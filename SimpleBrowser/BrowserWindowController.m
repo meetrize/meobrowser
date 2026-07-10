@@ -48,6 +48,7 @@
     if (self) {
         [self configureChromeWindow];
         _webViewConfiguration = [[WKWebViewConfiguration alloc] init];
+        [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
         [self setupUI];
@@ -58,6 +59,11 @@
 }
 
 #pragma mark - UI Setup
+
+- (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
+    // WKWebView 默认 UA 不含 Safari 标识，部分站点（如百度）会识别为内嵌 WebView 并反复跳转验证页。
+    configuration.applicationNameForUserAgent = @"Version/18.0 Safari/605.1.15";
+}
 
 - (void)configureChromeWindow {
     NSWindow *window = self.window;
@@ -143,6 +149,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)setDisplayedWindowTitle:(NSString *)title {
     NSString *resolved = title.length > 0 ? title : BrowserAppDisplayName;
+    if ([self.window.title isEqualToString:resolved]) {
+        return;
+    }
     self.window.title = resolved;
     [self repositionTrafficLightButtonsAfterLayout];
 }
@@ -482,6 +491,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self repositionTrafficLightButtonsAfterLayout];
 }
 
+- (void)updateTabStripDisplay {
+    [self.tabStripView syncWithTabs:self.tabController.tabs
+                      selectedTabID:self.tabController.selectedTab.tabID];
+}
+
 - (void)persistTabSession {
     NSMutableArray<NSString *> *entries = [[NSMutableArray alloc] init];
     for (BrowserTab *tab in self.tabController.tabs) {
@@ -696,40 +710,56 @@ doCommandBySelector:(SEL)commandSelector {
 
 #pragma mark - WKNavigationDelegate
 
-- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
-    (void)navigation;
-    BrowserTab *tab = [self.tabController tabForWebView:webView];
-    tab.isLoading = YES;
-    [self reloadTabStrip];
-
-    if (webView == self.webView) {
-        [self setDisplayedWindowTitle:@"加载中…"];
+- (void)webView:(WKWebView *)webView
+decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    if (navigationAction.targetFrame.isMainFrame) {
+        BrowserTab *tab = [self.tabController tabForWebView:webView];
+        [tab notePendingMainFrameNavigation];
     }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (![tab beginMainFrameNavigation:navigation]) {
+        return;
+    }
+
+    tab.isLoading = YES;
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+    (void)webView;
     (void)navigation;
-    [self syncFromWebView:webView];
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    (void)navigation;
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (![tab isMainFrameNavigation:navigation]) {
+        return;
+    }
+    [tab endMainFrameNavigation:navigation];
     [self syncFromWebView:webView];
 }
 
 - (void)webView:(WKWebView *)webView
 didFailProvisionalNavigation:(WKNavigation *)navigation
       withError:(NSError *)error {
-    (void)webView;
-    (void)navigation;
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if ([tab isMainFrameNavigation:navigation]) {
+        [tab endMainFrameNavigation:navigation];
+    }
     [self handleNavigationError:error forWebView:webView];
 }
 
 - (void)webView:(WKWebView *)webView
 didFailNavigation:(WKNavigation *)navigation
       withError:(NSError *)error {
-    (void)webView;
-    (void)navigation;
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if ([tab isMainFrameNavigation:navigation]) {
+        [tab endMainFrameNavigation:navigation];
+    }
     [self handleNavigationError:error forWebView:webView];
 }
 
@@ -741,15 +771,48 @@ didFailNavigation:(WKNavigation *)navigation
 
     tab.isLoading = NO;
 
+    if (webView == self.webView) {
+        if (tab.isNewTabPage) {
+            self.addressField.stringValue = @"";
+        } else if (webView.URL) {
+            self.addressField.stringValue = webView.URL.absoluteString;
+        }
+        self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
+        self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
+        self.reloadButton.enabled = !tab.isNewTabPage;
+        [self updateBookmarkButtonState];
+    }
+
+    NSInteger generation = tab.titleUpdateGeneration;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(200 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf applyTitleFromWebView:webView generation:generation];
+    });
+}
+
+- (void)applyTitleFromWebView:(WKWebView *)webView generation:(NSInteger)generation {
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (!tab || tab.titleUpdateGeneration != generation) {
+        return;
+    }
+
+    BOOL titleChanged = NO;
     if (!tab.isNewTabPage && webView.title.length > 0) {
-        tab.title = webView.title;
+        NSString *newTitle = webView.title;
+        if (![tab.title isEqualToString:newTitle]) {
+            tab.title = newTitle;
+            titleChanged = YES;
+        }
     }
 
     if (webView == self.webView) {
-        [self updateNavigationState];
+        [self setDisplayedWindowTitle:tab.displayTitle];
     }
 
-    [self reloadTabStrip];
+    if (titleChanged) {
+        [self updateTabStripDisplay];
+    }
     [self persistTabSession];
 }
 
@@ -760,7 +823,7 @@ didFailNavigation:(WKNavigation *)navigation
 
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     tab.isLoading = NO;
-    [self reloadTabStrip];
+    [self updateTabStripDisplay];
 
     if (webView != self.webView) {
         return;

@@ -60,6 +60,7 @@ static const CGFloat kTabTopInset = 3.0;
 @property (nonatomic, strong) NSStackView *tabsStackView;
 @property (nonatomic, strong) NSButton *addTabButton;
 @property (nonatomic, strong) NSMapTable<BrowserTabItemView *, NSUUID *> *tabItemIDs;
+@property (nonatomic, strong) NSMapTable<NSUUID *, BrowserTabItemView *> *tabItemsByID;
 @end
 
 @implementation BrowserTabStripView
@@ -71,6 +72,7 @@ static const CGFloat kTabTopInset = 3.0;
         self.wantsLayer = YES;
 
         _tabItemIDs = [NSMapTable weakToStrongObjectsMapTable];
+        _tabItemsByID = [NSMapTable strongToWeakObjectsMapTable];
 
         _backgroundView = [[BrowserTabStripDragAreaView alloc] init];
         _backgroundView.wantsLayer = YES;
@@ -223,6 +225,7 @@ static const CGFloat kTabTopInset = 3.0;
         [view removeFromSuperview];
     }
     [self.tabItemIDs removeAllObjects];
+    [self.tabItemsByID removeAllObjects];
 
     for (BrowserTab *tab in tabs) {
         BOOL selected = [tab.tabID isEqual:selectedTabID];
@@ -240,11 +243,37 @@ static const CGFloat kTabTopInset = 3.0;
         };
 
         [self.tabItemIDs setObject:tab.tabID forKey:item];
+        [self.tabItemsByID setObject:item forKey:tab.tabID];
         [self.tabsStackView addArrangedSubview:[self wrapTabItem:item]];
     }
 
     [self.tabsStackView layoutSubtreeIfNeeded];
     [self setNeedsLayout:YES];
+}
+
+- (void)syncWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID {
+    if (self.tabsStackView.arrangedSubviews.count != tabs.count) {
+        [self reloadWithTabs:tabs selectedTabID:selectedTabID];
+        return;
+    }
+
+    for (BrowserTab *tab in tabs) {
+        BrowserTabItemView *item = [self.tabItemsByID objectForKey:tab.tabID];
+        if (!item) {
+            [self reloadWithTabs:tabs selectedTabID:selectedTabID];
+            return;
+        }
+
+        NSString *title = [tab displayTitle];
+        if (![item.tabTitle isEqualToString:title]) {
+            item.tabTitle = title;
+        }
+
+        BOOL selected = [tab.tabID isEqual:selectedTabID];
+        if (item.tabSelected != selected) {
+            item.tabSelected = selected;
+        }
+    }
 }
 
 - (void)onNewTab:(id)sender {

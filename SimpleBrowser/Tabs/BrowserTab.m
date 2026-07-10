@@ -1,5 +1,11 @@
 #import "BrowserTab.h"
 
+@interface BrowserTab ()
+@property (nonatomic, assign) BOOL hasPendingMainFrameNavigation;
+@property (nonatomic, strong) NSMutableSet<WKNavigation *> *mainFrameNavigations;
+@property (nonatomic, assign, readwrite) NSInteger titleUpdateGeneration;
+@end
+
 @implementation BrowserTab
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration {
@@ -23,13 +29,35 @@
 }
 
 - (NSString *)displayTitle {
-    if (self.isLoading) {
-        return @"加载中…";
-    }
     if (self.title.length > 0) {
         return self.title;
     }
     return @"新标签页";
+}
+
+- (void)notePendingMainFrameNavigation {
+    self.hasPendingMainFrameNavigation = YES;
+}
+
+- (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation {
+    if (!self.hasPendingMainFrameNavigation) {
+        return NO;
+    }
+    self.hasPendingMainFrameNavigation = NO;
+    if (!self.mainFrameNavigations) {
+        self.mainFrameNavigations = [NSMutableSet set];
+    }
+    [self.mainFrameNavigations addObject:navigation];
+    self.titleUpdateGeneration++;
+    return YES;
+}
+
+- (BOOL)isMainFrameNavigation:(WKNavigation *)navigation {
+    return [self.mainFrameNavigations containsObject:navigation];
+}
+
+- (void)endMainFrameNavigation:(WKNavigation *)navigation {
+    [self.mainFrameNavigations removeObject:navigation];
 }
 
 @end

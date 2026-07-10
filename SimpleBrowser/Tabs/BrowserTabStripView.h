@@ -22,6 +22,7 @@ FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
 @property (nonatomic, weak, nullable) id<BrowserTabStripViewDelegate> delegate;
 
 - (void)reloadWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID;
+- (void)syncWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID;
 
 @end
 

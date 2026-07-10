@@ -10,12 +10,18 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, assign) BOOL isNewTabPage;
 @property (nonatomic, assign) BOOL isLoading;
+@property (nonatomic, assign, readonly) NSInteger titleUpdateGeneration;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 
 - (void)loadNewTabPage;
 - (void)loadURL:(NSURL *)url;
 - (NSString *)displayTitle;
+
+- (void)notePendingMainFrameNavigation;
+- (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation;
+- (BOOL)isMainFrameNavigation:(WKNavigation *)navigation;
+- (void)endMainFrameNavigation:(WKNavigation *)navigation;
 
 @end
 

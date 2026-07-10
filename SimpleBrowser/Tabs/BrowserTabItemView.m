@@ -81,7 +81,11 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)setTabTitle:(NSString *)tabTitle {
-    _tabTitle = [tabTitle copy];
+    NSString *normalized = tabTitle ?: @"";
+    if ([_tabTitle isEqualToString:normalized]) {
+        return;
+    }
+    _tabTitle = [normalized copy];
     NSString *display = tabTitle.length > 0 ? tabTitle : @"新标签页";
     if (display.length > 20) {
         display = [[display substringToIndex:19] stringByAppendingString:@"…"];
