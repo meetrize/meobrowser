@@ -12,6 +12,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
+                   $(BROWSER_SRC_DIR)/BrowserSettingsWindowController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTab.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \

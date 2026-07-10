@@ -635,11 +635,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                       range:NSMakeRange(0, trimmed.length)].location == NSNotFound);
 
     if (!looksLikeURL) {
-        NSString *encoded = [trimmed stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-        if (!encoded) {
-            return nil;
-        }
-        return [NSURL URLWithString:[NSString stringWithFormat:@"https://duckduckgo.com/?q=%@", encoded]];
+        return [BrowsingPreferences searchURLForQuery:trimmed];
     }
 
     NSString *urlString = trimmed;

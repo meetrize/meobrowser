@@ -39,4 +39,28 @@
     [mainMenu addItem:tabMenuItem];
 }
 
++ (void)installSettingsMenuForTarget:(id)target {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu || mainMenu.numberOfItems == 0) {
+        return;
+    }
+
+    NSMenu *appMenu = mainMenu.itemArray[0].submenu;
+    if (!appMenu) {
+        return;
+    }
+
+    NSInteger quitIndex = appMenu.numberOfItems - 1;
+    if (quitIndex > 0) {
+        [appMenu insertItem:[NSMenuItem separatorItem] atIndex:quitIndex];
+        quitIndex += 1;
+    }
+
+    NSMenuItem *settingsItem = [[NSMenuItem alloc] initWithTitle:@"设置…"
+                                                        action:@selector(showBrowserSettings:)
+                                                 keyEquivalent:@","];
+    settingsItem.target = target;
+    [appMenu insertItem:settingsItem atIndex:quitIndex];
+}
+
 @end
