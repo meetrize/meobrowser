@@ -387,6 +387,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController addNewTab];
 }
 
+- (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView {
+    (void)stripView;
+    [self.window performZoom:nil];
+}
+
 #pragma mark - BrowserLaunchpadViewDelegate
 
 - (void)launchpadView:(BrowserLaunchpadView *)view openURL:(NSURL *)url {

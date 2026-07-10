@@ -7,13 +7,48 @@ const CGFloat BrowserTabStripHeight = 36.0;
 static const CGFloat kTrafficLightLeadingInset = 78.0;
 static const CGFloat kTabTopInset = 3.0;
 
+@class BrowserTabStripView;
+
+@interface BrowserTabStripView (TitleBarInteraction)
+- (void)handleTitleBarDoubleClick;
+@end
+
 @interface BrowserTabStripDragAreaView : NSView
+@property (nonatomic, weak) BrowserTabStripView *stripView;
 @end
 
 @implementation BrowserTabStripDragAreaView
 
 - (BOOL)mouseDownCanMoveWindow {
     return YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        [self.stripView handleTitleBarDoubleClick];
+        return;
+    }
+    [super mouseDown:event];
+}
+
+@end
+
+@interface BrowserTabStripStackView : NSStackView
+@property (nonatomic, weak) BrowserTabStripView *stripView;
+@end
+
+@implementation BrowserTabStripStackView
+
+- (BOOL)mouseDownCanMoveWindow {
+    return YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        [self.stripView handleTitleBarDoubleClick];
+        return;
+    }
+    [super mouseDown:event];
 }
 
 @end
@@ -37,14 +72,14 @@ static const CGFloat kTabTopInset = 3.0;
 
         _tabItemIDs = [NSMapTable weakToStrongObjectsMapTable];
 
-        _backgroundView = [[NSView alloc] init];
+        _backgroundView = [[BrowserTabStripDragAreaView alloc] init];
         _backgroundView.wantsLayer = YES;
         _backgroundView.translatesAutoresizingMaskIntoConstraints = NO;
 
         _leadingDragArea = [[BrowserTabStripDragAreaView alloc] init];
         _leadingDragArea.translatesAutoresizingMaskIntoConstraints = NO;
 
-        _tabsStackView = [[NSStackView alloc] init];
+        _tabsStackView = [[BrowserTabStripStackView alloc] init];
         _tabsStackView.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         _tabsStackView.spacing = 2;
         _tabsStackView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -95,9 +130,21 @@ static const CGFloat kTabTopInset = 3.0;
             [_trailingDragArea.widthAnchor constraintGreaterThanOrEqualToConstant:16],
         ]];
 
+        ((BrowserTabStripDragAreaView *)_backgroundView).stripView = self;
+        ((BrowserTabStripDragAreaView *)_leadingDragArea).stripView = self;
+        ((BrowserTabStripDragAreaView *)_trailingDragArea).stripView = self;
+        ((BrowserTabStripStackView *)_tabsStackView).stripView = self;
+
         [self updateStripAppearance];
     }
     return self;
+}
+
+- (void)handleTitleBarDoubleClick {
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripViewDidDoubleClickTitleBar:)]) {
+        [delegate tabStripViewDidDoubleClickTitleBar:self];
+    }
 }
 
 - (void)viewDidChangeEffectiveAppearance {
@@ -119,6 +166,14 @@ static const CGFloat kTabTopInset = 3.0;
 
 - (BOOL)mouseDownCanMoveWindow {
     return YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        [self handleTitleBarDoubleClick];
+        return;
+    }
+    [super mouseDown:event];
 }
 
 - (NSView *)wrapTabItem:(BrowserTabItemView *)item {
