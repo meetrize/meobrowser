@@ -26,7 +26,7 @@
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
-    [BrowsingPreferences setLastVisitedURL:_browserWindowController.webView.URL];
+    [_browserWindowController persistTabSession];
 }
 
 @end

@@ -8,6 +8,7 @@
 |------|------|
 | [minimal-browser/design.md](minimal-browser/design.md) | SimpleBrowser 最精简浏览器 — 技术方案与架构设计 |
 | [minimal-browser/development-plan.md](minimal-browser/development-plan.md) | SimpleBrowser 分阶段开发计划与验收标准 |
+| [minimal-browser/multi-tab-design.md](minimal-browser/multi-tab-design.md) | 多标签页（Chrome 式标题栏）设计方案 L2 |
 | [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | SimpleBrowser L1 验收记录 |
 | [sbkit/text-input.md](sbkit/text-input.md) | SBKit 文本输入与编辑快捷键架构 |
 
