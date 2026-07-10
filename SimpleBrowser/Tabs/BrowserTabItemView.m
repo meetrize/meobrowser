@@ -1,7 +1,7 @@
 #import "BrowserTabItemView.h"
 
 static const CGFloat kTabItemWidth = 160.0;
-static const CGFloat kDefaultTabHeight = 36.0;
+static const CGFloat kDefaultTabHeight = 33.0;
 
 NSColor *BrowserTabActiveFillColor(void) {
     if ([[NSApp effectiveAppearance].name containsString:@"Dark"]) {
@@ -52,7 +52,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 
         _closeButton = [NSButton buttonWithTitle:@"×" target:self action:@selector(onClose:)];
         _closeButton.bezelStyle = NSBezelStyleInline;
-        _closeButton.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        _closeButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_closeButton];
 
@@ -61,14 +61,14 @@ NSColor *BrowserTabActiveFillColor(void) {
 
             [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
             [_closeButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [_closeButton.widthAnchor constraintEqualToConstant:18],
+            [_closeButton.widthAnchor constraintEqualToConstant:16],
+            [_closeButton.heightAnchor constraintEqualToConstant:16],
 
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
             [_titleLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_closeButton.leadingAnchor constant:-4],
         ]];
 
-        [self setTabHeight:kDefaultTabHeight];
         [self updateChromeAppearance];
     }
     return self;
@@ -99,7 +99,7 @@ NSColor *BrowserTabActiveFillColor(void) {
     self.layer.backgroundColor = (self.tabSelected ? active : inactive).CGColor;
 
     if (@available(macOS 10.13, *)) {
-        self.layer.cornerRadius = self.tabSelected ? 8.0 : 7.0;
+        self.layer.cornerRadius = self.tabSelected ? 7.0 : 6.0;
         self.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
     }
 

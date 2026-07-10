@@ -113,7 +113,7 @@
     [contentView addSubview:rootStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.tabStripView.heightAnchor constraintEqualToConstant:40],
+        [self.tabStripView.heightAnchor constraintEqualToConstant:36],
         [rootStack.topAnchor constraintEqualToAnchor:contentView.topAnchor],
         [rootStack.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
         [rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],

@@ -3,9 +3,8 @@
 #import "BrowserTabItemView.h"
 
 static const CGFloat kTrafficLightLeadingInset = 78.0;
-static const CGFloat kTabStripHeight = 40.0;
-static const CGFloat kTabTopInset = 4.0;
-static const CGFloat kTabItemHeight = kTabStripHeight - kTabTopInset;
+static const CGFloat kTabStripHeight = 36.0;
+static const CGFloat kTabTopInset = 3.0;
 
 @interface BrowserTabStripDragAreaView : NSView
 @end
@@ -84,9 +83,9 @@ static const CGFloat kTabItemHeight = kTabStripHeight - kTabTopInset;
             [_tabsStackView.trailingAnchor constraintEqualToAnchor:_addTabButton.leadingAnchor constant:-6],
             [_tabsStackView.heightAnchor constraintEqualToConstant:kTabStripHeight],
 
-            [_addTabButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-6],
+            [_addTabButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_addTabButton.widthAnchor constraintEqualToConstant:28],
-            [_addTabButton.heightAnchor constraintEqualToConstant:24],
+            [_addTabButton.heightAnchor constraintEqualToConstant:22],
 
             [_trailingDragArea.leadingAnchor constraintEqualToAnchor:_addTabButton.trailingAnchor constant:4],
             [_trailingDragArea.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
@@ -132,6 +131,7 @@ static const CGFloat kTabItemHeight = kTabStripHeight - kTabTopInset;
         [item.leadingAnchor constraintEqualToAnchor:slot.leadingAnchor],
         [item.trailingAnchor constraintEqualToAnchor:slot.trailingAnchor],
         [item.topAnchor constraintEqualToAnchor:slot.topAnchor constant:kTabTopInset],
+        [item.bottomAnchor constraintEqualToAnchor:slot.bottomAnchor],
     ]];
 
     return slot;
@@ -149,7 +149,6 @@ static const CGFloat kTabItemHeight = kTabStripHeight - kTabTopInset;
         BrowserTabItemView *item = [[BrowserTabItemView alloc] initWithFrame:NSZeroRect];
         item.tabTitle = [tab displayTitle];
         item.tabSelected = selected;
-        [item setTabHeight:kTabItemHeight];
 
         __weak typeof(self) weakSelf = self;
         NSUUID *tabID = tab.tabID;
