@@ -10,6 +10,7 @@ SOURCES := $(SRC_DIR)/main.m $(SRC_DIR)/AppDelegate.m $(SRC_DIR)/MainWindowContr
 BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
+                   $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \

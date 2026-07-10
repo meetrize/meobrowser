@@ -1,6 +1,7 @@
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "SBApplicationMenus.h"
+#import "BrowsingPreferences.h"
 
 @implementation AppDelegate {
     BrowserWindowController *_browserWindowController;
@@ -21,6 +22,11 @@
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    (void)notification;
+    [BrowsingPreferences setLastVisitedURL:_browserWindowController.webView.URL];
 }
 
 @end

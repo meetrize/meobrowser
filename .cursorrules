@@ -1,0 +1,31 @@
+# objcdemo — Cursor 仓库规则
+
+## Git 提交信息（最高优先级）
+
+在以下**所有**场景生成 commit message 时，**必须使用简体中文**：
+
+- Source Control 面板的「生成提交信息」（✨ 按钮）
+- Agent / Chat 代写提交说明
+- 用户要求撰写 commit message
+
+### 格式
+
+- 标题一行，类型前缀可保留：`feat:`、`fix:`、`perf:`、`docs:`、`chore:`、`refactor:`、`test:` 等，**冒号后描述必须用中文**
+- 正文可选，使用中文补充「为什么」
+- 语气简洁，一次提交一个主题
+
+### 示例
+
+```
+feat: 为 SimpleBrowser 添加地址栏自动补全
+
+fix: 修复 SBTextField 在深色模式下边框不可见的问题
+
+docs: 补充 minimal-browser 设计文档中的导航流程说明
+
+chore: 更新 Makefile 以链接 SBKit 文本输入模块
+```
+
+### 禁止
+
+- 不要输出英文提交标题或英文正文（除非用户当次明确要求其他语言）

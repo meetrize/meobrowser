@@ -1,7 +1,6 @@
 #import "BrowserWindowController.h"
 #import "SBTextField.h"
-
-static NSString * const kDefaultURLString = @"https://example.com";
+#import "BrowsingPreferences.h"
 
 @interface BrowserWindowController ()
 @property (nonatomic, strong) NSButton *backButton;
@@ -29,7 +28,7 @@ static NSString * const kDefaultURLString = @"https://example.com";
     self = [super initWithWindow:window];
     if (self) {
         [self setupUI];
-        [self loadDefaultPage];
+        [self loadInitialPage];
     }
     return self;
 }
@@ -106,8 +105,8 @@ static NSString * const kDefaultURLString = @"https://example.com";
     [self.webView reload];
 }
 
-- (void)loadDefaultPage {
-    NSURL *url = [NSURL URLWithString:kDefaultURLString];
+- (void)loadInitialPage {
+    NSURL *url = [BrowsingPreferences initialURL];
     [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
@@ -225,6 +224,7 @@ didFailNavigation:(WKNavigation *)navigation
 
 - (void)syncFromWebView:(WKWebView *)webView {
     [self updateNavigationState];
+    [BrowsingPreferences setLastVisitedURL:webView.URL];
 }
 
 - (void)handleNavigationError:(NSError *)error {
