@@ -9,5 +9,6 @@
 @property (nonatomic, strong, readonly) BrowserTabController * _Nonnull tabController;
 
 - (void)persistTabSession;
+- (void)scheduleTrafficLightPositioning;
 
 @end

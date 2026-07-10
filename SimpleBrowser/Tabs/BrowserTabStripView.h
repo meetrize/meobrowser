@@ -4,6 +4,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
+
 @protocol BrowserTabStripViewDelegate <NSObject>
 - (void)tabStripView:(id)stripView didSelectTabID:(NSUUID *)tabID;
 - (void)tabStripView:(id)stripView didCloseTabID:(NSUUID *)tabID;

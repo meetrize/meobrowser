@@ -7,7 +7,7 @@
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
@@ -63,6 +63,128 @@
         window.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
         window.toolbar = nil;
     }
+    window.delegate = self;
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(scheduleTrafficLightPositioning)
+                                                 name:NSWindowDidResizeNotification
+                                               object:window];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(scheduleTrafficLightPositioning)
+                                                 name:NSWindowDidMoveNotification
+                                               object:window];
+}
+
+/// 相对标签栏垂直中心的额外下移量（pt），正值表示向标题栏底部方向移动。
+static const CGFloat kTrafficLightDownwardOffset = 1.0;
+
+- (BOOL)positionTrafficLightButtons {
+    NSWindow *window = self.window;
+    if (!window || !window.isVisible) {
+        return NO;
+    }
+
+    NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+    if (!closeButton || !closeButton.superview || !self.tabStripView.superview) {
+        return NO;
+    }
+
+    [window.contentView layoutSubtreeIfNeeded];
+    [self.tabStripView layoutSubtreeIfNeeded];
+
+    if (NSHeight(self.tabStripView.bounds) < BrowserTabStripHeight - 0.5 ||
+        NSHeight(self.tabStripView.frame) < BrowserTabStripHeight - 0.5) {
+        return NO;
+    }
+
+    NSView *container = closeButton.superview;
+    NSPoint tabCenterInContainer = [self.tabStripView convertPoint:NSMakePoint(NSMidX(self.tabStripView.bounds),
+                                                                              NSMidY(self.tabStripView.bounds))
+                                                            toView:container];
+    CGFloat targetCenterY = tabCenterInContainer.y;
+    if (container.isFlipped) {
+        targetCenterY += kTrafficLightDownwardOffset;
+    } else {
+        targetCenterY -= kTrafficLightDownwardOffset;
+    }
+
+    static const NSWindowButton kWindowButtons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+
+    for (NSUInteger i = 0; i < sizeof(kWindowButtons) / sizeof(kWindowButtons[0]); i++) {
+        NSButton *button = [window standardWindowButton:kWindowButtons[i]];
+        if (!button) {
+            continue;
+        }
+        NSRect frame = button.frame;
+        frame.origin.y = targetCenterY - NSHeight(frame) / 2.0;
+        button.frame = frame;
+    }
+    return YES;
+}
+
+- (void)repositionTrafficLightButtonsAfterLayout {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self positionTrafficLightButtons];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self positionTrafficLightButtons];
+        });
+    });
+}
+
+- (void)setDisplayedWindowTitle:(NSString *)title {
+    NSString *resolved = title.length > 0 ? title : @"SimpleBrowser";
+    self.window.title = resolved;
+    [self repositionTrafficLightButtonsAfterLayout];
+}
+
+- (void)scheduleTrafficLightPositioning {
+    [self tryPositionTrafficLightsStartingAtAttempt:0];
+
+    __weak typeof(self) weakSelf = self;
+    for (NSNumber *delayMs in @[@50, @150, @350]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs.doubleValue * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf positionTrafficLightButtons];
+        });
+    }
+}
+
+- (void)tryPositionTrafficLightsStartingAtAttempt:(NSInteger)attempt {
+    if ([self positionTrafficLightButtons]) {
+        return;
+    }
+    if (attempt >= 40) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf tryPositionTrafficLightsStartingAtAttempt:attempt + 1];
+    });
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+    if (notification.object == self.window) {
+        [self scheduleTrafficLightPositioning];
+    }
+}
+
+- (void)windowDidLoad {
+    [super windowDidLoad];
+    [self scheduleTrafficLightPositioning];
+}
+
+- (void)showWindow:(id)sender {
+    [super showWindow:sender];
+    [self scheduleTrafficLightPositioning];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setupUI {
@@ -113,7 +235,7 @@
     [contentView addSubview:rootStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.tabStripView.heightAnchor constraintEqualToConstant:36],
+        [self.tabStripView.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
         [rootStack.topAnchor constraintEqualToAnchor:contentView.topAnchor],
         [rootStack.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
         [rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
@@ -172,6 +294,7 @@
 - (void)reloadTabStrip {
     [self.tabStripView reloadWithTabs:self.tabController.tabs
                         selectedTabID:self.tabController.selectedTab.tabID];
+    [self repositionTrafficLightButtonsAfterLayout];
 }
 
 - (void)persistTabSession {
@@ -336,7 +459,7 @@
 
     BrowserTab *tab = self.tabController.selectedTab;
     NSString *title = tab.displayTitle;
-    self.window.title = title.length > 0 ? title : @"SimpleBrowser";
+    [self setDisplayedWindowTitle:title];
 
     if (tab.isNewTabPage) {
         self.addressField.stringValue = @"";
@@ -375,7 +498,7 @@ doCommandBySelector:(SEL)commandSelector {
     [self reloadTabStrip];
 
     if (webView == self.webView) {
-        self.window.title = @"加载中…";
+        [self setDisplayedWindowTitle:@"加载中…"];
     }
 }
 

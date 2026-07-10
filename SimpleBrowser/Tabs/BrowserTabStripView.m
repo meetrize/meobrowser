@@ -2,8 +2,9 @@
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
 
+const CGFloat BrowserTabStripHeight = 36.0;
+
 static const CGFloat kTrafficLightLeadingInset = 78.0;
-static const CGFloat kTabStripHeight = 36.0;
 static const CGFloat kTabTopInset = 3.0;
 
 @interface BrowserTabStripDragAreaView : NSView
@@ -66,7 +67,7 @@ static const CGFloat kTabTopInset = 3.0;
         [self addSubview:_trailingDragArea];
 
         [NSLayoutConstraint activateConstraints:@[
-            [self.heightAnchor constraintEqualToConstant:kTabStripHeight],
+            [self.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
 
             [_backgroundView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_backgroundView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -81,7 +82,7 @@ static const CGFloat kTabTopInset = 3.0;
             [_tabsStackView.leadingAnchor constraintEqualToAnchor:_leadingDragArea.trailingAnchor constant:4],
             [_tabsStackView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
             [_tabsStackView.trailingAnchor constraintEqualToAnchor:_addTabButton.leadingAnchor constant:-6],
-            [_tabsStackView.heightAnchor constraintEqualToConstant:kTabStripHeight],
+            [_tabsStackView.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
 
             [_addTabButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_addTabButton.widthAnchor constraintEqualToConstant:28],
@@ -127,7 +128,7 @@ static const CGFloat kTabTopInset = 3.0;
 
     [NSLayoutConstraint activateConstraints:@[
         [slot.widthAnchor constraintEqualToConstant:160],
-        [slot.heightAnchor constraintEqualToConstant:kTabStripHeight],
+        [slot.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
         [item.leadingAnchor constraintEqualToAnchor:slot.leadingAnchor],
         [item.trailingAnchor constraintEqualToAnchor:slot.trailingAnchor],
         [item.topAnchor constraintEqualToAnchor:slot.topAnchor constant:kTabTopInset],

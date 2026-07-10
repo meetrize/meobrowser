@@ -17,6 +17,7 @@
     _browserWindowController = [[BrowserWindowController alloc] init];
     [_browserWindowController showWindow:nil];
     [_browserWindowController.window center];
+    [_browserWindowController scheduleTrafficLightPositioning];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

@@ -104,8 +104,7 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
 
     self.titleLabel.textColor = [NSColor labelColor];
-    self.titleLabel.font = [NSFont systemFontOfSize:12
-                                             weight:self.tabSelected ? NSFontWeightSemibold : NSFontWeightRegular];
+    self.titleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
 }
 
 - (BOOL)effectiveAppearanceIsDark {
