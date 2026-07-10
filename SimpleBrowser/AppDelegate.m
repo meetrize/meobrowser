@@ -2,6 +2,7 @@
 #import "BrowserWindowController.h"
 #import "BrowserSettingsWindowController.h"
 #import "BrowserMenus.h"
+#import "BrowserAppInfo.h"
 #import "SBApplicationMenus.h"
 #import "BrowsingPreferences.h"
 
@@ -12,7 +13,7 @@
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
-    [SBApplicationMenus installStandardMenusWithAppName:@"SimpleBrowser"];
+    [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
     [BrowserMenus installSettingsMenuForTarget:self];
 }
 

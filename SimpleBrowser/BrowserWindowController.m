@@ -1,4 +1,5 @@
 #import "BrowserWindowController.h"
+#import "BrowserAppInfo.h"
 #import "SBTextField.h"
 #import "BrowsingPreferences.h"
 #import "BrowserMenus.h"
@@ -39,7 +40,7 @@
                                                    styleMask:style
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title = @"SimpleBrowser";
+    window.title = BrowserAppDisplayName;
     window.releasedWhenClosed = NO;
     window.minSize = NSMakeSize(640, 480);
 
@@ -141,7 +142,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)setDisplayedWindowTitle:(NSString *)title {
-    NSString *resolved = title.length > 0 ? title : @"SimpleBrowser";
+    NSString *resolved = title.length > 0 ? title : BrowserAppDisplayName;
     self.window.title = resolved;
     [self repositionTrafficLightButtonsAfterLayout];
 }

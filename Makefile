@@ -1,5 +1,7 @@
 APP_NAME := SimpleWindow
-BROWSER_NAME := SimpleBrowser
+BROWSER_DISPLAY_NAME := MeoBrowser
+BROWSER_EXECUTABLE := MeoBrowser
+BROWSER_BUNDLE_NAME := MeoBrowser
 BUILD_DIR := build
 SRC_DIR := SimpleWindow
 BROWSER_SRC_DIR := SimpleBrowser
@@ -9,6 +11,7 @@ RES_DIR := $(BUILD_DIR)/$(APP_NAME).app/Contents/Resources
 SOURCES := $(SRC_DIR)/main.m $(SRC_DIR)/AppDelegate.m $(SRC_DIR)/MainWindowController.m
 BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
+                   $(BROWSER_SRC_DIR)/BrowserAppInfo.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
@@ -30,9 +33,9 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
 XIB_SRC := $(SRC_DIR)/MainWindow.xib
 NIB_OUT := $(RES_DIR)/MainWindow.nib
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
-BROWSER_BUNDLE := $(BUILD_DIR)/$(BROWSER_NAME).app
+BROWSER_BUNDLE := $(BUILD_DIR)/$(BROWSER_BUNDLE_NAME).app
 BINARY := $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
-BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_NAME)
+BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
@@ -66,8 +69,9 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> $(1)/Contents/Info.plist
 	@echo '<plist version="1.0"><dict>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleExecutable</key><string>$(2)</string>' >> $(1)/Contents/Info.plist
-	@echo '  <key>CFBundleIdentifier</key><string>com.example.$(2)</string>' >> $(1)/Contents/Info.plist
-	@echo '  <key>CFBundleName</key><string>$(2)</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleIdentifier</key><string>com.example.MeoBrowser</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleName</key><string>$(3)</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleDisplayName</key><string>$(3)</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundlePackageType</key><string>APPL</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleShortVersionString</key><string>1.0</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>LSMinimumSystemVersion</key><string>11.0</string>' >> $(1)/Contents/Info.plist
@@ -95,7 +99,7 @@ browser: $(BROWSER_BINARY)
 $(BROWSER_BINARY): $(BROWSER_SOURCES) Makefile | $(BUILD_DIR)
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
 	$(CC) $(BROWSER_CFLAGS) -isysroot $(SDK_PATH) $(BROWSER_SOURCES) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
-	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_NAME))
+	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
 
 $(NIB_OUT): $(XIB_SRC) | $(RES_DIR)
 ifeq ($(IBTOOL_APP),)
@@ -139,10 +143,10 @@ stats: all
 	fi
 
 stats-browser: browser
-	@echo "Launching $(BROWSER_NAME) and sampling memory..."
+	@echo "Launching $(BROWSER_DISPLAY_NAME) and sampling memory..."
 	@open $(BROWSER_BUNDLE)
 	@sleep 3
-	@PID=$$(pgrep -n $(BROWSER_NAME) 2>/dev/null); \
+	@PID=$$(pgrep -n $(BROWSER_EXECUTABLE) 2>/dev/null); \
 	if [ -n "$$PID" ]; then \
 		echo "PID: $$PID"; \
 		ps -o pid,rss,vsz,cpu,comm -p $$PID; \
@@ -161,7 +165,7 @@ verify: all browser
 	@test -x $(BROWSER_BINARY)
 	@test -f $(APP_BUNDLE)/Contents/Info.plist
 	@test -f $(BROWSER_BUNDLE)/Contents/Info.plist
-	@echo "verify OK: SimpleWindow + SimpleBrowser binaries and Info.plist"
+	@echo "verify OK: SimpleWindow + MeoBrowser binaries and Info.plist"
 
 clean:
 	rm -rf $(BUILD_DIR)

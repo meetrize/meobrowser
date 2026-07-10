@@ -17,7 +17,7 @@
 ### 示例
 
 ```
-feat: 为 SimpleBrowser 添加地址栏自动补全
+feat: 为 MeoBrowser 添加地址栏自动补全
 
 fix: 修复 SBTextField 在深色模式下边框不可见的问题
 

@@ -60,7 +60,7 @@ SBTextInputConfiguration    ← 统一默认属性
 #import "SBApplicationMenus.h"
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
-    [SBApplicationMenus installStandardMenusWithAppName:@"SimpleBrowser"];
+    [SBApplicationMenus installStandardMenusWithAppName:@"MeoBrowser"];
 }
 ```
 
@@ -111,5 +111,5 @@ AI 与协作者请遵循：
 
 | 应用 | 菜单 | 输入控件 |
 |------|------|----------|
-| SimpleBrowser | ✅ `SBApplicationMenus` | ✅ 地址栏 `SBTextField` |
+| MeoBrowser | ✅ `SBApplicationMenus` | ✅ 地址栏 `SBTextField` |
 | SimpleWindow | ❌ 待迁移 | ❌ 仍用 XIB 原生控件 |
