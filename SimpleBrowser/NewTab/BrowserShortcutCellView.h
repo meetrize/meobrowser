@@ -15,6 +15,7 @@ typedef void (^BrowserShortcutCellActionHandler)(BrowserShortcutItem *item);
 @property (nonatomic, copy, nullable) BrowserShortcutCellActivateHandler onActivate;
 @property (nonatomic, copy, nullable) BrowserShortcutCellActionHandler onDelete;
 @property (nonatomic, copy, nullable) dispatch_block_t onAddTapped;
+@property (nonatomic, copy, nullable) dispatch_block_t onRequestEditMode;
 
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut;
 - (void)configureAsAddCell;

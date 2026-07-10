@@ -4,14 +4,8 @@
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutEditorSheet.h"
 
-static const NSInteger kGridColumns = 7;
-static const NSInteger kGridRows = 5;
-static const NSInteger kItemsPerPage = kGridColumns * kGridRows;
 static const CGFloat kCellSize = 96.0;
-static const CGFloat kGridMinHorizontalInset = 48.0;
-static const CGFloat kGridMinVerticalInset = 32.0;
-static const CGFloat kGridItemSpacing = 8.0;
-static const CGFloat kPageIndicatorBottomInset = 16.0;
+static const CGFloat kItemSpacing = 8.0;
 
 @class BrowserLaunchpadView;
 
@@ -19,11 +13,27 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
 - (NSMenu *)menuForCollectionEvent:(NSEvent *)event;
 @end
 
+@interface BrowserLaunchpadView (EditingInteraction)
+@property (nonatomic, readonly, getter=isEditingMode) BOOL editingMode;
+- (void)enterEditingMode;
+- (void)exitEditingModeFromBackgroundClick;
+@end
+
 @interface BrowserLaunchpadCollectionView : NSCollectionView
 @property (nonatomic, weak) BrowserLaunchpadView *launchpadHost;
 @end
 
 @implementation BrowserLaunchpadCollectionView
+
+- (void)mouseDown:(NSEvent *)event {
+    if (self.launchpadHost.isEditingMode) {
+        NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+        if (![self indexPathForItemAtPoint:point]) {
+            [self.launchpadHost exitEditingModeFromBackgroundClick];
+        }
+    }
+    [super mouseDown:event];
+}
 
 - (NSMenu *)menuForEvent:(NSEvent *)event {
     if (self.launchpadHost) {
@@ -38,13 +48,11 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
 @property (nonatomic, strong) NSVisualEffectView *effectView;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) BrowserLaunchpadCollectionView *collectionView;
-@property (nonatomic, strong) NSCollectionViewGridLayout *gridLayout;
+@property (nonatomic, strong) NSCollectionViewFlowLayout *flowLayout;
 @property (nonatomic, strong) NSMutableArray<BrowserShortcutItem *> *mutableShortcuts;
-@property (nonatomic, strong) NSStackView *pageIndicatorStack;
-@property (nonatomic, assign) NSInteger currentPage;
-@property (nonatomic, assign) NSInteger pageCount;
 @property (nonatomic, assign, getter=isEditingMode) BOOL editingMode;
 @property (nonatomic, strong, nullable) id escapeMonitor;
+@property (nonatomic, assign) CGFloat lastLayoutWidth;
 @end
 
 @implementation BrowserLaunchpadView
@@ -60,7 +68,6 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
 
 - (void)dealloc {
     [self removeEscapeMonitor];
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setupViews {
@@ -73,17 +80,16 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
     _effectView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_effectView];
 
-    _gridLayout = [[NSCollectionViewGridLayout alloc] init];
-    _gridLayout.maximumNumberOfColumns = kGridColumns;
-    _gridLayout.maximumNumberOfRows = kGridRows;
-    _gridLayout.minimumItemSize = NSMakeSize(kCellSize, kCellSize);
-    _gridLayout.maximumItemSize = NSMakeSize(kCellSize, kCellSize);
-    _gridLayout.minimumInteritemSpacing = kGridItemSpacing;
-    _gridLayout.minimumLineSpacing = kGridItemSpacing;
+    _flowLayout = [[NSCollectionViewFlowLayout alloc] init];
+    _flowLayout.itemSize = NSMakeSize(kCellSize, kCellSize);
+    _flowLayout.minimumInteritemSpacing = kItemSpacing;
+    _flowLayout.minimumLineSpacing = kItemSpacing;
+    _flowLayout.sectionInset = NSEdgeInsetsMake(kItemSpacing, kItemSpacing, kItemSpacing, kItemSpacing);
+    _flowLayout.scrollDirection = NSCollectionViewScrollDirectionVertical;
 
     _collectionView = [[BrowserLaunchpadCollectionView alloc] initWithFrame:NSZeroRect];
     _collectionView.launchpadHost = self;
-    _collectionView.collectionViewLayout = _gridLayout;
+    _collectionView.collectionViewLayout = _flowLayout;
     _collectionView.dataSource = self;
     _collectionView.delegate = self;
     _collectionView.backgroundColors = @[[NSColor clearColor]];
@@ -93,18 +99,14 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
 
     _scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     _scrollView.documentView = _collectionView;
-    _scrollView.hasVerticalScroller = NO;
+    _scrollView.hasVerticalScroller = YES;
     _scrollView.hasHorizontalScroller = NO;
+    _scrollView.autohidesScrollers = YES;
     _scrollView.drawsBackground = NO;
-    _scrollView.horizontalScrollElasticity = NSScrollElasticityAllowed;
+    _scrollView.horizontalScrollElasticity = NSScrollElasticityNone;
+    _scrollView.verticalScrollElasticity = NSScrollElasticityAllowed;
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_scrollView];
-
-    _pageIndicatorStack = [NSStackView stackViewWithViews:@[]];
-    _pageIndicatorStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    _pageIndicatorStack.spacing = 8;
-    _pageIndicatorStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [self addSubview:_pageIndicatorStack];
 
     [NSLayoutConstraint activateConstraints:@[
         [_effectView.topAnchor constraintEqualToAnchor:self.topAnchor],
@@ -116,37 +118,41 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
         [_scrollView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [_scrollView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_scrollView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-
-        [_pageIndicatorStack.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-        [_pageIndicatorStack.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-kPageIndicatorBottomInset],
     ]];
-
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(scrollViewBoundsDidChange:)
-                                                 name:NSViewBoundsDidChangeNotification
-                                               object:_scrollView.contentView];
 }
 
 - (void)layout {
     [super layout];
-    [self updateGridInsetsForCurrentBounds];
-    [self updatePageIndicatorForCurrentScroll];
+    [self updateCollectionViewDocumentSize];
 }
 
-- (void)updateGridInsetsForCurrentBounds {
-    CGFloat width = NSWidth(self.bounds);
-    CGFloat height = NSHeight(self.bounds);
-    if (width <= 0 || height <= 0) {
+- (void)updateCollectionViewDocumentSize {
+    NSClipView *clipView = self.scrollView.contentView;
+    CGFloat width = NSWidth(clipView.bounds);
+    if (width <= 0) {
         return;
     }
 
-    CGFloat gridWidth = kGridColumns * kCellSize + (kGridColumns - 1) * kGridItemSpacing;
-    CGFloat gridHeight = kGridRows * kCellSize + (kGridRows - 1) * kGridItemSpacing;
+    BOOL widthChanged = fabs(width - self.lastLayoutWidth) > 0.5;
+    if (widthChanged) {
+        self.lastLayoutWidth = width;
+        [self.flowLayout invalidateLayout];
+    }
 
-    CGFloat horizontalInset = MAX(kGridMinHorizontalInset, (width - gridWidth) / 2.0);
-    CGFloat verticalInset = MAX(kGridMinVerticalInset, (height - gridHeight) / 2.0);
-
-    self.gridLayout.margins = NSEdgeInsetsMake(verticalInset, horizontalInset, verticalInset, horizontalInset);
+    [self.collectionView layoutSubtreeIfNeeded];
+    NSSize contentSize = self.flowLayout.collectionViewContentSize;
+    CGFloat height = MAX(contentSize.height, NSHeight(clipView.bounds));
+    NSRect frame = NSMakeRect(0, 0, width, height);
+    if (!NSEqualRects(self.collectionView.frame, frame)) {
+        self.collectionView.frame = frame;
+        if (!widthChanged) {
+            [self.flowLayout invalidateLayout];
+            [self.collectionView layoutSubtreeIfNeeded];
+            contentSize = self.flowLayout.collectionViewContentSize;
+            height = MAX(contentSize.height, NSHeight(clipView.bounds));
+            self.collectionView.frame = NSMakeRect(0, 0, width, height);
+        }
+    }
 }
 
 - (void)reloadShortcuts {
@@ -155,11 +161,9 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
 }
 
 - (void)reloadCollectionView {
-    [self updatePageCount];
     [self.collectionView reloadData];
-    [self updateGridInsetsForCurrentBounds];
-    [self rebuildPageIndicator];
-    [self updatePageIndicatorForCurrentScroll];
+    self.lastLayoutWidth = 0;
+    [self setNeedsLayout:YES];
 }
 
 - (BOOL)mouseDownCanMoveWindow {
@@ -203,70 +207,22 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
     }
 }
 
-#pragma mark - Pagination
+- (void)enterEditingMode {
+    self.editingMode = YES;
+}
+
+- (void)exitEditingModeFromBackgroundClick {
+    if (self.isEditingMode) {
+        self.editingMode = NO;
+    }
+}
+
+#pragma mark - Helpers
 
 - (NSInteger)totalItemCount {
     NSInteger count = (NSInteger)self.mutableShortcuts.count;
     return self.isEditingMode ? count + 1 : count;
 }
-
-- (void)updatePageCount {
-    NSInteger items = [self totalItemCount];
-    self.pageCount = items > 0 ? (NSInteger)ceil((double)items / (double)kItemsPerPage) : 1;
-}
-
-- (void)rebuildPageIndicator {
-    for (NSView *view in self.pageIndicatorStack.arrangedSubviews.copy) {
-        [self.pageIndicatorStack removeArrangedSubview:view];
-        [view removeFromSuperview];
-    }
-
-    self.pageIndicatorStack.hidden = self.pageCount <= 1;
-    for (NSInteger i = 0; i < self.pageCount; i++) {
-        NSView *dot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 8, 8)];
-        dot.wantsLayer = YES;
-        dot.layer.cornerRadius = 4;
-        dot.translatesAutoresizingMaskIntoConstraints = NO;
-        [NSLayoutConstraint activateConstraints:@[
-            [dot.widthAnchor constraintEqualToConstant:8],
-            [dot.heightAnchor constraintEqualToConstant:8],
-        ]];
-        dot.identifier = [NSString stringWithFormat:@"page-%ld", (long)i];
-        [self.pageIndicatorStack addArrangedSubview:dot];
-    }
-    [self highlightPageIndicator];
-}
-
-- (void)highlightPageIndicator {
-    for (NSView *dot in self.pageIndicatorStack.arrangedSubviews) {
-        NSInteger index = [self.pageIndicatorStack.arrangedSubviews indexOfObject:dot];
-        BOOL active = index == self.currentPage;
-        dot.layer.backgroundColor = active ? [NSColor labelColor].CGColor : [NSColor tertiaryLabelColor].CGColor;
-    }
-}
-
-- (void)scrollViewBoundsDidChange:(NSNotification *)notification {
-    (void)notification;
-    [self updatePageIndicatorForCurrentScroll];
-}
-
-- (void)updatePageIndicatorForCurrentScroll {
-    CGFloat pageWidth = NSWidth(self.bounds);
-    if (pageWidth <= 0 || self.pageCount <= 1) {
-        self.currentPage = 0;
-        [self highlightPageIndicator];
-        return;
-    }
-    CGFloat offsetX = self.scrollView.contentView.bounds.origin.x;
-    NSInteger page = (NSInteger)lround(offsetX / pageWidth);
-    page = MAX(0, MIN(page, self.pageCount - 1));
-    if (page != self.currentPage) {
-        self.currentPage = page;
-        [self highlightPageIndicator];
-    }
-}
-
-#pragma mark - Helpers
 
 - (BOOL)isAddIndexPath:(NSIndexPath *)indexPath {
     return self.isEditingMode && indexPath.item == (NSInteger)self.mutableShortcuts.count;
@@ -445,6 +401,9 @@ static const CGFloat kPageIndicatorBottomInset = 16.0;
     cell.onDelete = ^(BrowserShortcutItem *item) {
         [BrowserShortcutStore removeShortcutWithID:item.itemID fromShortcuts:weakSelf.mutableShortcuts];
         [weakSelf reloadCollectionView];
+    };
+    cell.onRequestEditMode = ^{
+        [weakSelf enterEditingMode];
     };
     return cell;
 }

@@ -7,6 +7,7 @@ static const CGFloat kIconSize = 64.0;
 static const CGFloat kIconCornerRadius = 14.0;
 static const CGFloat kHoverScale = 1.05;
 static const NSTimeInterval kHoverAnimationDuration = 0.15;
+static const NSTimeInterval kLongPressDuration = 0.5;
 static NSString * const kWiggleAnimationKey = @"launchpadWiggle";
 
 static NSColor *ColorFromURLString(NSString *urlString) {
@@ -35,10 +36,13 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, copy, nullable) BrowserShortcutCellActivateHandler onActivate;
 @property (nonatomic, copy, nullable) BrowserShortcutCellActionHandler onDelete;
 @property (nonatomic, copy, nullable) dispatch_block_t onAddTapped;
+@property (nonatomic, copy, nullable) dispatch_block_t onRequestEditMode;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *shortcut;
 @property (nonatomic, assign, getter=isEditingMode) BOOL editingMode;
 @property (nonatomic, assign, getter=isAddCell) BOOL addCell;
 @property (nonatomic, assign) BOOL trackingHover;
+@property (nonatomic, strong, nullable) NSTimer *longPressTimer;
+@property (nonatomic, assign) BOOL longPressTriggered;
 @end
 
 @implementation BrowserShortcutCellContentView
@@ -201,7 +205,52 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     [self setHoverScale:1.0 animated:YES];
 }
 
+- (void)dealloc {
+    [self cancelLongPressTimer];
+}
+
+- (void)cancelLongPressTimer {
+    [self.longPressTimer invalidate];
+    self.longPressTimer = nil;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (self.editingMode || self.addCell || event.type != NSEventTypeLeftMouseDown) {
+        [super mouseDown:event];
+        return;
+    }
+
+    self.longPressTriggered = NO;
+    [self cancelLongPressTimer];
+    __weak typeof(self) weakSelf = self;
+    self.longPressTimer = [NSTimer scheduledTimerWithTimeInterval:kLongPressDuration
+                                                          repeats:NO
+                                                            block:^(NSTimer *timer) {
+        (void)timer;
+        BrowserShortcutCellContentView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.editingMode || strongSelf.addCell) {
+            return;
+        }
+        strongSelf.longPressTriggered = YES;
+        [strongSelf cancelLongPressTimer];
+        if (strongSelf.onRequestEditMode) {
+            strongSelf.onRequestEditMode();
+        }
+    }];
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    [self cancelLongPressTimer];
+    [super mouseDragged:event];
+}
+
 - (void)mouseUp:(NSEvent *)event {
+    [self cancelLongPressTimer];
+    if (self.longPressTriggered) {
+        self.longPressTriggered = NO;
+        return;
+    }
+
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
     if (!NSPointInRect(point, self.bounds)) {
         return;
@@ -281,6 +330,11 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             weakSelf.onAddTapped();
         }
     };
+    self.shortcutContentView.onRequestEditMode = ^{
+        if (weakSelf.onRequestEditMode) {
+            weakSelf.onRequestEditMode();
+        }
+    };
 }
 
 - (void)setOnActivate:(BrowserShortcutCellActivateHandler)onActivate {
@@ -295,6 +349,11 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 - (void)setOnAddTapped:(dispatch_block_t)onAddTapped {
     _onAddTapped = [onAddTapped copy];
+    [self bindHandlers];
+}
+
+- (void)setOnRequestEditMode:(dispatch_block_t)onRequestEditMode {
+    _onRequestEditMode = [onRequestEditMode copy];
     [self bindHandlers];
 }
 
