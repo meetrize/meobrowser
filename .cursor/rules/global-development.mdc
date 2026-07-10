@@ -1,0 +1,17 @@
+---
+description: objcdemo 项目全局开发规范
+alwaysApply: true
+---
+
+# 全局开发规范
+
+## 文本输入控件（强制）
+
+**新功能输入框一律使用 `SBTextField` / `SBTextView`**（密码框使用 `SBSecureTextField`）。
+
+- 禁止在业务代码中直接 `[[NSTextField alloc] init]` 或 `[[NSTextView alloc] init]`
+- 单行：`[SBTextField standardField]`
+- 多行：`[SBTextView standardTextView]`
+- 新 App target 须链接 `SBKit/` 并调用 `SBApplicationMenus`
+
+详细架构与快捷键说明见 `docs/sbkit/text-input.md` 与 `.cursor/rules/appkit-text-input.mdc`。

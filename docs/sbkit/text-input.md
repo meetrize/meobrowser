@@ -102,7 +102,10 @@ BROWSER_CFLAGS += -I$(SBKIT_DIR)
 
 ## Cursor 规则
 
-AI 与协作者请遵循：`.cursor/rules/appkit-text-input.mdc`
+AI 与协作者请遵循：
+
+- **全局**：`.cursor/rules/global-development.mdc` — 新功能输入框一律用 `SBTextField` / `SBTextView`
+- **细节**：`.cursor/rules/appkit-text-input.mdc`
 
 ## 当前采用情况
 

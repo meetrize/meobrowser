@@ -6,6 +6,8 @@ alwaysApply: true
 
 # 文本输入规范（SBKit）
 
+> **全局规则**：新功能输入框一律使用 `SBTextField` / `SBTextView`（见 `global-development.mdc`）。
+
 ## 原则
 
 1. **禁止**在业务代码中直接 `[[NSTextField alloc] init]` / `[[NSTextView alloc] init]`。
