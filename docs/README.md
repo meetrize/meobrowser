@@ -11,7 +11,7 @@
 | [minimal-browser/multi-tab-design.md](minimal-browser/multi-tab-design.md) | 多标签页（Chrome 式标题栏）设计方案 L2 |
 | [minimal-browser/new-tab-launchpad-design.md](minimal-browser/new-tab-launchpad-design.md) | 新标签页 — Launchpad 式快捷方式设计方案 |
 | [minimal-browser/new-tab-launchpad-development-plan.md](minimal-browser/new-tab-launchpad-development-plan.md) | Launchpad 新标签页分阶段开发计划 |
-| [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | SimpleBrowser L1 验收记录 |
+| [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | SimpleBrowser L1 + Launchpad 新标签页验收记录 |
 | [sbkit/text-input.md](sbkit/text-input.md) | SBKit 文本输入与编辑快捷键架构 |
 
 ## 构建命令
@@ -31,5 +31,6 @@
 ## 相关代码
 
 - 演示应用：`SimpleWindow/`（AppKit + XIB + Makefile）
-- 最简浏览器：`SimpleBrowser/`（AppKit + WKWebView + Makefile，L1 已完成）
+- 最简浏览器：`SimpleBrowser/`（AppKit + WKWebView + 多标签 + Launchpad 新标签页，Makefile 构建）
+- Launchpad 新标签页：`SimpleBrowser/NewTab/`（快捷方式网格、持久化、编辑）
 - 共享 UI 基础库：`SBKit/`（标准菜单、文本输入控件）

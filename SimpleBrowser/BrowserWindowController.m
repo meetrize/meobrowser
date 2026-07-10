@@ -6,11 +6,13 @@
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
+#import "BrowserLaunchpadView.h"
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, NSWindowDelegate>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
+@property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
@@ -223,6 +225,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                     forOrientation:NSLayoutConstraintOrientationVertical];
 
+    self.launchpadView = [[BrowserLaunchpadView alloc] initWithFrame:NSZeroRect];
+    self.launchpadView.delegate = self;
+    self.launchpadView.hidden = YES;
+    self.launchpadView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.contentContainer addSubview:self.launchpadView];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.launchpadView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
+        [self.launchpadView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
+        [self.launchpadView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
+        [self.launchpadView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+    ]];
+
     NSStackView *rootStack = [NSStackView stackViewWithViews:@[
         self.tabStripView, toolbar, self.contentContainer
     ]];
@@ -284,7 +299,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BrowserTab *selectedTab = self.tabController.selectedTab;
     for (BrowserTab *tab in self.tabController.tabs) {
         [self attachWebViewForTab:tab];
-        tab.webView.hidden = (tab != selectedTab);
+        BOOL isSelected = (tab == selectedTab);
+        if (tab.isNewTabPage) {
+            tab.webView.hidden = YES;
+        } else {
+            tab.webView.hidden = !isSelected;
+        }
+    }
+
+    BOOL showLaunchpad = selectedTab.isNewTabPage;
+    self.launchpadView.hidden = !showLaunchpad;
+    if (showLaunchpad) {
+        [self.launchpadView reloadShortcuts];
     }
 
     [self reloadTabStrip];
@@ -361,6 +387,22 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController addNewTab];
 }
 
+#pragma mark - BrowserLaunchpadViewDelegate
+
+- (void)launchpadView:(BrowserLaunchpadView *)view openURL:(NSURL *)url {
+    (void)view;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab) {
+        [tab loadURL:url];
+        [self refreshTabsUI];
+    }
+}
+
+- (void)launchpadView:(BrowserLaunchpadView *)view openURLInNewTab:(NSURL *)url {
+    (void)view;
+    [self.tabController addTabWithURL:url];
+}
+
 #pragma mark - Tab Menu Actions
 
 - (void)newBrowserTab:(id)sender {
@@ -411,6 +453,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab) {
         [tab loadURL:url];
+        [self refreshTabsUI];
     }
 }
 
@@ -454,10 +497,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
 
-    self.backButton.enabled = webView.canGoBack;
-    self.forwardButton.enabled = webView.canGoForward;
-
     BrowserTab *tab = self.tabController.selectedTab;
+    self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
+    self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
+    self.reloadButton.enabled = !tab.isNewTabPage;
+
     NSString *title = tab.displayTitle;
     [self setDisplayedWindowTitle:title];
 
@@ -536,9 +580,8 @@ didFailNavigation:(WKNavigation *)navigation
 
     tab.isLoading = NO;
 
-    if (webView.title.length > 0) {
+    if (!tab.isNewTabPage && webView.title.length > 0) {
         tab.title = webView.title;
-        tab.isNewTabPage = NO;
     }
 
     if (webView == self.webView) {

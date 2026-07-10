@@ -1,5 +1,4 @@
 #import "BrowserTab.h"
-#import "BrowserNewTabPage.h"
 
 @implementation BrowserTab
 
@@ -15,7 +14,7 @@
 - (void)loadNewTabPage {
     self.isNewTabPage = YES;
     self.title = @"新标签页";
-    [BrowserNewTabPage loadInWebView:self.webView];
+    [self.webView stopLoading];
 }
 
 - (void)loadURL:(NSURL *)url {

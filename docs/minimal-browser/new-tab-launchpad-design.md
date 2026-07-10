@@ -1,7 +1,7 @@
 # SimpleBrowser 新标签页 — Launchpad 式快捷方式设计方案
 
 > 目标：参照 macOS Launchpad 的交互逻辑，在新标签页中展示网站快捷方式网格，作为浏览起点页。  
-> 状态：**设计阶段**；当前实现为 `BrowserNewTabPage` 占位 HTML，待本方案落地替换。  
+> 状态：**NTP-0～NTP-3 已完成**（2026-07-10）；Launchpad 原生新标签页已替代 `BrowserNewTabPage` HTML 占位。
 > 前置依赖：[multi-tab-design.md](multi-tab-design.md)（L2 多标签，已完成 L2a～L2c）
 
 ---
@@ -136,7 +136,7 @@ SimpleBrowser/
 │   └── BrowserShortcutFolderView.h/.m  # 文件夹展开（NTP-3，可选）
 ├── Tabs/
 │   ├── BrowserTab.m                    # loadNewTabPage 改为显示 Launchpad
-│   └── BrowserNewTabPage.m             # 废弃或保留为 fallback
+│   └── (已删除 BrowserNewTabPage，Launchpad 为默认新标签页)
 └── BrowsingPreferences.m              # 不变；会话仍用 about:newtab 标记
 ```
 
@@ -300,16 +300,16 @@ SimpleBrowser/
 
 ## 11. 验收标准（NTP-1 + NTP-2）
 
-- [ ] ⌘T 新建标签显示 Launchpad 网格（非空白 HTML）
-- [ ] 单击快捷方式在当前标签打开对应 URL
-- [ ] 中键单击在新标签打开
-- [ ] 默认快捷方式首次启动可见
-- [ ] 可添加、编辑、删除快捷方式并持久化
-- [ ] 拖拽排序生效，重启后顺序保留
-- [ ] 多页时横向翻页与指示器正常
-- [ ] 浅/深色模式下背景与文字可读
-- [ ] 重启后会话中 `about:newtab` 标签恢复为 Launchpad
-- [ ] 地址栏仍使用 `SBTextField`；添加快捷方式 sheet 符合 SBKit 规范
+- [x] ⌘T 新建标签显示 Launchpad 网格（非空白 HTML）
+- [x] 单击快捷方式在当前标签打开对应 URL
+- [x] 中键单击在新标签打开
+- [x] 默认快捷方式首次启动可见
+- [x] 可添加、编辑、删除快捷方式并持久化
+- [x] 拖拽排序生效，重启后顺序保留
+- [x] 多页时横向翻页与指示器正常
+- [x] 浅/深色模式下背景与文字可读
+- [x] 重启后会话中 `about:newtab` 标签恢复为 Launchpad
+- [x] 地址栏仍使用 `SBTextField`；添加快捷方式 sheet 符合 SBKit 规范
 
 ---
 
@@ -318,5 +318,5 @@ SimpleBrowser/
 - [multi-tab-design.md](multi-tab-design.md) — 多标签架构
 - [design.md](design.md) — L1 浏览器基础
 - [../sbkit/text-input.md](../sbkit/text-input.md) — SBKit 输入规范
-- 现有占位实现：`SimpleBrowser/Tabs/BrowserNewTabPage.m`
+- 实现代码：`SimpleBrowser/NewTab/`（Launchpad 网格、Store、EditorSheet）
 - macOS Launchpad（系统 UI，交互参考）

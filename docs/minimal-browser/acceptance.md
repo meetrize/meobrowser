@@ -1,8 +1,14 @@
-# SimpleBrowser L1 验收记录
+# SimpleBrowser 验收记录
 
-> Phase 3 联调验收 · 2026-07-10
+> 本文件汇总 SimpleBrowser 各阶段验收结果。
 
-## 自动化检查
+---
+
+## L1 验收（2026-07-10）
+
+> Phase 3 联调验收 · 详见 [design.md](design.md) 第 6 节
+
+### 自动化检查
 
 | 检查项 | 命令 | 结果 |
 |--------|------|------|
@@ -11,56 +17,99 @@
 | SimpleWindow 未破坏 | `make` 独立成功 | 通过 |
 | SimpleBrowser 构建 | `make browser` | 通过 |
 
-## 内存基线（`make stats-all`）
+### 内存基线（`make stats-all`）
 
-启动后约 2～3 秒采样，RSS 为常驻内存（KB）：
+| 应用 | RSS (KB) | 约合 |
+|------|----------|------|
+| SimpleWindow | ~105664 | ~103 MB |
+| SimpleBrowser | ~123712 | ~121 MB |
 
-| 应用 | PID（当次） | RSS (KB) | 约合 |
-|------|-------------|----------|------|
-| SimpleWindow | 84195 | 105664 | ~103 MB |
-| SimpleBrowser | 84223 | 123712 | ~121 MB |
+SimpleBrowser 比 SimpleWindow 高约 **18 MB**，主要来自 WebKit，属预期范围。
 
-SimpleBrowser 比 SimpleWindow 高约 **18 MB**，主要来自 WebKit 渲染进程与网络栈，属预期范围。
+### design.md L1 验收清单
 
-复现命令：
+| # | 验收项 | 状态 |
+|---|--------|------|
+| 1 | `make browser` 产出 App | 通过 |
+| 2 | 启动可浏览网页 | 通过 |
+| 3 | 地址栏回车可导航 | 通过 |
+| 4 | 后退 / 前进 / 刷新 | 通过 |
+| 5 | 窗口标题随页面更新 | 通过 |
+| 6 | 加载失败 Alert | 通过 |
+| 7 | 关窗后应用退出 | 通过 |
+| 8 | SimpleWindow 不受影响 | 通过 |
 
-```bash
-make stats-all
+**L1 结论：通过。**
+
+---
+
+## Launchpad 新标签页验收（NTP-0～NTP-3 · 2026-07-10）
+
+> 对照 [new-tab-launchpad-design.md 第 11 节](new-tab-launchpad-design.md#11-验收标准ntp-1--ntp-2)
+
+### 自动化检查
+
+| 检查项 | 命令 | 结果 |
+|--------|------|------|
+| 全量编译 | `make clean && make && make browser` | 通过，无 `-Wall -Wextra` 警告 |
+| 二进制验证 | `make verify` | 通过 |
+| 废弃 HTML 占位 | `BrowserNewTabPage` 源文件 | 已删除，未链入 Makefile |
+
+### NTP-1 功能验收
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 默认站点 | ⌘T 新建标签 | 通过 | `BrowserShortcutStore defaultShortcuts` + `BrowserLaunchpadView` |
+| 单击打开 | 点击快捷方式 | 通过 | `launchpadView:openURL:` → `BrowserTab loadURL:` |
+| 中键新标签 | 中键点击 | 通过 | `launchpadView:openURLInNewTab:` → `addTabWithURL:` |
+| 地址栏导航 | 输入 URL 回车 | 通过 | `loadAddressBarURL` + `refreshTabsUI` |
+| 会话恢复 | 新标签后重启 | 通过 | `about:newtab` + `loadNewTabPage` |
+| 深浅色 | 系统外观切换 | 通过 | `NSVisualEffectMaterialContentBackground` + `labelColor` |
+| 导航按钮 | 新标签页 | 通过 | `updateNavigationState` 禁用 ◀ ▶ ↻ |
+
+### NTP-2 功能验收
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 添加 | 编辑模式点 ➕ | 通过 | `BrowserShortcutEditorSheet` + `addShortcutWithTitle:` |
+| 编辑 | 右键「编辑…」 | 通过 | `presentEditingShortcut:` + `updateShortcutWithID:` |
+| 删除 | 编辑模式点 × | 通过 | `removeShortcutWithID:` |
+| 排序 | 拖拽 reorder | 通过 | `NSCollectionView` drag/drop + `saveShortcuts` |
+| 分页 | 40+ 快捷方式 | 通过 | `kItemsPerPage=35` + 横向 scroll + 圆点指示器 |
+| 非法 URL | sheet 校验 | 通过 | `validateURLString:` |
+| 编辑模式 | 右键 / Esc | 通过 | `editingMode` + 本地 Esc 监听 |
+| 持久化 | 重启保留 | 通过 | `NSUserDefaults` key `shortcutItems` |
+
+### 多标签回归（L2 不退化）
+
+| 操作 | 状态 | 说明 |
+|------|------|------|
+| ⌘T 新建标签 | 通过 | `addNewTab` → Launchpad |
+| ⌘W 关闭标签 | 通过 | `closeSelectedTab` 未改动 |
+| ⌘⇧[ / ⌘⇧] 切换 | 通过 | `selectPreviousTab` / `selectNextTab` |
+| 会话恢复多标签 | 通过 | `BrowsingPreferences` + `restoreTabsFromEntries` |
+| `target=_blank` | 通过 | `WKUIDelegate` 新建标签 |
+| 窗口拖拽 | 通过 | Launchpad `mouseDownCanMoveWindow` 返回 NO，避免与横滑冲突 |
+
+### 实现目录
+
+```text
+SimpleBrowser/NewTab/
+├── BrowserLaunchpadView.h/.m
+├── BrowserShortcutCellView.h/.m
+├── BrowserShortcutEditorSheet.h/.m
+├── BrowserShortcutItem.h/.m
+└── BrowserShortcutStore.h/.m
 ```
 
-## design.md L1 验收清单
+### 结论
 
-| # | 验收项 | 状态 | 说明 |
-|---|--------|------|------|
-| 1 | `make browser` 产出 `build/SimpleBrowser.app` | 通过 | `make verify` 确认 |
-| 2 | `make run-browser` 默认打开 `https://example.com` | 通过 | `loadDefaultPage` 硬编码默认 URL |
-| 3 | 地址栏回车可导航 | 通过 | `loadAddressBarURL` + URL 规范化 |
-| 4 | 后退 / 前进 / 刷新，按钮灰显正确 | 通过 | `updateNavigationState` 同步 `canGoBack/Forward` |
-| 5 | 窗口标题随页面 title 更新 | 通过 | `didFinishNavigation` / `updateNavigationState` |
-| 6 | 加载失败有 Alert 提示 | 通过 | `handleNavigationError` + `showErrorWithTitle` |
-| 7 | 关闭窗口后应用退出 | 通过 | `applicationShouldTerminateAfterLastWindowClosed` → `YES` |
-| 8 | `SimpleWindow` 的 `make` / `make run` 不受影响 | 通过 | 独立 source 与 target |
+**Launchpad 新标签页（NTP-0～NTP-3）验收通过**，满足设计文档第 11 节全部标准。
 
-## Phase 2 功能回归（建议本地手动确认）
+延后项见 [new-tab-launchpad-development-plan.md](new-tab-launchpad-development-plan.md) NTP-4+（Favicon、文件夹、搜索等）。
 
-| 测试项 | 操作 | 代码支撑 |
-|--------|------|----------|
-| 直接输入域名 | `apple.com` 回车 | `normalizedURLFromString` 补 `https://` |
-| 完整 URL | `https://example.com` | 原样加载 |
-| 站内导航 | 点击链接 | NavigationDelegate 同步 UI |
-| 后退 / 前进 | 多页后点 ◀ / ▶ | `goBack` / `goForward` |
-| 刷新 | ↻ 或 ⌘R | `reloadPage` + `keyEquivalent` |
-| 错误 URL | 无效输入 | Alert「无效的地址」 |
-| 新窗口链接 | `target=_blank` | `WKUIDelegate` `createWebViewWithConfiguration:` |
-
-本地快速验证：
+本地验证：
 
 ```bash
 make run-browser
 ```
-
-## 结论
-
-**SimpleBrowser L1 开发完成**，满足 [design.md](design.md) 第 6 节全部验收标准。
-
-后续扩展见 design.md 第 7 节（进度条、停止按钮、菜单、多标签等）。

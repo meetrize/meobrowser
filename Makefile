@@ -12,11 +12,15 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
-                   $(BROWSER_SRC_DIR)/Tabs/BrowserNewTabPage.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTab.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabItemView.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutItem.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutStore.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutCellView.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutEditorSheet.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserLaunchpadView.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \
@@ -32,9 +36,9 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_NAME)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool
