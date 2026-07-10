@@ -26,6 +26,11 @@ extern NSString * const BrowserShortcutAddItemID;
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
++ (nullable NSString *)normalizedURLStringFromInput:(NSString *)input;
++ (nullable BrowserShortcutItem *)shortcutItemMatchingURLString:(NSString *)urlString
+                                                    inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts;
++ (BOOL)isURLStringBookmarked:(NSString *)urlString;
+
 + (BOOL)validateURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
 + (BOOL)validateIconURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
 

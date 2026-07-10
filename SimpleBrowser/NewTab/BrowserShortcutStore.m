@@ -114,6 +114,34 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     [self saveShortcuts:shortcuts];
 }
 
++ (nullable NSString *)normalizedURLStringFromInput:(NSString *)input {
+    NSString *normalized = nil;
+    if (![self validateURLString:input normalizedURL:&normalized]) {
+        return nil;
+    }
+    return normalized;
+}
+
++ (nullable BrowserShortcutItem *)shortcutItemMatchingURLString:(NSString *)urlString
+                                                    inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
+    NSString *target = [self normalizedURLStringFromInput:urlString];
+    if (!target) {
+        return nil;
+    }
+    for (BrowserShortcutItem *item in shortcuts) {
+        NSString *candidate = [self normalizedURLStringFromInput:item.urlString];
+        if (candidate && [candidate isEqualToString:target]) {
+            return item;
+        }
+    }
+    return nil;
+}
+
++ (BOOL)isURLStringBookmarked:(NSString *)urlString {
+    NSArray<BrowserShortcutItem *> *shortcuts = [self loadShortcuts];
+    return [self shortcutItemMatchingURLString:urlString inShortcuts:shortcuts] != nil;
+}
+
 + (BOOL)validateURLString:(NSString *)input normalizedURL:(NSString * _Nullable __autoreleasing * _Nullable)outURL {
     NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (trimmed.length == 0) {

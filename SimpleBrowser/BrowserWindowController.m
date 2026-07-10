@@ -7,6 +7,8 @@
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
 #import "BrowserLaunchpadView.h"
+#import "BrowserShortcutStore.h"
+#import "BrowserShortcutItem.h"
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
@@ -16,6 +18,7 @@
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
+@property (nonatomic, strong) NSButton *bookmarkButton;
 @property (nonatomic, strong) SBTextField *addressField;
 @property (nonatomic, strong) WKWebViewConfiguration *webViewConfiguration;
 @end
@@ -219,8 +222,17 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField = [SBTextField standardField];
     self.addressField.placeholderString = @"输入网址";
     self.addressField.delegate = self;
+    self.addressField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.bookmarkButton = [self makeBookmarkButton];
+    [self.addressField addSubview:self.bookmarkButton];
+    self.addressField.trailingContentInset = 22;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.bookmarkButton.trailingAnchor constraintEqualToAnchor:self.addressField.trailingAnchor constant:-6],
+        [self.bookmarkButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
+    ]];
 
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
         navButtons, self.addressField
@@ -305,6 +317,109 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [button.heightAnchor constraintEqualToConstant:28],
     ]];
     return button;
+}
+
+- (NSButton *)makeBookmarkButton {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSZeroRect];
+    button.target = self;
+    button.action = @selector(toggleBookmark:);
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.imageScaling = NSImageScaleProportionallyDown;
+    button.toolTip = @"添加到起始页快捷方式";
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:16],
+        [button.heightAnchor constraintEqualToConstant:16],
+    ]];
+    NSImage *image = [self bookmarkSymbolImageNamed:@"star" filled:NO];
+    if (image) {
+        button.image = image;
+    }
+    return button;
+}
+
+- (NSImage *)bookmarkSymbolImageNamed:(NSString *)symbolName filled:(BOOL)filled {
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:11
+                                                            weight:(filled ? NSFontWeightSemibold : NSFontWeightRegular)
+                                                             scale:NSImageSymbolScaleSmall];
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:@"收藏"];
+        if (image) {
+            return [image imageWithSymbolConfiguration:config];
+        }
+    }
+    return nil;
+}
+
+- (void)setBookmarkButtonFilled:(BOOL)filled enabled:(BOOL)enabled {
+    self.bookmarkButton.enabled = enabled;
+    NSString *symbolName = filled ? @"star.fill" : @"star";
+    NSImage *image = [self bookmarkSymbolImageNamed:symbolName filled:filled];
+    if (image) {
+        self.bookmarkButton.image = image;
+    }
+    if (@available(macOS 10.14, *)) {
+        if (!enabled) {
+            self.bookmarkButton.contentTintColor = [NSColor tertiaryLabelColor];
+        } else if (filled) {
+            self.bookmarkButton.contentTintColor = [NSColor systemYellowColor];
+        } else {
+            self.bookmarkButton.contentTintColor = [NSColor secondaryLabelColor];
+        }
+    }
+    self.bookmarkButton.toolTip = filled ? @"从起始页快捷方式中移除" : @"添加到起始页快捷方式";
+}
+
+- (void)updateBookmarkButtonState {
+    BrowserTab *tab = self.tabController.selectedTab;
+    NSURL *url = self.webView.URL;
+    BOOL canBookmark = tab && !tab.isNewTabPage && [BrowsingPreferences isPersistableURL:url];
+    if (!canBookmark) {
+        [self setBookmarkButtonFilled:NO enabled:NO];
+        return;
+    }
+
+    NSString *normalized = [BrowserShortcutStore normalizedURLStringFromInput:url.absoluteString];
+    BOOL bookmarked = normalized ? [BrowserShortcutStore isURLStringBookmarked:normalized] : NO;
+    [self setBookmarkButtonFilled:bookmarked enabled:YES];
+}
+
+- (void)toggleBookmark:(id)sender {
+    (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    NSURL *url = self.webView.URL;
+    if (!tab || tab.isNewTabPage || ![BrowsingPreferences isPersistableURL:url]) {
+        return;
+    }
+
+    NSString *urlString = [BrowserShortcutStore normalizedURLStringFromInput:url.absoluteString];
+    if (!urlString) {
+        return;
+    }
+
+    NSMutableArray<BrowserShortcutItem *> *shortcuts = [[BrowserShortcutStore loadShortcuts] mutableCopy];
+    BrowserShortcutItem *existing = [BrowserShortcutStore shortcutItemMatchingURLString:urlString
+                                                                             inShortcuts:shortcuts];
+    if (existing) {
+        [BrowserShortcutStore removeShortcutWithID:existing.itemID fromShortcuts:shortcuts];
+    } else {
+        NSString *title = self.webView.title.length > 0 ? self.webView.title : (url.host ?: urlString);
+        [BrowserShortcutStore addShortcutWithTitle:title
+                                       urlString:urlString
+                                   iconURLString:@""
+                                     toShortcuts:shortcuts];
+    }
+
+    if (!self.launchpadView.hidden) {
+        [self.launchpadView reloadShortcuts];
+    }
+    [self updateBookmarkButtonState];
 }
 
 - (void)setupInitialTabs {
@@ -558,6 +673,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     } else if (webView.URL) {
         self.addressField.stringValue = webView.URL.absoluteString;
     }
+    [self updateBookmarkButtonState];
 }
 
 - (void)showErrorWithTitle:(NSString *)title message:(NSString *)message {
