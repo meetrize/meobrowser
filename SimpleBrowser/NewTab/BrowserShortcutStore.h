@@ -14,17 +14,20 @@ extern NSString * const BrowserShortcutAddItemID;
 
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
+                                iconURLString:(NSString *)iconURLString
                                   toShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 + (void)updateShortcutWithID:(NSString *)itemID
                        title:(NSString *)title
                    urlString:(NSString *)urlString
+               iconURLString:(NSString *)iconURLString
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 + (BOOL)validateURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
++ (BOOL)validateIconURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
 
 @end
 

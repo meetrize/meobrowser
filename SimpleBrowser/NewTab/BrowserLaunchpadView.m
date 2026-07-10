@@ -260,7 +260,10 @@ static const CGFloat kItemSpacing = 8.0;
         if (!item) {
             return;
         }
-        [BrowserShortcutStore addShortcutWithTitle:item.title urlString:item.urlString toShortcuts:weakSelf.mutableShortcuts];
+        [BrowserShortcutStore addShortcutWithTitle:item.title
+                                         urlString:item.urlString
+                                     iconURLString:item.iconURLString
+                                       toShortcuts:weakSelf.mutableShortcuts];
         [weakSelf reloadCollectionView];
     }];
 }
@@ -278,6 +281,7 @@ static const CGFloat kItemSpacing = 8.0;
         [BrowserShortcutStore updateShortcutWithID:item.itemID
                                              title:item.title
                                          urlString:item.urlString
+                                     iconURLString:item.iconURLString
                                        inShortcuts:weakSelf.mutableShortcuts];
         [weakSelf reloadCollectionView];
     }];

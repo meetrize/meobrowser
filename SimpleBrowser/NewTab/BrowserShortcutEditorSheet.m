@@ -6,6 +6,7 @@
 @interface BrowserShortcutEditorPanelController : NSWindowController <NSTextFieldDelegate, NSWindowDelegate>
 @property (nonatomic, strong) SBTextField *titleField;
 @property (nonatomic, strong) SBTextField *urlField;
+@property (nonatomic, strong) SBTextField *iconURLField;
 @property (nonatomic, strong) NSTextField *errorLabel;
 @property (nonatomic, copy, nullable) BrowserShortcutEditorCompletionHandler completion;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *editingShortcut;
@@ -30,12 +31,13 @@
         [self buildWindowWithTitle:@"编辑快捷方式"];
         self.titleField.stringValue = shortcut.title;
         self.urlField.stringValue = shortcut.urlString;
+        self.iconURLField.stringValue = shortcut.iconURLString;
     }
     return self;
 }
 
 - (void)buildWindowWithTitle:(NSString *)title {
-    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 220)
+    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 260)
                                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -44,12 +46,16 @@
 
     NSTextField *titleCaption = [NSTextField labelWithString:@"名称"];
     NSTextField *urlCaption = [NSTextField labelWithString:@"网址"];
+    NSTextField *iconCaption = [NSTextField labelWithString:@"图标链接"];
 
     self.titleField = [SBTextField standardField];
     self.urlField = [SBTextField standardField];
     self.urlField.placeholderString = @"https://example.com";
+    self.iconURLField = [SBTextField standardField];
+    self.iconURLField.placeholderString = @"https://example.com/favicon.ico（可选）";
     self.titleField.delegate = self;
     self.urlField.delegate = self;
+    self.iconURLField.delegate = self;
 
     self.errorLabel = [NSTextField labelWithString:@""];
     self.errorLabel.textColor = [NSColor systemRedColor];
@@ -64,10 +70,11 @@
     NSGridView *grid = [NSGridView gridViewWithViews:@[
         @[titleCaption, self.titleField],
         @[urlCaption, self.urlField],
+        @[iconCaption, self.iconURLField],
     ]];
     grid.columnSpacing = 12;
     grid.rowSpacing = 10;
-    [grid columnAtIndex:0].width = 48;
+    [grid columnAtIndex:0].width = 64;
     [grid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
     NSStackView *buttons = [NSStackView stackViewWithViews:@[cancelButton, saveButton]];
@@ -136,6 +143,7 @@
     (void)sender;
     NSString *title = [self.titleField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *urlInput = self.urlField.stringValue;
+    NSString *iconInput = self.iconURLField.stringValue;
 
     if (title.length == 0) {
         [self showError:@"请输入名称"];
@@ -148,13 +156,23 @@
         return;
     }
 
+    NSString *normalizedIconURL = nil;
+    if (![BrowserShortcutStore validateIconURLString:iconInput normalizedURL:&normalizedIconURL]) {
+        [self showError:@"请输入有效的图标链接，需包含 http/https 与域名"];
+        return;
+    }
+
     BrowserShortcutItem *result = nil;
     if (self.editingShortcut) {
         result = self.editingShortcut;
         result.title = title;
         result.urlString = normalizedURL;
+        result.iconURLString = normalizedIconURL ?: @"";
     } else {
-        result = [BrowserShortcutItem itemWithTitle:title urlString:normalizedURL sortOrder:0];
+        result = [BrowserShortcutItem itemWithTitle:title
+                                          urlString:normalizedURL
+                                       iconURLString:normalizedIconURL ?: @""
+                                          sortOrder:0];
     }
 
     if (self.completion) {

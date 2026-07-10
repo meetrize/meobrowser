@@ -28,8 +28,79 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     return [[host substringToIndex:1] uppercaseString];
 }
 
+@interface BrowserShortcutIconLoader : NSObject
++ (instancetype)sharedLoader;
+- (void)loadImageForURLString:(NSString *)urlString
+                   completion:(void (^)(NSImage * _Nullable image))completion;
+@end
+
+@interface BrowserShortcutIconLoader ()
+@property (nonatomic, strong) NSCache<NSString *, NSImage *> *imageCache;
+@end
+
+@implementation BrowserShortcutIconLoader
+
++ (instancetype)sharedLoader {
+    static BrowserShortcutIconLoader *loader = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        loader = [[BrowserShortcutIconLoader alloc] init];
+    });
+    return loader;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _imageCache = [[NSCache alloc] init];
+        _imageCache.countLimit = 128;
+    }
+    return self;
+}
+
+- (void)loadImageForURLString:(NSString *)urlString
+                   completion:(void (^)(NSImage * _Nullable image))completion {
+    if (urlString.length == 0 || !completion) {
+        completion(nil);
+        return;
+    }
+
+    NSImage *cached = [self.imageCache objectForKey:urlString];
+    if (cached) {
+        completion(cached);
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        completion(nil);
+        return;
+    }
+
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url
+                                                             completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)response;
+        NSImage *image = nil;
+        if (!error && data.length > 0) {
+            image = [[NSImage alloc] initWithData:data];
+        }
+        if (image && image.size.width > 0 && image.size.height > 0) {
+            [self.imageCache setObject:image forKey:urlString];
+        } else {
+            image = nil;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(image);
+        });
+    }];
+    [task resume];
+}
+
+@end
+
 @interface BrowserShortcutCellContentView : NSView
 @property (nonatomic, strong) NSView *iconView;
+@property (nonatomic, strong) NSImageView *iconImageView;
 @property (nonatomic, strong) NSTextField *letterLabel;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *deleteButton;
@@ -43,6 +114,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, assign) BOOL trackingHover;
 @property (nonatomic, strong, nullable) NSTimer *longPressTimer;
 @property (nonatomic, assign) BOOL longPressTriggered;
+@property (nonatomic, assign) NSUInteger iconLoadToken;
 @end
 
 @implementation BrowserShortcutCellContentView
@@ -55,8 +127,15 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconView = [[NSView alloc] initWithFrame:NSZeroRect];
         _iconView.wantsLayer = YES;
         _iconView.layer.cornerRadius = kIconCornerRadius;
+        _iconView.layer.masksToBounds = YES;
         _iconView.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_iconView];
+
+        _iconImageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _iconImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _iconImageView.translatesAutoresizingMaskIntoConstraints = NO;
+        _iconImageView.hidden = YES;
+        [_iconView addSubview:_iconImageView];
 
         _letterLabel = [NSTextField labelWithString:@""];
         _letterLabel.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
@@ -90,6 +169,11 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [_iconView.topAnchor constraintEqualToAnchor:self.topAnchor constant:4],
             [_iconView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
 
+            [_iconImageView.topAnchor constraintEqualToAnchor:_iconView.topAnchor],
+            [_iconImageView.leadingAnchor constraintEqualToAnchor:_iconView.leadingAnchor],
+            [_iconImageView.trailingAnchor constraintEqualToAnchor:_iconView.trailingAnchor],
+            [_iconImageView.bottomAnchor constraintEqualToAnchor:_iconView.bottomAnchor],
+
             [_letterLabel.centerXAnchor constraintEqualToAnchor:_iconView.centerXAnchor],
             [_letterLabel.centerYAnchor constraintEqualToAnchor:_iconView.centerYAnchor],
 
@@ -119,26 +203,65 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.trackingHover = YES;
 }
 
+- (void)applyLetterFallbackForShortcut:(BrowserShortcutItem *)shortcut {
+    self.iconImageView.image = nil;
+    self.iconImageView.hidden = YES;
+    self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
+    self.letterLabel.textColor = [NSColor whiteColor];
+    self.letterLabel.hidden = NO;
+    self.iconView.layer.backgroundColor = ColorFromURLString(shortcut.urlString).CGColor;
+}
+
+- (void)applyLoadedIconImage:(NSImage *)image {
+    self.iconImageView.image = image;
+    self.iconImageView.hidden = NO;
+    self.letterLabel.hidden = YES;
+    self.iconView.layer.backgroundColor = [NSColor whiteColor].CGColor;
+}
+
+- (void)loadIconForShortcut:(BrowserShortcutItem *)shortcut {
+    self.iconLoadToken += 1;
+    NSUInteger token = self.iconLoadToken;
+    [self applyLetterFallbackForShortcut:shortcut];
+
+    if (shortcut.iconURLString.length == 0) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [[BrowserShortcutIconLoader sharedLoader] loadImageForURLString:shortcut.iconURLString
+                                                          completion:^(NSImage *image) {
+        BrowserShortcutCellContentView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.iconLoadToken != token) {
+            return;
+        }
+        if (image) {
+            [strongSelf applyLoadedIconImage:image];
+        }
+    }];
+}
+
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
     self.addCell = NO;
     self.shortcut = shortcut;
-    self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
     self.titleLabel.stringValue = shortcut.title;
-    self.iconView.layer.backgroundColor = ColorFromURLString(shortcut.urlString).CGColor;
-    self.letterLabel.hidden = NO;
     self.titleLabel.hidden = NO;
+    [self loadIconForShortcut:shortcut];
     [self applyEditingChrome];
 }
 
 - (void)configureAsAddCell {
     self.addCell = YES;
     self.shortcut = nil;
+    self.iconLoadToken += 1;
+    self.iconImageView.image = nil;
+    self.iconImageView.hidden = YES;
     self.letterLabel.stringValue = @"+";
     self.titleLabel.stringValue = @"添加";
     self.letterLabel.hidden = NO;
     self.titleLabel.hidden = NO;
-    self.iconView.layer.backgroundColor = [NSColor quaternaryLabelColor].CGColor;
     self.letterLabel.textColor = [NSColor secondaryLabelColor];
+    self.iconView.layer.backgroundColor = [NSColor quaternaryLabelColor].CGColor;
     [self applyEditingChrome];
 }
 

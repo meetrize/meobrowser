@@ -5,6 +5,7 @@ static NSString * const kShortcutItemsKey = @"shortcutItems";
 static NSString * const kShortcutItemIDKey = @"id";
 static NSString * const kShortcutTitleKey = @"title";
 static NSString * const kShortcutURLKey = @"url";
+static NSString * const kShortcutIconURLKey = @"iconURL";
 static NSString * const kShortcutOrderKey = @"order";
 
 NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
@@ -13,14 +14,14 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 
 + (NSArray<BrowserShortcutItem *> *)defaultShortcuts {
     return @[
-        [BrowserShortcutItem itemWithTitle:@"Google" urlString:@"https://www.google.com" sortOrder:0],
-        [BrowserShortcutItem itemWithTitle:@"GitHub" urlString:@"https://github.com" sortOrder:1],
-        [BrowserShortcutItem itemWithTitle:@"Wikipedia" urlString:@"https://www.wikipedia.org" sortOrder:2],
-        [BrowserShortcutItem itemWithTitle:@"Hacker News" urlString:@"https://news.ycombinator.com" sortOrder:3],
-        [BrowserShortcutItem itemWithTitle:@"Apple" urlString:@"https://www.apple.com" sortOrder:4],
-        [BrowserShortcutItem itemWithTitle:@"百度" urlString:@"https://www.baidu.com" sortOrder:5],
-        [BrowserShortcutItem itemWithTitle:@"哔哩哔哩" urlString:@"https://www.bilibili.com" sortOrder:6],
-        [BrowserShortcutItem itemWithTitle:@"知乎" urlString:@"https://www.zhihu.com" sortOrder:7],
+        [BrowserShortcutItem itemWithTitle:@"Google" urlString:@"https://www.google.com" iconURLString:@"" sortOrder:0],
+        [BrowserShortcutItem itemWithTitle:@"GitHub" urlString:@"https://github.com" iconURLString:@"" sortOrder:1],
+        [BrowserShortcutItem itemWithTitle:@"Wikipedia" urlString:@"https://www.wikipedia.org" iconURLString:@"" sortOrder:2],
+        [BrowserShortcutItem itemWithTitle:@"Hacker News" urlString:@"https://news.ycombinator.com" iconURLString:@"" sortOrder:3],
+        [BrowserShortcutItem itemWithTitle:@"Apple" urlString:@"https://www.apple.com" iconURLString:@"" sortOrder:4],
+        [BrowserShortcutItem itemWithTitle:@"百度" urlString:@"https://www.baidu.com" iconURLString:@"" sortOrder:5],
+        [BrowserShortcutItem itemWithTitle:@"哔哩哔哩" urlString:@"https://www.bilibili.com" iconURLString:@"" sortOrder:6],
+        [BrowserShortcutItem itemWithTitle:@"知乎" urlString:@"https://www.zhihu.com" iconURLString:@"" sortOrder:7],
     ];
 }
 
@@ -70,10 +71,12 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
+                                iconURLString:(NSString *)iconURLString
                                   toShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     BrowserShortcutItem *item = [BrowserShortcutItem itemWithTitle:title
-                                                       urlString:urlString
-                                                       sortOrder:(NSInteger)shortcuts.count];
+                                                         urlString:urlString
+                                                      iconURLString:iconURLString
+                                                         sortOrder:(NSInteger)shortcuts.count];
     [shortcuts addObject:item];
     [self saveShortcuts:shortcuts];
     return item;
@@ -82,11 +85,13 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 + (void)updateShortcutWithID:(NSString *)itemID
                        title:(NSString *)title
                    urlString:(NSString *)urlString
+               iconURLString:(NSString *)iconURLString
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     for (BrowserShortcutItem *item in shortcuts) {
         if ([item.itemID isEqualToString:itemID]) {
             item.title = [title copy];
             item.urlString = [urlString copy];
+            item.iconURLString = [iconURLString copy];
             break;
         }
     }
@@ -139,6 +144,17 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     return YES;
 }
 
++ (BOOL)validateIconURLString:(NSString *)input normalizedURL:(NSString * _Nullable __autoreleasing * _Nullable)outURL {
+    NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        if (outURL) {
+            *outURL = @"";
+        }
+        return YES;
+    }
+    return [self validateURLString:trimmed normalizedURL:outURL];
+}
+
 #pragma mark - Serialization
 
 + (NSDictionary *)dictionaryFromItem:(BrowserShortcutItem *)item {
@@ -146,6 +162,7 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
         kShortcutItemIDKey: item.itemID ?: @"",
         kShortcutTitleKey: item.title ?: @"",
         kShortcutURLKey: item.urlString ?: @"",
+        kShortcutIconURLKey: item.iconURLString ?: @"",
         kShortcutOrderKey: @(item.sortOrder),
     };
 }
@@ -158,6 +175,8 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     item.title = [title isKindOfClass:[NSString class]] ? title : @"";
     id url = dictionary[kShortcutURLKey];
     item.urlString = [url isKindOfClass:[NSString class]] ? url : @"";
+    id iconURL = dictionary[kShortcutIconURLKey];
+    item.iconURLString = [iconURL isKindOfClass:[NSString class]] ? iconURL : @"";
     id order = dictionary[kShortcutOrderKey];
     item.sortOrder = [order respondsToSelector:@selector(integerValue)] ? [order integerValue] : 0;
     return item;

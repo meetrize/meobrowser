@@ -7,10 +7,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *itemID;
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, copy) NSString *urlString;
+@property (nonatomic, copy) NSString *iconURLString;
 @property (nonatomic, assign) NSInteger sortOrder;
 
 + (instancetype)itemWithTitle:(NSString *)title
                     urlString:(NSString *)urlString
+                 iconURLString:(NSString *)iconURLString
                     sortOrder:(NSInteger)sortOrder;
 
 @end
