@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.Cocoa.XIB" version="3.0" toolsVersion="22503" targetRuntime="MacOSX.Cocoa" propertyAccessControl="none" useAutolayout="NO">
+    <dependencies>
+        <deployment identifier="macosx"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.CocoaPlugin" version="22503"/>
+    </dependencies>
+    <objects>
+        <customObject id="-2" userLabel="File's Owner" customClass="MainWindowController">
+            <connections>
+                <outlet property="actionButton" destination="BTN-action" id="out-action-btn"/>
+                <outlet property="colorWell" destination="CW-001" id="out-color"/>
+                <outlet property="datePicker" destination="DP-001" id="out-date"/>
+                <outlet property="levelIndicator" destination="LI-001" id="out-level"/>
+                <outlet property="mainTabView" destination="TAB-main" id="out-tab"/>
+                <outlet property="nameField" destination="TF-name" id="out-name"/>
+                <outlet property="notifyCheckbox" destination="BTN-notify" id="out-notify"/>
+                <outlet property="outputTextView" destination="TV-output" id="out-textview"/>
+                <outlet property="passwordField" destination="STF-pass" id="out-pass"/>
+                <outlet property="previewImageView" destination="IV-preview" id="out-image"/>
+                <outlet property="progressBar" destination="PI-bar" id="out-pbar"/>
+                <outlet property="progressSpinner" destination="PI-spin" id="out-spin"/>
+                <outlet property="searchField" destination="SF-001" id="out-search"/>
+                <outlet property="segmentControl" destination="SC-001" id="out-segment"/>
+                <outlet property="sidebarTableView" destination="TV-side" id="out-sidebar"/>
+                <outlet property="statusLabel" destination="TF-status" id="out-status"/>
+                <outlet property="stepper" destination="STP-001" id="out-stepper"/>
+                <outlet property="themePopUp" destination="PU-theme" id="out-theme"/>
+                <outlet property="volumeSlider" destination="SL-vol" id="out-slider"/>
+                <outlet property="window" destination="WIN-001" id="out-window"/>
+            </connections>
+        </customObject>
+        <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+        <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+        <window title="AppKit XIB 组件演示" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="WIN-001">
+            <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+            <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+            <rect key="contentRect" x="200" y="140" width="920" height="640"/>
+            <rect key="screenRect" x="0.0" y="0.0" width="1920" height="1080"/>
+            <view key="contentView" id="CV-001">
+                <rect key="frame" x="0.0" y="0.0" width="920" height="640"/>
+                <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                <subviews>
+                    <searchField id="SF-001">
+                        <rect key="frame" x="12" y="608" width="280" height="22"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
+                        <searchFieldCell key="cell" scrollable="YES" lineBreakMode="clipping" selectable="YES" editable="YES" borderStyle="bezel" placeholderString="搜索侧边栏..." bezelStyle="round" id="SF-cell">
+                            <font key="font" metaFont="system"/>
+                            <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
+                            <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                        </searchFieldCell>
+                    </searchField>
+                    <textField id="TF-status">
+                        <rect key="frame" x="300" y="608" width="608" height="22"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
+                        <textFieldCell key="cell" lineBreakMode="truncatingTail" selectable="YES" editable="NO" sendsActionOnEndEditing="YES" title="就绪" id="TF-status-cell">
+                            <font key="font" metaFont="smallSystem"/>
+                            <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                        </textFieldCell>
+                    </textField>
+                    <splitView dividerStyle="thin" vertical="NO" id="SP-001">
+                        <rect key="frame" x="0.0" y="0.0" width="920" height="600"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <customView id="LV-001">
+                                <rect key="frame" x="0.0" y="0.0" width="200" height="600"/>
+                                <autoresizingMask key="autoresizingMask" heightSizable="YES"/>
+                                <subviews>
+                                    <scrollView borderType="none" autohidesScrollers="YES" id="SV-side">
+                                        <rect key="frame" x="0.0" y="0.0" width="200" height="600"/>
+                                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                        <clipView key="contentView" id="CL-side">
+                                            <rect key="frame" x="0.0" y="0.0" width="200" height="600"/>
+                                            <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                            <subviews>
+                                                <tableView verticalHuggingPriority="750" allowsExpansionToolTips="YES" columnAutoresizingStyle="lastColumnOnly" selectionHighlightStyle="sourceList" columnReordering="NO" columnResizing="NO" multipleSelection="NO" emptySelection="NO" autosaveColumns="NO" rowHeight="28" rowSizeStyle="automatic" id="TV-side">
+                                                    <rect key="frame" x="0.0" y="0.0" width="200" height="600"/>
+                                                    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                    <size key="intercellSpacing" width="3" height="2"/>
+                                                    <color key="backgroundColor" name="_sourceListBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                                    <tableColumns>
+                                                        <tableColumn editable="NO" width="196" minWidth="40" maxWidth="1000" id="TC-side">
+                                                            <tableHeaderCell key="headerCell" lineBreakMode="truncatingTail" borderStyle="border" title="导航">
+                                                                <color key="textColor" name="headerTextColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="headerColor" catalog="System" colorSpace="catalog"/>
+                                                            </tableHeaderCell>
+                                                            <textFieldCell key="dataCell" lineBreakMode="truncatingTail" selectable="YES" editable="YES" title="Text Cell" id="TC-side-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </tableColumn>
+                                                    </tableColumns>
+                                                </tableView>
+                                            </subviews>
+                                        </clipView>
+                                        <scroller key="horizontalScroller" hidden="YES" horizontal="YES" id="HS-side">
+                                            <rect key="frame" x="0.0" y="583" width="200" height="17"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                        </scroller>
+                                        <scroller key="verticalScroller" hidden="YES" horizontal="NO" id="VS-side">
+                                            <rect key="frame" x="183" y="0.0" width="17" height="600"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                        </scroller>
+                                    </scrollView>
+                                </subviews>
+                            </customView>
+                            <customView id="RV-001">
+                                <rect key="frame" x="209" y="0.0" width="711" height="600"/>
+                                <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                <subviews>
+                                    <tabView type="noTabsNoBorder" id="TAB-main">
+                                        <rect key="frame" x="0.0" y="0.0" width="711" height="600"/>
+                                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                        <tabViewItems>
+                                            <tabViewItem label="表单控件" identifier="form" id="TAB-form">
+                                                <view key="view" id="VIEW-form">
+                                                    <rect key="frame" x="0.0" y="0.0" width="711" height="600"/>
+                                                    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                    <subviews>
+                                                        <box title="基本信息" id="BOX-form">
+                                                            <rect key="frame" x="20" y="380" width="670" height="200"/>
+                                                            <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
+                                                            <view key="contentView" id="BOX-form-inner">
+                                                                <rect key="frame" x="3" y="3" width="664" height="182"/>
+                                                                <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                                <subviews>
+                                                                    <textField id="LBL-name">
+                                                                        <rect key="frame" x="18" y="140" width="60" height="17"/>
+                                                                        <textFieldCell key="cell" lineBreakMode="clipping" title="姓名：" id="LBL-name-cell">
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                    <textField id="TF-name">
+                                                                        <rect key="frame" x="80" y="137" width="200" height="22"/>
+                                                                        <textFieldCell key="cell" scrollable="YES" lineBreakMode="clipping" selectable="YES" editable="YES" sendsActionOnEndEditing="YES" borderStyle="bezel" placeholderString="输入姓名" id="TF-name-cell">
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                    <textField id="LBL-pass">
+                                                                        <rect key="frame" x="18" y="105" width="60" height="17"/>
+                                                                        <textFieldCell key="cell" lineBreakMode="clipping" title="密码：" id="LBL-pass-cell">
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                    <secureTextField id="STF-pass">
+                                                                        <rect key="frame" x="80" y="102" width="200" height="22"/>
+                                                                        <secureTextFieldCell key="cell" scrollable="YES" lineBreakMode="clipping" selectable="YES" editable="YES" borderStyle="bezel" placeholderString="输入密码" id="STF-pass-cell">
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                                                        </secureTextFieldCell>
+                                                                    </secureTextField>
+                                                                    <textField id="LBL-theme">
+                                                                        <rect key="frame" x="18" y="70" width="60" height="17"/>
+                                                                        <textFieldCell key="cell" lineBreakMode="clipping" title="主题：" id="LBL-theme-cell">
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                    <popUpButton id="PU-theme">
+                                                                        <rect key="frame" x="80" y="66" width="150" height="26"/>
+                                                                        <popUpButtonCell key="cell" type="push" title="系统默认" bezelStyle="rounded" alignment="left" lineBreakMode="clipping" borderStyle="borderAndBezel" inset="2" id="PU-theme-cell">
+                                                                            <behavior key="behavior" lightByBackground="YES" lightByGray="YES"/>
+                                                                            <font key="font" metaFont="system"/>
+                                                                            <menu key="menu" title="ThemeMenu" id="PU-theme-menu">
+                                                                                <items>
+                                                                                    <menuItem title="系统默认" id="PU-i1"/>
+                                                                                    <menuItem title="浅色" id="PU-i2"/>
+                                                                                    <menuItem title="深色" id="PU-i3"/>
+                                                                                </items>
+                                                                            </menu>
+                                                                        </popUpButtonCell>
+                                                                    </popUpButton>
+                                                                    <button id="BTN-notify">
+                                                                        <rect key="frame" x="18" y="30" width="120" height="18"/>
+                                                                        <buttonCell key="cell" type="check" title="启用通知" bezelStyle="regularSquare" imagePosition="left" inset="2" id="BTN-notify-cell">
+                                                                            <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                                                            <font key="font" metaFont="system"/>
+                                                                        </buttonCell>
+                                                                        <connections>
+                                                                            <action selector="onCheckboxChanged:" target="-2" id="act-notify"/>
+                                                                        </connections>
+                                                                    </button>
+                                                                </subviews>
+                                                            </view>
+                                                        </box>
+                                                        <textField id="LBL-vol">
+                                                            <rect key="frame" x="20" y="340" width="80" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="音量滑块：" id="LBL-vol-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <slider id="SL-vol">
+                                                            <rect key="frame" x="100" y="335" width="300" height="28"/>
+                                                            <sliderCell key="cell" continuous="YES" tickMarkPosition="below" numberOfTickMarks="11" minValue="0" maxValue="100" doubleValue="50" id="SL-vol-cell"/>
+                                                            <connections>
+                                                                <action selector="onSliderChanged:" target="-2" id="act-slider"/>
+                                                            </connections>
+                                                        </slider>
+                                                        <textField id="LBL-date">
+                                                            <rect key="frame" x="20" y="300" width="80" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="日期：" id="LBL-date-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <datePicker id="DP-001">
+                                                            <rect key="frame" x="100" y="295" width="140" height="26"/>
+                                                            <datePickerCell key="cell" borderStyle="bezel" alignment="left" id="DP-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <date key="date" timeIntervalSinceReferenceDate="0"/>
+                                                                <datePickerElements key="datePickerElements" year="YES" month="YES" day="YES"/>
+                                                            </datePickerCell>
+                                                        </datePicker>
+                                                        <textField id="LBL-color">
+                                                            <rect key="frame" x="20" y="260" width="80" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="颜色：" id="LBL-color-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <colorWell id="CW-001">
+                                                            <rect key="frame" x="100" y="255" width="44" height="28"/>
+                                                            <color key="color" red="0.2" green="0.5" blue="0.9" alpha="1" colorSpace="calibratedRGB"/>
+                                                        </colorWell>
+                                                        <stepper id="STP-001">
+                                                            <rect key="frame" x="160" y="255" width="19" height="28"/>
+                                                            <stepperCell key="cell" alignment="left" minValue="0" maxValue="100" doubleValue="50" id="STP-cell"/>
+                                                            <connections>
+                                                                <action selector="onStepperChanged:" target="-2" id="act-stepper"/>
+                                                            </connections>
+                                                        </stepper>
+                                                        <button id="BTN-action">
+                                                            <rect key="frame" x="20" y="20" width="100" height="32"/>
+                                                            <buttonCell key="cell" type="push" title="执行操作" bezelStyle="rounded" alignment="center" borderStyle="border" id="BTN-action-cell">
+                                                                <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                            <connections>
+                                                                <action selector="onActionButton:" target="-2" id="act-action"/>
+                                                            </connections>
+                                                        </button>
+                                                        <button id="BTN-alert">
+                                                            <rect key="frame" x="130" y="20" width="100" height="32"/>
+                                                            <buttonCell key="cell" type="push" title="弹出对话框" bezelStyle="rounded" alignment="center" borderStyle="border" id="BTN-alert-cell">
+                                                                <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                            <connections>
+                                                                <action selector="onShowAlert:" target="-2" id="act-alert"/>
+                                                            </connections>
+                                                        </button>
+                                                    </subviews>
+                                                </view>
+                                            </tabViewItem>
+                                            <tabViewItem label="展示组件" identifier="display" id="TAB-display">
+                                                <view key="view" id="VIEW-display">
+                                                    <rect key="frame" x="0.0" y="0.0" width="711" height="600"/>
+                                                    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                    <subviews>
+                                                        <scrollView borderType="line" autohidesScrollers="YES" id="SV-output">
+                                                            <rect key="frame" x="20" y="300" width="400" height="280"/>
+                                                            <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" heightSizable="YES"/>
+                                                            <clipView key="contentView" id="CL-output">
+                                                                <rect key="frame" x="1" y="1" width="398" height="278"/>
+                                                                <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                                <subviews>
+                                                                    <textView importsGraphics="NO" richText="NO" verticallyResizable="YES" id="TV-output">
+                                                                        <rect key="frame" x="0.0" y="0.0" width="398" height="278"/>
+                                                                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                                        <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                                                        <size key="minSize" width="398" height="278"/>
+                                                                        <size key="maxSize" width="10000000" height="10000000"/>
+                                                                        <color key="insertionPointColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
+                                                                    </textView>
+                                                                </subviews>
+                                                            </clipView>
+                                                            <scroller key="horizontalScroller" hidden="YES" horizontal="YES" id="HS-output">
+                                                                <rect key="frame" x="1" y="264" width="398" height="17"/>
+                                                                <autoresizingMask key="autoresizingMask"/>
+                                                            </scroller>
+                                                            <scroller key="verticalScroller" horizontal="NO" id="VS-output">
+                                                                <rect key="frame" x="382" y="1" width="17" height="278"/>
+                                                                <autoresizingMask key="autoresizingMask"/>
+                                                            </scroller>
+                                                        </scrollView>
+                                                        <box title="进度与指示器" id="BOX-progress">
+                                                            <rect key="frame" x="440" y="300" width="250" height="280"/>
+                                                            <autoresizingMask key="autoresizingMask" flexibleMinX="YES" heightSizable="YES"/>
+                                                            <view key="contentView" id="BOX-progress-inner">
+                                                                <rect key="frame" x="3" y="3" width="244" height="262"/>
+                                                                <subviews>
+                                                                    <progressIndicator maxValue="100" doubleValue="65" style="bar" id="PI-bar">
+                                                                        <rect key="frame" x="20" y="210" width="200" height="20"/>
+                                                                    </progressIndicator>
+                                                                    <progressIndicator indeterminate="YES" style="spinning" id="PI-spin">
+                                                                        <rect key="frame" x="20" y="160" width="32" height="32"/>
+                                                                    </progressIndicator>
+                                                                    <levelIndicator id="LI-001">
+                                                                        <rect key="frame" x="20" y="120" width="200" height="18"/>
+                                                                        <levelIndicatorCell key="cell" alignment="left" maxValue="10" warningValue="4" criticalValue="2" id="LI-cell"/>
+                                                                    </levelIndicator>
+                                                                    <textField id="LBL-pbar">
+                                                                        <rect key="frame" x="20" y="230" width="200" height="17"/>
+                                                                        <textFieldCell key="cell" lineBreakMode="clipping" title="NSProgressIndicator (bar)" id="LBL-pbar-cell">
+                                                                            <font key="font" metaFont="smallSystem"/>
+                                                                            <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                    <textField id="LBL-spin">
+                                                                        <rect key="frame" x="60" y="168" width="160" height="17"/>
+                                                                        <textFieldCell key="cell" lineBreakMode="clipping" title="NSProgressIndicator (spinning)" id="LBL-spin-cell">
+                                                                            <font key="font" metaFont="smallSystem"/>
+                                                                            <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                                                                            <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                                        </textFieldCell>
+                                                                    </textField>
+                                                                </subviews>
+                                                            </view>
+                                                        </box>
+                                                        <imageView id="IV-preview">
+                                                            <rect key="frame" x="20" y="80" width="128" height="128"/>
+                                                            <imageCell key="cell" refusesFirstResponder="YES" alignment="left" imageScaling="proportionallyDown" image="NSApplicationIcon" id="IV-preview-cell"/>
+                                                        </imageView>
+                                                        <textField id="LBL-image">
+                                                            <rect key="frame" x="160" y="180" width="300" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="NSImageView — 系统应用图标" id="LBL-image-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <box boxType="separator" id="BOX-sep">
+                                                            <rect key="frame" x="20" y="60" width="670" height="5"/>
+                                                            <autoresizingMask key="autoresizingMask" widthSizable="YES"/>
+                                                        </box>
+                                                    </subviews>
+                                                </view>
+                                            </tabViewItem>
+                                            <tabViewItem label="交互按钮" identifier="controls" id="TAB-controls">
+                                                <view key="view" id="VIEW-controls">
+                                                    <rect key="frame" x="0.0" y="0.0" width="711" height="600"/>
+                                                    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                    <subviews>
+                                                        <segmentedControl id="SC-001">
+                                                            <rect key="frame" x="20" y="540" width="240" height="28"/>
+                                                            <autoresizingMask key="autoresizingMask" flexibleMaxY="YES"/>
+                                                            <segmentedCell key="cell" borderStyle="border" alignment="left" style="rounded" trackingMode="selectOne" id="SC-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <segments>
+                                                                    <segment label="列表" width="72"/>
+                                                                    <segment label="网格" width="72"/>
+                                                                    <segment label="详情" width="72"/>
+                                                                </segments>
+                                                            </segmentedCell>
+                                                            <connections>
+                                                                <action selector="onSegmentChanged:" target="-2" id="act-segment"/>
+                                                            </connections>
+                                                        </segmentedControl>
+                                                        <textField id="LBL-segment">
+                                                            <rect key="frame" x="280" y="545" width="200" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="NSSegmentedControl" id="LBL-segment-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <button id="BTN-push">
+                                                            <rect key="frame" x="20" y="460" width="100" height="32"/>
+                                                            <buttonCell key="cell" type="push" title="Push 按钮" bezelStyle="rounded" alignment="center" borderStyle="border" id="BTN-push-cell">
+                                                                <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <button id="BTN-gradient">
+                                                            <rect key="frame" x="130" y="460" width="120" height="32"/>
+                                                            <buttonCell key="cell" type="push" title="Gradient 按钮" bezelStyle="rounded" alignment="center" borderStyle="border" id="BTN-gradient-cell">
+                                                                <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <button id="BTN-radio1">
+                                                            <rect key="frame" x="20" y="400" width="100" height="18"/>
+                                                            <buttonCell key="cell" type="radio" title="选项 A" bezelStyle="regularSquare" imagePosition="left" state="on" inset="2" id="BTN-radio1-cell">
+                                                                <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <button id="BTN-radio2">
+                                                            <rect key="frame" x="20" y="375" width="100" height="18"/>
+                                                            <buttonCell key="cell" type="radio" title="选项 B" bezelStyle="regularSquare" imagePosition="left" inset="2" id="BTN-radio2-cell">
+                                                                <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <button id="BTN-help">
+                                                            <rect key="frame" x="20" y="320" width="25" height="25"/>
+                                                            <buttonCell key="cell" type="help" bezelStyle="helpButton" alignment="center" borderStyle="border" id="BTN-help-cell">
+                                                                <behavior key="behavior" pushIn="YES" lightByBackground="YES" lightByGray="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <textField id="LBL-help">
+                                                            <rect key="frame" x="55" y="324" width="200" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="NSButton (help)" id="LBL-help-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <button id="BTN-disclosure">
+                                                            <rect key="frame" x="20" y="280" width="20" height="20"/>
+                                                            <buttonCell key="cell" type="disclosureTriangle" bezelStyle="disclosure" alignment="center" borderStyle="border" id="BTN-disclosure-cell">
+                                                                <behavior key="behavior" pushIn="YES" changeBackground="YES" changeGray="YES" lightByContents="YES"/>
+                                                                <font key="font" metaFont="system"/>
+                                                            </buttonCell>
+                                                        </button>
+                                                        <textField id="LBL-disclosure">
+                                                            <rect key="frame" x="50" y="282" width="200" height="17"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="NSButton (disclosure)" id="LBL-disclosure-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                    </subviews>
+                                                </view>
+                                            </tabViewItem>
+                                            <tabViewItem label="关于" identifier="about" id="TAB-about">
+                                                <view key="view" id="VIEW-about">
+                                                    <rect key="frame" x="0.0" y="0.0" width="711" height="600"/>
+                                                    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                                    <subviews>
+                                                        <textField id="TF-about-title">
+                                                            <rect key="frame" x="20" y="520" width="400" height="28"/>
+                                                            <textFieldCell key="cell" lineBreakMode="clipping" title="AppKit XIB 组件演示" id="TF-about-title-cell">
+                                                                <font key="font" metaFont="systemBold" size="18"/>
+                                                                <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                        <textField id="TF-about-body">
+                                                            <rect key="frame" x="20" y="380" width="600" height="120"/>
+                                                            <textFieldCell key="cell" lineBreakMode="wordWrapping" title="本演示使用 Interface Builder (XIB) 定义 UI 布局，Objective-C 代码处理逻辑。&#10;&#10;包含：NSSplitView、NSTableView、NSTabView、NSTextField、NSSecureTextField、NSPopUpButton、NSButton、NSSlider、NSDatePicker、NSColorWell、NSStepper、NSTextView、NSProgressIndicator、NSLevelIndicator、NSImageView、NSSegmentedControl、NSSearchField、NSBox 等。" id="TF-about-body-cell">
+                                                                <font key="font" metaFont="system"/>
+                                                                <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                                                                <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
+                                                            </textFieldCell>
+                                                        </textField>
+                                                    </subviews>
+                                                </view>
+                                            </tabViewItem>
+                                        </tabViewItems>
+                                    </tabView>
+                                </subviews>
+                            </customView>
+                        </subviews>
+                        <holdingPriorities>
+                            <real value="200"/>
+                            <real value="500"/>
+                        </holdingPriorities>
+                    </splitView>
+                </subviews>
+            </view>
+        </window>
+    </objects>
+    <resources>
+        <image name="NSApplicationIcon" width="128" height="128"/>
+    </resources>
+</document>

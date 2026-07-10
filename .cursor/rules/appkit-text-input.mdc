@@ -1,0 +1,39 @@
+---
+description: AppKit 文本输入与编辑快捷键规范（SBKit）
+globs: "{SimpleBrowser,SimpleWindow,SBKit}/**/*.{m,h}"
+alwaysApply: true
+---
+
+# 文本输入规范（SBKit）
+
+## 原则
+
+1. **禁止**在业务代码中直接 `[[NSTextField alloc] init]` / `[[NSTextView alloc] init]`。
+2. **必须**使用 `SBKit` 提供的标准控件或配置：
+   - 单行：`[SBTextField standardField]`
+   - 密码：`[SBSecureTextField standardField]`
+   - 多行：`[SBTextView standardTextView]`（或包在 `NSScrollView` 内）
+3. **必须**在 `AppDelegate` 的 `applicationWillFinishLaunching:` 调用：
+   `[SBApplicationMenus installStandardMenusWithAppName:@"应用名"];`
+   否则 ⌘C / ⌘V / ⌘X / ⌘A / ⌘Z 等无法经响应链生效。
+
+## 架构分层
+
+| 层 | 类 | 职责 |
+|----|-----|------|
+| 菜单 | `SBApplicationMenus` | 标准「编辑」菜单，快捷键转发给第一响应者 |
+| 配置 | `SBTextInputConfiguration` | 统一 editable / selectable / font 等默认值 |
+| 控件 | `SBTextField` 等 | 封装配置，供 UI 代码直接使用 |
+
+## 新增输入框 checklist
+
+- [ ] 使用 `SBTextField` / `SBSecureTextField` / `SBTextView`
+- [ ] 自定义样式写在 `SBTextInputConfiguration` 或子类 `init`，不散落在 ViewController
+- [ ] 回车等特殊键在 delegate 中处理，不破坏标准编辑快捷键
+- [ ] 若新建独立 App target，Makefile 链接 `SBKit/*.m` 并加 `-ISBKit`
+
+## 支持的快捷键（由系统 + 编辑菜单提供）
+
+⌘Z 撤销 · ⌘⇧Z 重做 · ⌘X 剪切 · ⌘C 拷贝 · ⌘V 粘贴 · ⌘A 全选 · Delete 删除
+
+详细说明见 `docs/sbkit/text-input.md`。
