@@ -5,6 +5,11 @@
 static const CGFloat kCellSize = 96.0;
 static const CGFloat kIconSize = 64.0;
 static const CGFloat kIconCornerRadius = 14.0;
+static const CGFloat kIconShadowInset = 10.0;
+static const CGFloat kIconContainerSize = kIconSize + kIconShadowInset * 2.0;
+static const CGFloat kIconShadowBlur = 6.0;
+static const CGFloat kIconShadowOffsetY = -2.0;
+static const CGFloat kIconShadowAlpha = 0.22;
 static const CGFloat kHoverScale = 1.05;
 static const NSTimeInterval kHoverAnimationDuration = 0.15;
 static const NSTimeInterval kLongPressDuration = 0.5;
@@ -98,8 +103,52 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 @end
 
+@interface BrowserShortcutIconBackdropView : NSView
+@property (nonatomic, strong) NSColor *fillColor;
+@end
+
+@implementation BrowserShortcutIconBackdropView
+
++ (BOOL)isOpaque {
+    return NO;
+}
+
+- (void)setFillColor:(NSColor *)fillColor {
+    _fillColor = fillColor;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSRect iconRect = NSInsetRect(self.bounds, kIconShadowInset, kIconShadowInset);
+    if (iconRect.size.width <= 0 || iconRect.size.height <= 0) {
+        return;
+    }
+
+    NSGraphicsContext *context = [NSGraphicsContext currentContext];
+    [context saveGraphicsState];
+
+    NSShadow *shadow = [[NSShadow alloc] init];
+    shadow.shadowColor = [NSColor colorWithCalibratedWhite:0 alpha:kIconShadowAlpha];
+    shadow.shadowOffset = NSMakeSize(0, kIconShadowOffsetY);
+    shadow.shadowBlurRadius = kIconShadowBlur;
+    [shadow set];
+
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:iconRect
+                                                         xRadius:kIconCornerRadius
+                                                         yRadius:kIconCornerRadius];
+    NSColor *fill = self.fillColor ?: NSColor.whiteColor;
+    [fill setFill];
+    [path fill];
+
+    [context restoreGraphicsState];
+}
+
+@end
+
 @interface BrowserShortcutCellContentView : NSView
-@property (nonatomic, strong) NSView *iconView;
+@property (nonatomic, strong) NSView *iconAnimContainer;
+@property (nonatomic, strong) BrowserShortcutIconBackdropView *iconBackdropView;
 @property (nonatomic, strong) NSImageView *iconImageView;
 @property (nonatomic, strong) NSTextField *letterLabel;
 @property (nonatomic, strong) NSTextField *titleLabel;
@@ -123,26 +172,37 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self = [super initWithFrame:frameRect];
     if (self) {
         self.wantsLayer = YES;
+        self.layer.masksToBounds = NO;
+        self.clipsToBounds = NO;
+        self.canDrawSubviewsIntoLayer = NO;
 
-        _iconView = [[NSView alloc] initWithFrame:NSZeroRect];
-        _iconView.wantsLayer = YES;
-        _iconView.layer.cornerRadius = kIconCornerRadius;
-        _iconView.layer.masksToBounds = YES;
-        _iconView.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:_iconView];
+        _iconAnimContainer = [[NSView alloc] initWithFrame:NSZeroRect];
+        _iconAnimContainer.wantsLayer = YES;
+        _iconAnimContainer.layer.masksToBounds = NO;
+        _iconAnimContainer.clipsToBounds = NO;
+        _iconAnimContainer.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:_iconAnimContainer];
+
+        _iconBackdropView = [[BrowserShortcutIconBackdropView alloc] initWithFrame:NSZeroRect];
+        _iconBackdropView.fillColor = NSColor.whiteColor;
+        _iconBackdropView.translatesAutoresizingMaskIntoConstraints = NO;
+        [_iconAnimContainer addSubview:_iconBackdropView];
 
         _iconImageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         _iconImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _iconImageView.wantsLayer = YES;
+        _iconImageView.layer.cornerRadius = kIconCornerRadius;
+        _iconImageView.layer.masksToBounds = YES;
         _iconImageView.translatesAutoresizingMaskIntoConstraints = NO;
         _iconImageView.hidden = YES;
-        [_iconView addSubview:_iconImageView];
+        [_iconAnimContainer addSubview:_iconImageView];
 
         _letterLabel = [NSTextField labelWithString:@""];
         _letterLabel.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
         _letterLabel.textColor = [NSColor whiteColor];
         _letterLabel.alignment = NSTextAlignmentCenter;
         _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
-        [_iconView addSubview:_letterLabel];
+        [_iconAnimContainer addSubview:_letterLabel];
 
         _titleLabel = [NSTextField labelWithString:@""];
         _titleLabel.font = [NSFont systemFontOfSize:13];
@@ -164,25 +224,30 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [self.widthAnchor constraintEqualToConstant:kCellSize],
             [self.heightAnchor constraintEqualToConstant:kCellSize],
 
-            [_iconView.widthAnchor constraintEqualToConstant:kIconSize],
-            [_iconView.heightAnchor constraintEqualToConstant:kIconSize],
-            [_iconView.topAnchor constraintEqualToAnchor:self.topAnchor constant:4],
-            [_iconView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [_iconAnimContainer.widthAnchor constraintEqualToConstant:kIconContainerSize],
+            [_iconAnimContainer.heightAnchor constraintEqualToConstant:kIconContainerSize],
+            [_iconAnimContainer.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [_iconAnimContainer.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
 
-            [_iconImageView.topAnchor constraintEqualToAnchor:_iconView.topAnchor],
-            [_iconImageView.leadingAnchor constraintEqualToAnchor:_iconView.leadingAnchor],
-            [_iconImageView.trailingAnchor constraintEqualToAnchor:_iconView.trailingAnchor],
-            [_iconImageView.bottomAnchor constraintEqualToAnchor:_iconView.bottomAnchor],
+            [_iconBackdropView.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor],
+            [_iconBackdropView.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor],
+            [_iconBackdropView.trailingAnchor constraintEqualToAnchor:_iconAnimContainer.trailingAnchor],
+            [_iconBackdropView.bottomAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor],
 
-            [_letterLabel.centerXAnchor constraintEqualToAnchor:_iconView.centerXAnchor],
-            [_letterLabel.centerYAnchor constraintEqualToAnchor:_iconView.centerYAnchor],
+            [_iconImageView.widthAnchor constraintEqualToConstant:kIconSize],
+            [_iconImageView.heightAnchor constraintEqualToConstant:kIconSize],
+            [_iconImageView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
+            [_iconImageView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
 
-            [_titleLabel.topAnchor constraintEqualToAnchor:_iconView.bottomAnchor constant:6],
+            [_letterLabel.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
+            [_letterLabel.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
+
+            [_titleLabel.topAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor constant:2],
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:2],
             [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2],
 
-            [_deleteButton.topAnchor constraintEqualToAnchor:_iconView.topAnchor constant:-4],
-            [_deleteButton.leadingAnchor constraintEqualToAnchor:_iconView.leadingAnchor constant:-4],
+            [_deleteButton.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor constant:kIconShadowInset - 4],
+            [_deleteButton.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor constant:kIconShadowInset - 4],
             [_deleteButton.widthAnchor constraintEqualToConstant:18],
             [_deleteButton.heightAnchor constraintEqualToConstant:18],
         ]];
@@ -203,20 +268,24 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.trackingHover = YES;
 }
 
+- (void)updateIconFillColor:(NSColor *)color {
+    self.iconBackdropView.fillColor = color;
+}
+
 - (void)applyLetterFallbackForShortcut:(BrowserShortcutItem *)shortcut {
     self.iconImageView.image = nil;
     self.iconImageView.hidden = YES;
     self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
     self.letterLabel.textColor = [NSColor whiteColor];
     self.letterLabel.hidden = NO;
-    self.iconView.layer.backgroundColor = ColorFromURLString(shortcut.urlString).CGColor;
+    [self updateIconFillColor:ColorFromURLString(shortcut.urlString)];
 }
 
 - (void)applyLoadedIconImage:(NSImage *)image {
     self.iconImageView.image = image;
     self.iconImageView.hidden = NO;
     self.letterLabel.hidden = YES;
-    self.iconView.layer.backgroundColor = [NSColor whiteColor].CGColor;
+    [self updateIconFillColor:NSColor.whiteColor];
 }
 
 - (void)loadIconForShortcut:(BrowserShortcutItem *)shortcut {
@@ -261,7 +330,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.letterLabel.hidden = NO;
     self.titleLabel.hidden = NO;
     self.letterLabel.textColor = [NSColor secondaryLabelColor];
-    self.iconView.layer.backgroundColor = [NSColor quaternaryLabelColor].CGColor;
+    [self updateIconFillColor:NSColor.quaternaryLabelColor];
     [self applyEditingChrome];
 }
 
@@ -284,7 +353,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     if (self.addCell) {
         return;
     }
-    if ([self.iconView.layer animationForKey:kWiggleAnimationKey]) {
+    if ([self.iconAnimContainer.layer animationForKey:kWiggleAnimationKey]) {
         return;
     }
     CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
@@ -292,11 +361,11 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     animation.duration = 0.16;
     animation.repeatCount = HUGE_VALF;
     animation.autoreverses = YES;
-    [self.iconView.layer addAnimation:animation forKey:kWiggleAnimationKey];
+    [self.iconAnimContainer.layer addAnimation:animation forKey:kWiggleAnimationKey];
 }
 
 - (void)stopWiggle {
-    [self.iconView.layer removeAnimationForKey:kWiggleAnimationKey];
+    [self.iconAnimContainer.layer removeAnimationForKey:kWiggleAnimationKey];
 }
 
 - (void)setHoverScale:(CGFloat)scale animated:(BOOL)animated {
@@ -414,6 +483,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 - (void)loadView {
     self.shortcutContentView = [[BrowserShortcutCellContentView alloc] initWithFrame:NSMakeRect(0, 0, kCellSize, kCellSize)];
+    self.shortcutContentView.clipsToBounds = NO;
     self.view = self.shortcutContentView;
 }
 

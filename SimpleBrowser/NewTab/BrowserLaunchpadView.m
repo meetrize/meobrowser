@@ -94,6 +94,7 @@ static const CGFloat kItemSpacing = 8.0;
     _collectionView.delegate = self;
     _collectionView.backgroundColors = @[[NSColor clearColor]];
     _collectionView.selectable = NO;
+    _collectionView.clipsToBounds = NO;
     [_collectionView registerClass:[BrowserShortcutCellView class] forItemWithIdentifier:@"ShortcutCell"];
     [_collectionView registerForDraggedTypes:@[NSPasteboardTypeString]];
 
