@@ -197,11 +197,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabStripView setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                forOrientation:NSLayoutConstraintOrientationVertical];
 
-    self.backButton = [self toolbarButtonWithTitle:@"◀" action:@selector(goBack:)];
-    self.forwardButton = [self toolbarButtonWithTitle:@"▶" action:@selector(goForward:)];
-    self.reloadButton = [self toolbarButtonWithTitle:@"↻" action:@selector(reloadPage:)];
+    self.backButton = [self toolbarIconButtonWithSymbol:@"chevron.left"
+                                                toolTip:@"后退"
+                                                 action:@selector(goBack:)];
+    self.forwardButton = [self toolbarIconButtonWithSymbol:@"chevron.right"
+                                                   toolTip:@"前进"
+                                                    action:@selector(goForward:)];
+    self.reloadButton = [self toolbarIconButtonWithSymbol:@"arrow.clockwise"
+                                                  toolTip:@"刷新"
+                                                   action:@selector(reloadPage:)];
     self.reloadButton.keyEquivalent = @"r";
     self.reloadButton.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+
+    NSStackView *navButtons = [NSStackView stackViewWithViews:@[
+        self.backButton, self.forwardButton, self.reloadButton
+    ]];
+    navButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    navButtons.spacing = 2;
+    navButtons.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.addressField = [SBTextField standardField];
     self.addressField.placeholderString = @"输入网址";
@@ -210,10 +223,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        self.backButton, self.forwardButton, self.reloadButton, self.addressField
+        navButtons, self.addressField
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    toolbar.spacing = 8;
+    toolbar.spacing = 10;
     toolbar.edgeInsets = NSEdgeInsetsMake(6, 8, 8, 8);
     toolbar.distribution = NSStackViewDistributionFill;
     [toolbar setContentHuggingPriority:NSLayoutPriorityRequired
@@ -258,9 +271,39 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     ]];
 }
 
-- (NSButton *)toolbarButtonWithTitle:(NSString *)title action:(SEL)action {
-    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
-    button.bezelStyle = NSBezelStyleRounded;
+- (NSImage *)toolbarSymbolImageNamed:(NSString *)symbolName {
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:15
+                                                            weight:NSFontWeightSemibold
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
+        if (image) {
+            return [image imageWithSymbolConfiguration:config];
+        }
+    }
+    return nil;
+}
+
+- (NSButton *)toolbarIconButtonWithSymbol:(NSString *)symbolName
+                                  toolTip:(NSString *)toolTip
+                                   action:(SEL)action {
+    NSImage *image = [self toolbarSymbolImageNamed:symbolName];
+    NSButton *button = image ? [NSButton buttonWithImage:image target:self action:action]
+                             : [NSButton buttonWithTitle:@"?" target:self action:action];
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.imageScaling = NSImageScaleProportionallyDown;
+    button.toolTip = toolTip;
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:28],
+        [button.heightAnchor constraintEqualToConstant:28],
+    ]];
     return button;
 }
 
