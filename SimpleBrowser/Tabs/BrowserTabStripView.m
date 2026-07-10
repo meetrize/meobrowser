@@ -87,9 +87,7 @@ static const CGFloat kTabTopInset = 3.0;
         [_tabsStackView setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
         [_tabsStackView setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        _addTabButton = [NSButton buttonWithTitle:@"+" target:self action:@selector(onNewTab:)];
-        _addTabButton.bezelStyle = NSBezelStyleInline;
-        _addTabButton.font = [NSFont systemFontOfSize:16 weight:NSFontWeightMedium];
+        _addTabButton = [self newTabButton];
         _addTabButton.translatesAutoresizingMaskIntoConstraints = NO;
 
         _trailingDragArea = [[BrowserTabStripDragAreaView alloc] init];
@@ -120,8 +118,8 @@ static const CGFloat kTabTopInset = 3.0;
             [_tabsStackView.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
 
             [_addTabButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [_addTabButton.widthAnchor constraintEqualToConstant:28],
-            [_addTabButton.heightAnchor constraintEqualToConstant:22],
+            [_addTabButton.widthAnchor constraintEqualToConstant:24],
+            [_addTabButton.heightAnchor constraintEqualToConstant:24],
 
             [_trailingDragArea.leadingAnchor constraintEqualToAnchor:_addTabButton.trailingAnchor constant:4],
             [_trailingDragArea.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
@@ -162,6 +160,32 @@ static const CGFloat kTabTopInset = 3.0;
 - (BOOL)effectiveAppearanceIsDark {
     NSString *name = self.effectiveAppearance.name;
     return [name containsString:@"Dark"];
+}
+
+- (NSButton *)newTabButton {
+    NSImage *image = nil;
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:14
+                                                            weight:NSFontWeightSemibold
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *symbol = [NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:@"新建标签页"];
+        if (symbol) {
+            image = [symbol imageWithSymbolConfiguration:config];
+        }
+    }
+
+    NSButton *button = image ? [NSButton buttonWithImage:image target:self action:@selector(onNewTab:)]
+                             : [NSButton buttonWithTitle:@"+" target:self action:@selector(onNewTab:)];
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.imageScaling = NSImageScaleProportionallyDown;
+    button.toolTip = @"新建标签页";
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    return button;
 }
 
 - (BOOL)mouseDownCanMoveWindow {
