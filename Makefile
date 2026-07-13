@@ -29,6 +29,9 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarActionGroup.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarRowView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
+                   $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
+                   $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
+                   $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \
@@ -45,7 +48,7 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore
 

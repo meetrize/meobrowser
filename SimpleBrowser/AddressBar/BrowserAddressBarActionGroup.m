@@ -2,7 +2,7 @@
 
 static const CGFloat kActionButtonSize = 28.0;
 static const CGFloat kActionButtonSpacing = 2.0;
-static const CGFloat kDefaultGroupWidth = 156.0;
+static const CGFloat kDefaultGroupWidth = 184.0;
 static const CGFloat kMinimumGroupWidth = 36.0;
 static const CGFloat kOverflowHysteresis = 8.0;
 
@@ -57,6 +57,8 @@ static const CGFloat kOverflowHysteresis = 8.0;
 @interface BrowserAddressBarActionItem : NSObject
 @property (nonatomic, copy) NSString *symbolName;
 @property (nonatomic, copy) NSString *toolTip;
+@property (nonatomic, weak, nullable) id target;
+@property (nonatomic, assign) SEL action;
 @end
 
 @implementation BrowserAddressBarActionItem
@@ -70,6 +72,7 @@ static const CGFloat kOverflowHysteresis = 8.0;
 @property (nonatomic, strong) NSMenu *overflowMenu;
 @property (nonatomic, strong) NSArray<BrowserAddressBarActionItem *> *items;
 @property (nonatomic, strong) NSArray<NSButton *> *actionButtons;
+@property (nonatomic, strong, readwrite) NSButton *downloadButton;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
 @property (nonatomic, assign) BOOL isDragging;
@@ -95,8 +98,9 @@ static const CGFloat kOverflowHysteresis = 8.0;
         [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        _items = [self demoItems];
+        _items = [self buildActionItems];
         _actionButtons = [self makeActionButtonsForItems:_items];
+        _downloadButton = _actionButtons.firstObject;
         _buttonStack = [NSStackView stackViewWithViews:_actionButtons];
         _buttonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         _buttonStack.spacing = kActionButtonSpacing;
@@ -135,8 +139,15 @@ static const CGFloat kOverflowHysteresis = 8.0;
     return [self initWithFrame:NSZeroRect];
 }
 
-- (NSArray<BrowserAddressBarActionItem *> *)demoItems {
-    NSArray<NSDictionary<NSString *, NSString *> *> *specs = @[
+- (NSArray<BrowserAddressBarActionItem *> *)buildActionItems {
+    NSMutableArray<BrowserAddressBarActionItem *> *items = [NSMutableArray array];
+
+    BrowserAddressBarActionItem *download = [[BrowserAddressBarActionItem alloc] init];
+    download.symbolName = @"arrow.down.circle";
+    download.toolTip = @"下载";
+    [items addObject:download];
+
+    NSArray<NSDictionary<NSString *, NSString *> *> *demoSpecs = @[
         @{@"symbol": @"square.and.arrow.up", @"tip": @"分享"},
         @{@"symbol": @"camera", @"tip": @"截图"},
         @{@"symbol": @"text.bubble", @"tip": @"评论"},
@@ -144,8 +155,7 @@ static const CGFloat kOverflowHysteresis = 8.0;
         @{@"symbol": @"gearshape", @"tip": @"页面设置"},
         @{@"symbol": @"doc.on.doc", @"tip": @"复制链接"},
     ];
-    NSMutableArray<BrowserAddressBarActionItem *> *items = [NSMutableArray array];
-    for (NSDictionary<NSString *, NSString *> *spec in specs) {
+    for (NSDictionary<NSString *, NSString *> *spec in demoSpecs) {
         BrowserAddressBarActionItem *item = [[BrowserAddressBarActionItem alloc] init];
         item.symbolName = spec[@"symbol"];
         item.toolTip = spec[@"tip"];
@@ -192,6 +202,10 @@ static const CGFloat kOverflowHysteresis = 8.0;
     NSMutableArray<NSButton *> *buttons = [NSMutableArray array];
     for (BrowserAddressBarActionItem *item in items) {
         NSButton *button = [self makeToolbarButtonWithSymbol:item.symbolName toolTip:item.toolTip];
+        if (item.target && item.action) {
+            button.target = item.target;
+            button.action = item.action;
+        }
         [buttons addObject:button];
     }
     return buttons;
@@ -357,10 +371,20 @@ static const CGFloat kOverflowHysteresis = 8.0;
     NSInteger total = (NSInteger)self.items.count;
     for (NSInteger i = startIndex; i < total; i++) {
         BrowserAddressBarActionItem *item = self.items[i];
+        SEL action = (item.target && item.action) ? item.action : @selector(demoButtonClicked:);
+        id target = (item.target && item.action) ? item.target : self;
+        // 下载按钮的 target/action 可能在创建按钮后才由窗口控制器设置，overflow 时从按钮读取。
+        if (i < (NSInteger)self.actionButtons.count) {
+            NSButton *button = self.actionButtons[i];
+            if (button.target && button.action) {
+                target = button.target;
+                action = button.action;
+            }
+        }
         NSMenuItem *menuItem = [[NSMenuItem alloc] initWithTitle:item.toolTip
-                                                          action:@selector(demoButtonClicked:)
+                                                          action:action
                                                    keyEquivalent:@""];
-        menuItem.target = self;
+        menuItem.target = target;
         menuItem.image = [self symbolImageNamed:item.symbolName];
         [self.overflowMenu addItem:menuItem];
     }

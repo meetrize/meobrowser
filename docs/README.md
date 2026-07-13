@@ -15,6 +15,7 @@
 | [minimal-browser/new-tab-launchpad-development-plan.md](minimal-browser/new-tab-launchpad-development-plan.md) | Launchpad 新标签页分阶段开发计划 |
 | [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | MeoBrowser L1 + Launchpad 新标签页验收记录 |
 | [minimal-browser/professional-features-roadmap.md](minimal-browser/professional-features-roadmap.md) | 面向技术/专业用户的功能规划与路线图 |
+| [minimal-browser/download-design.md](minimal-browser/download-design.md) | 下载管理 — 交互与实现方案（V1） |
 | [sbkit/text-input.md](sbkit/text-input.md) | SBKit 文本输入与编辑快捷键架构 |
 
 ## 构建命令

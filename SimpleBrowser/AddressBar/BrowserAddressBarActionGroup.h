@@ -14,6 +14,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 用于计算按钮组最大宽度的容器（通常为 BrowserAddressBarRowView）。
 @property (nonatomic, weak, nullable) NSView *layoutContainer;
 
+/// 下载按钮（组内首项，优先保持可见）；由窗口控制器设置 target/action 与角标。
+@property (nonatomic, strong, readonly) NSButton *downloadButton;
+
 /// 根据拖拽增量调整按钮组宽度（正值为变宽）。
 - (void)applyWidthDelta:(CGFloat)deltaX;
 

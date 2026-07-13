@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (void)installTabMenuForTarget:(id)target;
 + (void)installSettingsMenuForTarget:(id)target;
++ (void)installDownloadMenuForTarget:(id)target;
 
 @end
 

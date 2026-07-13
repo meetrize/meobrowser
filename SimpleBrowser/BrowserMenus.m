@@ -63,4 +63,31 @@
     [appMenu insertItem:settingsItem atIndex:quitIndex];
 }
 
++ (void)installDownloadMenuForTarget:(id)target {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        return;
+    }
+
+    // 插在「标签页」之前；若尚未安装标签页菜单则追加到末尾。
+    NSInteger insertIndex = mainMenu.numberOfItems;
+    for (NSInteger i = 0; i < mainMenu.numberOfItems; i++) {
+        if ([mainMenu.itemArray[i].submenu.title isEqualToString:@"标签页"]) {
+            insertIndex = i;
+            break;
+        }
+    }
+
+    NSMenuItem *fileMenuItem = [[NSMenuItem alloc] init];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"文件"];
+
+    NSMenuItem *downloads = [menu addItemWithTitle:@"下载"
+                                            action:@selector(toggleDownloadsPanel:)
+                                     keyEquivalent:@"j"];
+    downloads.target = target;
+
+    fileMenuItem.submenu = menu;
+    [mainMenu insertItem:fileMenuItem atIndex:insertIndex];
+}
+
 @end

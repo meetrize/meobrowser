@@ -13,8 +13,10 @@
 #import "BrowserAddressBarAutocompleteController.h"
 #import "BrowserAddressBarActionGroup.h"
 #import "BrowserAddressBarRowView.h"
+#import "BrowserDownloadManager.h"
+#import "BrowserDownloadPanel.h"
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, NSWindowDelegate>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
@@ -23,11 +25,16 @@
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong) NSButton *bookmarkButton;
+@property (nonatomic, strong) NSButton *downloadButton;
+@property (nonatomic, strong) NSView *downloadBadgeView;
 @property (nonatomic, strong) SBTextField *addressField;
 @property (nonatomic, strong) BrowserAddressBarActionGroup *addressBarActionGroup;
 @property (nonatomic, strong) BrowserAddressBarRowView *addressBarRow;
 @property (nonatomic, strong) BrowserAddressBarAutocompleteController *addressAutocompleteController;
 @property (nonatomic, strong) WKWebViewConfiguration *webViewConfiguration;
+@property (nonatomic, strong) BrowserDownloadManager *downloadManager;
+@property (nonatomic, strong) BrowserDownloadPanel *downloadPanel;
+@property (nonatomic, assign) BOOL downloadPanelVisible;
 @end
 
 @implementation BrowserWindowController
@@ -57,8 +64,11 @@
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
+        _downloadManager = [[BrowserDownloadManager alloc] init];
+        [_downloadManager addObserver:self];
         [self setupUI];
         [BrowserMenus installTabMenuForTarget:self];
+        [BrowserMenus installDownloadMenuForTarget:self];
         [self setupInitialTabs];
     }
     return self;
@@ -206,6 +216,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)dealloc {
     [self.addressAutocompleteController uninstall];
+    [self.downloadManager removeObserver:self];
+    self.downloadPanel.panelDelegate = nil;
+    [self.downloadPanel orderOut:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -258,6 +271,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
     self.addressBarActionGroup.minimumAddressWidth = 120;
+    self.downloadButton = self.addressBarActionGroup.downloadButton;
+    self.downloadButton.target = self;
+    self.downloadButton.action = @selector(toggleDownloadsPanel:);
+    [self installDownloadBadgeOnButton:self.downloadButton];
 
     self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
                                                                   actionGroup:self.addressBarActionGroup];
@@ -345,6 +362,104 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [button.heightAnchor constraintEqualToConstant:28],
     ]];
     return button;
+}
+
+- (void)installDownloadBadgeOnButton:(NSButton *)button {
+    NSView *badge = [[NSView alloc] initWithFrame:NSZeroRect];
+    badge.wantsLayer = YES;
+    badge.layer.backgroundColor = [NSColor systemRedColor].CGColor;
+    badge.layer.cornerRadius = 3.5;
+    badge.hidden = YES;
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    [button addSubview:badge];
+    [NSLayoutConstraint activateConstraints:@[
+        [badge.widthAnchor constraintEqualToConstant:7],
+        [badge.heightAnchor constraintEqualToConstant:7],
+        [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:3],
+        [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-3],
+    ]];
+    self.downloadBadgeView = badge;
+}
+
+#pragma mark - Downloads
+
+- (void)toggleDownloadsPanel:(id)sender {
+    (void)sender;
+    if (self.downloadPanelVisible && self.downloadPanel.isVisible) {
+        [self.downloadPanel dismissPanel];
+        return;
+    }
+    [self showDownloadsPanel];
+}
+
+- (void)showDownloadsPanel {
+    if (!self.downloadPanel) {
+        self.downloadPanel = [[BrowserDownloadPanel alloc] init];
+        self.downloadPanel.panelDelegate = self;
+        self.downloadPanel.manager = self.downloadManager;
+    }
+    [self.downloadManager markAllCompletedAsRead];
+    [self updateDownloadButtonAppearance];
+
+    NSRect buttonRect = [self.downloadButton convertRect:self.downloadButton.bounds toView:nil];
+    NSRect screenRect = [self.window convertRectToScreen:buttonRect];
+    self.downloadPanel.dismissExclusionRectOnScreen = NSInsetRect(screenRect, -4, -4);
+    [self.downloadPanel presentAnchoredToRect:screenRect];
+    self.downloadPanelVisible = YES;
+}
+
+- (void)downloadPanelDidRequestClose:(BrowserDownloadPanel *)panel {
+    (void)panel;
+    self.downloadPanelVisible = NO;
+}
+
+- (void)downloadManagerDidChange:(BrowserDownloadManager *)manager {
+    (void)manager;
+    [self updateDownloadButtonAppearance];
+    if (self.downloadPanelVisible && self.downloadPanel.isVisible) {
+        [self.downloadPanel reloadFromManager];
+    }
+}
+
+- (void)updateDownloadButtonAppearance {
+    NSUInteger active = self.downloadManager.activeCount;
+    NSUInteger unread = self.downloadManager.unreadCompletedCount;
+    BOOL busy = active > 0;
+
+    NSString *symbol = busy ? @"arrow.down.circle.fill" : @"arrow.down.circle";
+    NSImage *image = [self toolbarSymbolImageNamed:symbol];
+    if (image) {
+        self.downloadButton.image = image;
+    }
+    if (@available(macOS 10.14, *)) {
+        self.downloadButton.contentTintColor = busy ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+
+    self.downloadBadgeView.hidden = (unread == 0);
+
+    if (active > 0) {
+        NSInteger pct = (NSInteger)llround(self.downloadManager.aggregateProgress * 100.0);
+        self.downloadButton.toolTip = [NSString stringWithFormat:@"下载中（%lu 项 · %ld%%）", (unsigned long)active, (long)pct];
+    } else if (unread > 0) {
+        self.downloadButton.toolTip = [NSString stringWithFormat:@"下载（%lu 个新完成）", (unsigned long)unread];
+    } else {
+        self.downloadButton.toolTip = @"下载";
+    }
+}
+
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    (void)sender;
+    if (!self.downloadManager.hasActiveDownloads) {
+        return YES;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"还有下载正在进行";
+    alert.informativeText = [NSString stringWithFormat:@"仍有 %lu 个下载未完成。关闭窗口不会取消已写入磁盘的文件，但进行中的下载会被中断。",
+                             (unsigned long)self.downloadManager.activeCount];
+    [alert addButtonWithTitle:@"仍然关闭"];
+    [alert addButtonWithTitle:@"取消"];
+    NSModalResponse response = [alert runModal];
+    return response == NSAlertFirstButtonReturn;
 }
 
 - (NSButton *)makeBookmarkButton {
@@ -760,6 +875,45 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     decisionHandler(WKNavigationActionPolicyAllow);
 }
 
+- (void)webView:(WKWebView *)webView
+decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    (void)webView;
+    if (@available(macOS 11.3, *)) {
+        if ([BrowserDownloadManager shouldDownloadNavigationResponse:navigationResponse]) {
+            decisionHandler(WKNavigationResponsePolicyDownload);
+            return;
+        }
+    }
+    decisionHandler(WKNavigationResponsePolicyAllow);
+}
+
+- (void)webView:(WKWebView *)webView
+navigationAction:(WKNavigationAction *)navigationAction
+didBecomeDownload:(WKDownload *)download {
+    (void)webView;
+    (void)navigationAction;
+    if (@available(macOS 11.3, *)) {
+        [self.downloadManager takeOwnershipOfDownload:download];
+        if (!self.downloadPanelVisible) {
+            [self showDownloadsPanel];
+        }
+    }
+}
+
+- (void)webView:(WKWebView *)webView
+navigationResponse:(WKNavigationResponse *)navigationResponse
+didBecomeDownload:(WKDownload *)download {
+    (void)webView;
+    (void)navigationResponse;
+    if (@available(macOS 11.3, *)) {
+        [self.downloadManager takeOwnershipOfDownload:download];
+        if (!self.downloadPanelVisible) {
+            [self showDownloadsPanel];
+        }
+    }
+}
+
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab beginMainFrameNavigation:navigation]) {
@@ -857,7 +1011,15 @@ didFailNavigation:(WKNavigation *)navigation
 }
 
 - (void)handleNavigationError:(NSError *)error forWebView:(WKWebView *)webView {
-    if (error.code == NSURLErrorCancelled) {
+    // 用户取消、或策略改为下载（WKNavigationResponsePolicyDownload）时，
+    // WebKit 仍会回调失败，文案常为 "Frame load interrupted"；不应弹错误框。
+    if ([self shouldIgnoreNavigationError:error]) {
+        BrowserTab *tab = [self.tabController tabForWebView:webView];
+        tab.isLoading = NO;
+        if (webView == self.webView) {
+            [self updateNavigationState];
+        }
+        [self updateTabStripDisplay];
         return;
     }
 
@@ -870,6 +1032,24 @@ didFailNavigation:(WKNavigation *)navigation
     }
     [self showErrorWithTitle:@"无法加载页面" message:error.localizedDescription];
     [self updateNavigationState];
+}
+
+- (BOOL)shouldIgnoreNavigationError:(NSError *)error {
+    if (!error) {
+        return YES;
+    }
+    if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) {
+        return YES;
+    }
+    // WebKitErrorFrameLoadInterruptedByPolicyChange == 102
+    if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) {
+        return YES;
+    }
+    NSString *description = error.localizedDescription.lowercaseString;
+    if ([description containsString:@"frame load interrupted"]) {
+        return YES;
+    }
+    return NO;
 }
 
 #pragma mark - WKUIDelegate
