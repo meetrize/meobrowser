@@ -34,6 +34,9 @@ extern NSString * const BrowserShortcutAddItemID;
 + (BOOL)validateURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
 + (BOOL)validateIconURLString:(NSString *)input normalizedURL:(NSString * _Nullable * _Nullable)outURL;
 
++ (NSArray<BrowserShortcutItem *> *)shortcutsMatchingQuery:(NSString *)query
+                                                     limit:(NSUInteger)limit;
+
 @end
 
 NS_ASSUME_NONNULL_END

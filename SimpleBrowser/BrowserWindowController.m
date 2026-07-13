@@ -10,8 +10,9 @@
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserAddressBarAutocompleteController.h"
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, NSWindowDelegate>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
@@ -21,6 +22,7 @@
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong) NSButton *bookmarkButton;
 @property (nonatomic, strong) SBTextField *addressField;
+@property (nonatomic, strong) BrowserAddressBarAutocompleteController *addressAutocompleteController;
 @property (nonatomic, strong) WKWebViewConfiguration *webViewConfiguration;
 @end
 
@@ -199,6 +201,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    [self.addressAutocompleteController uninstall];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -243,6 +246,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.bookmarkButton.trailingAnchor constraintEqualToAnchor:self.addressField.trailingAnchor constant:-6],
         [self.bookmarkButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
     ]];
+
+    self.addressAutocompleteController = [[BrowserAddressBarAutocompleteController alloc] initWithAddressField:self.addressField];
+    self.addressAutocompleteController.delegate = self;
+    [self.addressAutocompleteController install];
 
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
         navButtons, self.addressField
@@ -429,6 +436,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (!self.launchpadView.hidden) {
         [self.launchpadView reloadShortcuts];
     }
+    [self.addressAutocompleteController refreshMatchesIfNeeded];
     [self updateBookmarkButtonState];
 }
 
@@ -563,6 +571,23 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView {
     (void)stripView;
     [self.window performZoom:nil];
+}
+
+#pragma mark - BrowserAddressBarAutocompleteControllerDelegate
+
+- (void)autocompleteController:(BrowserAddressBarAutocompleteController *)controller openURL:(NSURL *)url {
+    (void)controller;
+    [self launchpadView:self.launchpadView openURL:url];
+}
+
+- (void)autocompleteController:(BrowserAddressBarAutocompleteController *)controller openURLInNewTab:(NSURL *)url {
+    (void)controller;
+    [self launchpadView:self.launchpadView openURLInNewTab:url];
+}
+
+- (NSWindow *)windowForAutocompleteController:(BrowserAddressBarAutocompleteController *)controller {
+    (void)controller;
+    return self.window;
 }
 
 #pragma mark - BrowserLaunchpadViewDelegate
@@ -700,10 +725,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (BOOL)control:(NSControl *)control
       textView:(NSTextView *)textView
 doCommandBySelector:(SEL)commandSelector {
-    (void)textView;
-    if (control == self.addressField && commandSelector == @selector(insertNewline:)) {
-        [self loadAddressBarURL];
-        return YES;
+    if (control == self.addressField) {
+        if ([self.addressAutocompleteController handleCommandBySelector:commandSelector textView:textView]) {
+            return YES;
+        }
+        if (commandSelector == @selector(insertNewline:)) {
+            [self loadAddressBarURL];
+            return YES;
+        }
     }
     return NO;
 }

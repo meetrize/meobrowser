@@ -172,6 +172,71 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     return YES;
 }
 
++ (NSInteger)matchScoreForShortcut:(BrowserShortcutItem *)item query:(NSString *)query {
+    NSString *lowercaseQuery = query.lowercaseString;
+    if (lowercaseQuery.length == 0) {
+        return NSNotFound;
+    }
+
+    NSInteger bestScore = -1;
+    NSString *title = item.title.lowercaseString;
+    if (title.length > 0) {
+        if ([title hasPrefix:lowercaseQuery]) {
+            bestScore = MAX(bestScore, 100);
+        } else if ([title containsString:lowercaseQuery]) {
+            bestScore = MAX(bestScore, 80);
+        }
+    }
+
+    NSURL *url = [NSURL URLWithString:item.urlString];
+    NSString *host = url.host.lowercaseString ?: @"";
+    if ([host hasPrefix:@"www."]) {
+        host = [host substringFromIndex:4];
+    }
+    if (host.length > 0) {
+        if ([host hasPrefix:lowercaseQuery]) {
+            bestScore = MAX(bestScore, 60);
+        } else if ([host containsString:lowercaseQuery]) {
+            bestScore = MAX(bestScore, 40);
+        }
+    }
+
+    return bestScore >= 0 ? bestScore : NSNotFound;
+}
+
++ (NSArray<BrowserShortcutItem *> *)shortcutsMatchingQuery:(NSString *)query
+                                                     limit:(NSUInteger)limit {
+    NSString *trimmed = [query stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0 || limit == 0) {
+        return @[];
+    }
+
+    NSArray<BrowserShortcutItem *> *shortcuts = [self loadShortcuts];
+    NSMutableArray<BrowserShortcutItem *> *matches = [[NSMutableArray alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if ([self matchScoreForShortcut:item query:trimmed] != NSNotFound) {
+            [matches addObject:item];
+        }
+    }
+
+    [matches sortUsingComparator:^NSComparisonResult(BrowserShortcutItem *a, BrowserShortcutItem *b) {
+        NSInteger scoreA = [self matchScoreForShortcut:a query:trimmed];
+        NSInteger scoreB = [self matchScoreForShortcut:b query:trimmed];
+        if (scoreA != scoreB) {
+            return scoreA > scoreB ? NSOrderedAscending : NSOrderedDescending;
+        }
+        if (a.sortOrder != b.sortOrder) {
+            return a.sortOrder < b.sortOrder ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return [a.title compare:b.title];
+    }];
+
+    if (matches.count > limit) {
+        return [matches subarrayWithRange:NSMakeRange(0, limit)];
+    }
+    return matches;
+}
+
 + (BOOL)validateIconURLString:(NSString *)input normalizedURL:(NSString * _Nullable __autoreleasing * _Nullable)outURL {
     NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (trimmed.length == 0) {
