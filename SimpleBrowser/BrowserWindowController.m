@@ -11,6 +11,8 @@
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserAddressBarAutocompleteController.h"
+#import "BrowserAddressBarActionGroup.h"
+#import "BrowserAddressBarRowView.h"
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
@@ -22,6 +24,8 @@
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong) NSButton *bookmarkButton;
 @property (nonatomic, strong) SBTextField *addressField;
+@property (nonatomic, strong) BrowserAddressBarActionGroup *addressBarActionGroup;
+@property (nonatomic, strong) BrowserAddressBarRowView *addressBarRow;
 @property (nonatomic, strong) BrowserAddressBarAutocompleteController *addressAutocompleteController;
 @property (nonatomic, strong) WKWebViewConfiguration *webViewConfiguration;
 @end
@@ -252,8 +256,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressAutocompleteController.delegate = self;
     [self.addressAutocompleteController install];
 
+    self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
+    self.addressBarActionGroup.minimumAddressWidth = 120;
+
+    self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
+                                                                  actionGroup:self.addressBarActionGroup];
+
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        navButtons, self.addressField
+        navButtons, self.addressBarRow
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     toolbar.spacing = 10;

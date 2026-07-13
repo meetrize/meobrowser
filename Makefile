@@ -26,6 +26,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutEditorSheet.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserLaunchpadView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarAutocompleteController.m \
+                   $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarActionGroup.m \
+                   $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarRowView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
