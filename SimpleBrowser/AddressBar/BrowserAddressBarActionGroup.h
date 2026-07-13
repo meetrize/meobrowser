@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /// 地址栏右侧可拖拽宽度的按钮工具组；宽度不足时自动显示溢出菜单。
+/// 组内按钮支持按住拖动调整顺序，顺序会持久化。
 @interface BrowserAddressBarActionGroup : NSView
 
 /// 控制整组宽度的约束，由本视图创建并激活。

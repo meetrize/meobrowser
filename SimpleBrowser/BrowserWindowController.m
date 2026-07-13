@@ -269,12 +269,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressAutocompleteController.delegate = self;
     [self.addressAutocompleteController install];
 
-    self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
+        self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
     self.addressBarActionGroup.minimumAddressWidth = 120;
     self.downloadButton = self.addressBarActionGroup.downloadButton;
     self.downloadButton.target = self;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
     [self installDownloadBadgeOnButton:self.downloadButton];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(addressBarActionOrderDidChange:)
+                                                 name:@"BrowserAddressBarActionOrderDidChangeNotification"
+                                               object:self.addressBarActionGroup];
 
     self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
                                                                   actionGroup:self.addressBarActionGroup];
@@ -382,6 +386,25 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 #pragma mark - Downloads
+
+- (void)addressBarActionOrderDidChange:(NSNotification *)notification {
+    (void)notification;
+    // 重排后 downloadButton 可能仍是同一实例；角标在该按钮上。刷新引用与外观即可。
+    self.downloadButton = self.addressBarActionGroup.downloadButton;
+    if (self.downloadButton && self.downloadBadgeView.superview != self.downloadButton) {
+        [self.downloadBadgeView removeFromSuperview];
+        [self.downloadButton addSubview:self.downloadBadgeView];
+        [NSLayoutConstraint activateConstraints:@[
+            [self.downloadBadgeView.widthAnchor constraintEqualToConstant:7],
+            [self.downloadBadgeView.heightAnchor constraintEqualToConstant:7],
+            [self.downloadBadgeView.topAnchor constraintEqualToAnchor:self.downloadButton.topAnchor constant:3],
+            [self.downloadBadgeView.trailingAnchor constraintEqualToAnchor:self.downloadButton.trailingAnchor constant:-3],
+        ]];
+    }
+    self.downloadButton.target = self;
+    self.downloadButton.action = @selector(toggleDownloadsPanel:);
+    [self updateDownloadButtonAppearance];
+}
 
 - (void)toggleDownloadsPanel:(id)sender {
     (void)sender;
