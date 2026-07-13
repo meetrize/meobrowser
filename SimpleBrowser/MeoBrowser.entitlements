@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 受限 entitlement：须向 Apple 申请并在 Provisioning Profile 中启用后，WKWebView 才会出现系统密码自动填充。 -->
+	<key>com.apple.developer.web-browser</key>
+	<true/>
+</dict>
+</plist>

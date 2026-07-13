@@ -36,6 +36,7 @@ XIB_SRC := $(SRC_DIR)/MainWindow.xib
 NIB_OUT := $(RES_DIR)/MainWindow.nib
 APP_BUNDLE := $(BUILD_DIR)/$(APP_NAME).app
 BROWSER_BUNDLE := $(BUILD_DIR)/$(BROWSER_BUNDLE_NAME).app
+BROWSER_ENTITLEMENTS := $(BROWSER_SRC_DIR)/MeoBrowser.entitlements
 BINARY := $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 
@@ -80,6 +81,16 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <key>NSHighResolutionCapable</key><true/>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSMainNibFile</key><string></string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSPrincipalClass</key><string>NSApplication</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleURLTypes</key>' >> $(1)/Contents/Info.plist
+	@echo '  <array>' >> $(1)/Contents/Info.plist
+	@echo '    <dict>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleTypeRole</key><string>Viewer</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleURLName</key><string>Web site URL</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleURLSchemes</key>' >> $(1)/Contents/Info.plist
+	@echo '      <array><string>http</string><string>https</string></array>' >> $(1)/Contents/Info.plist
+	@echo '    </dict>' >> $(1)/Contents/Info.plist
+	@echo '  </array>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSAppTransportSecurity</key>' >> $(1)/Contents/Info.plist
 	@echo '  <dict>' >> $(1)/Contents/Info.plist
 	@echo '    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>' >> $(1)/Contents/Info.plist
@@ -98,10 +109,17 @@ $(BINARY): $(SOURCES) | $(BUILD_DIR)
 
 browser: $(BROWSER_BINARY)
 
-$(BROWSER_BINARY): $(BROWSER_SOURCES) Makefile | $(BUILD_DIR)
+$(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) Makefile | $(BUILD_DIR)
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
 	$(CC) $(BROWSER_CFLAGS) -isysroot $(SDK_PATH) $(BROWSER_SOURCES) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
+	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
+		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
+		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \
+	else \
+		echo "Ad-hoc signing $(BROWSER_BUNDLE) without restricted entitlements (local dev)"; \
+		codesign --force --sign - "$(BROWSER_BUNDLE)"; \
+	fi
 
 $(NIB_OUT): $(XIB_SRC) | $(RES_DIR)
 ifeq ($(IBTOOL_APP),)

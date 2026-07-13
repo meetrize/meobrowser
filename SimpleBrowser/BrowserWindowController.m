@@ -234,6 +234,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     self.addressField = [SBTextField standardField];
     self.addressField.placeholderString = @"输入网址";
+    self.addressField.selectsAllOnMouseFocus = YES;
     self.addressField.delegate = self;
     self.addressField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow

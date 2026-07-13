@@ -10,6 +10,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 为右侧内嵌控件（如收藏按钮）预留的文字区域宽度。
 @property (nonatomic) CGFloat trailingContentInset;
 
+/// 鼠标点击获得焦点时全选文字（再次点击已聚焦时不全选，便于移动光标）。
+@property (nonatomic) BOOL selectsAllOnMouseFocus;
+
 @end
 
 NS_ASSUME_NONNULL_END
