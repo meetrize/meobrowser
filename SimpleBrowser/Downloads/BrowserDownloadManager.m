@@ -6,11 +6,20 @@ NSNotificationName const BrowserDownloadManagerDidChangeNotification = @"Browser
 
 static const NSUInteger kMaxKeptItems = 50;
 
+static NSString *HostFromURL(NSURL *url);
+static NSString *SanitizedFilename(NSString *raw);
+static NSURL *UniqueDestinationURLInDownloads(NSString *filename);
+static NSString *ExtensionForMIMEType(NSString *mime);
+
 @interface BrowserDownloadManager ()
 @property (nonatomic, strong) NSMutableArray<BrowserDownloadItem *> *mutableItems;
 @property (nonatomic, strong) NSHashTable<id<BrowserDownloadManagerObserver>> *observers;
 @property (nonatomic, strong) NSMapTable<WKDownload *, BrowserDownloadItem *> *itemByDownload;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID *, NSString *> *progressObservationKeys;
+@end
+
+@interface BrowserDownloadManager (Private)
+- (void)saveDataURL:(NSURL *)url;
 @end
 
 @implementation BrowserDownloadManager
@@ -115,14 +124,89 @@ static const NSUInteger kMaxKeptItems = 50;
 }
 
 - (void)startDownloadWithURL:(NSURL *)url fromWebView:(WKWebView *)webView {
-    if (!url || !webView) {
+    if (!url) {
         return;
     }
-    NSURLRequest *request = [NSURLRequest requestWithURL:url];
-    __weak typeof(self) weakSelf = self;
-    [webView startDownloadUsingRequest:request completionHandler:^(WKDownload *download) {
-        [weakSelf takeOwnershipOfDownload:download];
-    }];
+    if ([url.scheme.lowercaseString isEqualToString:@"data"]) {
+        [self saveDataURL:url];
+        return;
+    }
+    if (!webView) {
+        return;
+    }
+    if (@available(macOS 11.3, *)) {
+        NSURLRequest *request = [NSURLRequest requestWithURL:url];
+        __weak typeof(self) weakSelf = self;
+        [webView startDownloadUsingRequest:request completionHandler:^(WKDownload *download) {
+            [weakSelf takeOwnershipOfDownload:download];
+        }];
+    }
+}
+
+- (void)saveDataURL:(NSURL *)url {
+    if (!url) {
+        return;
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSString *resource = components.path ?: url.resourceSpecifier;
+    if (resource.length == 0) {
+        return;
+    }
+
+    NSRange comma = [resource rangeOfString:@","];
+    if (comma.location == NSNotFound) {
+        return;
+    }
+
+    NSString *meta = [resource substringToIndex:comma.location];
+    NSString *payload = [resource substringFromIndex:NSMaxRange(comma)];
+    BOOL isBase64 = [[meta lowercaseString] containsString:@";base64"];
+    NSData *data = nil;
+    if (isBase64) {
+        data = [[NSData alloc] initWithBase64EncodedString:payload options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    } else {
+        NSString *decoded = [payload stringByRemovingPercentEncoding] ?: payload;
+        data = [decoded dataUsingEncoding:NSUTF8StringEncoding];
+    }
+    if (data.length == 0) {
+        return;
+    }
+
+    NSString *mime = @"application/octet-stream";
+    NSArray<NSString *> *metaParts = [meta componentsSeparatedByString:@";"];
+    if (metaParts.firstObject.length > 0) {
+        mime = metaParts.firstObject;
+    }
+
+    NSString *ext = ExtensionForMIMEType(mime);
+    NSString *filename = SanitizedFilename([NSString stringWithFormat:@"image.%@", ext]);
+    NSURL *destination = UniqueDestinationURLInDownloads(filename);
+    if (!destination) {
+        return;
+    }
+
+    NSError *writeError = nil;
+    if (![data writeToURL:destination options:NSDataWritingAtomic error:&writeError]) {
+        return;
+    }
+
+    BrowserDownloadItem *item = [[BrowserDownloadItem alloc] init];
+    item.sourceURL = url;
+    item.sourceHost = @"data";
+    item.filename = destination.lastPathComponent;
+    item.destinationURL = destination;
+    item.state = BrowserDownloadStateCompleted;
+    item.progress = 1.0;
+    item.hasKnownTotalUnitCount = YES;
+    item.completedUnitCount = (int64_t)data.length;
+    item.totalUnitCount = (int64_t)data.length;
+    item.createdAt = [NSDate date];
+    item.finishedAt = item.createdAt;
+    item.unread = YES;
+    [self.mutableItems insertObject:item atIndex:0];
+    [self trimOldFinishedItems];
+    [self notifyChange];
 }
 
 - (void)cancelItem:(BrowserDownloadItem *)item {
@@ -449,6 +533,38 @@ static NSString *HostFromURL(NSURL *url) {
         host = [host substringFromIndex:4];
     }
     return host;
+}
+
+static NSString *ExtensionForMIMEType(NSString *mime) {
+    NSString *lower = mime.lowercaseString ?: @"";
+    if ([lower isEqualToString:@"image/png"]) {
+        return @"png";
+    }
+    if ([lower isEqualToString:@"image/jpeg"] || [lower isEqualToString:@"image/jpg"]) {
+        return @"jpg";
+    }
+    if ([lower isEqualToString:@"image/gif"]) {
+        return @"gif";
+    }
+    if ([lower isEqualToString:@"image/webp"]) {
+        return @"webp";
+    }
+    if ([lower isEqualToString:@"image/svg+xml"]) {
+        return @"svg";
+    }
+    if ([lower isEqualToString:@"image/bmp"]) {
+        return @"bmp";
+    }
+    if ([lower isEqualToString:@"image/x-icon"] || [lower isEqualToString:@"image/vnd.microsoft.icon"]) {
+        return @"ico";
+    }
+    if ([lower hasPrefix:@"image/"]) {
+        NSString *subtype = [lower substringFromIndex:@"image/".length];
+        if (subtype.length > 0 && ![subtype containsString:@"+"]) {
+            return subtype;
+        }
+    }
+    return @"bin";
 }
 
 static NSString *SanitizedFilename(NSString *raw) {

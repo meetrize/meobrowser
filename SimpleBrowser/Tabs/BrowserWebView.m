@@ -1,23 +1,76 @@
 #import "BrowserWebView.h"
 #import "BrowsingPreferences.h"
 
+@interface BrowserWebView ()
+@property (nonatomic, assign, readwrite) BOOL pendingContextMenuDownload;
+@property (nonatomic, weak) NSMenuItem *openResourceMenuItem;
+@property (nonatomic, strong, nullable) NSEvent *contextMenuEvent;
+@end
+
 @implementation BrowserWebView
 
 - (void)willOpenMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
     [super willOpenMenu:menu withEvent:event];
 
+    self.contextMenuEvent = event;
+    self.pendingContextMenuDownload = NO;
+    self.openResourceMenuItem = nil;
+
+    NSMenuItem *downloadItem = nil;
+    NSMenuItem *openImageItem = nil;
+    NSMenuItem *openMediaItem = nil;
+
     NSString *engineName = [BrowsingPreferences displayNameForSearchEngineID:[BrowsingPreferences defaultSearchEngineID]];
     NSString *searchTitle = [NSString stringWithFormat:@"使用「%@」搜索", engineName];
 
     for (NSMenuItem *item in menu.itemArray) {
-        if (![self isSearchWebMenuItem:item]) {
+        if ([self isSearchWebMenuItem:item]) {
+            item.title = searchTitle;
+            item.target = self;
+            item.action = @selector(meo_searchSelectionWithDefaultEngine:);
             continue;
         }
-        item.title = searchTitle;
-        item.target = self;
-        item.action = @selector(meo_searchSelectionWithDefaultEngine:);
-        break;
+
+        NSString *identifier = item.identifier;
+        if ([identifier isEqualToString:@"WKMenuItemIdentifierDownloadImage"] ||
+            [identifier isEqualToString:@"WKMenuItemIdentifierDownloadMedia"]) {
+            downloadItem = item;
+        } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenImageInNewWindow"]) {
+            openImageItem = item;
+        } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenMediaInNewWindow"]) {
+            openMediaItem = item;
+        }
     }
+
+    if (downloadItem) {
+        // WebKit 系统「Download Image/Media」常不触发 WKDownload；改为劫持 Open*InNewWindow 取 URL。
+        NSMenuItem *openItem = nil;
+        if ([downloadItem.identifier isEqualToString:@"WKMenuItemIdentifierDownloadMedia"]) {
+            openItem = openMediaItem ?: openImageItem;
+        } else {
+            openItem = openImageItem ?: openMediaItem;
+        }
+        self.openResourceMenuItem = openItem;
+        downloadItem.target = self;
+        downloadItem.action = @selector(meo_downloadContextResource:);
+        downloadItem.representedObject = openItem;
+    }
+}
+
+- (void)didCloseMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
+    [super didCloseMenu:menu withEvent:event];
+    // createWebView 异步到达，稍后再清标记，避免误伤普通弹窗导航。
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.pendingContextMenuDownload = NO;
+        strongSelf.openResourceMenuItem = nil;
+        strongSelf.contextMenuEvent = nil;
+    });
 }
 
 - (BOOL)isSearchWebMenuItem:(NSMenuItem *)item {
@@ -75,6 +128,114 @@
             [strongSelf loadRequest:[NSURLRequest requestWithURL:url]];
         }
     }];
+}
+
+- (void)meo_downloadContextResource:(id)sender {
+    NSMenuItem *openItem = nil;
+    if ([sender isKindOfClass:[NSMenuItem class]]) {
+        openItem = [(NSMenuItem *)sender representedObject];
+    }
+    if (![openItem isKindOfClass:[NSMenuItem class]]) {
+        openItem = self.openResourceMenuItem;
+    }
+
+    if (openItem.action && openItem.target) {
+        self.pendingContextMenuDownload = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [openItem.target performSelector:openItem.action withObject:openItem];
+#pragma clang diagnostic pop
+        return;
+    }
+
+    // 找不到 Open Image/Media 时，用点击坐标兜底解析图片 URL。
+    [self meo_downloadResourceAtContextMenuPoint];
+}
+
+- (void)meo_downloadResourceAtContextMenuPoint {
+    NSEvent *event = self.contextMenuEvent;
+    if (!event) {
+        return;
+    }
+
+    NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+    CGFloat x = locationInView.x;
+    // AppKit 原点在左下；elementFromPoint 使用视口左上原点。
+    CGFloat y = NSHeight(self.bounds) - locationInView.y;
+
+    NSString *script = [NSString stringWithFormat:
+        @"(function(x, y) {"
+         "  function absUrl(u) {"
+         "    try { return new URL(u, document.baseURI).href; } catch (e) { return u; }"
+         "  }"
+         "  var el = document.elementFromPoint(x, y);"
+         "  if (!el) { return null; }"
+         "  var n = el;"
+         "  while (n) {"
+         "    if (n.tagName === 'IMG') {"
+         "      return absUrl(n.currentSrc || n.src);"
+         "    }"
+         "    if (n.tagName === 'VIDEO' || n.tagName === 'AUDIO' || n.tagName === 'SOURCE') {"
+         "      var src = n.currentSrc || n.src;"
+         "      if (src) { return absUrl(src); }"
+         "    }"
+         "    if (n.tagName === 'PICTURE') {"
+         "      var img = n.querySelector('img');"
+         "      if (img) { return absUrl(img.currentSrc || img.src); }"
+         "    }"
+         "    n = n.parentElement;"
+         "  }"
+         "  n = el;"
+         "  while (n && n !== document.documentElement) {"
+         "    var bg = getComputedStyle(n).backgroundImage;"
+         "    var m = bg && bg.match(/url\\([\"']?([^\"')]+)[\"']?\\)/);"
+         "    if (m && m[1] && m[1] !== 'none') { return absUrl(m[1]); }"
+         "    n = n.parentElement;"
+         "  }"
+         "  return null;"
+         "})(%f, %f)", x, y];
+
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        NSString *urlString = (NSString *)result;
+        if (urlString.length == 0) {
+            return;
+        }
+        NSURL *url = [NSURL URLWithString:urlString];
+        if (!url) {
+            return;
+        }
+        [strongSelf meo_deliverDownloadURL:url];
+    }];
+}
+
+- (nullable NSURL *)consumePendingContextMenuDownloadURL:(NSURL *)candidateURL {
+    if (!self.pendingContextMenuDownload) {
+        return nil;
+    }
+    self.pendingContextMenuDownload = NO;
+    self.openResourceMenuItem = nil;
+    if (!candidateURL) {
+        return nil;
+    }
+    return candidateURL;
+}
+
+- (void)meo_deliverDownloadURL:(NSURL *)url {
+    if (!url) {
+        return;
+    }
+    if (self.downloadURLHandler) {
+        self.downloadURLHandler(url);
+    } else if (@available(macOS 11.3, *)) {
+        [self startDownloadUsingRequest:[NSURLRequest requestWithURL:url]
+                      completionHandler:^(__unused WKDownload *download) {
+        }];
+    }
 }
 
 @end

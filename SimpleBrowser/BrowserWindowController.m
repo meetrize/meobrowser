@@ -649,8 +649,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     WKWebView *webView = tab.webView;
     if ([webView isKindOfClass:[BrowserWebView class]]) {
         __weak typeof(self) weakSelf = self;
-        ((BrowserWebView *)webView).openURLHandler = ^(NSURL *url) {
+        BrowserWebView *browserWebView = (BrowserWebView *)webView;
+        __weak BrowserWebView *weakBrowserWebView = browserWebView;
+        browserWebView.openURLHandler = ^(NSURL *url) {
             [weakSelf.tabController addTabWithURL:url];
+        };
+        browserWebView.downloadURLHandler = ^(NSURL *url) {
+            typeof(self) strongSelf = weakSelf;
+            BrowserWebView *strongWebView = weakBrowserWebView;
+            if (!strongSelf || !strongWebView) {
+                return;
+            }
+            [strongSelf.downloadManager startDownloadWithURL:url fromWebView:strongWebView];
+            if (!strongSelf.downloadPanelVisible) {
+                [strongSelf showDownloadsPanel];
+            }
         };
     }
 
@@ -1387,9 +1400,20 @@ didFailNavigation:(WKNavigation *)navigation
 createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
    forNavigationAction:(WKNavigationAction *)navigationAction
         windowFeatures:(WKWindowFeatures *)windowFeatures {
-    (void)webView;
     (void)configuration;
     (void)windowFeatures;
+
+    // 右键「下载图片/媒体」：WebKit 默认项无效，经 Open*InNewWindow 拿 URL 后改走下载。
+    if ([webView isKindOfClass:[BrowserWebView class]]) {
+        BrowserWebView *browserWebView = (BrowserWebView *)webView;
+        NSURL *downloadURL = [browserWebView consumePendingContextMenuDownloadURL:navigationAction.request.URL];
+        if (downloadURL) {
+            if (browserWebView.downloadURLHandler) {
+                browserWebView.downloadURLHandler(downloadURL);
+            }
+            return nil;
+        }
+    }
 
     if (!navigationAction.targetFrame || !navigationAction.targetFrame.isMainFrame) {
         NSURL *url = navigationAction.request.URL;
