@@ -332,8 +332,12 @@ BrowserFaviconIconFitStyle BrowserFaviconAnalyzeIconForDisplay(NSImage *image,
                                                               maxX - corner + 1, maxY - corner + 1, maxX + 1, maxY + 1);
             CGFloat cornerFG = (cTL + cTR + cBL + cBR) / 4.0;
 
-            BOOL looksCircle = (fillRatio >= 0.68 && fillRatio <= 0.84 && cornerFG < 0.30 && aspect <= 1.2);
-            BOOL looksRoundedRect = (fillRatio >= 0.86 && cornerFG < 0.45 && aspect <= 1.25 && !looksCircle);
+            // 圆：填充率约 π/4，四角很空。
+            BOOL looksCircle = (fillRatio >= 0.68 && fillRatio <= 0.84 && cornerFG < 0.35 && aspect <= 1.2);
+            // 圆角矩形（含浅圆角）：整体几乎铺满包围盒即可。
+            // 注意：小圆角时 corner 采样区仍大量实色（如知乎 favicon cornerFG≈0.8），
+            // 不能用过严的 cornerFG 上限，否则会被错判成 INSET。
+            BOOL looksRoundedRect = (fillRatio >= 0.90 && aspect <= 1.25 && !looksCircle);
 
             if (looksRoundedRect) {
                 style = BrowserFaviconIconFitFillRoundedRect;
