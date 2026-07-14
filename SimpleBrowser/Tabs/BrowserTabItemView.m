@@ -145,8 +145,12 @@ NSColor *BrowserTabActiveFillColor(void) {
     self.layer.backgroundColor = (self.tabSelected ? active : inactive).CGColor;
 
     if (@available(macOS 10.13, *)) {
-        self.layer.cornerRadius = self.tabSelected ? 7.0 : 6.0;
+        // 顶角弧度贴近系统窗口（约 10–12pt），略大于侧缘以免选中态显得更方。
+        self.layer.cornerRadius = self.tabSelected ? 11.0 : 10.0;
         self.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+        if (@available(macOS 10.15, *)) {
+            self.layer.cornerCurve = kCACornerCurveContinuous;
+        }
     }
 
     self.titleLabel.textColor = [NSColor labelColor];
