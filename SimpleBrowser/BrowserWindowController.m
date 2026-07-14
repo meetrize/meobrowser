@@ -749,6 +749,48 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+- (void)tabStripView:(id)stripView didCloseOtherTabsExceptTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab) {
+        [self.tabController closeOtherTabsExcept:tab];
+    }
+}
+
+- (void)tabStripView:(id)stripView didCloseTabsToTheRightOfTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab) {
+        [self.tabController closeTabsToTheRightOf:tab];
+    }
+}
+
+- (void)tabStripViewDidRequestRestoreRecentlyClosedTab:(id)stripView {
+    (void)stripView;
+    [self.tabController restoreRecentlyClosedTab];
+}
+
+- (BOOL)tabStripViewCanRestoreRecentlyClosedTab:(id)stripView {
+    (void)stripView;
+    return self.tabController.canRestoreRecentlyClosedTab;
+}
+
+- (BOOL)tabStripView:(id)stripView canCloseOtherTabsExceptTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    return tab != nil && self.tabController.tabs.count > 1;
+}
+
+- (BOOL)tabStripView:(id)stripView canCloseTabsToTheRightOfTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (!tab) {
+        return NO;
+    }
+    NSUInteger index = [self.tabController.tabs indexOfObject:tab];
+    return index != NSNotFound && index + 1 < self.tabController.tabs.count;
+}
+
 - (void)tabStripViewDidRequestNewTab:(id)stripView {
     (void)stripView;
     [self.tabController addNewTab];

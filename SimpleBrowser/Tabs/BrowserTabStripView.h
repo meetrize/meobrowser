@@ -15,6 +15,12 @@ FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
 
 @optional
 - (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView;
+- (void)tabStripView:(id)stripView didCloseOtherTabsExceptTabID:(NSUUID *)tabID;
+- (void)tabStripView:(id)stripView didCloseTabsToTheRightOfTabID:(NSUUID *)tabID;
+- (void)tabStripViewDidRequestRestoreRecentlyClosedTab:(id)stripView;
+- (BOOL)tabStripViewCanRestoreRecentlyClosedTab:(id)stripView;
+- (BOOL)tabStripView:(id)stripView canCloseOtherTabsExceptTabID:(NSUUID *)tabID;
+- (BOOL)tabStripView:(id)stripView canCloseTabsToTheRightOfTabID:(NSUUID *)tabID;
 @end
 
 @interface BrowserTabStripView : NSView

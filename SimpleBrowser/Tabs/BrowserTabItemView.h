@@ -14,6 +14,9 @@ FOUNDATION_EXPORT const CGFloat BrowserTabItemMaxWidth;
 @property (nonatomic, copy) NSString *tabTitle;
 @property (nonatomic, copy, nullable) void (^onSelect)(void);
 @property (nonatomic, copy, nullable) void (^onClose)(void);
+/// Option+点击关闭按钮时调用；未设置时退回 onClose
+@property (nonatomic, copy, nullable) void (^onCloseTabsToTheRight)(void);
+@property (nonatomic, copy, nullable) NSMenu * _Nullable (^contextMenuProvider)(void);
 
 - (void)setTabTitle:(NSString *)tabTitle;
 - (void)setTabHeight:(CGFloat)height;

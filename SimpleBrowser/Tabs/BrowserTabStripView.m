@@ -59,7 +59,7 @@ static const CGFloat kChromeGap = 4.0;
 
 @end
 
-@interface BrowserTabStripView ()
+@interface BrowserTabStripView () <NSMenuItemValidation>
 @property (nonatomic, strong) NSView *backgroundView;
 @property (nonatomic, strong) NSView *leadingDragArea;
 @property (nonatomic, strong) NSView *trailingDragArea;
@@ -517,6 +517,15 @@ static const CGFloat kChromeGap = 4.0;
         item.onClose = ^{
             [weakSelf.delegate tabStripView:weakSelf didCloseTabID:tabID];
         };
+        item.onCloseTabsToTheRight = ^{
+            id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
+            if ([delegate respondsToSelector:@selector(tabStripView:didCloseTabsToTheRightOfTabID:)]) {
+                [delegate tabStripView:weakSelf didCloseTabsToTheRightOfTabID:tabID];
+            }
+        };
+        item.contextMenuProvider = ^{
+            return [weakSelf contextMenuForTabID:tabID];
+        };
 
         [self.tabItemIDs setObject:tab.tabID forKey:item];
         [self.tabItemsByID setObject:item forKey:tab.tabID];
@@ -526,6 +535,117 @@ static const CGFloat kChromeGap = 4.0;
 
     [self setNeedsLayout:YES];
     [self layoutSubtreeIfNeeded];
+}
+
+#pragma mark - Tab Context Menu
+
+- (NSMenu *)contextMenuForTabID:(NSUUID *)tabID {
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"标签页"];
+
+    NSMenuItem *closeItem = [menu addItemWithTitle:@"关闭标签页"
+                                            action:@selector(contextCloseTab:)
+                                     keyEquivalent:@""];
+    closeItem.target = self;
+    closeItem.representedObject = tabID;
+
+    NSMenuItem *closeOthers = [menu addItemWithTitle:@"关闭其他标签页"
+                                              action:@selector(contextCloseOtherTabs:)
+                                       keyEquivalent:@""];
+    closeOthers.target = self;
+    closeOthers.representedObject = tabID;
+
+    NSMenuItem *closeRight = [menu addItemWithTitle:@"关闭右侧标签页"
+                                             action:@selector(contextCloseTabsToTheRight:)
+                                      keyEquivalent:@""];
+    closeRight.target = self;
+    closeRight.representedObject = tabID;
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *restoreItem = [menu addItemWithTitle:@"恢复最近关闭的标签页"
+                                              action:@selector(contextRestoreRecentlyClosedTab:)
+                                       keyEquivalent:@""];
+    restoreItem.target = self;
+
+    return menu;
+}
+
+- (void)contextCloseTab:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+    [self.delegate tabStripView:self didCloseTabID:tabID];
+}
+
+- (void)contextCloseOtherTabs:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripView:didCloseOtherTabsExceptTabID:)]) {
+        [delegate tabStripView:self didCloseOtherTabsExceptTabID:tabID];
+    }
+}
+
+- (void)contextCloseTabsToTheRight:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripView:didCloseTabsToTheRightOfTabID:)]) {
+        [delegate tabStripView:self didCloseTabsToTheRightOfTabID:tabID];
+    }
+}
+
+- (void)contextRestoreRecentlyClosedTab:(NSMenuItem *)sender {
+    (void)sender;
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripViewDidRequestRestoreRecentlyClosedTab:)]) {
+        [delegate tabStripViewDidRequestRestoreRecentlyClosedTab:self];
+    }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    SEL action = menuItem.action;
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    NSUUID *tabID = menuItem.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        tabID = nil;
+    }
+
+    if (action == @selector(contextCloseOtherTabs:)) {
+        if (!tabID) {
+            return NO;
+        }
+        if ([delegate respondsToSelector:@selector(tabStripView:canCloseOtherTabsExceptTabID:)]) {
+            return [delegate tabStripView:self canCloseOtherTabsExceptTabID:tabID];
+        }
+        return self.tabItems.count > 1;
+    }
+
+    if (action == @selector(contextCloseTabsToTheRight:)) {
+        if (!tabID) {
+            return NO;
+        }
+        if ([delegate respondsToSelector:@selector(tabStripView:canCloseTabsToTheRightOfTabID:)]) {
+            return [delegate tabStripView:self canCloseTabsToTheRightOfTabID:tabID];
+        }
+        BrowserTabItemView *item = [self.tabItemsByID objectForKey:tabID];
+        NSUInteger index = item ? [self.tabItems indexOfObject:item] : NSNotFound;
+        return index != NSNotFound && index + 1 < self.tabItems.count;
+    }
+
+    if (action == @selector(contextRestoreRecentlyClosedTab:)) {
+        if ([delegate respondsToSelector:@selector(tabStripViewCanRestoreRecentlyClosedTab:)]) {
+            return [delegate tabStripViewCanRestoreRecentlyClosedTab:self];
+        }
+        return NO;
+    }
+
+    return YES;
 }
 
 - (void)syncWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID {

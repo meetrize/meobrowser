@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) id<BrowserTabControllerDelegate> delegate;
 @property (nonatomic, readonly) NSArray<BrowserTab *> *tabs;
 @property (nonatomic, readonly, nullable) BrowserTab *selectedTab;
+@property (nonatomic, readonly) BOOL canRestoreRecentlyClosedTab;
 
 - (instancetype)initWithConfiguration:(WKWebViewConfiguration *)configuration;
 
@@ -22,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BrowserTab *)addTabWithURL:(NSURL *)url;
 - (void)closeTab:(BrowserTab *)tab;
 - (void)closeSelectedTab;
+- (void)closeOtherTabsExcept:(BrowserTab *)tab;
+- (void)closeTabsToTheRightOf:(BrowserTab *)tab;
+- (nullable BrowserTab *)restoreRecentlyClosedTab;
 - (void)selectTab:(BrowserTab *)tab;
 - (void)selectNextTab;
 - (void)selectPreviousTab;

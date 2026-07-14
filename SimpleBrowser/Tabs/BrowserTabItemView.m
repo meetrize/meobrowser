@@ -223,9 +223,24 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (void)onClose:(id)sender {
     (void)sender;
+    BOOL optionHeld = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
+    if (optionHeld && self.onCloseTabsToTheRight) {
+        self.onCloseTabsToTheRight();
+        return;
+    }
     if (self.onClose) {
         self.onClose();
     }
+}
+
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    if (self.contextMenuProvider) {
+        NSMenu *menu = self.contextMenuProvider();
+        if (menu) {
+            return menu;
+        }
+    }
+    return [super menuForEvent:event];
 }
 
 @end
