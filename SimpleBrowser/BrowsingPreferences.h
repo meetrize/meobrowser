@@ -18,7 +18,11 @@ extern NSString * const BrowserSearchEngineBaidu;
 + (BOOL)isPersistableURL:(nullable NSURL *)url;
 + (nullable NSArray<NSString *> *)savedTabEntries;
 + (NSInteger)savedSelectedTabIndex;
-+ (void)saveTabEntries:(NSArray<NSString *> *)entries selectedIndex:(NSInteger)selectedIndex;
+/// 会话中前 N 个标签为固定标签；旧会话缺省为 0。
++ (NSUInteger)savedPinnedTabCount;
++ (void)saveTabEntries:(NSArray<NSString *> *)entries
+         selectedIndex:(NSInteger)selectedIndex
+           pinnedCount:(NSUInteger)pinnedCount;
 
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)availableSearchEngines;
 + (NSString *)defaultSearchEngineID;

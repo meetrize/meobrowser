@@ -2,9 +2,11 @@
 
 const CGFloat BrowserTabItemMinWidth = 108.0;
 const CGFloat BrowserTabItemMaxWidth = 200.0;
+const CGFloat BrowserTabPinnedWidth = 36.0;
 
 static const CGFloat kDefaultTabHeight = 33.0;
 static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
+static const CGFloat kReorderDragThreshold = 4.0;
 
 NSColor *BrowserTabActiveFillColor(void) {
     if ([[NSApp effectiveAppearance].name containsString:@"Dark"]) {
@@ -15,23 +17,29 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 @interface BrowserTabItemView ()
 @property (nonatomic, strong) NSTextField *titleLabel;
+@property (nonatomic, strong) NSImageView *pinIconView;
 @property (nonatomic, strong) NSButton *closeButton;
 @property (nonatomic, strong) NSLayoutConstraint *heightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToClose;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToEdge;
+@property (nonatomic, strong) NSLayoutConstraint *titleLeadingConstraint;
 @property (nonatomic, assign) CGFloat appliedWidth;
 @property (nonatomic, assign) BOOL pointerInside;
+@property (nonatomic, assign) BOOL trackingMouse;
+@property (nonatomic, assign) BOOL isReorderDragging;
+@property (nonatomic, assign) NSPoint mouseDownWindowPoint;
 @end
 
 @implementation BrowserTabItemView
 
 + (NSSet<NSString *> *)keyPathsForValuesAffectingIntrinsicContentSize {
-    return [NSSet setWithObjects:@"tabTitle", @"tabSelected", nil];
+    return [NSSet setWithObjects:@"tabTitle", @"tabSelected", @"tabPinned", nil];
 }
 
 - (NSSize)intrinsicContentSize {
     CGFloat height = self.heightConstraint ? self.heightConstraint.constant : kDefaultTabHeight;
-    return NSMakeSize(BrowserTabItemMinWidth, height);
+    CGFloat width = self.tabPinned ? BrowserTabPinnedWidth : BrowserTabItemMinWidth;
+    return NSMakeSize(width, height);
 }
 
 - (void)setTabHeight:(CGFloat)height {
@@ -51,6 +59,7 @@ NSColor *BrowserTabActiveFillColor(void) {
         self.wantsLayer = YES;
         self.layer.masksToBounds = YES;
         _appliedWidth = BrowserTabItemMaxWidth;
+        _tabTitle = @"";
 
         _titleLabel = [NSTextField labelWithString:@"新标签页"];
         _titleLabel.font = [NSFont systemFontOfSize:12];
@@ -66,6 +75,24 @@ NSColor *BrowserTabActiveFillColor(void) {
                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:_titleLabel];
 
+        _pinIconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _pinIconView.translatesAutoresizingMaskIntoConstraints = NO;
+        _pinIconView.imageScaling = NSImageScaleProportionallyDown;
+        _pinIconView.hidden = YES;
+        if (@available(macOS 11.0, *)) {
+            NSImageSymbolConfiguration *config =
+                [NSImageSymbolConfiguration configurationWithPointSize:11
+                                                                weight:NSFontWeightMedium
+                                                                 scale:NSImageSymbolScaleMedium];
+            NSImage *symbol = [NSImage imageWithSystemSymbolName:@"pin.fill"
+                                        accessibilityDescription:@"固定标签页"];
+            _pinIconView.image = symbol ? [symbol imageWithSymbolConfiguration:config] : nil;
+            if (@available(macOS 10.14, *)) {
+                _pinIconView.contentTintColor = [NSColor secondaryLabelColor];
+            }
+        }
+        [self addSubview:_pinIconView];
+
         _closeButton = [NSButton buttonWithTitle:@"×" target:self action:@selector(onClose:)];
         _closeButton.bezelStyle = NSBezelStyleInline;
         _closeButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
@@ -80,6 +107,7 @@ NSColor *BrowserTabActiveFillColor(void) {
                                                                                      constant:-4];
         _titleTrailingToEdge = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor
                                                                                     constant:-8];
+        _titleLeadingConstraint = [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10];
 
         [NSLayoutConstraint activateConstraints:@[
             [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
@@ -87,9 +115,14 @@ NSColor *BrowserTabActiveFillColor(void) {
             [_closeButton.widthAnchor constraintEqualToConstant:16],
             [_closeButton.heightAnchor constraintEqualToConstant:16],
 
-            [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
+            _titleLeadingConstraint,
             [_titleLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             _titleTrailingToClose,
+
+            [_pinIconView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [_pinIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_pinIconView.widthAnchor constraintEqualToConstant:14],
+            [_pinIconView.heightAnchor constraintEqualToConstant:14],
         ]];
 
         [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
@@ -98,6 +131,7 @@ NSColor *BrowserTabActiveFillColor(void) {
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         [self updateChromeAppearance];
+        [self updatePinnedAppearance];
         [self updateCloseButtonVisibility];
     }
     return self;
@@ -110,13 +144,28 @@ NSColor *BrowserTabActiveFillColor(void) {
     [self invalidateIntrinsicContentSize];
 }
 
+- (void)setTabPinned:(BOOL)tabPinned {
+    if (_tabPinned == tabPinned) {
+        return;
+    }
+    _tabPinned = tabPinned;
+    [self updatePinnedAppearance];
+    [self updateCloseButtonVisibility];
+    [self invalidateIntrinsicContentSize];
+}
+
 - (void)setTabTitle:(NSString *)tabTitle {
     NSString *normalized = tabTitle ?: @"";
     if ([_tabTitle isEqualToString:normalized]) {
         return;
     }
     _tabTitle = [normalized copy];
-    self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
+    if (self.tabPinned) {
+        [self updatePinnedAppearance];
+    } else {
+        self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
+        self.toolTip = nil;
+    }
     [self invalidateIntrinsicContentSize];
 }
 
@@ -128,7 +177,34 @@ NSColor *BrowserTabActiveFillColor(void) {
     [self updateCloseButtonVisibility];
 }
 
+- (void)updatePinnedAppearance {
+    BOOL hasPinImage = (self.pinIconView.image != nil);
+    self.pinIconView.hidden = !self.tabPinned || !hasPinImage;
+    self.titleLabel.hidden = self.tabPinned && hasPinImage;
+    if (self.tabPinned && !hasPinImage) {
+        NSString *title = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
+        self.titleLabel.stringValue = [title substringToIndex:MIN((NSUInteger)1, title.length)];
+        self.titleLeadingConstraint.constant = 10;
+    } else if (!self.tabPinned) {
+        self.titleLabel.stringValue = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
+        self.titleLeadingConstraint.constant = 10;
+    }
+    self.toolTip = self.tabPinned ? (self.tabTitle.length > 0 ? self.tabTitle : @"新标签页") : nil;
+    if (self.tabPinned) {
+        self.closeButton.hidden = YES;
+        self.titleTrailingToClose.active = NO;
+        self.titleTrailingToEdge.active = NO;
+    }
+}
+
 - (void)updateCloseButtonVisibility {
+    if (self.tabPinned) {
+        self.closeButton.hidden = YES;
+        self.titleTrailingToClose.active = NO;
+        self.titleTrailingToEdge.active = NO;
+        return;
+    }
+
     BOOL alwaysShow = self.tabSelected || self.appliedWidth >= kCloseAlwaysVisibleMinWidth;
     BOOL visible = alwaysShow || self.pointerInside;
     self.closeButton.hidden = !visible;
@@ -155,6 +231,10 @@ NSColor *BrowserTabActiveFillColor(void) {
 
     self.titleLabel.textColor = [NSColor labelColor];
     self.titleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+    if (@available(macOS 10.14, *)) {
+        self.pinIconView.contentTintColor = self.tabSelected ? [NSColor labelColor]
+                                                             : [NSColor secondaryLabelColor];
+    }
 }
 
 - (BOOL)effectiveAppearanceIsDark {
@@ -209,20 +289,57 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    // 双击标签关闭；单击切换（双击序列里第一次仍会先选中，符合常见浏览器习惯）
+    // 双击标签关闭（固定标签除外）；单击切换
     if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
-        if (self.onClose) {
+        if (!self.tabPinned && self.onClose) {
             self.onClose();
         }
         return;
     }
+
+    self.trackingMouse = YES;
+    self.isReorderDragging = NO;
+    self.mouseDownWindowPoint = event.locationInWindow;
     if (self.onSelect) {
         self.onSelect();
     }
 }
 
+- (void)mouseDragged:(NSEvent *)event {
+    if (!self.trackingMouse) {
+        return;
+    }
+
+    CGFloat deltaX = event.locationInWindow.x - self.mouseDownWindowPoint.x;
+    if (!self.isReorderDragging) {
+        if (fabs(deltaX) < kReorderDragThreshold) {
+            return;
+        }
+        self.isReorderDragging = YES;
+        if (self.onReorderDragBegan) {
+            self.onReorderDragBegan();
+        }
+    }
+
+    if (self.onReorderDragMoved) {
+        self.onReorderDragMoved(deltaX);
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    (void)event;
+    if (self.isReorderDragging && self.onReorderDragEnded) {
+        self.onReorderDragEnded();
+    }
+    self.trackingMouse = NO;
+    self.isReorderDragging = NO;
+}
+
 - (void)onClose:(id)sender {
     (void)sender;
+    if (self.tabPinned) {
+        return;
+    }
     BOOL optionHeld = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
     if (optionHeld && self.onCloseTabsToTheRight) {
         self.onCloseTabsToTheRight();

@@ -637,7 +637,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSArray<NSString *> *entries = [BrowsingPreferences savedTabEntries];
     if (entries.count > 0) {
         NSInteger index = [BrowsingPreferences savedSelectedTabIndex];
-        [self.tabController restoreTabsFromEntries:entries selectedIndex:index];
+        NSUInteger pinnedCount = [BrowsingPreferences savedPinnedTabCount];
+        [self.tabController restoreTabsFromEntries:entries
+                                     selectedIndex:index
+                                       pinnedCount:pinnedCount];
     } else {
         [self.tabController addNewTab];
     }
@@ -828,7 +831,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (selectedIndex == NSNotFound) {
         selectedIndex = 0;
     }
-    [BrowsingPreferences saveTabEntries:entries selectedIndex:selectedIndex];
+    [BrowsingPreferences saveTabEntries:entries
+                          selectedIndex:selectedIndex
+                            pinnedCount:self.tabController.pinnedTabCount];
 }
 
 - (nullable BrowserTab *)tabForID:(NSUUID *)tabID {
@@ -916,6 +921,28 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)tabStripViewDidRequestNewTab:(id)stripView {
     (void)stripView;
     [self.tabController addNewTab];
+}
+
+- (void)tabStripView:(id)stripView didMoveTabID:(NSUUID *)tabID toIndex:(NSUInteger)toIndex {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab) {
+        [self.tabController moveTab:tab toIndex:toIndex];
+    }
+}
+
+- (void)tabStripView:(id)stripView didSetPinned:(BOOL)pinned forTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab) {
+        [self.tabController setTab:tab pinned:pinned];
+    }
+}
+
+- (BOOL)tabStripView:(id)stripView isTabPinnedForTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    return tab.isPinned;
 }
 
 - (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView {

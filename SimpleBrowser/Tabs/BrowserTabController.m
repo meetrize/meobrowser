@@ -7,6 +7,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 @interface BrowserRecentlyClosedEntry : NSObject
 @property (nonatomic, copy) NSString *sessionEntry;
 @property (nonatomic, assign) NSUInteger insertionIndex;
+@property (nonatomic, assign) BOOL wasPinned;
 @end
 
 @implementation BrowserRecentlyClosedEntry
@@ -37,6 +38,17 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 
 - (BOOL)canRestoreRecentlyClosedTab {
     return self.recentlyClosedEntries.count > 0;
+}
+
+- (NSUInteger)pinnedTabCount {
+    NSUInteger count = 0;
+    for (BrowserTab *tab in self.mutableTabs) {
+        if (!tab.isPinned) {
+            break;
+        }
+        count++;
+    }
+    return count;
 }
 
 - (BrowserTab *)addNewTab {
@@ -108,7 +120,15 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     [self.recentlyClosedEntries removeLastObject];
 
     BrowserTab *tab = [self tabFromSessionEntry:entry.sessionEntry];
+    tab.pinned = entry.wasPinned;
+
     NSUInteger insertIndex = MIN(entry.insertionIndex, self.mutableTabs.count);
+    if (tab.isPinned) {
+        insertIndex = MIN(insertIndex, self.pinnedTabCount);
+    } else {
+        insertIndex = MAX(insertIndex, self.pinnedTabCount);
+        insertIndex = MIN(insertIndex, self.mutableTabs.count);
+    }
     [self.mutableTabs insertObject:tab atIndex:insertIndex];
     self.selectedTab = tab;
     [self notifyChange];
@@ -149,15 +169,59 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     [self notifyChange];
 }
 
-- (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries selectedIndex:(NSInteger)selectedIndex {
+- (void)moveTab:(BrowserTab *)tab toIndex:(NSUInteger)toIndex {
+    NSUInteger fromIndex = [self.mutableTabs indexOfObject:tab];
+    if (fromIndex == NSNotFound || self.mutableTabs.count <= 1) {
+        return;
+    }
+
+    // toIndex 为移动完成后的最终下标（0…count-1）；固定/普通标签不可越过分界。
+    NSUInteger pinnedCount = self.pinnedTabCount;
+    NSUInteger desired = MIN(toIndex, self.mutableTabs.count - 1);
+    if (tab.isPinned) {
+        if (pinnedCount == 0) {
+            return;
+        }
+        desired = MIN(desired, pinnedCount - 1);
+    } else {
+        desired = MAX(desired, pinnedCount);
+    }
+    if (desired == fromIndex) {
+        return;
+    }
+
+    [self.mutableTabs removeObjectAtIndex:fromIndex];
+    NSUInteger insertIndex = MIN(desired, self.mutableTabs.count);
+    [self.mutableTabs insertObject:tab atIndex:insertIndex];
+    [self notifyChange];
+}
+
+- (void)setTab:(BrowserTab *)tab pinned:(BOOL)pinned {
+    NSUInteger index = [self.mutableTabs indexOfObject:tab];
+    if (index == NSNotFound || tab.isPinned == pinned) {
+        return;
+    }
+
+    [self.mutableTabs removeObjectAtIndex:index];
+    tab.pinned = pinned;
+    NSUInteger insertIndex = MIN(self.pinnedTabCount, self.mutableTabs.count);
+    [self.mutableTabs insertObject:tab atIndex:insertIndex];
+    [self notifyChange];
+}
+
+- (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries
+                 selectedIndex:(NSInteger)selectedIndex
+                   pinnedCount:(NSUInteger)pinnedCount {
     for (BrowserTab *tab in [self.mutableTabs copy]) {
         [tab.webView removeFromSuperview];
     }
     [self.mutableTabs removeAllObjects];
     self.selectedTab = nil;
 
-    for (NSString *entry in entries) {
-        BrowserTab *tab = [self tabFromSessionEntry:entry];
+    NSUInteger clampedPinned = MIN(pinnedCount, entries.count);
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        BrowserTab *tab = [self tabFromSessionEntry:entries[i]];
+        tab.pinned = (i < clampedPinned);
         [self.mutableTabs addObject:tab];
     }
 
@@ -230,6 +294,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     BrowserRecentlyClosedEntry *entry = [[BrowserRecentlyClosedEntry alloc] init];
     entry.sessionEntry = [self sessionEntryForTab:tab];
     entry.insertionIndex = index;
+    entry.wasPinned = tab.isPinned;
     [self.recentlyClosedEntries addObject:entry];
     while (self.recentlyClosedEntries.count > kRecentlyClosedTabLimit) {
         [self.recentlyClosedEntries removeObjectAtIndex:0];

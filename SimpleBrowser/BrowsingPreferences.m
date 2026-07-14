@@ -6,6 +6,7 @@ static NSString * const kLastVisitedURLKey = @"lastVisitedURL";
 static NSString * const kTabSessionKey = @"tabSession";
 static NSString * const kTabSessionTabsKey = @"tabs";
 static NSString * const kTabSessionSelectedIndexKey = @"selectedIndex";
+static NSString * const kTabSessionPinnedCountKey = @"pinnedCount";
 static NSString * const kDefaultURLString = @"https://example.com";
 static NSString * const kDefaultSearchEngineKey = @"defaultSearchEngineID";
 
@@ -71,16 +72,31 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
     return 0;
 }
 
-+ (void)saveTabEntries:(NSArray<NSString *> *)entries selectedIndex:(NSInteger)selectedIndex {
++ (NSUInteger)savedPinnedTabCount {
+    NSDictionary *session = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kTabSessionKey];
+    NSNumber *count = session[kTabSessionPinnedCountKey];
+    if (![count isKindOfClass:[NSNumber class]]) {
+        return 0;
+    }
+    NSArray *tabs = session[kTabSessionTabsKey];
+    NSUInteger tabCount = [tabs isKindOfClass:[NSArray class]] ? tabs.count : 0;
+    return (NSUInteger)MAX(0, MIN(count.integerValue, (NSInteger)tabCount));
+}
+
++ (void)saveTabEntries:(NSArray<NSString *> *)entries
+         selectedIndex:(NSInteger)selectedIndex
+           pinnedCount:(NSUInteger)pinnedCount {
     if (entries.count == 0) {
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:kTabSessionKey];
         return;
     }
 
     NSInteger clampedIndex = MAX(0, MIN(selectedIndex, (NSInteger)entries.count - 1));
+    NSUInteger clampedPinned = MIN(pinnedCount, entries.count);
     NSDictionary *session = @{
         kTabSessionTabsKey: entries,
         kTabSessionSelectedIndexKey: @(clampedIndex),
+        kTabSessionPinnedCountKey: @(clampedPinned),
     };
     [[NSUserDefaults standardUserDefaults] setObject:session forKey:kTabSessionKey];
 

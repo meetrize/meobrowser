@@ -21,6 +21,9 @@ FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
 - (BOOL)tabStripViewCanRestoreRecentlyClosedTab:(id)stripView;
 - (BOOL)tabStripView:(id)stripView canCloseOtherTabsExceptTabID:(NSUUID *)tabID;
 - (BOOL)tabStripView:(id)stripView canCloseTabsToTheRightOfTabID:(NSUUID *)tabID;
+- (void)tabStripView:(id)stripView didMoveTabID:(NSUUID *)tabID toIndex:(NSUInteger)toIndex;
+- (void)tabStripView:(id)stripView didSetPinned:(BOOL)pinned forTabID:(NSUUID *)tabID;
+- (BOOL)tabStripView:(id)stripView isTabPinnedForTabID:(NSUUID *)tabID;
 @end
 
 @interface BrowserTabStripView : NSView

@@ -16,6 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSArray<BrowserTab *> *tabs;
 @property (nonatomic, readonly, nullable) BrowserTab *selectedTab;
 @property (nonatomic, readonly) BOOL canRestoreRecentlyClosedTab;
+@property (nonatomic, readonly) NSUInteger pinnedTabCount;
 
 - (instancetype)initWithConfiguration:(WKWebViewConfiguration *)configuration;
 
@@ -29,7 +30,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)selectTab:(BrowserTab *)tab;
 - (void)selectNextTab;
 - (void)selectPreviousTab;
-- (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries selectedIndex:(NSInteger)selectedIndex;
+- (void)moveTab:(BrowserTab *)tab toIndex:(NSUInteger)toIndex;
+- (void)setTab:(BrowserTab *)tab pinned:(BOOL)pinned;
+- (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries
+                 selectedIndex:(NSInteger)selectedIndex
+                   pinnedCount:(NSUInteger)pinnedCount;
 - (NSInteger)indexOfSelectedTab;
 - (nullable BrowserTab *)tabForWebView:(WKWebView *)webView;
 

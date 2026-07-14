@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, assign) BOOL isNewTabPage;
 @property (nonatomic, assign) BOOL isLoading;
+/// 固定标签：始终排在标签条左侧，紧凑显示，避免误关。
+@property (nonatomic, assign, getter=isPinned) BOOL pinned;
 @property (nonatomic, assign, readonly) NSInteger titleUpdateGeneration;
 /// 地址栏未提交输入草稿；nil 表示使用规范展示（新标签页为空，普通页为当前 URL）。
 @property (nonatomic, copy, nullable) NSString *addressBarDraft;
