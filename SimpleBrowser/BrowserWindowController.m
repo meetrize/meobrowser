@@ -1426,4 +1426,37 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
     return nil;
 }
 
+- (void)webView:(WKWebView *)webView
+runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+initiatedByFrame:(WKFrameInfo *)frame
+completionHandler:(void (^)(NSArray<NSURL *> * _Nullable URLs))completionHandler {
+    (void)webView;
+    (void)frame;
+
+    // macOS 上若不实现本方法，网页 <input type="file"> 点击无响应。
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
+    if (@available(macOS 10.13.4, *)) {
+        panel.canChooseDirectories = parameters.allowsDirectories;
+    } else {
+        panel.canChooseDirectories = NO;
+    }
+
+    NSWindow *hostWindow = self.window;
+    void (^finish)(NSModalResponse) = ^(NSModalResponse result) {
+        if (result == NSModalResponseOK) {
+            completionHandler(panel.URLs);
+        } else {
+            completionHandler(nil);
+        }
+    };
+
+    if (hostWindow != nil) {
+        [panel beginSheetModalForWindow:hostWindow completionHandler:finish];
+    } else {
+        finish([panel runModal]);
+    }
+}
+
 @end
