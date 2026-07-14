@@ -17,12 +17,17 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserFaviconService.h"
+#import "BrowserLoadingProgressView.h"
+
+static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate, NSMenuItemValidation>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
+@property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
+@property (nonatomic, weak) WKWebView *observedProgressWebView;
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
@@ -220,6 +225,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    [self stopObservingLoadingProgress];
     [self.addressAutocompleteController uninstall];
     [self.downloadManager removeObserver:self];
     self.downloadPanel.panelDelegate = nil;
@@ -312,11 +318,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.launchpadView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.contentContainer addSubview:self.launchpadView];
 
+    self.loadingProgressView = [[BrowserLoadingProgressView alloc] initWithFrame:NSZeroRect];
+    self.loadingProgressView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.contentContainer addSubview:self.loadingProgressView];
+
     [NSLayoutConstraint activateConstraints:@[
         [self.launchpadView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.launchpadView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.launchpadView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
         [self.launchpadView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+        [self.loadingProgressView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
+        [self.loadingProgressView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
+        [self.loadingProgressView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
+        [self.loadingProgressView.heightAnchor constraintEqualToConstant:BrowserLoadingProgressHeight],
     ]];
 
     NSStackView *rootStack = [NSStackView stackViewWithViews:@[
@@ -675,8 +689,103 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.launchpadView reloadShortcuts];
     }
 
+    [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
+    [self observeLoadingProgressForSelectedTab];
+
     [self reloadTabStrip];
     [self updateNavigationState];
+}
+
+#pragma mark - Loading Progress
+
+- (void)stopObservingLoadingProgress {
+    WKWebView *webView = self.observedProgressWebView;
+    if (!webView) {
+        return;
+    }
+    @try {
+        [webView removeObserver:self
+                     forKeyPath:@"estimatedProgress"
+                        context:kBrowserEstimatedProgressContext];
+    } @catch (__unused NSException *exception) {
+    }
+    self.observedProgressWebView = nil;
+}
+
+- (void)observeLoadingProgressForSelectedTab {
+    WKWebView *webView = self.webView;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (webView == self.observedProgressWebView) {
+        [self syncLoadingProgressUI];
+        return;
+    }
+
+    [self stopObservingLoadingProgress];
+
+    if (!webView || tab.isNewTabPage) {
+        [self.loadingProgressView resetHidden];
+        return;
+    }
+
+    self.observedProgressWebView = webView;
+    [webView addObserver:self
+              forKeyPath:@"estimatedProgress"
+                 options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial
+                 context:kBrowserEstimatedProgressContext];
+}
+
+- (void)syncLoadingProgressUI {
+    BrowserTab *tab = self.tabController.selectedTab;
+    WKWebView *webView = tab.webView;
+    if (!tab || tab.isNewTabPage || !webView) {
+        [self.loadingProgressView resetHidden];
+        return;
+    }
+
+    if (webView.isLoading || tab.isLoading) {
+        [self.loadingProgressView setProgress:webView.estimatedProgress animated:NO];
+        return;
+    }
+
+    if (webView.estimatedProgress > 0.0 && webView.estimatedProgress < 1.0) {
+        [self.loadingProgressView setProgress:webView.estimatedProgress animated:NO];
+        return;
+    }
+
+    [self.loadingProgressView resetHidden];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context {
+    if (context != kBrowserEstimatedProgressContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    if (![keyPath isEqualToString:@"estimatedProgress"] || ![object isKindOfClass:[WKWebView class]]) {
+        return;
+    }
+
+    WKWebView *webView = (WKWebView *)object;
+    if (webView != self.webView) {
+        return;
+    }
+
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        [self.loadingProgressView resetHidden];
+        return;
+    }
+
+    double progress = webView.estimatedProgress;
+    if (webView.isLoading || tab.isLoading || (progress > 0.0 && progress < 1.0)) {
+        [self.loadingProgressView setProgress:progress animated:YES];
+    } else if (progress >= 1.0) {
+        [self.loadingProgressView completeIfVisible];
+    } else {
+        [self.loadingProgressView resetHidden];
+    }
 }
 
 - (void)reloadTabStrip {
@@ -1122,6 +1231,9 @@ didBecomeDownload:(WKDownload *)download {
     }
 
     tab.isLoading = YES;
+    if (webView == self.webView) {
+        [self.loadingProgressView beginLoading];
+    }
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
@@ -1180,6 +1292,7 @@ didFailNavigation:(WKNavigation *)navigation
     tab.addressBarDraft = nil;
 
     if (webView == self.webView) {
+        [self.loadingProgressView completeIfVisible];
         [self applyAddressBarStringForTab:tab];
         self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
         self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
@@ -1227,6 +1340,11 @@ didFailNavigation:(WKNavigation *)navigation
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         tab.isLoading = NO;
         if (webView == self.webView) {
+            if (webView.isLoading) {
+                [self.loadingProgressView setProgress:webView.estimatedProgress animated:YES];
+            } else {
+                [self.loadingProgressView resetHidden];
+            }
             [self updateNavigationState];
         }
         [self updateTabStripDisplay];
@@ -1240,6 +1358,7 @@ didFailNavigation:(WKNavigation *)navigation
     if (webView != self.webView) {
         return;
     }
+    [self.loadingProgressView resetHidden];
     [self showErrorWithTitle:@"无法加载页面" message:error.localizedDescription];
     [self updateNavigationState];
 }

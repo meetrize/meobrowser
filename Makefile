@@ -13,6 +13,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
                    $(BROWSER_SRC_DIR)/BrowserAppInfo.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
+                   $(BROWSER_SRC_DIR)/BrowserLoadingProgressView.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
                    $(BROWSER_SRC_DIR)/BrowserSettingsWindowController.m \
