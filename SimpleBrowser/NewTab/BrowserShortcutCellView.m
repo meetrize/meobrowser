@@ -1,8 +1,12 @@
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserShortcutStore.h"
 #import "BrowserLaunchpadAppearance.h"
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutFolderOverlay.h"
+#import "BrowserFaviconService.h"
+#import "BrowserFaviconCache.h"
+#import "BrowserFaviconUtil.h"
 #import <QuartzCore/QuartzCore.h>
 
 @interface BrowserLaunchpadView (CellDragSupport)
@@ -36,75 +40,20 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     return [[host substringToIndex:1] uppercaseString];
 }
 
-@interface BrowserShortcutIconLoader : NSObject
-+ (instancetype)sharedLoader;
-- (void)loadImageForURLString:(NSString *)urlString
-                   completion:(void (^)(NSImage * _Nullable image))completion;
-@end
-
-@interface BrowserShortcutIconLoader ()
-@property (nonatomic, strong) NSCache<NSString *, NSImage *> *imageCache;
-@end
-
-@implementation BrowserShortcutIconLoader
-
-+ (instancetype)sharedLoader {
-    static BrowserShortcutIconLoader *loader = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        loader = [[BrowserShortcutIconLoader alloc] init];
-    });
-    return loader;
-}
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _imageCache = [[NSCache alloc] init];
-        _imageCache.countLimit = 128;
-    }
-    return self;
-}
-
-- (void)loadImageForURLString:(NSString *)urlString
-                   completion:(void (^)(NSImage * _Nullable image))completion {
-    if (urlString.length == 0 || !completion) {
-        completion(nil);
+static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) {
+    if (shortcut == nil || shortcut.isFolder || shortcut.iconURLString.length > 0) {
         return;
     }
-
-    NSImage *cached = [self.imageCache objectForKey:urlString];
-    if (cached) {
-        completion(cached);
+    NSString *host = BrowserFaviconHostFromURLString(shortcut.urlString);
+    if (host.length == 0) {
         return;
     }
-
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) {
-        completion(nil);
+    NSString *source = [[BrowserFaviconCache sharedCache] sourceURLForHost:host];
+    if (source.length == 0) {
         return;
     }
-
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url
-                                                             completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        (void)response;
-        NSImage *image = nil;
-        if (!error && data.length > 0) {
-            image = [[NSImage alloc] initWithData:data];
-        }
-        if (image && image.size.width > 0 && image.size.height > 0) {
-            [self.imageCache setObject:image forKey:urlString];
-        } else {
-            image = nil;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            completion(image);
-        });
-    }];
-    [task resume];
+    [BrowserShortcutStore updateIconURLString:source matchingURLString:shortcut.urlString];
 }
-
-@end
 
 @interface BrowserShortcutIconBackdropView : NSView
 @property (nonatomic, strong) NSColor *fillColor;
@@ -175,6 +124,12 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, strong) NSImageView *imageView;
 @property (nonatomic, strong) NSTextField *letterLabel;
 @property (nonatomic, assign) NSUInteger loadToken;
+@property (nonatomic, copy, nullable) NSString *boundHost;
+@property (nonatomic, strong, nullable) BrowserShortcutItem *boundShortcut;
+@property (nonatomic, strong) NSLayoutConstraint *imageTopConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *imageLeadingConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *imageTrailingConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *imageBottomConstraint;
 @end
 
 @implementation BrowserShortcutFolderTileView
@@ -206,23 +161,69 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_letterLabel];
 
+        CGFloat tilePad = 2.5;
+        _imageTopConstraint = [_imageView.topAnchor constraintEqualToAnchor:self.topAnchor constant:tilePad];
+        _imageLeadingConstraint = [_imageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:tilePad];
+        _imageTrailingConstraint = [_imageView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-tilePad];
+        _imageBottomConstraint = [_imageView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-tilePad];
         [NSLayoutConstraint activateConstraints:@[
             [_backdropView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_backdropView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
             [_backdropView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [_backdropView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_imageView.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [_imageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [_imageView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [_imageView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            _imageTopConstraint,
+            _imageLeadingConstraint,
+            _imageTrailingConstraint,
+            _imageBottomConstraint,
             [_letterLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
             [_letterLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
         ]];
 
         // 默认按小格尺寸套用与主图标同比例的圆角。
         [self applyCornerRadiusForParentIconSize:[BrowserLaunchpadAppearance defaultIconSize]];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(faviconDidUpdate:)
+                                                     name:BrowserFaviconDidUpdateNotification
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)applyTileImagePaddingForPreRounded:(BOOL)preRounded {
+    CGFloat pad = preRounded ? 0.0 : 2.5;
+    self.imageTopConstraint.constant = pad;
+    self.imageLeadingConstraint.constant = pad;
+    self.imageTrailingConstraint.constant = -pad;
+    self.imageBottomConstraint.constant = -pad;
+}
+
+- (void)applyTileLoadedImage:(NSImage *)image {
+    NSImage *displayImage = image;
+    BrowserFaviconIconFitStyle fit = BrowserFaviconAnalyzeIconForDisplay(image, &displayImage);
+    BOOL fill = (fit == BrowserFaviconIconFitFillRoundedRect);
+    [self applyTileImagePaddingForPreRounded:fill];
+    self.imageView.image = displayImage ?: image;
+    self.imageView.hidden = NO;
+    self.letterLabel.hidden = YES;
+    self.backdropView.fillColor = fill ? NSColor.clearColor : NSColor.whiteColor;
+}
+
+- (void)faviconDidUpdate:(NSNotification *)notification {
+    NSString *host = notification.userInfo[BrowserFaviconHostUserInfoKey] ?: notification.object;
+    if (self.boundHost.length == 0 || ![host isEqualToString:self.boundHost]) {
+        return;
+    }
+    NSImage *image = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+    if (image == nil) {
+        return;
+    }
+    [self applyTileLoadedImage:image];
+    BrowserShortcutWritebackIconIfNeeded(self.boundShortcut);
 }
 
 /// 与主图标保持相同圆角比例（radius/side），视觉上和大图标 squircle 一致。
@@ -248,6 +249,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 - (void)configureWithShortcut:(nullable BrowserShortcutItem *)shortcut {
     self.loadToken += 1;
     NSUInteger token = self.loadToken;
+    self.boundShortcut = shortcut;
+    self.boundHost = shortcut ? BrowserFaviconHostFromURLString(shortcut.urlString) : nil;
     if (!shortcut) {
         self.hidden = YES;
         self.imageView.image = nil;
@@ -260,22 +263,20 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.letterLabel.hidden = NO;
     self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
     self.backdropView.fillColor = ColorFromURLString(shortcut.urlString);
+    [self applyTileImagePaddingForPreRounded:NO];
 
-    if (shortcut.iconURLString.length == 0) {
-        return;
-    }
-
+    NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
-    [[BrowserShortcutIconLoader sharedLoader] loadImageForURLString:shortcut.iconURLString
-                                                          completion:^(NSImage *image) {
+    [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                 preferredIconURL:preferred
+                                                      triggerFetch:YES
+                                                        completion:^(NSImage *image) {
         BrowserShortcutFolderTileView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.loadToken != token || !image) {
             return;
         }
-        strongSelf.imageView.image = image;
-        strongSelf.imageView.hidden = NO;
-        strongSelf.letterLabel.hidden = YES;
-        strongSelf.backdropView.fillColor = NSColor.whiteColor;
+        [strongSelf applyTileLoadedImage:image];
+        BrowserShortcutWritebackIconIfNeeded(shortcut);
     }];
 }
 
@@ -299,6 +300,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, assign, getter=isMergeHighlighted) BOOL mergeHighlighted;
 @property (nonatomic, assign) BOOL trackingHover;
 @property (nonatomic, assign) NSUInteger iconLoadToken;
+@property (nonatomic, copy, nullable) NSString *boundHost;
 @property (nonatomic, assign) NSPoint mouseDownLocation;
 @property (nonatomic, strong, nullable) NSEvent *mouseDownEvent;
 @property (nonatomic, assign) BOOL didStartDrag;
@@ -309,7 +311,18 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, strong) NSLayoutConstraint *iconContainerHeightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *iconWidthConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *iconHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *folderWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *folderHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *mergeWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *mergeHeightConstraint;
+/// YES：图标自带圆角抠图，铺满底板；NO：四周留白。
+@property (nonatomic, assign) BOOL iconImageFillsBounds;
 @end
+
+static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
+    // 直角/满幅图标四周留白，避免贴边显得挤。
+    return MAX(6.0, iconSize * 0.14);
+}
 
 @implementation BrowserShortcutCellContentView
 
@@ -322,6 +335,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         self.canDrawSubviewsIntoLayer = NO;
         _iconSize = [BrowserLaunchpadAppearance defaultIconSize];
         _folderChildren = @[];
+        _iconImageFillsBounds = NO;
 
         _iconAnimContainer = [[NSView alloc] initWithFrame:NSZeroRect];
         _iconAnimContainer.wantsLayer = YES;
@@ -385,7 +399,12 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         CGFloat shadowInset = [BrowserLaunchpadAppearance iconShadowInsetForIconSize:_iconSize];
         CGFloat iconContainerSize = _iconSize + shadowInset * 2.0;
         CGFloat cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:_iconSize];
-        _iconImageView.layer.cornerRadius = cornerRadius;
+        CGFloat imageInset = _iconImageFillsBounds ? 0.0 : BrowserShortcutIconImageInset(_iconSize);
+        CGFloat imageSideForRadius = MAX(1.0, _iconSize - imageInset * 2.0);
+        CGFloat imageCorner = _iconImageFillsBounds
+            ? cornerRadius
+            : MAX(4.0, cornerRadius * (imageSideForRadius / MAX(_iconSize, 1.0)));
+        _iconImageView.layer.cornerRadius = imageCorner;
         _iconBackdropView.cornerRadius = cornerRadius;
         _iconBackdropView.shadowInset = shadowInset;
         _mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
@@ -394,12 +413,19 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             _mergeRingView.layer.cornerCurve = kCACornerCurveContinuous;
         }
 
+        CGFloat imageSide = MAX(1.0, _iconSize - imageInset * 2.0);
+        CGFloat folderSide = _iconSize * 0.86;
+
         _cellWidthConstraint = [self.widthAnchor constraintEqualToConstant:cellWidth];
         _cellHeightConstraint = [self.heightAnchor constraintEqualToConstant:cellHeight];
         _iconContainerWidthConstraint = [_iconAnimContainer.widthAnchor constraintEqualToConstant:iconContainerSize];
         _iconContainerHeightConstraint = [_iconAnimContainer.heightAnchor constraintEqualToConstant:iconContainerSize];
-        _iconWidthConstraint = [_iconImageView.widthAnchor constraintEqualToConstant:_iconSize];
-        _iconHeightConstraint = [_iconImageView.heightAnchor constraintEqualToConstant:_iconSize];
+        _iconWidthConstraint = [_iconImageView.widthAnchor constraintEqualToConstant:imageSide];
+        _iconHeightConstraint = [_iconImageView.heightAnchor constraintEqualToConstant:imageSide];
+        _folderWidthConstraint = [_folderGridView.widthAnchor constraintEqualToConstant:folderSide];
+        _folderHeightConstraint = [_folderGridView.heightAnchor constraintEqualToConstant:folderSide];
+        _mergeWidthConstraint = [_mergeRingView.widthAnchor constraintEqualToConstant:_iconSize + 8.0];
+        _mergeHeightConstraint = [_mergeRingView.heightAnchor constraintEqualToConstant:_iconSize + 8.0];
 
         for (BrowserShortcutFolderTileView *tile in _folderTiles) {
             [tile applyCornerRadiusForParentIconSize:_iconSize];
@@ -429,8 +455,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [_letterLabel.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
             [_folderGridView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
             [_folderGridView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
-            [_folderGridView.widthAnchor constraintEqualToAnchor:_iconImageView.widthAnchor multiplier:0.86],
-            [_folderGridView.heightAnchor constraintEqualToAnchor:_iconImageView.heightAnchor multiplier:0.86],
+            _folderWidthConstraint,
+            _folderHeightConstraint,
             [tile0.topAnchor constraintEqualToAnchor:_folderGridView.topAnchor],
             [tile0.leadingAnchor constraintEqualToAnchor:_folderGridView.leadingAnchor],
             [tile0.widthAnchor constraintEqualToAnchor:_folderGridView.widthAnchor multiplier:0.46],
@@ -449,14 +475,39 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [tile3.heightAnchor constraintEqualToAnchor:tile0.heightAnchor],
             [_mergeRingView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
             [_mergeRingView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
-            [_mergeRingView.widthAnchor constraintEqualToAnchor:_iconImageView.widthAnchor constant:8],
-            [_mergeRingView.heightAnchor constraintEqualToAnchor:_iconImageView.heightAnchor constant:8],
+            _mergeWidthConstraint,
+            _mergeHeightConstraint,
             [_titleLabel.topAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor constant:2],
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:2],
             [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2],
         ]];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(faviconDidUpdate:)
+                                                     name:BrowserFaviconDidUpdateNotification
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)faviconDidUpdate:(NSNotification *)notification {
+    if (self.addCell || self.shortcut == nil || self.shortcut.isFolder) {
+        return;
+    }
+    NSString *host = notification.userInfo[BrowserFaviconHostUserInfoKey] ?: notification.object;
+    if (self.boundHost.length == 0 || ![host isEqualToString:self.boundHost]) {
+        return;
+    }
+    NSImage *image = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+    if (image == nil) {
+        return;
+    }
+    [self applyLoadedIconImage:image];
+    BrowserShortcutWritebackIconIfNeeded(self.shortcut);
 }
 
 - (void)applyIconSize:(CGFloat)iconSize {
@@ -471,13 +522,16 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     CGFloat cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:iconSize];
     CGFloat letterFontSize = 28.0 * (iconSize / [BrowserLaunchpadAppearance defaultIconSize]);
 
+    [self applyIconImageLayoutForCurrentFillMode];
+
     self.cellWidthConstraint.constant = cellWidth;
     self.cellHeightConstraint.constant = cellHeight;
     self.iconContainerWidthConstraint.constant = iconContainerSize;
     self.iconContainerHeightConstraint.constant = iconContainerSize;
-    self.iconWidthConstraint.constant = iconSize;
-    self.iconHeightConstraint.constant = iconSize;
-    self.iconImageView.layer.cornerRadius = cornerRadius;
+    self.folderWidthConstraint.constant = iconSize * 0.86;
+    self.folderHeightConstraint.constant = iconSize * 0.86;
+    self.mergeWidthConstraint.constant = iconSize + 8.0;
+    self.mergeHeightConstraint.constant = iconSize + 8.0;
     self.iconBackdropView.cornerRadius = cornerRadius;
     self.iconBackdropView.shadowInset = shadowInset;
     self.mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
@@ -509,7 +563,24 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.iconBackdropView.fillColor = color;
 }
 
+- (void)applyIconImageLayoutForCurrentFillMode {
+    CGFloat inset = self.iconImageFillsBounds ? 0.0 : BrowserShortcutIconImageInset(self.iconSize);
+    CGFloat side = MAX(1.0, self.iconSize - inset * 2.0);
+    CGFloat cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:self.iconSize];
+    CGFloat imageCorner = self.iconImageFillsBounds
+        ? cornerRadius
+        : MAX(4.0, cornerRadius * (side / MAX(self.iconSize, 1.0)));
+    self.iconWidthConstraint.constant = side;
+    self.iconHeightConstraint.constant = side;
+    self.iconImageView.layer.cornerRadius = imageCorner;
+    if (@available(macOS 10.15, *)) {
+        self.iconImageView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+}
+
 - (void)applyLetterFallbackForShortcut:(BrowserShortcutItem *)shortcut {
+    self.iconImageFillsBounds = NO;
+    [self applyIconImageLayoutForCurrentFillMode];
     self.iconImageView.image = nil;
     self.iconImageView.hidden = YES;
     self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
@@ -519,27 +590,34 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 }
 
 - (void)applyLoadedIconImage:(NSImage *)image {
-    self.iconImageView.image = image;
+    NSImage *displayImage = image;
+    BrowserFaviconIconFitStyle fit = BrowserFaviconAnalyzeIconForDisplay(image, &displayImage);
+    self.iconImageFillsBounds = (fit == BrowserFaviconIconFitFillRoundedRect);
+    [self applyIconImageLayoutForCurrentFillMode];
+    self.iconImageView.image = displayImage ?: image;
     self.iconImageView.hidden = NO;
     self.letterLabel.hidden = YES;
-    [self updateIconFillColor:NSColor.whiteColor];
+    // 满幅徽章：底板透明，避免圆角缝里露白边；留白图标：白底圆角矩形承托。
+    [self updateIconFillColor:self.iconImageFillsBounds ? NSColor.clearColor : NSColor.whiteColor];
 }
 
 - (void)loadIconForShortcut:(BrowserShortcutItem *)shortcut {
     self.iconLoadToken += 1;
     NSUInteger token = self.iconLoadToken;
+    self.boundHost = BrowserFaviconHostFromURLString(shortcut.urlString);
     [self applyLetterFallbackForShortcut:shortcut];
-    if (shortcut.iconURLString.length == 0) {
-        return;
-    }
+    NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
-    [[BrowserShortcutIconLoader sharedLoader] loadImageForURLString:shortcut.iconURLString
-                                                          completion:^(NSImage *image) {
+    [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                 preferredIconURL:preferred
+                                                      triggerFetch:YES
+                                                        completion:^(NSImage *image) {
         BrowserShortcutCellContentView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.iconLoadToken != token || !image) {
             return;
         }
         [strongSelf applyLoadedIconImage:image];
+        BrowserShortcutWritebackIconIfNeeded(shortcut);
     }];
 }
 
@@ -548,6 +626,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.addCell = NO;
     self.shortcut = shortcut;
     self.folderChildren = children ?: @[];
+    self.boundHost = shortcut.isFolder ? nil : BrowserFaviconHostFromURLString(shortcut.urlString);
     self.titleLabel.stringValue = shortcut.title;
     self.titleLabel.hidden = NO;
     self.mergeHighlighted = NO;
@@ -580,6 +659,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.addCell = YES;
     self.shortcut = nil;
     self.folderChildren = @[];
+    self.boundHost = nil;
     self.iconLoadToken += 1;
     self.iconImageView.image = nil;
     self.iconImageView.hidden = YES;

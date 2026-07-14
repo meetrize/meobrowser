@@ -139,8 +139,8 @@ NSColor *BrowserTabActiveFillColor(void) {
 - (void)updateChromeAppearance {
     BOOL dark = [self effectiveAppearanceIsDark];
     NSColor *active = BrowserTabActiveFillColor();
-    NSColor *inactive = dark ? [NSColor colorWithCalibratedWhite:0.16 alpha:1.0]
-                             : [NSColor colorWithCalibratedWhite:0.90 alpha:1.0];
+    NSColor *inactive = dark ? [NSColor colorWithCalibratedWhite:0.13 alpha:1.0]
+                             : [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
 
     self.layer.backgroundColor = (self.tabSelected ? active : inactive).CGColor;
 

@@ -167,7 +167,7 @@ SimpleBrowser/
 
 ### 5.2 视觉
 
-- **背景**：`NSVisualEffectView`（`behindWindow` + `contentBackground`），随系统浅/深色
+- **背景**：默认 `NSVisualEffectView`（`behindWindow` + `contentBackground`），随系统浅/深色；自定义图片见 [new-tab-launchpad-wallpaper-design.md](new-tab-launchpad-wallpaper-design.md)
 - **图标**：圆角 14 pt；无 favicon 时用域名首字母 + 色相哈希背景色
 - **标题**：13 pt，单行截断，居中于图标下方
 - **悬停**：轻微放大（1.05）+ 阴影，150 ms 动画
@@ -272,8 +272,8 @@ SimpleBrowser/
 | 阶段 | 策略 |
 |------|------|
 | NTP-1 | 首字母占位 + 域名哈希背景色 |
-| NTP-3 | `NSURLSession` 拉取 `/favicon.ico`；失败保持占位 |
-| 后续 | 页面加载成功后本地缓存（可与未来历史模块联动） |
+| NTP-3 | 展示侧可按 `iconURLString` / `/favicon.ico` 异步加载（内存缓存） |
+| **ICO（现行方案）** | 多渠道瀑布 + Application Support 磁盘缓存；星标加入与编辑「自动获取」触发。详见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md) |
 
 **禁止**：为每个快捷方式预建 hidden `WKWebView`（与 N 标签内存模型冲突）。
 

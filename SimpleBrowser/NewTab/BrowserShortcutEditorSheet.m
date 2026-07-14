@@ -1,17 +1,22 @@
 #import "BrowserShortcutEditorSheet.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserShortcutStore.h"
+#import "BrowserFaviconService.h"
+#import "BrowserFaviconUtil.h"
 #import "SBTextField.h"
 
 @interface BrowserShortcutEditorPanelController : NSWindowController <NSTextFieldDelegate, NSWindowDelegate>
 @property (nonatomic, strong) SBTextField *titleField;
 @property (nonatomic, strong) SBTextField *urlField;
 @property (nonatomic, strong) SBTextField *iconURLField;
+@property (nonatomic, strong) NSButton *fetchIconButton;
+@property (nonatomic, strong) NSImageView *iconPreview;
 @property (nonatomic, strong) NSTextField *errorLabel;
 @property (nonatomic, copy, nullable) BrowserShortcutEditorCompletionHandler completion;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *editingShortcut;
-/// 保持 controller 存活直至 sheet 结束（按钮 target 与 delegate 需要有效 self）
 @property (nonatomic, strong, nullable) BrowserShortcutEditorPanelController *selfRetain;
+@property (nonatomic, copy, nullable) NSString *fetchingHost;
+@property (nonatomic, assign) BOOL fetchingIcon;
 @end
 
 @implementation BrowserShortcutEditorPanelController
@@ -32,12 +37,13 @@
         self.titleField.stringValue = shortcut.title;
         self.urlField.stringValue = shortcut.urlString;
         self.iconURLField.stringValue = shortcut.iconURLString;
+        [self refreshIconPreview];
     }
     return self;
 }
 
 - (void)buildWindowWithTitle:(NSString *)title {
-    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 260)
+    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 300)
                                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -57,6 +63,39 @@
     self.urlField.delegate = self;
     self.iconURLField.delegate = self;
 
+    self.fetchIconButton = [NSButton buttonWithTitle:@"自动获取" target:self action:@selector(onFetchIcon:)];
+    self.fetchIconButton.bezelStyle = NSBezelStyleRounded;
+    [self.fetchIconButton setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *iconRow = [NSStackView stackViewWithViews:@[self.iconURLField, self.fetchIconButton]];
+    iconRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    iconRow.alignment = NSLayoutAttributeCenterY;
+    iconRow.spacing = 8;
+    iconRow.distribution = NSStackViewDistributionFill;
+    [self.iconURLField setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.iconPreview = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.iconPreview.imageScaling = NSImageScaleProportionallyUpOrDown;
+    self.iconPreview.wantsLayer = YES;
+    self.iconPreview.layer.cornerRadius = 6.0;
+    self.iconPreview.layer.masksToBounds = YES;
+    self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+    self.iconPreview.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.iconPreview.widthAnchor constraintEqualToConstant:32],
+        [self.iconPreview.heightAnchor constraintEqualToConstant:32],
+    ]];
+
+    NSStackView *iconPreviewRow = [NSStackView stackViewWithViews:@[self.iconPreview, iconRow]];
+    iconPreviewRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    iconPreviewRow.alignment = NSLayoutAttributeCenterY;
+    iconPreviewRow.spacing = 10;
+    iconPreviewRow.distribution = NSStackViewDistributionFill;
+    [iconRow setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.errorLabel = [NSTextField labelWithString:@""];
     self.errorLabel.textColor = [NSColor systemRedColor];
     self.errorLabel.font = [NSFont systemFontOfSize:12];
@@ -70,7 +109,7 @@
     NSGridView *grid = [NSGridView gridViewWithViews:@[
         @[titleCaption, self.titleField],
         @[urlCaption, self.urlField],
-        @[iconCaption, self.iconURLField],
+        @[iconCaption, iconPreviewRow],
     ]];
     grid.columnSpacing = 12;
     grid.rowSpacing = 10;
@@ -107,6 +146,7 @@
     __weak typeof(self) weakSelf = self;
     [parentWindow beginSheet:self.window completionHandler:^(NSModalResponse returnCode) {
         BrowserShortcutEditorPanelController *controller = weakSelf;
+        [controller cancelInFlightFetch];
         controller.window.delegate = nil;
         controller.selfRetain = nil;
         if (returnCode == NSModalResponseCancel && controller.completion) {
@@ -116,12 +156,21 @@
 }
 
 - (void)dismissSheetWithReturnCode:(NSModalResponse)returnCode {
+    [self cancelInFlightFetch];
     NSWindow *sheet = self.window;
     if (sheet.sheetParent) {
         [sheet.sheetParent endSheet:sheet returnCode:returnCode];
         return;
     }
     [NSApp endSheet:sheet returnCode:returnCode];
+}
+
+- (void)cancelInFlightFetch {
+    if (self.fetchingHost.length > 0) {
+        [[BrowserFaviconService sharedService] cancelFetchForHost:self.fetchingHost];
+        self.fetchingHost = nil;
+    }
+    [self setFetchingIcon:NO];
 }
 
 #pragma mark - NSWindowDelegate
@@ -137,6 +186,92 @@
 - (void)onCancel:(id)sender {
     (void)sender;
     [self dismissSheetWithReturnCode:NSModalResponseCancel];
+}
+
+- (void)onFetchIcon:(id)sender {
+    (void)sender;
+    if (self.fetchingIcon) {
+        return;
+    }
+
+    NSString *urlInput = self.urlField.stringValue;
+    NSString *normalizedURL = nil;
+    if (![BrowserShortcutStore validateURLString:urlInput normalizedURL:&normalizedURL]) {
+        [self showError:@"请先输入有效的网址，再自动获取图标"];
+        return;
+    }
+
+    self.errorLabel.hidden = YES;
+    [self setFetchingIcon:YES];
+    NSString *host = BrowserFaviconHostFromURLString(normalizedURL);
+    self.fetchingHost = host;
+
+    __weak typeof(self) weakSelf = self;
+    [[BrowserFaviconService sharedService] fetchAndCacheForPageURLString:normalizedURL
+                                                         preferredIconURL:nil
+                                                                   reason:BrowserFaviconFetchReasonUserAction
+                                                               completion:^(NSURL *iconURL, NSImage *image, NSError *error) {
+        BrowserShortcutEditorPanelController *strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+        strongSelf.fetchingHost = nil;
+        [strongSelf setFetchingIcon:NO];
+
+        if (error != nil && error.code == BrowserFaviconErrorCancelled) {
+            return;
+        }
+        if (image == nil || iconURL.absoluteString.length == 0) {
+            [strongSelf showError:@"未能获取图标，可手动填写"];
+            return;
+        }
+
+        strongSelf.iconURLField.stringValue = iconURL.absoluteString;
+        strongSelf.iconPreview.image = image;
+        strongSelf.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+        strongSelf.errorLabel.hidden = YES;
+    }];
+}
+
+- (void)setFetchingIcon:(BOOL)fetchingIcon {
+    _fetchingIcon = fetchingIcon;
+    self.fetchIconButton.enabled = !fetchingIcon;
+    self.fetchIconButton.title = fetchingIcon ? @"获取中…" : @"自动获取";
+}
+
+- (void)refreshIconPreview {
+    NSString *iconURL = self.iconURLField.stringValue;
+    NSString *pageURL = self.urlField.stringValue;
+    self.iconPreview.image = nil;
+    self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+
+    NSString *host = BrowserFaviconHostFromURLString(pageURL);
+    if (host.length > 0) {
+        NSImage *cached = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+        if (cached != nil) {
+            self.iconPreview.image = cached;
+            self.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+            return;
+        }
+    }
+    if (iconURL.length == 0) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [[BrowserFaviconService sharedService] imageForPageURLString:(pageURL.length > 0 ? pageURL : iconURL)
+                                                 preferredIconURL:iconURL
+                                                      triggerFetch:NO
+                                                        completion:^(NSImage *image) {
+        BrowserShortcutEditorPanelController *strongSelf = weakSelf;
+        if (strongSelf == nil || image == nil) {
+            return;
+        }
+        if (![strongSelf.iconURLField.stringValue isEqualToString:iconURL]) {
+            return;
+        }
+        strongSelf.iconPreview.image = image;
+        strongSelf.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+    }];
 }
 
 - (void)onSave:(id)sender {
@@ -184,6 +319,26 @@
 - (void)showError:(NSString *)message {
     self.errorLabel.stringValue = message;
     self.errorLabel.hidden = NO;
+}
+
+- (void)controlTextDidChange:(NSNotification *)obj {
+    (void)obj;
+    if (obj.object == self.iconURLField || obj.object == self.urlField) {
+        // 输入变化时不自动请求网络，仅在有 host 缓存时刷新预览。
+        NSString *host = BrowserFaviconHostFromURLString(self.urlField.stringValue);
+        if (host.length > 0) {
+            NSImage *cached = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+            if (cached != nil) {
+                self.iconPreview.image = cached;
+                self.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+                return;
+            }
+        }
+        if (self.iconURLField.stringValue.length == 0) {
+            self.iconPreview.image = nil;
+            self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+        }
+    }
 }
 
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {

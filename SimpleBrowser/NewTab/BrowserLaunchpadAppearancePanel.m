@@ -1,5 +1,6 @@
 #import "BrowserLaunchpadAppearancePanel.h"
 #import "BrowserLaunchpadAppearance.h"
+#import "BrowserWallpaperStore.h"
 
 @interface BrowserLaunchpadAppearancePanel ()
 @property (nonatomic, strong) NSSegmentedControl *presetControl;
@@ -9,6 +10,12 @@
 @property (nonatomic, strong) NSTextField *iconSizeValueLabel;
 @property (nonatomic, strong) NSTextField *horizontalSpacingValueLabel;
 @property (nonatomic, strong) NSTextField *verticalSpacingValueLabel;
+@property (nonatomic, strong) NSButton *wallpaperEnabledCheckbox;
+@property (nonatomic, strong) NSButton *chooseWallpaperButton;
+@property (nonatomic, strong) NSButton *clearWallpaperButton;
+@property (nonatomic, strong) NSTextField *wallpaperFileLabel;
+@property (nonatomic, strong) NSSlider *scrimSlider;
+@property (nonatomic, strong) NSTextField *scrimValueLabel;
 @property (nonatomic, assign) BOOL updatingUI;
 @property (nonatomic, assign) BOOL didBuildUI;
 @end
@@ -24,6 +31,10 @@
     if (self) {
         [self buildUI];
         [self reloadFromAppearance];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(wallpaperDidChange:)
+                                                     name:BrowserWallpaperDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -33,12 +44,20 @@
     if (self) {
         [self buildUI];
         [self reloadFromAppearance];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(wallpaperDidChange:)
+                                                     name:BrowserWallpaperDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
 
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
 + (NSSize)preferredPanelSize {
-    return NSMakeSize(288, 252);
+    return NSMakeSize(288, 392);
 }
 
 - (NSSize)preferredContentSize {
@@ -63,7 +82,7 @@
     label.translatesAutoresizingMaskIntoConstraints = NO;
     [label setContentHuggingPriority:NSLayoutPriorityRequired
                        forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [label.widthAnchor constraintGreaterThanOrEqualToConstant:28].active = YES;
+    [label.widthAnchor constraintGreaterThanOrEqualToConstant:36].active = YES;
     return label;
 }
 
@@ -158,6 +177,40 @@
     [resetButton setContentHuggingPriority:NSLayoutPriorityRequired
                              forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    NSTextField *backgroundCaption = [self makeCaption:@"背景"];
+
+    self.wallpaperEnabledCheckbox = [NSButton checkboxWithTitle:@"使用背景图片"
+                                                         target:self
+                                                         action:@selector(wallpaperEnabledChanged:)];
+    self.wallpaperEnabledCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.wallpaperEnabledCheckbox.font = [NSFont systemFontOfSize:13];
+
+    self.chooseWallpaperButton = [NSButton buttonWithTitle:@"选择图片…"
+                                                    target:self
+                                                    action:@selector(chooseWallpaper:)];
+    self.chooseWallpaperButton.bezelStyle = NSBezelStyleRounded;
+    self.chooseWallpaperButton.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.clearWallpaperButton = [NSButton buttonWithTitle:@"清除"
+                                                   target:self
+                                                   action:@selector(clearWallpaper:)];
+    self.clearWallpaperButton.bezelStyle = NSBezelStyleRounded;
+    self.clearWallpaperButton.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.wallpaperFileLabel = [NSTextField labelWithString:@"未选择图片"];
+    self.wallpaperFileLabel.font = [NSFont systemFontOfSize:11];
+    self.wallpaperFileLabel.textColor = NSColor.tertiaryLabelColor;
+    self.wallpaperFileLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.wallpaperFileLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.wallpaperFileLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.scrimSlider = [self makeSliderMin:0 max:70 action:@selector(scrimChanged:)];
+    self.scrimValueLabel = [self makeValueLabel];
+    NSView *scrimRow = [self rowWithCaption:@"压暗"
+                                     slider:self.scrimSlider
+                                 valueLabel:self.scrimValueLabel];
+
     NSView *content = [[NSView alloc] initWithFrame:NSZeroRect];
     content.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:content];
@@ -166,6 +219,12 @@
     [content addSubview:hRow];
     [content addSubview:vRow];
     [content addSubview:resetButton];
+    [content addSubview:backgroundCaption];
+    [content addSubview:self.wallpaperEnabledCheckbox];
+    [content addSubview:self.chooseWallpaperButton];
+    [content addSubview:self.clearWallpaperButton];
+    [content addSubview:self.wallpaperFileLabel];
+    [content addSubview:scrimRow];
 
     static const CGFloat kInset = 16.0;
     static const CGFloat kGap = 14.0;
@@ -197,8 +256,37 @@
 
         [resetButton.topAnchor constraintEqualToAnchor:vRow.bottomAnchor constant:kGap],
         [resetButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-        [resetButton.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor],
+
+        [backgroundCaption.topAnchor constraintEqualToAnchor:resetButton.bottomAnchor constant:kGap + 2],
+        [backgroundCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+
+        [self.wallpaperEnabledCheckbox.topAnchor constraintEqualToAnchor:backgroundCaption.bottomAnchor constant:6],
+        [self.wallpaperEnabledCheckbox.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+
+        [self.chooseWallpaperButton.topAnchor constraintEqualToAnchor:self.wallpaperEnabledCheckbox.bottomAnchor constant:8],
+        [self.chooseWallpaperButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+
+        [self.clearWallpaperButton.centerYAnchor constraintEqualToAnchor:self.chooseWallpaperButton.centerYAnchor],
+        [self.clearWallpaperButton.leadingAnchor constraintEqualToAnchor:self.chooseWallpaperButton.trailingAnchor constant:8],
+
+        [self.wallpaperFileLabel.topAnchor constraintEqualToAnchor:self.chooseWallpaperButton.bottomAnchor constant:6],
+        [self.wallpaperFileLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [self.wallpaperFileLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+
+        [scrimRow.topAnchor constraintEqualToAnchor:self.wallpaperFileLabel.bottomAnchor constant:10],
+        [scrimRow.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scrimRow.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scrimRow.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor],
     ]];
+}
+
+- (void)wallpaperDidChange:(NSNotification *)notification {
+    // 压暗拖动时面板已自行更新滑杆；再 reload 会与 continuous slider 打架。
+    NSString *reason = notification.userInfo[BrowserWallpaperChangeReasonKey];
+    if ([reason isEqualToString:@"scrim"]) {
+        return;
+    }
+    [self reloadWallpaperControls];
 }
 
 - (void)reloadFromAppearance {
@@ -212,6 +300,29 @@
     self.verticalSpacingSlider.doubleValue = appearance.verticalSpacing;
     [self updateValueLabels];
     [self updatePresetSelection];
+    self.updatingUI = NO;
+    [self reloadWallpaperControls];
+}
+
+- (void)reloadWallpaperControls {
+    if (!self.didBuildUI) {
+        return;
+    }
+    BrowserWallpaperStore *store = [BrowserWallpaperStore sharedStore];
+    self.updatingUI = YES;
+    BOOL hasFile = store.hasDisplayFile;
+    self.wallpaperEnabledCheckbox.state = (hasFile && store.enabledFlag) ? NSControlStateValueOn : NSControlStateValueOff;
+    self.clearWallpaperButton.enabled = hasFile;
+    self.scrimSlider.enabled = hasFile;
+    self.scrimSlider.doubleValue = store.scrimAlpha * 100.0;
+    self.scrimValueLabel.stringValue = [NSString stringWithFormat:@"%.0f%%", store.scrimAlpha * 100.0];
+    if (hasFile && store.sourceFileName.length > 0) {
+        self.wallpaperFileLabel.stringValue = store.sourceFileName;
+    } else if (hasFile) {
+        self.wallpaperFileLabel.stringValue = @"已设置背景";
+    } else {
+        self.wallpaperFileLabel.stringValue = @"未选择图片";
+    }
     self.updatingUI = NO;
 }
 
@@ -294,6 +405,82 @@
     (void)sender;
     [BrowserLaunchpadAppearance resetToDefaults];
     [self reloadFromAppearance];
+}
+
+- (void)wallpaperEnabledChanged:(NSButton *)sender {
+    if (self.updatingUI) {
+        return;
+    }
+    BrowserWallpaperStore *store = [BrowserWallpaperStore sharedStore];
+    if (sender.state == NSControlStateValueOn) {
+        if (!store.hasDisplayFile) {
+            sender.state = NSControlStateValueOff;
+            [self chooseWallpaper:nil];
+            return;
+        }
+        [store setWallpaperEnabled:YES];
+    } else {
+        [store setWallpaperEnabled:NO];
+    }
+}
+
+- (void)chooseWallpaper:(id)sender {
+    (void)sender;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    panel.allowedFileTypes = [NSImage imageTypes];
+#pragma clang diagnostic pop
+    panel.message = @"选择新标签页背景图片";
+
+    NSWindow *hostWindow = self.window;
+    void (^handle)(NSModalResponse) = ^(NSModalResponse result) {
+        if (result != NSModalResponseOK || panel.URL == nil) {
+            return;
+        }
+        __weak typeof(self) weakSelf = self;
+        [[BrowserWallpaperStore sharedStore] importImageFromURL:panel.URL
+                                                     completion:^(NSError *error) {
+            if (error == nil) {
+                [weakSelf reloadWallpaperControls];
+                return;
+            }
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.alertStyle = NSAlertStyleWarning;
+            alert.messageText = @"无法设置背景图片";
+            alert.informativeText = error.localizedDescription ?: @"";
+            NSWindow *window = weakSelf.window ?: hostWindow;
+            if (window != nil) {
+                [alert beginSheetModalForWindow:window completionHandler:nil];
+            } else {
+                [alert runModal];
+            }
+        }];
+    };
+
+    if (hostWindow != nil) {
+        [panel beginSheetModalForWindow:hostWindow completionHandler:handle];
+    } else {
+        handle([panel runModal]);
+    }
+}
+
+- (void)clearWallpaper:(id)sender {
+    (void)sender;
+    [[BrowserWallpaperStore sharedStore] clearWallpaper];
+    [self reloadWallpaperControls];
+}
+
+- (void)scrimChanged:(NSSlider *)sender {
+    if (self.updatingUI) {
+        return;
+    }
+    CGFloat alpha = sender.doubleValue / 100.0;
+    self.scrimValueLabel.stringValue = [NSString stringWithFormat:@"%.0f%%", sender.doubleValue];
+    [[BrowserWallpaperStore sharedStore] setScrimAlpha:alpha];
 }
 
 @end

@@ -16,6 +16,7 @@
 #import "BrowserAddressBarRowView.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
+#import "BrowserFaviconService.h"
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate>
 @property (nonatomic, strong) BrowserTabController *tabController;
@@ -298,6 +299,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     toolbar.layer.backgroundColor = BrowserTabActiveFillColor().CGColor;
 
     self.contentContainer = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.contentContainer.wantsLayer = YES;
+    self.contentContainer.clipsToBounds = YES;
     [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                     forOrientation:NSLayoutConstraintOrientationVertical];
 
@@ -582,6 +585,29 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                        urlString:urlString
                                    iconURLString:@""
                                      toShortcuts:shortcuts];
+        // 星标加入后立即返回；图标后台瀑布拉取并回写（不阻塞 ★ 状态）。
+        NSString *pageURLForFavicon = urlString;
+        __weak typeof(self) weakSelf = self;
+        [[BrowserFaviconService sharedService] fetchAndCacheForPageURLString:pageURLForFavicon
+                                                             preferredIconURL:nil
+                                                                       reason:BrowserFaviconFetchReasonSilent
+                                                                   completion:^(NSURL *iconURL, NSImage *image, NSError *error) {
+            (void)image;
+            (void)error;
+            typeof(self) strongSelf = weakSelf;
+            if (strongSelf == nil || iconURL.absoluteString.length == 0) {
+                return;
+            }
+            BOOL updated = [BrowserShortcutStore updateIconURLString:iconURL.absoluteString
+                                                  matchingURLString:pageURLForFavicon];
+            if (!updated) {
+                return;
+            }
+            if (!strongSelf.launchpadView.hidden) {
+                [strongSelf.launchpadView reloadShortcuts];
+            }
+            [strongSelf.addressAutocompleteController refreshMatchesIfNeeded];
+        }];
     }
 
     if (!self.launchpadView.hidden) {

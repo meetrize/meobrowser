@@ -13,6 +13,8 @@
 | [minimal-browser/new-tab-launchpad-design.md](minimal-browser/new-tab-launchpad-design.md) | 新标签页 — Launchpad 式快捷方式设计方案 |
 | [minimal-browser/new-tab-launchpad-folder-design.md](minimal-browser/new-tab-launchpad-folder-design.md) | Launchpad 快捷方式文件夹 — 拖合/展开交互方案 |
 | [minimal-browser/new-tab-launchpad-folder-development-plan.md](minimal-browser/new-tab-launchpad-folder-development-plan.md) | Launchpad 快捷方式文件夹 — 分阶段开发计划 |
+| [minimal-browser/new-tab-launchpad-wallpaper-design.md](minimal-browser/new-tab-launchpad-wallpaper-design.md) | Launchpad 新标签页背景图 — 降采样与共享解码方案 |
+| [minimal-browser/new-tab-launchpad-wallpaper-development-plan.md](minimal-browser/new-tab-launchpad-wallpaper-development-plan.md) | Launchpad 新标签页背景图 — 分阶段开发计划 |
 | [minimal-browser/address-bar-shortcut-autocomplete-design.md](minimal-browser/address-bar-shortcut-autocomplete-design.md) | 地址栏快捷方式补全 — 交互与实现方案 |
 | [minimal-browser/address-bar-shortcut-autocomplete-development-plan.md](minimal-browser/address-bar-shortcut-autocomplete-development-plan.md) | 地址栏快捷方式补全 — 开发计划 |
 | [minimal-browser/new-tab-launchpad-development-plan.md](minimal-browser/new-tab-launchpad-development-plan.md) | Launchpad 新标签页分阶段开发计划 |

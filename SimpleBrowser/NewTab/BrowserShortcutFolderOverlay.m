@@ -138,6 +138,9 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
 
     _panelWidthConstraint = [_panelView.widthAnchor constraintEqualToConstant:kFolderOverlayMinWidth];
     _panelHeightConstraint = [_panelView.heightAnchor constraintEqualToConstant:kFolderOverlayMinHeight];
+    // 优先尺寸即可；Required 会通过 ≤0.88×父宽 反推出宿主最小宽，拖窄窗口失效
+    _panelWidthConstraint.priority = NSLayoutPriorityDefaultHigh;
+    _panelHeightConstraint.priority = NSLayoutPriorityDefaultHigh;
 
     [NSLayoutConstraint activateConstraints:@[
         [_dimmingView.topAnchor constraintEqualToAnchor:self.topAnchor],

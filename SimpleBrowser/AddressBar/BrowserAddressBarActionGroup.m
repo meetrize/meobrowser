@@ -120,7 +120,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         _lastVisibleButtonCount = -1;
         _lastMenuStartIndex = -1;
         self.translatesAutoresizingMaskIntoConstraints = NO;
-        [self setContentHuggingPriority:NSLayoutPriorityRequired
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultHigh
                          forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -156,8 +156,9 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
             [self.overflowButton.heightAnchor constraintEqualToConstant:kActionButtonSize],
         ]];
 
+        // 不可 Required：否则用户拉宽动作区后，定宽会抬高窗口最小宽度，无法再拖窄
         _widthConstraint = [self.widthAnchor constraintEqualToConstant:_preferredWidth];
-        _widthConstraint.priority = NSLayoutPriorityRequired;
+        _widthConstraint.priority = NSLayoutPriorityDefaultHigh;
         _widthConstraint.active = YES;
     }
     return self;
@@ -667,6 +668,11 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         return;
     }
     self.maximumWidth = MAX(kMinimumGroupWidth, containerWidth - self.minimumAddressWidth);
+    CGFloat clamped = [self clampedPreferredWidth:self.preferredWidth];
+    if (fabs(clamped - self.preferredWidth) > 0.5) {
+        self.preferredWidth = clamped;
+        self.widthConstraint.constant = clamped;
+    }
 }
 
 - (void)dealloc {

@@ -187,6 +187,27 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     [self saveShortcuts:shortcuts];
 }
 
++ (BOOL)updateIconURLString:(NSString *)iconURLString matchingURLString:(NSString *)urlString {
+    if (urlString.length == 0) {
+        return NO;
+    }
+    NSMutableArray<BrowserShortcutItem *> *shortcuts = [[self loadShortcuts] mutableCopy];
+    BrowserShortcutItem *item = [self shortcutItemMatchingURLString:urlString inShortcuts:shortcuts];
+    if (item == nil || item.isFolder) {
+        return NO;
+    }
+    NSString *icon = iconURLString ?: @"";
+    if ([item.iconURLString isEqualToString:icon]) {
+        return YES;
+    }
+    [self updateShortcutWithID:item.itemID
+                         title:item.title
+                     urlString:item.urlString
+                 iconURLString:icon
+                   inShortcuts:shortcuts];
+    return YES;
+}
+
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     BrowserShortcutItem *item = [self shortcutWithID:itemID inShortcuts:shortcuts];

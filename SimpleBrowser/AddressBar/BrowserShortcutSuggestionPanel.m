@@ -1,5 +1,6 @@
 #import "BrowserShortcutSuggestionPanel.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserFaviconService.h"
 
 @class BrowserShortcutSuggestionRowView;
 
@@ -136,40 +137,25 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
     self.imageView.hidden = YES;
     self.letterLabel.hidden = NO;
 
-    NSString *loadURL = item.iconURLString.length > 0
-        ? item.iconURLString
-        : [NSString stringWithFormat:@"https://%@/favicon.ico", DisplayHostForShortcut(item)];
-    self.loadToken = loadURL;
-
-    NSURL *url = [NSURL URLWithString:loadURL];
-    if (!url) {
-        return;
-    }
+    // 补全行不主动打第三方瀑布，仅用磁盘缓存 / 已有 iconURL（避免输入时风暴）。
+    NSString *token = item.urlString ?: @"";
+    self.loadToken = token;
+    NSString *preferred = item.iconURLString.length > 0 ? item.iconURLString : nil;
 
     __weak typeof(self) weakSelf = self;
-    NSString *token = loadURL;
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url
-                                                             completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        (void)response;
-        if (error || data.length == 0) {
+    [[BrowserFaviconService sharedService] imageForPageURLString:item.urlString
+                                                 preferredIconURL:preferred
+                                                      triggerFetch:NO
+                                                        completion:^(NSImage *image) {
+        BrowserShortcutSuggestionIconView *strongSelf = weakSelf;
+        if (!strongSelf || ![strongSelf.loadToken isEqualToString:token] || !image) {
             return;
         }
-        NSImage *image = [[NSImage alloc] initWithData:data];
-        if (!image || image.size.width <= 0) {
-            return;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            BrowserShortcutSuggestionIconView *strongSelf = weakSelf;
-            if (!strongSelf || ![strongSelf.loadToken isEqualToString:token]) {
-                return;
-            }
-            strongSelf.imageView.image = image;
-            strongSelf.imageView.hidden = NO;
-            strongSelf.letterLabel.hidden = YES;
-            strongSelf.layer.backgroundColor = NSColor.clearColor.CGColor;
-        });
+        strongSelf.imageView.image = image;
+        strongSelf.imageView.hidden = NO;
+        strongSelf.letterLabel.hidden = YES;
+        strongSelf.layer.backgroundColor = NSColor.clearColor.CGColor;
     }];
-    [task resume];
 }
 
 @end

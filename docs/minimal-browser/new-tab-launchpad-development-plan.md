@@ -117,8 +117,9 @@ make run-browser
 
 ## 延后工作（NTP-4+）
 
-- Favicon 异步拉取与磁盘缓存
+- **Favicon 多渠道获取与磁盘缓存** → [设计方案](favicon-fetch-cache-design.md) + [开发计划](favicon-fetch-cache-development-plan.md)
 - **文件夹合并与展开** → [设计方案](new-tab-launchpad-folder-design.md) + [开发计划](new-tab-launchpad-folder-development-plan.md)
+- **新标签页背景图** → [设计方案](new-tab-launchpad-wallpaper-design.md) + [开发计划](new-tab-launchpad-wallpaper-development-plan.md)
 - Launchpad 内搜索框
 - 「最常访问」动态推荐区
 - 从当前页面「添加到快捷方式」菜单项

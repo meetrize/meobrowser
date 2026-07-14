@@ -6,6 +6,7 @@
 #import "BrowserShortcutFolderOverlay.h"
 #import "BrowserLaunchpadAppearance.h"
 #import "BrowserLaunchpadAppearancePanel.h"
+#import "BrowserWallpaperStore.h"
 #import <QuartzCore/QuartzCore.h>
 
 static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortcut-item-id";
@@ -294,7 +295,10 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
 @end
 
 @interface BrowserLaunchpadView () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSPopoverDelegate, BrowserShortcutFolderOverlayDelegate, NSDraggingSource>
+@property (nonatomic, strong) NSView *wallpaperView;
+@property (nonatomic, strong) NSView *scrimView;
 @property (nonatomic, strong) NSVisualEffectView *effectView;
+@property (nonatomic, assign) BOOL wallpaperAcquired;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) BrowserLaunchpadCollectionView *collectionView;
 @property (nonatomic, strong) BrowserLaunchpadFlowLayout *flowLayout;
@@ -332,17 +336,64 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
                                                  selector:@selector(appearanceDidChange:)
                                                      name:BrowserLaunchpadAppearanceDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(wallpaperDidChange:)
+                                                     name:BrowserWallpaperDidChangeNotification
+                                                   object:nil];
+        [self refreshWallpaperPresentation];
     }
     return self;
 }
 
 - (void)dealloc {
+    [self releaseWallpaperIfNeeded];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self removeEscapeMonitor];
 }
 
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (self.window != nil && !self.hidden) {
+        [self acquireWallpaperIfNeeded];
+        [self refreshWallpaperPresentation];
+    } else {
+        [self releaseWallpaperIfNeeded];
+    }
+}
+
+- (void)setHidden:(BOOL)hidden {
+    BOOL wasHidden = self.hidden;
+    [super setHidden:hidden];
+    if (wasHidden == hidden) {
+        return;
+    }
+    if (hidden) {
+        [self releaseWallpaperIfNeeded];
+    } else if (self.window != nil) {
+        [self acquireWallpaperIfNeeded];
+        [self refreshWallpaperPresentation];
+    }
+}
+
 - (void)setupViews {
     self.wantsLayer = YES;
+    // 壁纸 aspectFill 会超出 layer bounds；必须裁剪，避免盖住标签栏/地址栏。
+    self.clipsToBounds = YES;
+
+    _wallpaperView = [[NSView alloc] initWithFrame:NSZeroRect];
+    _wallpaperView.wantsLayer = YES;
+    _wallpaperView.layer.contentsGravity = kCAGravityResizeAspectFill;
+    _wallpaperView.layer.masksToBounds = YES;
+    _wallpaperView.translatesAutoresizingMaskIntoConstraints = NO;
+    _wallpaperView.hidden = YES;
+    [self addSubview:_wallpaperView];
+
+    _scrimView = [[NSView alloc] initWithFrame:NSZeroRect];
+    _scrimView.wantsLayer = YES;
+    _scrimView.layer.masksToBounds = YES;
+    _scrimView.translatesAutoresizingMaskIntoConstraints = NO;
+    _scrimView.hidden = YES;
+    [self addSubview:_scrimView];
 
     _effectView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
     _effectView.material = NSVisualEffectMaterialContentBackground;
@@ -414,11 +465,11 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
     _settingsButton = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleAppearancePopover:)];
     _settingsButton.bezelStyle = NSBezelStyleToolbar;
     _settingsButton.bordered = NO;
-    _settingsButton.toolTip = @"快捷方式外观";
+    _settingsButton.toolTip = @"外观与背景";
     _settingsButton.translatesAutoresizingMaskIntoConstraints = NO;
     if (@available(macOS 11.0, *)) {
         NSImage *gear = [NSImage imageWithSystemSymbolName:@"gearshape"
-                                  accessibilityDescription:@"快捷方式外观"];
+                                  accessibilityDescription:@"外观与背景"];
         gear.template = YES;
         gear.size = NSMakeSize(16, 16);
         _settingsButton.image = gear;
@@ -436,6 +487,16 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
     _folderOverlay.delegate = self;
 
     [NSLayoutConstraint activateConstraints:@[
+        [_wallpaperView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_wallpaperView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_wallpaperView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [_wallpaperView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+
+        [_scrimView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_scrimView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_scrimView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [_scrimView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+
         [_effectView.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_effectView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [_effectView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
@@ -451,6 +512,49 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
         [_settingsButton.widthAnchor constraintEqualToConstant:28],
         [_settingsButton.heightAnchor constraintEqualToConstant:28],
     ]];
+}
+
+- (void)acquireWallpaperIfNeeded {
+    if (self.wallpaperAcquired) {
+        return;
+    }
+    [[BrowserWallpaperStore sharedStore] acquireDisplayImage];
+    self.wallpaperAcquired = YES;
+}
+
+- (void)releaseWallpaperIfNeeded {
+    if (!self.wallpaperAcquired) {
+        return;
+    }
+    [[BrowserWallpaperStore sharedStore] releaseDisplayImage];
+    self.wallpaperAcquired = NO;
+    self.wallpaperView.layer.contents = nil;
+}
+
+- (void)wallpaperDidChange:(NSNotification *)notification {
+    (void)notification;
+    if (!self.hidden && self.window != nil) {
+        [self acquireWallpaperIfNeeded];
+    }
+    [self refreshWallpaperPresentation];
+}
+
+- (void)refreshWallpaperPresentation {
+    BrowserWallpaperStore *store = [BrowserWallpaperStore sharedStore];
+    BOOL showWallpaper = store.isWallpaperEnabled && store.displayImage != nil;
+    if (showWallpaper) {
+        self.wallpaperView.layer.contents = store.displayImage;
+        self.wallpaperView.hidden = NO;
+        self.scrimView.hidden = NO;
+        self.scrimView.layer.backgroundColor =
+            [[NSColor blackColor] colorWithAlphaComponent:store.scrimAlpha].CGColor;
+        self.effectView.hidden = YES;
+    } else {
+        self.wallpaperView.layer.contents = nil;
+        self.wallpaperView.hidden = YES;
+        self.scrimView.hidden = YES;
+        self.effectView.hidden = NO;
+    }
 }
 
 - (void)layout {
@@ -1069,7 +1173,7 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     }
 
     [menu addItem:[NSMenuItem separatorItem]];
-    [menu addItemWithTitle:@"快捷方式外观…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
+    [menu addItemWithTitle:@"外观与背景…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
 
     return menu;
@@ -1080,7 +1184,13 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     [menu addItemWithTitle:@"添加快捷方式…" action:@selector(contextAddShortcut:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
-    [menu addItemWithTitle:@"快捷方式外观…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
+    [menu addItemWithTitle:@"设置背景图片…" action:@selector(contextChooseWallpaper:) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+    if ([BrowserWallpaperStore sharedStore].hasDisplayFile) {
+        [menu addItemWithTitle:@"清除背景" action:@selector(contextClearWallpaper:) keyEquivalent:@""];
+        menu.itemArray.lastObject.target = self;
+    }
+    [menu addItemWithTitle:@"外观与背景…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
     return menu;
 }
@@ -1138,6 +1248,45 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 - (void)contextShowAppearance:(NSMenuItem *)sender {
     (void)sender;
     [self showAppearanceSettings];
+}
+
+- (void)contextChooseWallpaper:(NSMenuItem *)sender {
+    (void)sender;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    panel.allowedFileTypes = [NSImage imageTypes];
+#pragma clang diagnostic pop
+    panel.message = @"选择新标签页背景图片";
+    __weak typeof(self) weakSelf = self;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK || panel.URL == nil) {
+            return;
+        }
+        [[BrowserWallpaperStore sharedStore] importImageFromURL:panel.URL
+                                                     completion:^(NSError *error) {
+            if (error == nil) {
+                return;
+            }
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.alertStyle = NSAlertStyleWarning;
+            alert.messageText = @"无法设置背景图片";
+            alert.informativeText = error.localizedDescription ?: @"";
+            if (weakSelf.window != nil) {
+                [alert beginSheetModalForWindow:weakSelf.window completionHandler:nil];
+            } else {
+                [alert runModal];
+            }
+        }];
+    }];
+}
+
+- (void)contextClearWallpaper:(NSMenuItem *)sender {
+    (void)sender;
+    [[BrowserWallpaperStore sharedStore] clearWallpaper];
 }
 
 #pragma mark - NSCollectionViewDataSource

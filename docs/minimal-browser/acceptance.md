@@ -106,7 +106,8 @@ SimpleBrowser/NewTab/
 
 **Launchpad 新标签页（NTP-0～NTP-3）验收通过**，满足设计文档第 11 节全部标准。
 
-延后项见 [new-tab-launchpad-development-plan.md](new-tab-launchpad-development-plan.md) NTP-4+（Favicon、搜索等）。  
+延后项见 [new-tab-launchpad-development-plan.md](new-tab-launchpad-development-plan.md) NTP-4+（搜索等）。  
+Favicon 多渠道与缓存见下方「Favicon 获取与缓存」及 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md)。  
 文件夹已单独验收：见下方「Launchpad 文件夹」。
 
 本地验证：
@@ -158,3 +159,43 @@ SimpleBrowser/NewTab/
 ### 结论
 
 **Launchpad 文件夹（FLD-0～FLD-3）验收通过**，满足设计文档 §10 标准。
+
+---
+
+## Favicon 获取与缓存验收（ICO-0～ICO-2 · 2026-07-14）
+
+> 对照 [favicon-fetch-cache-design.md §11](favicon-fetch-cache-design.md#11-分期与验收)  
+> 开发计划：[favicon-fetch-cache-development-plan.md](favicon-fetch-cache-development-plan.md)
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| 全量编译 | `make browser` | 通过 |
+| Favicon 入链 | Makefile 含 `SimpleBrowser/Favicon/*.m` | 通过 |
+| 瀑布冒烟 | `example.com` → 落盘 + 二次磁盘命中 | 通过 |
+
+### 功能验收
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 星标加入拉图标 | 地址栏 ★ 加入后后台拉取并回写 `iconURL` | 通过（逻辑） | `toggleBookmark:` + `BrowserFaviconService` |
+| 编辑「自动获取」 | Sheet 按钮 UserAction 瀑布，填入链接 | 通过（逻辑） | `BrowserShortcutEditorSheet` |
+| Launchpad 显示 | Cell / 四宫格走 Service，失败字母占位 | 通过（逻辑） | `BrowserShortcutCellView` |
+| 补全不风暴 | 补全行 `triggerFetch=NO` | 通过 | `BrowserShortcutSuggestionPanel` |
+| 长期缓存 | `Application Support/MeoBrowser/Favicons/` | 通过 | `BrowserFaviconCache` |
+| 断网冷启动仍显示 | 手测 | 待手测 | 磁盘 blobs |
+
+### 涉及文件
+
+```text
+SimpleBrowser/Favicon/
+├── BrowserFaviconService.h/.m
+├── BrowserFaviconCache.h/.m
+├── BrowserFaviconHTMLParser.h/.m
+└── BrowserFaviconUtil.h/.m
+```
+
+### 结论
+
+**ICO-0～ICO-2 实现完成**；标签栏 favicon 与清除缓存 UI 仍属设计延后项。手测项（断网复用、连点 ★）建议在 `make run-browser` 时补勾。

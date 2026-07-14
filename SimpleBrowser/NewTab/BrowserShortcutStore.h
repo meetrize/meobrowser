@@ -29,6 +29,9 @@ extern NSString * const BrowserShortcutAddItemID;
                iconURLString:(NSString *)iconURLString
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
+/// 按页面 URL 匹配 link 快捷方式并回写 iconURL；找到则保存并返回 YES。
++ (BOOL)updateIconURLString:(NSString *)iconURLString matchingURLString:(NSString *)urlString;
+
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
