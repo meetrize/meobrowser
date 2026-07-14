@@ -11,6 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL isNewTabPage;
 @property (nonatomic, assign) BOOL isLoading;
 @property (nonatomic, assign, readonly) NSInteger titleUpdateGeneration;
+/// 地址栏未提交输入草稿；nil 表示使用规范展示（新标签页为空，普通页为当前 URL）。
+@property (nonatomic, copy, nullable) NSString *addressBarDraft;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 

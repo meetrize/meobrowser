@@ -43,7 +43,9 @@
 }
 
 - (void)buildWindowWithTitle:(NSString *)title {
-    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 300)
+    // 高度略大于表单内容即可；多余竖直空间交给 root 的 gravity 间隙
+    // （表单区与按钮之间），不要撑开 NSGridView 的行间距。
+    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 240)
                                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -62,6 +64,15 @@
     self.titleField.delegate = self;
     self.urlField.delegate = self;
     self.iconURLField.delegate = self;
+
+    // 带 bezel 的单行框需要稳定行高，避免被 grid / fitting 压扁裁切。
+    static const CGFloat kFieldHeight = 22.0;
+    for (NSTextField *field in @[self.titleField, self.urlField, self.iconURLField]) {
+        field.translatesAutoresizingMaskIntoConstraints = NO;
+        [field.heightAnchor constraintEqualToConstant:kFieldHeight].active = YES;
+        [field setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                        forOrientation:NSLayoutConstraintOrientationVertical];
+    }
 
     self.fetchIconButton = [NSButton buttonWithTitle:@"自动获取" target:self action:@selector(onFetchIcon:)];
     self.fetchIconButton.bezelStyle = NSBezelStyleRounded;
@@ -115,17 +126,29 @@
     grid.rowSpacing = 10;
     [grid columnAtIndex:0].width = 64;
     [grid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
+    for (NSInteger row = 0; row < grid.numberOfRows; row++) {
+        [grid rowAtIndex:row].yPlacement = NSGridCellPlacementCenter;
+    }
+    [grid setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                     forOrientation:NSLayoutConstraintOrientationVertical];
+    [grid setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                   forOrientation:NSLayoutConstraintOrientationVertical];
 
     NSStackView *buttons = [NSStackView stackViewWithViews:@[cancelButton, saveButton]];
     buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     buttons.alignment = NSLayoutAttributeCenterY;
     buttons.spacing = 8;
 
-    NSStackView *root = [NSStackView stackViewWithViews:@[grid, self.errorLabel, buttons]];
+    // GravityAreas：表单置顶、按钮沉底，窗口略高时空隙落在二者之间，不拉大表单行距。
+    NSStackView *root = [[NSStackView alloc] initWithFrame:NSZeroRect];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.spacing = 12;
     root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
+    root.distribution = NSStackViewDistributionGravityAreas;
     root.translatesAutoresizingMaskIntoConstraints = NO;
+    [root addView:grid inGravity:NSStackViewGravityTop];
+    [root addView:self.errorLabel inGravity:NSStackViewGravityTop];
+    [root addView:buttons inGravity:NSStackViewGravityBottom];
 
     NSView *contentView = panel.contentView;
     [contentView addSubview:root];

@@ -33,6 +33,7 @@
 @property (nonatomic, strong) BrowserAddressBarActionGroup *addressBarActionGroup;
 @property (nonatomic, strong) BrowserAddressBarRowView *addressBarRow;
 @property (nonatomic, strong) BrowserAddressBarAutocompleteController *addressAutocompleteController;
+@property (nonatomic, weak) BrowserTab *lastAddressBarTab;
 @property (nonatomic, strong) WKWebViewConfiguration *webViewConfiguration;
 @property (nonatomic, strong) BrowserDownloadManager *downloadManager;
 @property (nonatomic, strong) BrowserDownloadPanel *downloadPanel;
@@ -947,6 +948,36 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     return url;
 }
 
+- (NSString *)canonicalAddressBarStringForTab:(BrowserTab *)tab {
+    if (!tab || tab.isNewTabPage) {
+        return @"";
+    }
+    return tab.webView.URL.absoluteString ?: @"";
+}
+
+- (void)persistAddressBarDraftFromField {
+    BrowserTab *tab = self.lastAddressBarTab;
+    if (!tab) {
+        return;
+    }
+    NSString *current = self.addressField.stringValue ?: @"";
+    NSString *canonical = [self canonicalAddressBarStringForTab:tab];
+    if ([current isEqualToString:canonical]) {
+        tab.addressBarDraft = nil;
+    } else {
+        tab.addressBarDraft = current;
+    }
+}
+
+- (void)applyAddressBarStringForTab:(BrowserTab *)tab {
+    if (tab.addressBarDraft != nil) {
+        self.addressField.stringValue = tab.addressBarDraft;
+    } else {
+        self.addressField.stringValue = [self canonicalAddressBarStringForTab:tab];
+    }
+    self.lastAddressBarTab = tab;
+}
+
 - (void)updateNavigationState {
     WKWebView *webView = self.webView;
     if (!webView) {
@@ -961,11 +992,8 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     NSString *title = tab.displayTitle;
     [self setDisplayedWindowTitle:title];
 
-    if (tab.isNewTabPage) {
-        self.addressField.stringValue = @"";
-    } else if (webView.URL) {
-        self.addressField.stringValue = webView.URL.absoluteString;
-    }
+    [self persistAddressBarDraftFromField];
+    [self applyAddressBarStringForTab:tab];
     [self updateBookmarkButtonState];
 }
 
@@ -1055,8 +1083,20 @@ didBecomeDownload:(WKDownload *)download {
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
-    (void)webView;
-    (void)navigation;
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (![tab isMainFrameNavigation:navigation]) {
+        return;
+    }
+    // URL 在 commit 时已可用；尽早刷新星标，避免等 didFinish。
+    if (webView == self.webView) {
+        if (tab.addressBarDraft == nil) {
+            [self applyAddressBarStringForTab:tab];
+        }
+        self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
+        self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
+        self.reloadButton.enabled = !tab.isNewTabPage;
+        [self updateBookmarkButtonState];
+    }
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
@@ -1095,13 +1135,10 @@ didFailNavigation:(WKNavigation *)navigation
     }
 
     tab.isLoading = NO;
+    tab.addressBarDraft = nil;
 
     if (webView == self.webView) {
-        if (tab.isNewTabPage) {
-            self.addressField.stringValue = @"";
-        } else if (webView.URL) {
-            self.addressField.stringValue = webView.URL.absoluteString;
-        }
+        [self applyAddressBarStringForTab:tab];
         self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
         self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
         self.reloadButton.enabled = !tab.isNewTabPage;

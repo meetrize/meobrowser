@@ -385,9 +385,46 @@ toTopLevelAtOrder:(NSInteger)order
     return normalized;
 }
 
+/// 用于星标/快捷方式匹配：忽略尾斜杠、主机大小写、默认端口与 fragment。
++ (nullable NSString *)bookmarkMatchKeyFromURLString:(NSString *)urlString {
+    NSString *normalized = [self normalizedURLStringFromInput:urlString];
+    if (!normalized) {
+        return nil;
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:normalized];
+    if (!components || components.host.length == 0) {
+        return nil;
+    }
+
+    components.scheme = components.scheme.lowercaseString;
+    components.host = components.host.lowercaseString;
+    components.fragment = nil;
+    components.user = nil;
+    components.password = nil;
+
+    if (components.port != nil) {
+        NSInteger port = components.port.integerValue;
+        BOOL httpDefault = [components.scheme isEqualToString:@"http"] && port == 80;
+        BOOL httpsDefault = [components.scheme isEqualToString:@"https"] && port == 443;
+        if (httpDefault || httpsDefault) {
+            components.port = nil;
+        }
+    }
+
+    NSString *path = components.path ?: @"";
+    if ([path isEqualToString:@"/"]) {
+        components.path = @"";
+    } else if (path.length > 1 && [path hasSuffix:@"/"]) {
+        components.path = [path substringToIndex:path.length - 1];
+    }
+
+    return components.string;
+}
+
 + (nullable BrowserShortcutItem *)shortcutItemMatchingURLString:(NSString *)urlString
                                                     inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
-    NSString *target = [self normalizedURLStringFromInput:urlString];
+    NSString *target = [self bookmarkMatchKeyFromURLString:urlString];
     if (!target) {
         return nil;
     }
@@ -395,7 +432,7 @@ toTopLevelAtOrder:(NSInteger)order
         if (item.isFolder) {
             continue;
         }
-        NSString *candidate = [self normalizedURLStringFromInput:item.urlString];
+        NSString *candidate = [self bookmarkMatchKeyFromURLString:item.urlString];
         if (candidate && [candidate isEqualToString:target]) {
             return item;
         }

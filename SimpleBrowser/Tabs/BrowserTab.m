@@ -21,11 +21,13 @@
 - (void)loadNewTabPage {
     self.isNewTabPage = YES;
     self.title = @"新标签页";
+    self.addressBarDraft = nil;
     [self.webView stopLoading];
 }
 
 - (void)loadURL:(NSURL *)url {
     self.isNewTabPage = NO;
+    self.addressBarDraft = nil;
     [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
