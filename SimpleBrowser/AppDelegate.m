@@ -9,10 +9,12 @@
 @implementation AppDelegate {
     BrowserWindowController *_browserWindowController;
     BrowserSettingsWindowController *_settingsWindowController;
+    NSMutableArray<NSURL *> *_pendingExternalURLs;
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    _pendingExternalURLs = [NSMutableArray array];
     [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
     [BrowserMenus installSettingsMenuForTarget:self];
 }
@@ -23,6 +25,28 @@
     [_browserWindowController showWindow:nil];
     [_browserWindowController.window center];
     [_browserWindowController scheduleTrafficLightPositioning];
+    [self flushPendingExternalURLs];
+}
+
+- (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
+    (void)application;
+    if (urls.count == 0) {
+        return;
+    }
+    if (_browserWindowController) {
+        [_browserWindowController openURLsFromExternalSource:urls];
+        return;
+    }
+    [_pendingExternalURLs addObjectsFromArray:urls];
+}
+
+- (void)flushPendingExternalURLs {
+    if (_pendingExternalURLs.count == 0 || !_browserWindowController) {
+        return;
+    }
+    NSArray<NSURL *> *urls = [_pendingExternalURLs copy];
+    [_pendingExternalURLs removeAllObjects];
+    [_browserWindowController openURLsFromExternalSource:urls];
 }
 
 - (void)showBrowserSettings:(id)sender {

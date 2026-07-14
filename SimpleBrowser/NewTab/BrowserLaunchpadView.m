@@ -47,20 +47,36 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
 }
 
 - (NSInteger)launchpadHoleVisualSlotForInsert:(NSInteger)insert source:(NSInteger)source {
-    if (insert == NSNotFound || source == NSNotFound) {
+    if (insert == NSNotFound) {
         return NSNotFound;
+    }
+    // 夹外拖入：源不在顶层列表，空位就是 insert 本身。
+    if (source == NSNotFound) {
+        return insert;
     }
     return (insert <= source) ? insert : (insert - 1);
 }
 
+- (BOOL)launchpadNeedsReflow {
+    return [self launchpadInsertIndex] != NSNotFound || [self launchpadSourceIndex] != NSNotFound;
+}
+
 - (NSInteger)launchpadVisualSlotForItemIndex:(NSInteger)itemIndex {
     NSInteger source = [self launchpadSourceIndex];
-    if (source == NSNotFound) {
-        return itemIndex;
-    }
     NSInteger insert = [self launchpadInsertIndex];
     NSInteger hole = [self launchpadHoleVisualSlotForInsert:insert source:source];
     NSInteger count = [self.collectionView numberOfItemsInSection:0];
+
+    // 从文件夹拖入：在 insert 处开孔，其后项整体后移一格。
+    if (source == NSNotFound) {
+        if (hole == NSNotFound) {
+            return itemIndex;
+        }
+        if (itemIndex >= hole) {
+            return itemIndex + 1;
+        }
+        return itemIndex;
+    }
 
     if (hole == NSNotFound) {
         // 无有效插入位：收起源位置，后面的往前填。
@@ -90,9 +106,32 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
 }
 
 - (NSRect)launchpadBaseFrameForItemAtIndex:(NSInteger)index {
-    NSCollectionViewLayoutAttributes *attrs =
-        [super layoutAttributesForItemAtIndexPath:[NSIndexPath indexPathForItem:index inSection:0]];
-    return attrs ? attrs.frame : NSZeroRect;
+    NSInteger count = [self.collectionView numberOfItemsInSection:0];
+    if (index >= 0 && index < count) {
+        NSCollectionViewLayoutAttributes *attrs =
+            [super layoutAttributesForItemAtIndexPath:[NSIndexPath indexPathForItem:index inSection:0]];
+        return attrs ? attrs.frame : NSZeroRect;
+    }
+    // 挤位后多出的末尾槽位（外部插入时最后一格可能落到 count）。
+    if (index == count && count > 0) {
+        NSRect last = [self launchpadBaseFrameForItemAtIndex:count - 1];
+        if (NSIsEmptyRect(last)) {
+            return NSZeroRect;
+        }
+        CGFloat nextX = NSMaxX(last) + self.minimumInteritemSpacing;
+        CGFloat maxX = NSWidth(self.collectionView.bounds) - self.sectionInset.right - self.itemSize.width;
+        NSRect frame = last;
+        frame.size = self.itemSize;
+        if (nextX <= maxX + 0.5) {
+            frame.origin.x = nextX;
+        } else {
+            // 与主网格其它追加占位一致（AppKit collection view 坐标系）。
+            frame.origin.x = self.sectionInset.left;
+            frame.origin.y -= (self.itemSize.height + self.minimumLineSpacing);
+        }
+        return frame;
+    }
+    return NSZeroRect;
 }
 
 - (NSRect)launchpadPlaceholderFrameForInsertIndex:(NSInteger)insertIndex
@@ -108,12 +147,12 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
     if (!attributes || attributes.representedElementCategory != NSCollectionElementCategoryItem) {
         return;
     }
-    NSInteger source = [self launchpadSourceIndex];
-    if (source == NSNotFound) {
+    if (![self launchpadNeedsReflow]) {
         return;
     }
+    NSInteger source = [self launchpadSourceIndex];
     NSInteger itemIndex = attributes.indexPath.item;
-    if (itemIndex == source) {
+    if (source != NSNotFound && itemIndex == source) {
         // 拖起的源图标本身由拖影表示，格子让给占位或收起。
         NSInteger insert = [self launchpadInsertIndex];
         NSInteger hole = [self launchpadHoleVisualSlotForInsert:insert source:source];
@@ -134,9 +173,24 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
     }
 }
 
+- (NSSize)collectionViewContentSize {
+    NSSize size = [super collectionViewContentSize];
+    if (![self launchpadNeedsReflow]) {
+        return size;
+    }
+    // 外部插入时最后一格可能多出一行，扩大 contentSize 以免裁切。
+    NSInteger count = [self.collectionView numberOfItemsInSection:0];
+    NSRect trailing = [self launchpadBaseFrameForItemAtIndex:count];
+    if (!NSIsEmptyRect(trailing)) {
+        size.width = MAX(size.width, NSMaxX(trailing) + self.sectionInset.right);
+        size.height = MAX(size.height, NSMaxY(trailing) + self.sectionInset.bottom);
+    }
+    return size;
+}
+
 - (NSArray<NSCollectionViewLayoutAttributes *> *)layoutAttributesForElementsInRect:(NSRect)rect {
     NSArray<NSCollectionViewLayoutAttributes *> *base = [super layoutAttributesForElementsInRect:rect];
-    if ([self launchpadSourceIndex] == NSNotFound) {
+    if (![self launchpadNeedsReflow]) {
         return base;
     }
     // 重排后 frame 可能移出原 rect，放宽查询以免漏掉正在动画的 cell。
@@ -1229,7 +1283,13 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 
 - (NSDragOperation)launchpadUpdateDropFeedbackAtPoint:(NSPoint)locationInCollectionView
                                                source:(BrowserShortcutItem *)source {
-    if (self.folderOverlay.folder || !source) {
+    if (!source) {
+        [self hideDropPlaceholder];
+        [self clearMergeState];
+        return NSDragOperationNone;
+    }
+    // Overlay 展开时禁止拖顶层项；夹内项拖出时允许在主网格显示占位。
+    if (self.folderOverlay.folder && source.isTopLevel) {
         [self hideDropPlaceholder];
         [self clearMergeState];
         return NSDragOperationNone;
@@ -1302,6 +1362,22 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         return NO;
     }
 
+    NSInteger destinationIndex = self.dropPlaceholderIndex;
+    if (destinationIndex == NSNotFound) {
+        destinationIndex = [self insertionIndexAtPoint:locationInCollectionView];
+    }
+    destinationIndex = MAX(0, MIN(destinationIndex, (NSInteger)self.displayShortcuts.count));
+
+    // 来自文件夹的项不在顶层列表中：直接升顶层并插到占位位置。
+    if (!source.isTopLevel) {
+        [BrowserShortcutStore moveItem:source
+                     toTopLevelAtOrder:destinationIndex
+                           inShortcuts:self.mutableShortcuts];
+        self.dropDidCommit = YES;
+        [self reloadShortcuts];
+        return YES;
+    }
+
     NSMutableArray<BrowserShortcutItem *> *ordered = [self.displayShortcuts mutableCopy];
     NSInteger sourceIndex = NSNotFound;
     for (NSUInteger i = 0; i < ordered.count; i++) {
@@ -1313,12 +1389,6 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     if (sourceIndex == NSNotFound) {
         return NO;
     }
-
-    NSInteger destinationIndex = self.dropPlaceholderIndex;
-    if (destinationIndex == NSNotFound) {
-        destinationIndex = [self insertionIndexAtPoint:locationInCollectionView];
-    }
-    destinationIndex = MAX(0, MIN(destinationIndex, (NSInteger)ordered.count));
 
     if (destinationIndex == sourceIndex || destinationIndex == sourceIndex + 1) {
         self.dropDidCommit = YES;
@@ -1420,6 +1490,60 @@ moveShortcutToTopLevel:(BrowserShortcutItem *)shortcut {
 - (BOOL)folderOverlayIsEditingMode:(BrowserShortcutFolderOverlay *)overlay {
     (void)overlay;
     return NO;
+}
+
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+didBeginDraggingChild:(BrowserShortcutItem *)child {
+    (void)overlay;
+    if (!child || child.itemID.length == 0) {
+        return;
+    }
+    self.draggingItemID = child.itemID;
+    self.dropDidCommit = NO;
+    [self clearMergeState];
+    self.dropPlaceholderIndex = NSNotFound;
+    self.dropPlaceholderView.hidden = YES;
+}
+
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+        draggingChild:(BrowserShortcutItem *)child
+    movedToWindowPoint:(NSPoint)windowPoint
+         outsidePanel:(BOOL)outsidePanel {
+    (void)overlay;
+    if (!child) {
+        return;
+    }
+    self.draggingItemID = child.itemID;
+    if (!outsidePanel) {
+        [self hideDropPlaceholder];
+        [self clearMergeState];
+        return;
+    }
+    NSPoint location = [self.collectionView convertPoint:windowPoint fromView:nil];
+    [self launchpadUpdateDropFeedbackAtPoint:location source:child];
+}
+
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+  didEndDraggingChild:(BrowserShortcutItem *)child
+        atWindowPoint:(NSPoint)windowPoint
+         outsidePanel:(BOOL)outsidePanel {
+    (void)overlay;
+    if (!child) {
+        [self launchpadDraggingSessionDidEnd];
+        return;
+    }
+    self.draggingItemID = child.itemID;
+    if (outsidePanel && !self.dropDidCommit) {
+        NSPoint location = [self.collectionView convertPoint:windowPoint fromView:nil];
+        if (![self launchpadCommitDropForSource:child atPoint:location]) {
+            // 落在网格外：追加到顶层末尾。
+            NSInteger order = (NSInteger)self.displayShortcuts.count;
+            [BrowserShortcutStore moveItem:child toTopLevelAtOrder:order inShortcuts:self.mutableShortcuts];
+            self.dropDidCommit = YES;
+            [self reloadShortcuts];
+        }
+    }
+    [self launchpadDraggingSessionDidEnd];
 }
 
 @end

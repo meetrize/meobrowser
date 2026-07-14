@@ -1,4 +1,6 @@
 #import "BrowsingPreferences.h"
+#import <AppKit/AppKit.h>
+#import <CoreServices/CoreServices.h>
 
 static NSString * const kLastVisitedURLKey = @"lastVisitedURL";
 static NSString * const kTabSessionKey = @"tabSession";
@@ -148,6 +150,57 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
         template = [self searchURLTemplates][BrowserSearchEngineDuckDuckGo];
     }
     return [NSURL URLWithString:[NSString stringWithFormat:template, encoded]];
+}
+
++ (BOOL)isDefaultBrowser {
+    NSURL *probe = [NSURL URLWithString:@"http://example.com"];
+    NSURL *handlerURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:probe];
+    if (!handlerURL) {
+        return NO;
+    }
+    NSString *handlerID = [[NSBundle bundleWithURL:handlerURL] bundleIdentifier];
+    NSString *ourID = [[NSBundle mainBundle] bundleIdentifier];
+    return handlerID.length > 0 && [handlerID isEqualToString:ourID];
+}
+
++ (void)requestSetAsDefaultBrowserWithCompletion:(void (^)(NSError * _Nullable error))completion {
+    void (^finish)(NSError * _Nullable) = ^(NSError * _Nullable error) {
+        if (!completion) {
+            return;
+        }
+        if ([NSThread isMainThread]) {
+            completion(error);
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(error);
+            });
+        }
+    };
+
+    NSURL *appURL = [[NSBundle mainBundle] bundleURL];
+    if (@available(macOS 12.0, *)) {
+        [[NSWorkspace sharedWorkspace] setDefaultApplicationAtURL:appURL
+                                           toOpenURLsWithScheme:@"http"
+                                              completionHandler:^(NSError * _Nullable error) {
+            finish(error);
+        }];
+        return;
+    }
+
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    if (bundleID.length == 0) {
+        finish([NSError errorWithDomain:NSCocoaErrorDomain
+                                   code:NSFileReadUnknownError
+                               userInfo:@{NSLocalizedDescriptionKey: @"无法读取应用标识符"}]);
+        return;
+    }
+
+    OSStatus status = LSSetDefaultHandlerForURLScheme(CFSTR("http"), (__bridge CFStringRef)bundleID);
+    if (status == noErr) {
+        finish(nil);
+    } else {
+        finish([NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:nil]);
+    }
 }
 
 @end

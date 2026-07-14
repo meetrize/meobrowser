@@ -756,6 +756,31 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController addTabWithURL:url];
 }
 
+- (void)openURLsFromExternalSource:(NSArray<NSURL *> *)urls {
+    if (urls.count == 0) {
+        return;
+    }
+
+    [self showWindow:nil];
+    [self.window makeKeyAndOrderFront:nil];
+
+    BOOL openedAny = NO;
+    for (NSURL *url in urls) {
+        NSString *scheme = url.scheme.lowercaseString;
+        BOOL isWebURL = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
+        BOOL isFile = url.isFileURL;
+        if (!isWebURL && !isFile) {
+            continue;
+        }
+        [self.tabController addTabWithURL:url];
+        openedAny = YES;
+    }
+
+    if (openedAny) {
+        [self refreshTabsUI];
+    }
+}
+
 #pragma mark - Tab Menu Actions
 
 - (void)newBrowserTab:(id)sender {

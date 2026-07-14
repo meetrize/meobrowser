@@ -5,8 +5,14 @@
 #import "SBTextField.h"
 #import <QuartzCore/QuartzCore.h>
 
-static const NSTimeInterval kOverlayAnimationDuration = 0.22;
+static const NSTimeInterval kOverlayAnimationDuration = 0.28;
 static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-item-id";
+/// 展开层至少按 Launchpad 风格预留的列数/行数，避免只有两三项时面板过小。
+static const NSUInteger kFolderOverlayMinColumns = 4;
+static const NSUInteger kFolderOverlayMaxColumns = 5;
+static const NSUInteger kFolderOverlayMinRows = 2;
+static const CGFloat kFolderOverlayMinWidth = 560.0;
+static const CGFloat kFolderOverlayMinHeight = 380.0;
 
 @interface BrowserShortcutFolderOverlay () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSTextFieldDelegate, NSDraggingSource>
 @property (nonatomic, strong) NSView *dimmingView;
@@ -16,6 +22,8 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) NSCollectionView *collectionView;
 @property (nonatomic, strong) NSCollectionViewFlowLayout *flowLayout;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *panelWidthConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *panelHeightConstraint;
 @property (nonatomic, strong, readwrite, nullable) BrowserShortcutItem *folder;
 @property (nonatomic, copy) NSArray<BrowserShortcutItem *> *children;
 @property (nonatomic, assign) NSRect anchorRectInHost;
@@ -32,8 +40,24 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
         self.wantsLayer = YES;
         self.hidden = YES;
         [self setupViews];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(appearanceDidChange:)
+                                                     name:BrowserLaunchpadAppearanceDidChangeNotification
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)appearanceDidChange:(NSNotification *)notification {
+    (void)notification;
+    if (self.folder) {
+        [self updateChildLayout];
+        [self.collectionView reloadData];
+    }
 }
 
 - (void)setupViews {
@@ -48,18 +72,26 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
     [_dimmingView addGestureRecognizer:dimClick];
 
     _panelView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
-    _panelView.material = NSVisualEffectMaterialPopover;
+    if (@available(macOS 10.14, *)) {
+        _panelView.material = NSVisualEffectMaterialSheet;
+    } else {
+        _panelView.material = NSVisualEffectMaterialPopover;
+    }
     _panelView.blendingMode = NSVisualEffectBlendingModeWithinWindow;
     _panelView.state = NSVisualEffectStateActive;
     _panelView.wantsLayer = YES;
-    _panelView.layer.cornerRadius = 20.0;
+    _panelView.layer.cornerRadius = 30.0;
     _panelView.layer.masksToBounds = YES;
+    if (@available(macOS 10.15, *)) {
+        _panelView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
     _panelView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_panelView];
 
     _titleLabel = [NSTextField labelWithString:@""];
-    _titleLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
+    _titleLabel.font = [NSFont systemFontOfSize:24 weight:NSFontWeightSemibold];
     _titleLabel.alignment = NSTextAlignmentCenter;
+    _titleLabel.textColor = [NSColor labelColor];
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     NSClickGestureRecognizer *titleClick =
         [[NSClickGestureRecognizer alloc] initWithTarget:self action:@selector(titleClicked:)];
@@ -67,7 +99,7 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
     [_panelView addSubview:_titleLabel];
 
     _titleField = [SBTextField standardField];
-    _titleField.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
+    _titleField.font = [NSFont systemFontOfSize:24 weight:NSFontWeightSemibold];
     _titleField.alignment = NSTextAlignmentCenter;
     _titleField.delegate = self;
     _titleField.hidden = YES;
@@ -78,9 +110,13 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
 
     _flowLayout = [[NSCollectionViewFlowLayout alloc] init];
     _flowLayout.scrollDirection = NSCollectionViewScrollDirectionVertical;
-    _flowLayout.minimumInteritemSpacing = 12;
-    _flowLayout.minimumLineSpacing = 12;
-    _flowLayout.sectionInset = NSEdgeInsetsMake(8, 16, 16, 16);
+    BrowserLaunchpadAppearance *appearance = [BrowserLaunchpadAppearance current];
+    _flowLayout.minimumInteritemSpacing = appearance.horizontalSpacing;
+    _flowLayout.minimumLineSpacing = appearance.verticalSpacing;
+    _flowLayout.sectionInset = NSEdgeInsetsMake(appearance.verticalSpacing,
+                                                appearance.horizontalSpacing,
+                                                appearance.verticalSpacing,
+                                                appearance.horizontalSpacing);
 
     _collectionView = [[NSCollectionView alloc] initWithFrame:NSZeroRect];
     _collectionView.collectionViewLayout = _flowLayout;
@@ -100,6 +136,9 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     [_panelView addSubview:_scrollView];
 
+    _panelWidthConstraint = [_panelView.widthAnchor constraintEqualToConstant:kFolderOverlayMinWidth];
+    _panelHeightConstraint = [_panelView.heightAnchor constraintEqualToConstant:kFolderOverlayMinHeight];
+
     [NSLayoutConstraint activateConstraints:@[
         [_dimmingView.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_dimmingView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -108,21 +147,22 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
 
         [_panelView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
         [_panelView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_panelView.widthAnchor constraintLessThanOrEqualToAnchor:self.widthAnchor multiplier:0.7],
-        [_panelView.widthAnchor constraintGreaterThanOrEqualToConstant:360],
-        [_panelView.heightAnchor constraintLessThanOrEqualToAnchor:self.heightAnchor multiplier:0.75],
-        [_panelView.heightAnchor constraintGreaterThanOrEqualToConstant:260],
+        [_panelView.widthAnchor constraintLessThanOrEqualToAnchor:self.widthAnchor multiplier:0.88],
+        [_panelView.heightAnchor constraintLessThanOrEqualToAnchor:self.heightAnchor multiplier:0.86],
+        _panelWidthConstraint,
+        _panelHeightConstraint,
 
-        [_titleLabel.topAnchor constraintEqualToAnchor:_panelView.topAnchor constant:18],
-        [_titleLabel.leadingAnchor constraintEqualToAnchor:_panelView.leadingAnchor constant:24],
-        [_titleLabel.trailingAnchor constraintEqualToAnchor:_panelView.trailingAnchor constant:-24],
+        [_titleLabel.topAnchor constraintEqualToAnchor:_panelView.topAnchor constant:28],
+        [_titleLabel.leadingAnchor constraintEqualToAnchor:_panelView.leadingAnchor constant:40],
+        [_titleLabel.trailingAnchor constraintEqualToAnchor:_panelView.trailingAnchor constant:-40],
+        [_titleLabel.heightAnchor constraintEqualToConstant:34],
 
         [_titleField.topAnchor constraintEqualToAnchor:_titleLabel.topAnchor],
         [_titleField.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
         [_titleField.trailingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor],
-        [_titleField.heightAnchor constraintEqualToConstant:28],
+        [_titleField.heightAnchor constraintEqualToConstant:34],
 
-        [_scrollView.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:12],
+        [_scrollView.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:20],
         [_scrollView.leadingAnchor constraintEqualToAnchor:_panelView.leadingAnchor],
         [_scrollView.trailingAnchor constraintEqualToAnchor:_panelView.trailingAnchor],
         [_scrollView.bottomAnchor constraintEqualToAnchor:_panelView.bottomAnchor],
@@ -138,7 +178,8 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
         ]];
         dark = [match isEqualToString:NSAppearanceNameDarkAqua];
     }
-    CGFloat alpha = dark ? 0.45 : 0.35;
+    // 略加深遮罩，突出中央大面板（贴近 Launchpad 展开层次）。
+    CGFloat alpha = dark ? 0.52 : 0.40;
     self.dimmingView.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:alpha].CGColor;
 }
 
@@ -161,8 +202,6 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
     self.titleLabel.hidden = NO;
     self.titleField.hidden = YES;
     [self updateAppearanceForEffectiveAppearance];
-    [self updateChildLayout];
-    [self.collectionView reloadData];
 
     if (self.superview != hostView) {
         self.translatesAutoresizingMaskIntoConstraints = YES;
@@ -173,9 +212,13 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
         self.frame = hostView.bounds;
     }
 
+    // 先铺满宿主再算面板尺寸，避免 bounds 为 0 时只能落在最小尺寸。
+    [self updateChildLayout];
+    [self.collectionView reloadData];
+
     self.hidden = NO;
     self.alphaValue = 0.0;
-    self.panelView.layer.transform = CATransform3DMakeScale(0.6, 0.6, 1.0);
+    self.panelView.layer.transform = CATransform3DMakeScale(0.88, 0.88, 1.0);
 
     void (^apply)(void) = ^{
         self.alphaValue = 1.0;
@@ -185,6 +228,7 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
     if (animated) {
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
             context.duration = kOverlayAnimationDuration;
+            context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             context.allowsImplicitAnimation = YES;
             apply();
         } completionHandler:nil];
@@ -218,9 +262,10 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
 
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = kOverlayAnimationDuration;
+        context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
         context.allowsImplicitAnimation = YES;
         self.alphaValue = 0.0;
-        self.panelView.layer.transform = CATransform3DMakeScale(0.6, 0.6, 1.0);
+        self.panelView.layer.transform = CATransform3DMakeScale(0.92, 0.92, 1.0);
     } completionHandler:finish];
 }
 
@@ -239,34 +284,43 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
 }
 
 - (void)updateChildLayout {
-    CGFloat iconSize = [BrowserLaunchpadAppearance current].iconSize * 0.9;
+    BrowserLaunchpadAppearance *appearance = [BrowserLaunchpadAppearance current];
+    CGFloat iconSize = appearance.iconSize;
     CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:iconSize];
     CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:iconSize];
+    // 与主网格完全一致：图标大小、左右间距、上下间距。
     self.flowLayout.itemSize = NSMakeSize(cellWidth, cellHeight);
+    self.flowLayout.minimumInteritemSpacing = appearance.horizontalSpacing;
+    self.flowLayout.minimumLineSpacing = appearance.verticalSpacing;
+    self.flowLayout.sectionInset = NSEdgeInsetsMake(appearance.verticalSpacing,
+                                                    appearance.horizontalSpacing,
+                                                    appearance.verticalSpacing,
+                                                    appearance.horizontalSpacing);
 
-    NSUInteger count = MAX((NSUInteger)1, self.children.count);
-    NSUInteger columns = MIN((NSUInteger)5, count);
-    CGFloat width = columns * cellWidth + (columns - 1) * self.flowLayout.minimumInteritemSpacing
-        + self.flowLayout.sectionInset.left + self.flowLayout.sectionInset.right;
-    width = MAX(360.0, MIN(width, NSWidth(self.bounds) * 0.7));
-
-    NSUInteger rows = (count + columns - 1) / columns;
-    CGFloat height = 60.0 + rows * cellHeight + MAX((NSInteger)rows - 1, 0) * self.flowLayout.minimumLineSpacing
-        + self.flowLayout.sectionInset.top + self.flowLayout.sectionInset.bottom;
-    height = MAX(260.0, MIN(height, NSHeight(self.bounds) * 0.75));
-
-    for (NSLayoutConstraint *constraint in self.panelView.constraints) {
-        if (constraint.firstAttribute == NSLayoutAttributeWidth && constraint.relation == NSLayoutRelationEqual
-            && constraint.secondItem == nil) {
-            [self.panelView removeConstraint:constraint];
-        }
-        if (constraint.firstAttribute == NSLayoutAttributeHeight && constraint.relation == NSLayoutRelationEqual
-            && constraint.secondItem == nil) {
-            [self.panelView removeConstraint:constraint];
-        }
+    NSUInteger count = self.children.count;
+    NSUInteger columns = kFolderOverlayMinColumns;
+    if (count > kFolderOverlayMinColumns) {
+        columns = MIN(kFolderOverlayMaxColumns, count);
     }
-    [self.panelView.widthAnchor constraintEqualToConstant:width].active = YES;
-    [self.panelView.heightAnchor constraintEqualToConstant:height].active = YES;
+
+    CGFloat hSpacing = self.flowLayout.minimumInteritemSpacing;
+    CGFloat vSpacing = self.flowLayout.minimumLineSpacing;
+    NSEdgeInsets inset = self.flowLayout.sectionInset;
+    CGFloat contentWidth = columns * cellWidth + (columns - 1) * hSpacing + inset.left + inset.right;
+    NSUInteger contentRows = count == 0 ? 1 : (count + columns - 1) / columns;
+    NSUInteger rows = MAX(kFolderOverlayMinRows, contentRows);
+    CGFloat titleBlock = 28.0 + 34.0 + 20.0;
+    CGFloat contentHeight = titleBlock + rows * cellHeight + MAX((NSInteger)rows - 1, 0) * vSpacing
+        + inset.top + inset.bottom;
+
+    CGFloat maxWidth = MAX(kFolderOverlayMinWidth, NSWidth(self.bounds) * 0.88);
+    CGFloat maxHeight = MAX(kFolderOverlayMinHeight, NSHeight(self.bounds) * 0.86);
+    CGFloat width = MAX(kFolderOverlayMinWidth, MIN(contentWidth, maxWidth));
+    CGFloat height = MAX(kFolderOverlayMinHeight, MIN(contentHeight, maxHeight));
+
+    self.panelWidthConstraint.constant = width;
+    self.panelHeightConstraint.constant = height;
+    [self.panelView layoutSubtreeIfNeeded];
 }
 
 - (void)dimmingClicked:(NSClickGestureRecognizer *)recognizer {
@@ -329,7 +383,7 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
      itemForRepresentedObjectAtIndexPath:(NSIndexPath *)indexPath {
     BrowserShortcutCellView *cell = [collectionView makeItemWithIdentifier:@"FolderChildCell" forIndexPath:indexPath];
     BrowserShortcutItem *child = self.children[(NSUInteger)indexPath.item];
-    [cell applyIconSize:[BrowserLaunchpadAppearance current].iconSize * 0.9];
+    [cell applyIconSize:[BrowserLaunchpadAppearance current].iconSize];
     [cell configureWithShortcut:child];
 
     __weak typeof(self) weakSelf = self;
@@ -467,6 +521,9 @@ static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-i
         return NO;
     }
     session.animatesToStartingPositionsOnCancelOrFail = NO;
+    if ([self.delegate respondsToSelector:@selector(folderOverlay:didBeginDraggingChild:)]) {
+        [self.delegate folderOverlay:self didBeginDraggingChild:child];
+    }
     return YES;
 }
 
@@ -479,6 +536,43 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     return NSDragOperationMove;
 }
 
+- (void)draggingSession:(NSDraggingSession *)session movedToPoint:(NSPoint)screenPoint {
+    (void)session;
+    if (self.draggingChildID.length == 0 || !self.window) {
+        return;
+    }
+    BrowserShortcutItem *child = nil;
+    for (BrowserShortcutItem *item in self.children) {
+        if ([item.itemID isEqualToString:self.draggingChildID]) {
+            child = item;
+            break;
+        }
+    }
+    if (!child) {
+        return;
+    }
+
+    NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
+    // panel 即便 hidden 仍保留 frame，用来判断是否拖出面板区域。
+    NSPoint localPoint = [self convertPoint:windowPoint fromView:nil];
+    BOOL outsidePanel = !NSPointInRect(localPoint, self.panelView.frame);
+
+    if (outsidePanel) {
+        self.panelView.hidden = YES;
+        self.dimmingView.hidden = YES;
+    } else {
+        self.panelView.hidden = NO;
+        self.dimmingView.hidden = NO;
+    }
+
+    if ([self.delegate respondsToSelector:@selector(folderOverlay:draggingChild:movedToWindowPoint:outsidePanel:)]) {
+        [self.delegate folderOverlay:self
+                       draggingChild:child
+                   movedToWindowPoint:windowPoint
+                        outsidePanel:outsidePanel];
+    }
+}
+
 - (void)draggingSession:(NSDraggingSession *)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
@@ -488,10 +582,6 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         return;
     }
 
-    NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
-    NSPoint panelPoint = [self.panelView convertPoint:windowPoint fromView:nil];
-    BOOL outsidePanel = !NSPointInRect(panelPoint, self.panelView.bounds);
-
     BrowserShortcutItem *child = nil;
     for (BrowserShortcutItem *item in self.children) {
         if ([item.itemID isEqualToString:self.draggingChildID]) {
@@ -500,7 +590,20 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         }
     }
     self.draggingChildID = nil;
-    if (outsidePanel && child) {
+
+    NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
+    NSPoint localPoint = [self convertPoint:windowPoint fromView:nil];
+    BOOL outsidePanel = !NSPointInRect(localPoint, self.panelView.frame);
+
+    self.panelView.hidden = NO;
+    self.dimmingView.hidden = NO;
+
+    if (child && [self.delegate respondsToSelector:@selector(folderOverlay:didEndDraggingChild:atWindowPoint:outsidePanel:)]) {
+        [self.delegate folderOverlay:self
+                 didEndDraggingChild:child
+                       atWindowPoint:windowPoint
+                        outsidePanel:outsidePanel];
+    } else if (outsidePanel && child) {
         [self.delegate folderOverlay:self moveShortcutToTopLevel:child];
     }
 }

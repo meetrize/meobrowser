@@ -216,7 +216,8 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     if (targetItem.isFolder || droppingItem.isFolder) {
         return nil;
     }
-    if (!targetItem.isTopLevel || !droppingItem.isTopLevel) {
+    // 目标须在顶层；拖入项可以来自另一文件夹（夹外拖合）。
+    if (!targetItem.isTopLevel) {
         return nil;
     }
     if (![shortcuts containsObject:targetItem] || ![shortcuts containsObject:droppingItem]) {
@@ -230,12 +231,16 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
         return nil;
     }
 
+    NSString *previousFolderID = droppingItem.folderID;
     targetItem.folderID = folder.itemID;
     targetItem.sortOrder = 0;
     droppingItem.folderID = folder.itemID;
     droppingItem.sortOrder = 1;
 
     [shortcuts insertObject:folder atIndex:insertIndex];
+    if (previousFolderID.length > 0) {
+        [self removeEmptyFolderWithID:previousFolderID inShortcuts:shortcuts];
+    }
     [self saveShortcuts:shortcuts];
     return folder;
 }

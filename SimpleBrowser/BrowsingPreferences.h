@@ -26,6 +26,9 @@ extern NSString * const BrowserSearchEngineBaidu;
 + (NSString *)displayNameForSearchEngineID:(NSString *)engineID;
 + (nullable NSURL *)searchURLForQuery:(NSString *)query;
 
++ (BOOL)isDefaultBrowser;
++ (void)requestSetAsDefaultBrowserWithCompletion:(void (^)(NSError * _Nullable error))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

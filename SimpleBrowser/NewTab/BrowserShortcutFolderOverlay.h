@@ -20,6 +20,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
          editShortcut:(BrowserShortcutItem *)shortcut;
 - (BOOL)folderOverlayIsEditingMode:(BrowserShortcutFolderOverlay *)overlay;
+
+/// 夹内拖出到主网格：开始 / 移动 / 结束（含占位符与落点保存）。
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+didBeginDraggingChild:(BrowserShortcutItem *)child;
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+draggingChild:(BrowserShortcutItem *)child
+movedToWindowPoint:(NSPoint)windowPoint
+       outsidePanel:(BOOL)outsidePanel;
+- (void)folderOverlay:(BrowserShortcutFolderOverlay *)overlay
+didEndDraggingChild:(BrowserShortcutItem *)child
+     atWindowPoint:(NSPoint)windowPoint
+      outsidePanel:(BOOL)outsidePanel;
 @end
 
 @interface BrowserShortcutFolderOverlay : NSView
