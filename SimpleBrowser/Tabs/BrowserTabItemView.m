@@ -205,7 +205,13 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    (void)event;
+    // 双击标签关闭；单击切换（双击序列里第一次仍会先选中，符合常见浏览器习惯）
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
+        if (self.onClose) {
+            self.onClose();
+        }
+        return;
+    }
     if (self.onSelect) {
         self.onSelect();
     }
