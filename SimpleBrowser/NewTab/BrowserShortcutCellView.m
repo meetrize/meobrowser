@@ -511,9 +511,11 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
             [_mergeRingView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
             _mergeWidthConstraint,
             _mergeHeightConstraint,
+            // 标题相对单元格左右各外扩一点（clipsToBounds=NO），借用相邻图标间距，
+            // 比贴齐图标内缩时能多显示几个字。
             [_titleLabel.topAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor constant:2],
-            [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:2],
-            [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2],
+            [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:-6],
+            [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:6],
         ]];
 
         [[NSNotificationCenter defaultCenter] addObserver:self
