@@ -24,6 +24,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate, NSMenuItemValidation>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
+@property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
 @property (nonatomic, strong) NSView *contentContainer;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
@@ -97,6 +98,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
     window.titlebarAppearsTransparent = YES;
     window.titleVisibility = NSWindowTitleHidden;
     window.movableByWindowBackground = YES;
+    window.backgroundColor = BrowserTabStripFillColor();
     if (@available(macOS 11.0, *)) {
         window.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
         window.toolbar = nil;
@@ -115,6 +117,24 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 
 /// 相对标签栏垂直中心的额外下移量（pt），正值表示向标题栏底部方向移动。
 static const CGFloat kTrafficLightDownwardOffset = 1.0;
+
+/// 压扁系统标题栏装饰区高度，避免 accessory 标签条上方再露出一截标题栏。
+- (void)collapseSystemTitlebarDecoration {
+    NSWindow *window = self.window;
+    NSView *themeFrame = window.contentView.superview;
+    if (!themeFrame) {
+        return;
+    }
+    SEL setter = NSSelectorFromString(@"setCustomTitlebarHeight:");
+    if (![themeFrame respondsToSelector:setter]) {
+        return;
+    }
+    void (*setFn)(id, SEL, double) = (void (*)(id, SEL, double))[themeFrame methodForSelector:setter];
+    if (setFn) {
+        // 0：交通灯叠在标签条上；标签条本身由 titlebar accessory 提供
+        setFn(themeFrame, setter, 0.0);
+    }
+}
 
 - (BOOL)positionTrafficLightButtons {
     NSWindow *window = self.window;
@@ -183,12 +203,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)scheduleTrafficLightPositioning {
+    [self collapseSystemTitlebarDecoration];
     [self tryPositionTrafficLightsStartingAtAttempt:0];
 
     __weak typeof(self) weakSelf = self;
     for (NSNumber *delayMs in @[@50, @150, @350]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs.doubleValue * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
+            [weakSelf collapseSystemTitlebarDecoration];
             [weakSelf positionTrafficLightButtons];
         });
     }
@@ -333,8 +355,29 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.loadingProgressView.heightAnchor constraintEqualToConstant:BrowserLoadingProgressHeight],
     ]];
 
+    // 标签条挂到标题栏 accessory：系统在该区域把事件交给标签，而非拖窗。
+    NSView *accessoryRoot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, BrowserTabStripHeight)];
+    accessoryRoot.wantsLayer = YES;
+    accessoryRoot.layer.backgroundColor = BrowserTabStripFillColor().CGColor;
+    self.tabStripView.translatesAutoresizingMaskIntoConstraints = NO;
+    [accessoryRoot addSubview:self.tabStripView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.tabStripView.topAnchor constraintEqualToAnchor:accessoryRoot.topAnchor],
+        [self.tabStripView.leadingAnchor constraintEqualToAnchor:accessoryRoot.leadingAnchor],
+        [self.tabStripView.trailingAnchor constraintEqualToAnchor:accessoryRoot.trailingAnchor],
+        [self.tabStripView.bottomAnchor constraintEqualToAnchor:accessoryRoot.bottomAnchor],
+        [accessoryRoot.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
+    ]];
+
+    self.tabStripAccessory = [[NSTitlebarAccessoryViewController alloc] init];
+    self.tabStripAccessory.view = accessoryRoot;
+    // 必须在 add 之前设置
+    self.tabStripAccessory.layoutAttribute = NSLayoutAttributeBottom;
+    [self.window addTitlebarAccessoryViewController:self.tabStripAccessory];
+    [self collapseSystemTitlebarDecoration];
+
     NSStackView *rootStack = [NSStackView stackViewWithViews:@[
-        self.tabStripView, toolbar, self.contentContainer
+        toolbar, self.contentContainer
     ]];
     rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     rootStack.spacing = 0;
@@ -344,9 +387,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     rootStack.translatesAutoresizingMaskIntoConstraints = NO;
     [contentView addSubview:rootStack];
 
+    // 对齐 contentLayoutGuide：内容紧贴 accessory 下方，避免重复留白
+    NSLayoutGuide *contentGuide = (NSLayoutGuide *)self.window.contentLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
-        [self.tabStripView.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
-        [rootStack.topAnchor constraintEqualToAnchor:contentView.topAnchor],
+        [rootStack.topAnchor constraintEqualToAnchor:contentGuide.topAnchor],
         [rootStack.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
         [rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
         [rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],

@@ -48,6 +48,10 @@ static const CGFloat kChromeGap = 4.0;
 
 @implementation BrowserTabStripClipView
 
+- (BOOL)isFlipped {
+    return YES;
+}
+
 - (BOOL)mouseDownCanMoveWindow {
     return NO;
 }
@@ -71,6 +75,10 @@ static const CGFloat kChromeGap = 4.0;
 @end
 
 @implementation BrowserTabStripTabsContainerView
+
+- (BOOL)isFlipped {
+    return YES;
+}
 
 - (BOOL)mouseDownCanMoveWindow {
     return NO;
@@ -158,6 +166,20 @@ static const CGFloat kChromeGap = 4.0;
 @end
 
 @implementation BrowserTabStripView
+
+- (BOOL)isFlipped {
+    // 与 NSStackView 一致：y=0 在顶部，顶部留白语义更直观
+    return YES;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    NSPoint local = [self convertPoint:point fromView:self.superview];
+    // 左侧交通灯区域穿透，避免盖住关闭/最小化/最大化按钮
+    if (local.x < kTrafficLightLeadingInset) {
+        return nil;
+    }
+    return [super hitTest:point];
+}
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
@@ -298,11 +320,25 @@ static const CGFloat kChromeGap = 4.0;
     [self updateStripAppearance];
 }
 
+NSColor *BrowserTabStripFillColor(void) {
+    BOOL dark = NO;
+    if (@available(macOS 10.14, *)) {
+        dark = [[NSApp effectiveAppearance] bestMatchFromAppearancesWithNames:@[
+            NSAppearanceNameDarkAqua, NSAppearanceNameAqua
+        ]] == NSAppearanceNameDarkAqua;
+    }
+    if (dark) {
+        return [NSColor colorWithCalibratedWhite:0.12 alpha:1.0];
+    }
+    return [NSColor colorWithCalibratedRed:0.87 green:0.88 blue:0.91 alpha:1.0];
+}
+
 - (void)updateStripAppearance {
-    BOOL dark = [self effectiveAppearanceIsDark];
-    NSColor *strip = dark ? [NSColor colorWithCalibratedWhite:0.12 alpha:1.0]
-                          : [NSColor colorWithCalibratedRed:0.87 green:0.88 blue:0.91 alpha:1.0];
+    NSColor *strip = BrowserTabStripFillColor();
     self.backgroundView.layer.backgroundColor = strip.CGColor;
+    if ([self.window isKindOfClass:[NSWindow class]]) {
+        self.window.backgroundColor = strip;
+    }
 }
 
 - (BOOL)effectiveAppearanceIsDark {
@@ -337,7 +373,8 @@ static const CGFloat kChromeGap = 4.0;
 }
 
 - (BOOL)mouseDownCanMoveWindow {
-    return YES;
+    // 标签条本体不拖窗；仅 leading/trailing/background 等 DragArea 可拖窗
+    return NO;
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -519,6 +556,7 @@ static const CGFloat kChromeGap = 4.0;
     CGFloat ideal = visibleLen > 0 ? (available - spacingTotal) / (CGFloat)visibleLen : BrowserTabItemMinWidth;
     CGFloat tabWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
     CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : 0;
+    // isFlipped：y=0 在顶；标签下移 kTabTopInset，高度不铺满
     CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
 
     BOOL geometryChanged = fabs(tabWidth - self.lastLaidOutTabWidth) > 0.5
@@ -541,7 +579,7 @@ static const CGFloat kChromeGap = 4.0;
                 // 拖拽中的标签保留纵向布局，横向由拖拽逻辑更新
                 item.hidden = NO;
                 NSRect frame = item.frame;
-                frame.origin.y = 0;
+                frame.origin.y = kTabTopInset;
                 frame.size.width = tabWidth;
                 frame.size.height = tabHeight;
                 item.frame = frame;
@@ -552,7 +590,7 @@ static const CGFloat kChromeGap = 4.0;
 
             item.hidden = !visible;
             if (visible) {
-                item.frame = NSMakeRect(x, 0, tabWidth, tabHeight);
+                item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
                 [item applyAvailableWidth:tabWidth];
                 x += tabWidth + kTabSpacing;
             } else {
@@ -713,7 +751,7 @@ static const CGFloat kChromeGap = 4.0;
             continue;
         }
         if (!item.hidden) {
-            item.frame = NSMakeRect(x, 0, tabWidth, tabHeight);
+            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
             [item applyAvailableWidth:tabWidth];
         }
         x += tabWidth + kTabSpacing;

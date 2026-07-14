@@ -11,5 +11,4 @@
 - (void)persistTabSession;
 - (void)scheduleTrafficLightPositioning;
 - (void)openURLsFromExternalSource:(NSArray<NSURL *> * _Nonnull)urls;
-
 @end

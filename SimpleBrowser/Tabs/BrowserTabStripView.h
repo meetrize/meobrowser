@@ -6,6 +6,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
 
+/// 标签条背景色（窗口标题栏与之同色，避免 accessory 上方露白）
+NSColor *BrowserTabStripFillColor(void);
+
 @class BrowserTabStripView;
 
 @protocol BrowserTabStripViewDelegate <NSObject>

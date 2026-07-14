@@ -12,7 +12,7 @@ static const CGFloat kPinIconSize = 12.0;
 static const CGFloat kLeadingPadding = 8.0;
 static const CGFloat kTitleAfterPinGap = 4.0;
 
-/// 标题不参与命中，避免 FullSizeContentView 下文字区被系统当成拖窗
+/// 标题不参与命中，全部由标签本身接收拖拽
 @interface BrowserTabTitleLabel : NSTextField
 @end
 
@@ -240,7 +240,6 @@ NSColor *BrowserTabActiveFillColor(void) {
     self.layer.backgroundColor = (self.tabSelected ? active : inactive).CGColor;
 
     if (@available(macOS 10.13, *)) {
-        // 顶角弧度贴近系统窗口（约 10–12pt），略大于侧缘以免选中态显得更方。
         self.layer.cornerRadius = self.tabSelected ? 11.0 : 10.0;
         self.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
         if (@available(macOS 10.15, *)) {
@@ -308,7 +307,6 @@ NSColor *BrowserTabActiveFillColor(void) {
     if (self.hidden || self.alphaValue < 0.01) {
         return nil;
     }
-    // point 位于 superview 坐标系：整块标签（含标题）都可拖，仅关闭按钮例外
     NSPoint local = [self convertPoint:point fromView:self.superview];
     if (![self mouse:local inRect:self.bounds]) {
         return nil;
@@ -323,7 +321,6 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    // 双击标签关闭（固定标签除外）；单击切换并进入拖拽跟踪
     if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
         if (!self.tabPinned && self.onClose) {
             self.onClose();
@@ -331,7 +328,6 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
 
-    // 先选中。选中路径必须 sync 而非重建 strip，否则本视图被销毁后无法收到后续拖拽。
     if (self.onSelect) {
         self.onSelect();
     }
@@ -371,7 +367,6 @@ NSColor *BrowserTabActiveFillColor(void) {
             continue;
         }
 
-        // mouseUp
         if (dragging && self.onReorderDragEnded) {
             self.onReorderDragEnded();
         }

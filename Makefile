@@ -7,6 +7,9 @@ SRC_DIR := SimpleWindow
 BROWSER_SRC_DIR := SimpleBrowser
 SBKIT_DIR := SBKit
 RES_DIR := $(BUILD_DIR)/$(APP_NAME).app/Contents/Resources
+BROWSER_RES_DIR := $(BUILD_DIR)/$(BROWSER_BUNDLE_NAME).app/Contents/Resources
+BROWSER_ICON_SRC := $(BROWSER_SRC_DIR)/Resources/AppIcon.icns
+BROWSER_ICON_NAME := AppIcon
 
 SOURCES := $(SRC_DIR)/main.m $(SRC_DIR)/AppDelegate.m $(SRC_DIR)/MainWindowController.m
 BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
@@ -90,6 +93,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <key>CFBundleIdentifier</key><string>com.example.MeoBrowser</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleName</key><string>$(3)</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleDisplayName</key><string>$(3)</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleIconFile</key><string>$(BROWSER_ICON_NAME)</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundlePackageType</key><string>APPL</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleShortVersionString</key><string>1.0</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>LSMinimumSystemVersion</key><string>11.0</string>' >> $(1)/Contents/Info.plist
@@ -124,10 +128,11 @@ $(BINARY): $(SOURCES) | $(BUILD_DIR)
 
 browser: $(BROWSER_BINARY)
 
-$(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) Makefile | $(BUILD_DIR)
-	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
+$(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC) Makefile | $(BUILD_DIR)
+	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS $(BROWSER_RES_DIR)
 	$(CC) $(BROWSER_CFLAGS) -isysroot $(SDK_PATH) $(BROWSER_SOURCES) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
+	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
 		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \
@@ -200,7 +205,8 @@ verify: all browser
 	@test -x $(BROWSER_BINARY)
 	@test -f $(APP_BUNDLE)/Contents/Info.plist
 	@test -f $(BROWSER_BUNDLE)/Contents/Info.plist
-	@echo "verify OK: SimpleWindow + MeoBrowser binaries and Info.plist"
+	@test -f $(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns
+	@echo "verify OK: SimpleWindow + MeoBrowser binaries, Info.plist, AppIcon"
 
 clean:
 	rm -rf $(BUILD_DIR)
