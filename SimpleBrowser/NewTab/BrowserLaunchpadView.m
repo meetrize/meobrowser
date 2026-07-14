@@ -1122,18 +1122,29 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 
 #pragma mark - Drag and Drop
 
+/// 拖拽重排后的视觉格子（与屏幕上看到的图标位置一致）。
+- (NSRect)launchpadVisualFrameForItemAtIndex:(NSInteger)index {
+    NSCollectionViewLayoutAttributes *attrs =
+        [self.flowLayout layoutAttributesForItemAtIndexPath:[NSIndexPath indexPathForItem:index inSection:0]];
+    return attrs ? attrs.frame : NSZeroRect;
+}
+
 - (nullable BrowserShortcutItem *)mergeTargetAtPoint:(NSPoint)location
                                               source:(BrowserShortcutItem *)source {
     if (!source || source.isFolder) {
         return nil;
     }
 
-    // 命中测试用未重排的基础格子，避免挤位动画干扰建夹判定。
+    // 必须用挤位后的视觉坐标；否则拖到「文件夹」上看起来命中了，实际测到旧槽位。
     NSInteger count = (NSInteger)self.displayShortcuts.count;
     NSInteger hoverIndex = NSNotFound;
     NSRect frame = NSZeroRect;
     for (NSInteger i = 0; i < count; i++) {
-        NSRect candidate = [self.flowLayout launchpadBaseFrameForItemAtIndex:i];
+        BrowserShortcutItem *candidateItem = self.displayShortcuts[(NSUInteger)i];
+        if ([candidateItem.itemID isEqualToString:source.itemID]) {
+            continue; // 源图标透明占位，不参与合并命中
+        }
+        NSRect candidate = [self launchpadVisualFrameForItemAtIndex:i];
         if (!NSIsEmptyRect(candidate) && NSPointInRect(location, candidate)) {
             hoverIndex = i;
             frame = candidate;
@@ -1144,11 +1155,19 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         return nil;
     }
     BrowserShortcutItem *target = self.displayShortcuts[(NSUInteger)hoverIndex];
-    if (!target || [target.itemID isEqualToString:source.itemID]) {
+    if (!target) {
         return nil;
     }
 
-    // 中心约 50% 命中区建夹；边缘留给排序空隙。
+    // 文件夹：图标主体区即可归入（更易拖入）；链接：中心约 50% 用于建夹，边缘留给排序。
+    if (target.isFolder) {
+        NSRect iconSlot = [self launchpadIconSlotFrameInCellFrame:frame];
+        if (!NSPointInRect(location, iconSlot)) {
+            return nil;
+        }
+        return target;
+    }
+
     NSRect center = NSInsetRect(frame, frame.size.width * 0.25, frame.size.height * 0.25);
     if (!NSPointInRect(location, center)) {
         return nil;
@@ -1165,14 +1184,17 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 
     NSInteger bestIndex = count;
     CGFloat bestScore = CGFLOAT_MAX;
+    NSInteger sourceIndex = [self launchpadDraggingSourceIndex];
 
     for (NSInteger i = 0; i < count; i++) {
-        // 用基础布局坐标，避免挤位后的反馈抖动。
-        NSRect frame = [self.flowLayout launchpadBaseFrameForItemAtIndex:i];
+        if (i == sourceIndex) {
+            continue;
+        }
+        // 视觉坐标与挤位动画一致，保证「拖到文件夹上」不会误判成排序空位。
+        NSRect frame = [self launchpadVisualFrameForItemAtIndex:i];
         if (NSIsEmptyRect(frame)) {
             continue;
         }
-        // 落在某格左半侧 → 插到该格之前；右半侧 → 插到该格之后。
         BOOL leftHalf = location.x < NSMidX(frame);
         NSInteger candidate = leftHalf ? i : (i + 1);
         NSPoint gapPoint = leftHalf
@@ -1181,7 +1203,6 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         CGFloat dx = location.x - gapPoint.x;
         CGFloat dy = location.y - gapPoint.y;
         CGFloat score = dx * dx + dy * dy;
-        // 同一行优先
         if (fabs(location.y - NSMidY(frame)) > frame.size.height) {
             score += 100000.0;
         }
@@ -1191,9 +1212,8 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         }
     }
 
-    // 落在「添加」cell 上视为插到末尾
     NSInteger addIndex = count;
-    NSRect addFrame = [self.flowLayout launchpadBaseFrameForItemAtIndex:addIndex];
+    NSRect addFrame = [self launchpadVisualFrameForItemAtIndex:addIndex];
     if (!NSIsEmptyRect(addFrame) && NSPointInRect(location, addFrame)) {
         return count;
     }

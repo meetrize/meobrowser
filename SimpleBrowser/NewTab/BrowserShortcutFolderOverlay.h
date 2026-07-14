@@ -37,6 +37,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)reloadChildren:(NSArray<BrowserShortcutItem *> *)children;
 - (void)beginRenaming;
 
+/// 夹内图标拖出：由 cell 在超过拖拽阈值后调用。
+- (BOOL)beginDraggingChild:(BrowserShortcutItem *)child
+                  fromView:(NSView *)view
+                     event:(NSEvent *)event;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -2,6 +2,7 @@
 #import "BrowserShortcutItem.h"
 #import "BrowserLaunchpadAppearance.h"
 #import "BrowserLaunchpadView.h"
+#import "BrowserShortcutFolderOverlay.h"
 #import <QuartzCore/QuartzCore.h>
 
 @interface BrowserLaunchpadView (CellDragSupport)
@@ -598,6 +599,17 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     return nil;
 }
 
+- (nullable BrowserShortcutFolderOverlay *)enclosingFolderOverlay {
+    NSView *view = self.superview;
+    while (view) {
+        if ([view isKindOfClass:[BrowserShortcutFolderOverlay class]]) {
+            return (BrowserShortcutFolderOverlay *)view;
+        }
+        view = view.superview;
+    }
+    return nil;
+}
+
 - (void)mouseDown:(NSEvent *)event {
     if (self.addCell) {
         [super mouseDown:event];
@@ -618,8 +630,14 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     if ((dx * dx + dy * dy) < 16.0) {
         return;
     }
-    BrowserLaunchpadView *host = [self enclosingLaunchpadView];
     NSEvent *dragEvent = self.mouseDownEvent ?: event;
+    // 夹内优先：拖到面板外可移回顶层；勿走主网格（overlay 打开时主网格会拒绝拖拽）。
+    BrowserShortcutFolderOverlay *overlay = [self enclosingFolderOverlay];
+    if (overlay && [overlay beginDraggingChild:self.shortcut fromView:self event:dragEvent]) {
+        self.didStartDrag = YES;
+        return;
+    }
+    BrowserLaunchpadView *host = [self enclosingLaunchpadView];
     if (host && [host launchpadBeginDraggingShortcut:self.shortcut fromView:self event:dragEvent]) {
         self.didStartDrag = YES;
     }

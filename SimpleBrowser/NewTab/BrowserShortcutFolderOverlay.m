@@ -6,8 +6,9 @@
 #import <QuartzCore/QuartzCore.h>
 
 static const NSTimeInterval kOverlayAnimationDuration = 0.22;
+static NSPasteboardType const kFolderChildDragType = @"com.meobrowser.shortcut-item-id";
 
-@interface BrowserShortcutFolderOverlay () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSTextFieldDelegate>
+@interface BrowserShortcutFolderOverlay () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSTextFieldDelegate, NSDraggingSource>
 @property (nonatomic, strong) NSView *dimmingView;
 @property (nonatomic, strong) NSVisualEffectView *panelView;
 @property (nonatomic, strong) NSTextField *titleLabel;
@@ -88,7 +89,7 @@ static const NSTimeInterval kOverlayAnimationDuration = 0.22;
     _collectionView.backgroundColors = @[[NSColor clearColor]];
     _collectionView.selectable = NO;
     [_collectionView registerClass:[BrowserShortcutCellView class] forItemWithIdentifier:@"FolderChildCell"];
-    [_collectionView registerForDraggedTypes:@[NSPasteboardTypeString]];
+    [_collectionView registerForDraggedTypes:@[kFolderChildDragType]];
 
     _scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     _scrollView.documentView = _collectionView;
@@ -418,55 +419,76 @@ static const NSTimeInterval kOverlayAnimationDuration = 0.22;
 
 #pragma mark - Drag out
 
-- (BOOL)collectionView:(NSCollectionView *)collectionView canDragItemsAtIndexPaths:(NSSet<NSIndexPath *> *)indexPaths {
-    (void)collectionView;
-    (void)indexPaths;
+- (BOOL)beginDraggingChild:(BrowserShortcutItem *)child
+                  fromView:(NSView *)view
+                     event:(NSEvent *)event {
+    if (!child || child.itemID.length == 0 || child.isFolder || !view || !event) {
+        return NO;
+    }
+    if (self.folder == nil || self.renaming) {
+        return NO;
+    }
+    BOOL found = NO;
+    for (BrowserShortcutItem *item in self.children) {
+        if ([item.itemID isEqualToString:child.itemID]) {
+            found = YES;
+            break;
+        }
+    }
+    if (!found) {
+        return NO;
+    }
+
+    self.draggingChildID = child.itemID;
+
+    NSPasteboardItem *pasteboardItem = [[NSPasteboardItem alloc] init];
+    [pasteboardItem setString:child.itemID forType:kFolderChildDragType];
+
+    NSDraggingItem *draggingItem = [[NSDraggingItem alloc] initWithPasteboardWriter:pasteboardItem];
+    NSImage *image = [BrowserShortcutCellView draggingProxyImageFromContentView:view alpha:0.72];
+    NSRect dragFrame = [BrowserShortcutCellView draggingProxyFrameFromContentView:view inView:self.collectionView];
+    if (!image || NSIsEmptyRect(dragFrame)) {
+        NSRect bounds = view.bounds;
+        NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:bounds];
+        if (rep) {
+            [view cacheDisplayInRect:bounds toBitmapImageRep:rep];
+            image = [[NSImage alloc] initWithSize:bounds.size];
+            [image addRepresentation:rep];
+        }
+        dragFrame = [view convertRect:bounds toView:self.collectionView];
+    }
+    [draggingItem setDraggingFrame:dragFrame contents:image];
+
+    NSDraggingSession *session = [self.collectionView beginDraggingSessionWithItems:@[draggingItem]
+                                                                              event:event
+                                                                             source:self];
+    if (!session) {
+        self.draggingChildID = nil;
+        return NO;
+    }
+    session.animatesToStartingPositionsOnCancelOrFail = NO;
     return YES;
 }
 
-- (nullable id<NSPasteboardWriting>)collectionView:(NSCollectionView *)collectionView
-                    pasteboardWriterForItemAtIndexPath:(NSIndexPath *)indexPath {
-    (void)collectionView;
-    if (indexPath.item < 0 || indexPath.item >= (NSInteger)self.children.count) {
-        return nil;
-    }
-    return self.children[(NSUInteger)indexPath.item].itemID;
-}
-
-- (void)collectionView:(NSCollectionView *)collectionView
-       draggingSession:(NSDraggingSession *)session
-      willBeginAtPoint:(NSPoint)screenPoint
-  forItemsAtIndexPaths:(NSSet<NSIndexPath *> *)indexPaths {
-    (void)collectionView;
-    (void)session;
-    (void)screenPoint;
-    NSIndexPath *path = indexPaths.anyObject;
-    if (path && path.item >= 0 && path.item < (NSInteger)self.children.count) {
-        self.draggingChildID = self.children[(NSUInteger)path.item].itemID;
-    }
-}
-
-- (NSDragOperation)collectionView:(NSCollectionView *)collectionView
-                     draggingSession:(NSDraggingSession *)session
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session
 sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
-    (void)collectionView;
     (void)session;
-    (void)context;
+    if (context == NSDraggingContextOutsideApplication) {
+        return NSDragOperationNone;
+    }
     return NSDragOperationMove;
 }
 
-- (void)collectionView:(NSCollectionView *)collectionView
-       draggingSession:(NSDraggingSession *)session
-          endedAtPoint:(NSPoint)screenPoint
-         dragOperation:(NSDragOperation)operation {
-    (void)collectionView;
+- (void)draggingSession:(NSDraggingSession *)session
+           endedAtPoint:(NSPoint)screenPoint
+              operation:(NSDragOperation)operation {
     (void)session;
     (void)operation;
     if (self.draggingChildID.length == 0) {
         return;
     }
 
-    NSPoint windowPoint = [self.window convertRectFromScreen:NSMakeRect(screenPoint.x, screenPoint.y, 1, 1)].origin;
+    NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
     NSPoint panelPoint = [self.panelView convertPoint:windowPoint fromView:nil];
     BOOL outsidePanel = !NSPointInRect(panelPoint, self.panelView.bounds);
 
