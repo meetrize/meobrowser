@@ -106,10 +106,55 @@ SimpleBrowser/NewTab/
 
 **Launchpad 新标签页（NTP-0～NTP-3）验收通过**，满足设计文档第 11 节全部标准。
 
-延后项见 [new-tab-launchpad-development-plan.md](new-tab-launchpad-development-plan.md) NTP-4+（Favicon、文件夹、搜索等）。
+延后项见 [new-tab-launchpad-development-plan.md](new-tab-launchpad-development-plan.md) NTP-4+（Favicon、搜索等）。  
+文件夹已单独验收：见下方「Launchpad 文件夹」。
 
 本地验证：
 
 ```bash
 make run-browser
 ```
+
+---
+
+## Launchpad 文件夹验收（FLD-0～FLD-3 · 2026-07-14）
+
+> 对照 [new-tab-launchpad-folder-design.md §10](new-tab-launchpad-folder-design.md#10-分期与验收)  
+> 开发计划：[new-tab-launchpad-folder-development-plan.md](new-tab-launchpad-folder-development-plan.md)
+
+### 自动化检查
+
+| 检查项 | 命令 | 结果 |
+|--------|------|------|
+| 全量编译 | `make clean && make browser` | 通过，无 `-Wall -Wextra` 警告 |
+| Overlay 入链 | Makefile 含 `BrowserShortcutFolderOverlay.m` | 通过 |
+
+### FLD-1 / FLD-2 功能验收
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 拖合建夹 | 编辑态将 link A 拖到 B 中心悬停 ≥400ms | 通过 | `createFolderWithTitle:fromItem:droppingItem:` |
+| 拖入已有夹 | 拖 link 到 folder cell | 通过 | `moveItem:intoFolder:` |
+| 展开 / 关闭 | 单击文件夹；Esc / 点遮罩 | 通过 | `BrowserShortcutFolderOverlay` |
+| 夹内打开 | 单击 / 中键 | 通过 | overlay → dismiss → delegate |
+| 改名 | 点击标题 / 右键重命名 | 通过 | `SBTextField` + `renameFolderWithID:` |
+| 解散 / 删除 | 右键或 × 确认 | 通过 | `disbandFolderWithID:` / `removeFolderWithID:deleteChildren:` |
+| 拖出顶层 | 夹内拖到遮罩外；或右键「移出文件夹」 | 通过 | `moveItem:toTopLevelAtOrder:` |
+| 持久化迁移 | 旧 `shortcutItems` 数组 | 通过 | version 2 payload + orphan 修复 |
+| 地址栏补全 | 匹配夹内站点 | 通过 | `shortcutsMatchingQuery:` 跳过 folder |
+| 四宫格 / 动画 | 夹图标与展开 scale+fade | 通过 | Cell folder tiles + overlay 动画 |
+
+### 实现目录（增量）
+
+```text
+SimpleBrowser/NewTab/
+├── BrowserShortcutFolderOverlay.h/.m   # 新增
+├── BrowserShortcutItem.*               # kind / folderID
+├── BrowserShortcutStore.*              # version 2 + 文件夹 API
+├── BrowserShortcutCellView.*           # 四宫格 / 合并环
+└── BrowserLaunchpadView.*              # topLevel + merge drop
+```
+
+### 结论
+
+**Launchpad 文件夹（FLD-0～FLD-3）验收通过**，满足设计文档 §10 标准。

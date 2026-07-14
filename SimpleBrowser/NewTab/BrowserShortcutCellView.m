@@ -1,15 +1,21 @@
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserLaunchpadAppearance.h"
+#import "BrowserLaunchpadView.h"
 #import <QuartzCore/QuartzCore.h>
+
+@interface BrowserLaunchpadView (CellDragSupport)
+@property (nonatomic, readonly, getter=isDraggingShortcut) BOOL draggingShortcut;
+- (BOOL)launchpadBeginDraggingShortcut:(BrowserShortcutItem *)shortcut
+                              fromView:(NSView *)view
+                                 event:(NSEvent *)event;
+@end
 
 static const CGFloat kIconShadowBlur = 6.0;
 static const CGFloat kIconShadowOffsetY = -2.0;
 static const CGFloat kIconShadowAlpha = 0.22;
 static const CGFloat kHoverScale = 1.05;
 static const NSTimeInterval kHoverAnimationDuration = 0.15;
-static const NSTimeInterval kLongPressDuration = 0.5;
-static NSString * const kWiggleAnimationKey = @"launchpadWiggle";
 
 static NSColor *ColorFromURLString(NSString *urlString) {
     NSUInteger hash = urlString.hash;
@@ -163,24 +169,116 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 @end
 
+@interface BrowserShortcutFolderTileView : NSView
+@property (nonatomic, strong) BrowserShortcutIconBackdropView *backdropView;
+@property (nonatomic, strong) NSImageView *imageView;
+@property (nonatomic, strong) NSTextField *letterLabel;
+@property (nonatomic, assign) NSUInteger loadToken;
+@end
+
+@implementation BrowserShortcutFolderTileView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.wantsLayer = YES;
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+
+        _backdropView = [[BrowserShortcutIconBackdropView alloc] initWithFrame:NSZeroRect];
+        _backdropView.translatesAutoresizingMaskIntoConstraints = NO;
+        _backdropView.shadowInset = 0;
+        _backdropView.cornerRadius = 4;
+        [self addSubview:_backdropView];
+
+        _imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _imageView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _imageView.wantsLayer = YES;
+        _imageView.layer.masksToBounds = YES;
+        _imageView.layer.cornerRadius = 4;
+        _imageView.translatesAutoresizingMaskIntoConstraints = NO;
+        _imageView.hidden = YES;
+        [self addSubview:_imageView];
+
+        _letterLabel = [NSTextField labelWithString:@""];
+        _letterLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        _letterLabel.textColor = NSColor.whiteColor;
+        _letterLabel.alignment = NSTextAlignmentCenter;
+        _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:_letterLabel];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [_backdropView.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [_backdropView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [_backdropView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            [_backdropView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [_imageView.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [_imageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [_imageView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+            [_imageView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [_letterLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [_letterLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+        ]];
+    }
+    return self;
+}
+
+- (void)configureWithShortcut:(nullable BrowserShortcutItem *)shortcut {
+    self.loadToken += 1;
+    NSUInteger token = self.loadToken;
+    if (!shortcut) {
+        self.hidden = YES;
+        self.imageView.image = nil;
+        self.letterLabel.stringValue = @"";
+        return;
+    }
+
+    self.hidden = NO;
+    self.imageView.hidden = YES;
+    self.letterLabel.hidden = NO;
+    self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
+    self.backdropView.fillColor = ColorFromURLString(shortcut.urlString);
+
+    if (shortcut.iconURLString.length == 0) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [[BrowserShortcutIconLoader sharedLoader] loadImageForURLString:shortcut.iconURLString
+                                                          completion:^(NSImage *image) {
+        BrowserShortcutFolderTileView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.loadToken != token || !image) {
+            return;
+        }
+        strongSelf.imageView.image = image;
+        strongSelf.imageView.hidden = NO;
+        strongSelf.letterLabel.hidden = YES;
+        strongSelf.backdropView.fillColor = NSColor.whiteColor;
+    }];
+}
+
+@end
+
+
 @interface BrowserShortcutCellContentView : NSView
 @property (nonatomic, strong) NSView *iconAnimContainer;
 @property (nonatomic, strong) BrowserShortcutIconBackdropView *iconBackdropView;
 @property (nonatomic, strong) NSImageView *iconImageView;
 @property (nonatomic, strong) NSTextField *letterLabel;
+@property (nonatomic, strong) NSView *folderGridView;
+@property (nonatomic, strong) NSArray<BrowserShortcutFolderTileView *> *folderTiles;
+@property (nonatomic, strong) NSView *mergeRingView;
 @property (nonatomic, strong) NSTextField *titleLabel;
-@property (nonatomic, strong) NSButton *deleteButton;
 @property (nonatomic, copy, nullable) BrowserShortcutCellActivateHandler onActivate;
-@property (nonatomic, copy, nullable) BrowserShortcutCellActionHandler onDelete;
 @property (nonatomic, copy, nullable) dispatch_block_t onAddTapped;
-@property (nonatomic, copy, nullable) dispatch_block_t onRequestEditMode;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *shortcut;
-@property (nonatomic, assign, getter=isEditingMode) BOOL editingMode;
+@property (nonatomic, copy) NSArray<BrowserShortcutItem *> *folderChildren;
 @property (nonatomic, assign, getter=isAddCell) BOOL addCell;
+@property (nonatomic, assign, getter=isMergeHighlighted) BOOL mergeHighlighted;
 @property (nonatomic, assign) BOOL trackingHover;
-@property (nonatomic, strong, nullable) NSTimer *longPressTimer;
-@property (nonatomic, assign) BOOL longPressTriggered;
 @property (nonatomic, assign) NSUInteger iconLoadToken;
+@property (nonatomic, assign) NSPoint mouseDownLocation;
+@property (nonatomic, strong, nullable) NSEvent *mouseDownEvent;
+@property (nonatomic, assign) BOOL didStartDrag;
 @property (nonatomic, assign) CGFloat iconSize;
 @property (nonatomic, strong) NSLayoutConstraint *cellWidthConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *cellHeightConstraint;
@@ -188,8 +286,6 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, strong) NSLayoutConstraint *iconContainerHeightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *iconWidthConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *iconHeightConstraint;
-@property (nonatomic, strong) NSLayoutConstraint *deleteTopConstraint;
-@property (nonatomic, strong) NSLayoutConstraint *deleteLeadingConstraint;
 @end
 
 @implementation BrowserShortcutCellContentView
@@ -202,6 +298,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         self.clipsToBounds = NO;
         self.canDrawSubviewsIntoLayer = NO;
         _iconSize = [BrowserLaunchpadAppearance defaultIconSize];
+        _folderChildren = @[];
 
         _iconAnimContainer = [[NSView alloc] initWithFrame:NSZeroRect];
         _iconAnimContainer.wantsLayer = YES;
@@ -230,6 +327,27 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [_iconAnimContainer addSubview:_letterLabel];
 
+        _folderGridView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _folderGridView.translatesAutoresizingMaskIntoConstraints = NO;
+        _folderGridView.hidden = YES;
+        [_iconAnimContainer addSubview:_folderGridView];
+
+        NSMutableArray<BrowserShortcutFolderTileView *> *tiles = [[NSMutableArray alloc] initWithCapacity:4];
+        for (NSInteger i = 0; i < 4; i++) {
+            BrowserShortcutFolderTileView *tile = [[BrowserShortcutFolderTileView alloc] initWithFrame:NSZeroRect];
+            [_folderGridView addSubview:tile];
+            [tiles addObject:tile];
+        }
+        _folderTiles = [tiles copy];
+
+        _mergeRingView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _mergeRingView.wantsLayer = YES;
+        _mergeRingView.layer.borderWidth = 2.5;
+        _mergeRingView.layer.borderColor = NSColor.controlAccentColor.CGColor;
+        _mergeRingView.hidden = YES;
+        _mergeRingView.translatesAutoresizingMaskIntoConstraints = NO;
+        [_iconAnimContainer addSubview:_mergeRingView];
+
         _titleLabel = [NSTextField labelWithString:@""];
         _titleLabel.font = [NSFont systemFontOfSize:13];
         _titleLabel.textColor = [NSColor labelColor];
@@ -239,13 +357,6 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_titleLabel];
 
-        _deleteButton = [NSButton buttonWithTitle:@"×" target:self action:@selector(onDelete:)];
-        _deleteButton.bezelStyle = NSBezelStyleInline;
-        _deleteButton.font = [NSFont systemFontOfSize:14 weight:NSFontWeightBold];
-        _deleteButton.hidden = YES;
-        _deleteButton.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:_deleteButton];
-
         CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:_iconSize];
         CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:_iconSize];
         CGFloat shadowInset = [BrowserLaunchpadAppearance iconShadowInsetForIconSize:_iconSize];
@@ -254,6 +365,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconImageView.layer.cornerRadius = cornerRadius;
         _iconBackdropView.cornerRadius = cornerRadius;
         _iconBackdropView.shadowInset = shadowInset;
+        _mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
 
         _cellWidthConstraint = [self.widthAnchor constraintEqualToConstant:cellWidth];
         _cellHeightConstraint = [self.heightAnchor constraintEqualToConstant:cellHeight];
@@ -261,42 +373,56 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconContainerHeightConstraint = [_iconAnimContainer.heightAnchor constraintEqualToConstant:iconContainerSize];
         _iconWidthConstraint = [_iconImageView.widthAnchor constraintEqualToConstant:_iconSize];
         _iconHeightConstraint = [_iconImageView.heightAnchor constraintEqualToConstant:_iconSize];
-        _deleteTopConstraint = [_deleteButton.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor
-                                                                      constant:shadowInset - 4];
-        _deleteLeadingConstraint = [_deleteButton.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor
-                                                                               constant:shadowInset - 4];
+
+        BrowserShortcutFolderTileView *tile0 = _folderTiles[0];
+        BrowserShortcutFolderTileView *tile1 = _folderTiles[1];
+        BrowserShortcutFolderTileView *tile2 = _folderTiles[2];
+        BrowserShortcutFolderTileView *tile3 = _folderTiles[3];
 
         [NSLayoutConstraint activateConstraints:@[
             _cellWidthConstraint,
             _cellHeightConstraint,
-
             _iconContainerWidthConstraint,
             _iconContainerHeightConstraint,
-            // 阴影可画出 cell 左右边界，使「左右间距」直接作用在可视图标之间。
             [_iconAnimContainer.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_iconAnimContainer.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-
             [_iconBackdropView.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor],
             [_iconBackdropView.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor],
             [_iconBackdropView.trailingAnchor constraintEqualToAnchor:_iconAnimContainer.trailingAnchor],
             [_iconBackdropView.bottomAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor],
-
             _iconWidthConstraint,
             _iconHeightConstraint,
             [_iconImageView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
             [_iconImageView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
-
             [_letterLabel.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
             [_letterLabel.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
-
+            [_folderGridView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
+            [_folderGridView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
+            [_folderGridView.widthAnchor constraintEqualToAnchor:_iconImageView.widthAnchor multiplier:0.86],
+            [_folderGridView.heightAnchor constraintEqualToAnchor:_iconImageView.heightAnchor multiplier:0.86],
+            [tile0.topAnchor constraintEqualToAnchor:_folderGridView.topAnchor],
+            [tile0.leadingAnchor constraintEqualToAnchor:_folderGridView.leadingAnchor],
+            [tile0.widthAnchor constraintEqualToAnchor:_folderGridView.widthAnchor multiplier:0.46],
+            [tile0.heightAnchor constraintEqualToAnchor:_folderGridView.heightAnchor multiplier:0.46],
+            [tile1.topAnchor constraintEqualToAnchor:_folderGridView.topAnchor],
+            [tile1.trailingAnchor constraintEqualToAnchor:_folderGridView.trailingAnchor],
+            [tile1.widthAnchor constraintEqualToAnchor:tile0.widthAnchor],
+            [tile1.heightAnchor constraintEqualToAnchor:tile0.heightAnchor],
+            [tile2.bottomAnchor constraintEqualToAnchor:_folderGridView.bottomAnchor],
+            [tile2.leadingAnchor constraintEqualToAnchor:_folderGridView.leadingAnchor],
+            [tile2.widthAnchor constraintEqualToAnchor:tile0.widthAnchor],
+            [tile2.heightAnchor constraintEqualToAnchor:tile0.heightAnchor],
+            [tile3.bottomAnchor constraintEqualToAnchor:_folderGridView.bottomAnchor],
+            [tile3.trailingAnchor constraintEqualToAnchor:_folderGridView.trailingAnchor],
+            [tile3.widthAnchor constraintEqualToAnchor:tile0.widthAnchor],
+            [tile3.heightAnchor constraintEqualToAnchor:tile0.heightAnchor],
+            [_mergeRingView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
+            [_mergeRingView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
+            [_mergeRingView.widthAnchor constraintEqualToAnchor:_iconImageView.widthAnchor constant:8],
+            [_mergeRingView.heightAnchor constraintEqualToAnchor:_iconImageView.heightAnchor constant:8],
             [_titleLabel.topAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor constant:2],
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:2],
             [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2],
-
-            _deleteTopConstraint,
-            _deleteLeadingConstraint,
-            [_deleteButton.widthAnchor constraintEqualToConstant:18],
-            [_deleteButton.heightAnchor constraintEqualToConstant:18],
         ]];
     }
     return self;
@@ -320,11 +446,10 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.iconContainerHeightConstraint.constant = iconContainerSize;
     self.iconWidthConstraint.constant = iconSize;
     self.iconHeightConstraint.constant = iconSize;
-    self.deleteTopConstraint.constant = shadowInset - 4;
-    self.deleteLeadingConstraint.constant = shadowInset - 4;
     self.iconImageView.layer.cornerRadius = cornerRadius;
     self.iconBackdropView.cornerRadius = cornerRadius;
     self.iconBackdropView.shadowInset = shadowInset;
+    self.mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
     self.letterLabel.font = [NSFont systemFontOfSize:letterFontSize weight:NSFontWeightSemibold];
     [self setNeedsLayout:YES];
 }
@@ -366,86 +491,79 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.iconLoadToken += 1;
     NSUInteger token = self.iconLoadToken;
     [self applyLetterFallbackForShortcut:shortcut];
-
     if (shortcut.iconURLString.length == 0) {
         return;
     }
-
     __weak typeof(self) weakSelf = self;
     [[BrowserShortcutIconLoader sharedLoader] loadImageForURLString:shortcut.iconURLString
                                                           completion:^(NSImage *image) {
         BrowserShortcutCellContentView *strongSelf = weakSelf;
-        if (!strongSelf || strongSelf.iconLoadToken != token) {
+        if (!strongSelf || strongSelf.iconLoadToken != token || !image) {
             return;
         }
-        if (image) {
-            [strongSelf applyLoadedIconImage:image];
-        }
+        [strongSelf applyLoadedIconImage:image];
     }];
 }
 
-- (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
+- (void)configureWithShortcut:(BrowserShortcutItem *)shortcut
+                     children:(NSArray<BrowserShortcutItem *> *)children {
     self.addCell = NO;
     self.shortcut = shortcut;
+    self.folderChildren = children ?: @[];
     self.titleLabel.stringValue = shortcut.title;
     self.titleLabel.hidden = NO;
-    [self loadIconForShortcut:shortcut];
-    [self applyEditingChrome];
+    self.mergeHighlighted = NO;
+    if (shortcut.isFolder) {
+        [self configureAsFolderWithChildren:self.folderChildren];
+    } else {
+        self.folderGridView.hidden = YES;
+        [self loadIconForShortcut:shortcut];
+    }
+}
+
+- (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
+    [self configureWithShortcut:shortcut children:@[]];
+}
+
+- (void)configureAsFolderWithChildren:(NSArray<BrowserShortcutItem *> *)children {
+    self.iconLoadToken += 1;
+    self.iconImageView.image = nil;
+    self.iconImageView.hidden = YES;
+    self.letterLabel.hidden = YES;
+    self.folderGridView.hidden = NO;
+    [self updateIconFillColor:[NSColor.quaternaryLabelColor colorWithAlphaComponent:0.55]];
+    for (NSUInteger i = 0; i < self.folderTiles.count; i++) {
+        BrowserShortcutItem *child = (i < children.count) ? children[i] : nil;
+        [self.folderTiles[i] configureWithShortcut:child];
+    }
 }
 
 - (void)configureAsAddCell {
     self.addCell = YES;
     self.shortcut = nil;
+    self.folderChildren = @[];
     self.iconLoadToken += 1;
     self.iconImageView.image = nil;
     self.iconImageView.hidden = YES;
+    self.folderGridView.hidden = YES;
+    self.mergeHighlighted = NO;
     self.letterLabel.stringValue = @"+";
     self.titleLabel.stringValue = @"添加";
     self.letterLabel.hidden = NO;
     self.titleLabel.hidden = NO;
     self.letterLabel.textColor = [NSColor secondaryLabelColor];
     [self updateIconFillColor:NSColor.quaternaryLabelColor];
-    [self applyEditingChrome];
 }
 
-- (void)setEditingMode:(BOOL)editingMode {
-    _editingMode = editingMode;
-    [self applyEditingChrome];
-}
-
-- (void)applyEditingChrome {
-    self.deleteButton.hidden = !(self.editingMode && !self.addCell);
-    if (self.editingMode) {
-        [self setHoverScale:1.0 animated:NO];
-        [self startWiggle];
-    } else {
-        [self stopWiggle];
+- (void)setMergeHighlighted:(BOOL)mergeHighlighted {
+    _mergeHighlighted = mergeHighlighted;
+    self.mergeRingView.hidden = !mergeHighlighted;
+    if (mergeHighlighted) {
+        self.mergeRingView.layer.borderColor = NSColor.controlAccentColor.CGColor;
     }
-}
-
-- (void)startWiggle {
-    if (self.addCell) {
-        return;
-    }
-    if ([self.iconAnimContainer.layer animationForKey:kWiggleAnimationKey]) {
-        return;
-    }
-    CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
-    animation.values = @[@(-0.03), @(0.03), @(-0.03)];
-    animation.duration = 0.16;
-    animation.repeatCount = HUGE_VALF;
-    animation.autoreverses = YES;
-    [self.iconAnimContainer.layer addAnimation:animation forKey:kWiggleAnimationKey];
-}
-
-- (void)stopWiggle {
-    [self.iconAnimContainer.layer removeAnimationForKey:kWiggleAnimationKey];
 }
 
 - (void)setHoverScale:(CGFloat)scale animated:(BOOL)animated {
-    if (self.editingMode) {
-        scale = 1.0;
-    }
     void (^apply)(void) = ^{
         self.layer.transform = CATransform3DMakeScale(scale, scale, 1.0);
     };
@@ -461,9 +579,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 - (void)mouseEntered:(NSEvent *)event {
     (void)event;
-    if (!self.editingMode) {
-        [self setHoverScale:kHoverScale animated:YES];
-    }
+    [self setHoverScale:kHoverScale animated:YES];
 }
 
 - (void)mouseExited:(NSEvent *)event {
@@ -471,80 +587,80 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     [self setHoverScale:1.0 animated:YES];
 }
 
-- (void)dealloc {
-    [self cancelLongPressTimer];
-}
-
-- (void)cancelLongPressTimer {
-    [self.longPressTimer invalidate];
-    self.longPressTimer = nil;
+- (nullable BrowserLaunchpadView *)enclosingLaunchpadView {
+    NSView *view = self.superview;
+    while (view) {
+        if ([view isKindOfClass:[BrowserLaunchpadView class]]) {
+            return (BrowserLaunchpadView *)view;
+        }
+        view = view.superview;
+    }
+    return nil;
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    if (self.editingMode || self.addCell || event.type != NSEventTypeLeftMouseDown) {
+    if (self.addCell) {
         [super mouseDown:event];
         return;
     }
-
-    self.longPressTriggered = NO;
-    [self cancelLongPressTimer];
-    __weak typeof(self) weakSelf = self;
-    self.longPressTimer = [NSTimer scheduledTimerWithTimeInterval:kLongPressDuration
-                                                          repeats:NO
-                                                            block:^(NSTimer *timer) {
-        (void)timer;
-        BrowserShortcutCellContentView *strongSelf = weakSelf;
-        if (!strongSelf || strongSelf.editingMode || strongSelf.addCell) {
-            return;
-        }
-        strongSelf.longPressTriggered = YES;
-        [strongSelf cancelLongPressTimer];
-        if (strongSelf.onRequestEditMode) {
-            strongSelf.onRequestEditMode();
-        }
-    }];
+    self.mouseDownLocation = event.locationInWindow;
+    self.mouseDownEvent = event;
+    self.didStartDrag = NO;
 }
 
 - (void)mouseDragged:(NSEvent *)event {
-    [self cancelLongPressTimer];
-    [super mouseDragged:event];
+    if (self.addCell || self.didStartDrag || !self.shortcut) {
+        return;
+    }
+    NSPoint loc = event.locationInWindow;
+    CGFloat dx = loc.x - self.mouseDownLocation.x;
+    CGFloat dy = loc.y - self.mouseDownLocation.y;
+    if ((dx * dx + dy * dy) < 16.0) {
+        return;
+    }
+    BrowserLaunchpadView *host = [self enclosingLaunchpadView];
+    NSEvent *dragEvent = self.mouseDownEvent ?: event;
+    if (host && [host launchpadBeginDraggingShortcut:self.shortcut fromView:self event:dragEvent]) {
+        self.didStartDrag = YES;
+    }
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    [self cancelLongPressTimer];
-    if (self.longPressTriggered) {
-        self.longPressTriggered = NO;
-        return;
-    }
-
-    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
-    if (!NSPointInRect(point, self.bounds)) {
-        return;
-    }
-
+    self.mouseDownEvent = nil;
     if (self.addCell) {
-        if (self.onAddTapped) {
+        NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+        if (NSPointInRect(point, self.bounds) && self.onAddTapped) {
             self.onAddTapped();
         }
         return;
     }
 
-    if (self.editingMode) {
+    if (self.didStartDrag) {
+        self.didStartDrag = NO;
         return;
     }
 
-    if (!self.shortcut || !self.onActivate) {
+    BrowserLaunchpadView *launchpad = [self enclosingLaunchpadView];
+    if (launchpad.isDraggingShortcut) {
+        return;
+    }
+
+    NSPoint up = event.locationInWindow;
+    CGFloat dx = up.x - self.mouseDownLocation.x;
+    CGFloat dy = up.y - self.mouseDownLocation.y;
+    BOOL wasClick = (dx * dx + dy * dy) < 16.0;
+    if (!wasClick || !self.shortcut || !self.onActivate) {
+        return;
+    }
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    if (!NSPointInRect(point, self.bounds)) {
+        return;
+    }
+    if (self.shortcut.isFolder && event.buttonNumber == 2) {
         return;
     }
     BOOL openInNewTab = (event.buttonNumber == 2);
     self.onActivate(self.shortcut, openInNewTab);
-}
-
-- (void)onDelete:(id)sender {
-    (void)sender;
-    if (self.shortcut && self.onDelete) {
-        self.onDelete(self.shortcut);
-    }
 }
 
 @end
@@ -554,6 +670,56 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @end
 
 @implementation BrowserShortcutCellView
+
++ (nullable NSView *)dragProxyViewFromContentView:(NSView *)contentView {
+    if (![contentView isKindOfClass:[BrowserShortcutCellContentView class]]) {
+        return nil;
+    }
+    return [(BrowserShortcutCellContentView *)contentView iconAnimContainer];
+}
+
++ (nullable NSImage *)draggingProxyImageFromContentView:(NSView *)contentView
+                                                  alpha:(CGFloat)alpha {
+    NSView *proxy = [self dragProxyViewFromContentView:contentView];
+    if (!proxy) {
+        return nil;
+    }
+    NSRect bounds = proxy.bounds;
+    if (bounds.size.width < 1.0 || bounds.size.height < 1.0) {
+        return nil;
+    }
+    NSBitmapImageRep *rep = [proxy bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!rep) {
+        return nil;
+    }
+    [proxy cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    NSImage *opaque = [[NSImage alloc] initWithSize:bounds.size];
+    [opaque addRepresentation:rep];
+
+    CGFloat clamped = MAX(0.15, MIN(alpha, 1.0));
+    if (clamped >= 0.999) {
+        return opaque;
+    }
+    NSImage *ghost = [[NSImage alloc] initWithSize:bounds.size];
+    [ghost lockFocus];
+    [opaque drawInRect:NSMakeRect(0, 0, bounds.size.width, bounds.size.height)
+              fromRect:NSZeroRect
+             operation:NSCompositingOperationSourceOver
+              fraction:clamped
+        respectFlipped:YES
+                 hints:nil];
+    [ghost unlockFocus];
+    return ghost;
+}
+
++ (NSRect)draggingProxyFrameFromContentView:(NSView *)contentView
+                                     inView:(NSView *)targetView {
+    NSView *proxy = [self dragProxyViewFromContentView:contentView];
+    if (!proxy || !targetView) {
+        return NSZeroRect;
+    }
+    return [proxy convertRect:proxy.bounds toView:targetView];
+}
 
 - (void)loadView {
     CGFloat iconSize = [BrowserLaunchpadAppearance current].iconSize;
@@ -566,15 +732,18 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 }
 
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
-    self.addCell = NO;
+    [self configureWithShortcut:shortcut children:@[]];
+}
+
+- (void)configureWithShortcut:(BrowserShortcutItem *)shortcut
+                     children:(NSArray<BrowserShortcutItem *> *)children {
     self.shortcut = shortcut;
     [self.shortcutContentView applyIconSize:[BrowserLaunchpadAppearance current].iconSize];
-    [self.shortcutContentView configureWithShortcut:shortcut];
+    [self.shortcutContentView configureWithShortcut:shortcut children:children];
     [self bindHandlers];
 }
 
 - (void)configureAsAddCell {
-    self.addCell = YES;
     self.shortcut = nil;
     [self.shortcutContentView applyIconSize:[BrowserLaunchpadAppearance current].iconSize];
     [self.shortcutContentView configureAsAddCell];
@@ -585,9 +754,9 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     [self.shortcutContentView applyIconSize:iconSize];
 }
 
-- (void)setEditingMode:(BOOL)editingMode {
-    _editingMode = editingMode;
-    self.shortcutContentView.editingMode = editingMode;
+- (void)setMergeHighlighted:(BOOL)mergeHighlighted {
+    _mergeHighlighted = mergeHighlighted;
+    self.shortcutContentView.mergeHighlighted = mergeHighlighted;
 }
 
 - (void)bindHandlers {
@@ -597,19 +766,9 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             weakSelf.onActivate(item, openInNewTab);
         }
     };
-    self.shortcutContentView.onDelete = ^(BrowserShortcutItem *item) {
-        if (weakSelf.onDelete) {
-            weakSelf.onDelete(item);
-        }
-    };
     self.shortcutContentView.onAddTapped = ^{
         if (weakSelf.onAddTapped) {
             weakSelf.onAddTapped();
-        }
-    };
-    self.shortcutContentView.onRequestEditMode = ^{
-        if (weakSelf.onRequestEditMode) {
-            weakSelf.onRequestEditMode();
         }
     };
 }
@@ -619,18 +778,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     [self bindHandlers];
 }
 
-- (void)setOnDelete:(BrowserShortcutCellActionHandler)onDelete {
-    _onDelete = [onDelete copy];
-    [self bindHandlers];
-}
-
 - (void)setOnAddTapped:(dispatch_block_t)onAddTapped {
     _onAddTapped = [onAddTapped copy];
-    [self bindHandlers];
-}
-
-- (void)setOnRequestEditMode:(dispatch_block_t)onRequestEditMode {
-    _onRequestEditMode = [onRequestEditMode copy];
     [self bindHandlers];
 }
 

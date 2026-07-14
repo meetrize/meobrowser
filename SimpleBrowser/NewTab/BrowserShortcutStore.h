@@ -12,6 +12,12 @@ extern NSString * const BrowserShortcutAddItemID;
 + (NSArray<BrowserShortcutItem *> *)loadShortcuts;
 + (void)saveShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts;
 
++ (NSArray<BrowserShortcutItem *> *)topLevelShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts;
++ (NSArray<BrowserShortcutItem *> *)childrenOfFolderID:(NSString *)folderID
+                                           inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts;
++ (nullable BrowserShortcutItem *)shortcutWithID:(NSString *)itemID
+                                     inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts;
+
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
                                 iconURLString:(NSString *)iconURLString
@@ -25,6 +31,33 @@ extern NSString * const BrowserShortcutAddItemID;
 
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (nullable BrowserShortcutItem *)createFolderWithTitle:(NSString *)title
+                                              fromItem:(BrowserShortcutItem *)targetItem
+                                          droppingItem:(BrowserShortcutItem *)droppingItem
+                                           inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (BOOL)moveItem:(BrowserShortcutItem *)item
+      intoFolder:(BrowserShortcutItem *)folder
+     inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (BOOL)moveItem:(BrowserShortcutItem *)item
+toTopLevelAtOrder:(NSInteger)order
+     inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (void)renameFolderWithID:(NSString *)folderID
+                     title:(NSString *)title
+               inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (void)disbandFolderWithID:(NSString *)folderID
+                inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (void)removeFolderWithID:(NSString *)folderID
+            deleteChildren:(BOOL)deleteChildren
+               inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
+
++ (void)reorderTopLevelItems:(NSArray<BrowserShortcutItem *> *)orderedTopLevel
+                 inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 + (nullable NSString *)normalizedURLStringFromInput:(NSString *)input;
 + (nullable BrowserShortcutItem *)shortcutItemMatchingURLString:(NSString *)urlString

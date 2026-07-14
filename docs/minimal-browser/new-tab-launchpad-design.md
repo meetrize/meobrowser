@@ -14,7 +14,7 @@
 |------|------|------|
 | **NTP-1** | MVP | 原生网格 + 默认快捷方式 + 单击/中键打开 |
 | **NTP-2** | 可定制 | 增删改、拖拽排序、分页、持久化 |
-| NTP-3 | 打磨 | Favicon 缓存、文件夹、Launchpad 内搜索、最常访问 |
+| NTP-3 | 打磨 | Favicon 缓存、Launchpad 内搜索、最常访问（文件夹见 [folder 方案](new-tab-launchpad-folder-design.md)） |
 
 **本方案首版交付目标：NTP-1 + NTP-2。**
 
@@ -214,10 +214,12 @@ SimpleBrowser/
 编辑快捷方式…
 ```
 
-### 6.4 文件夹（NTP-3，可选）
+### 6.4 文件夹（NTP-4+ / FLD）
 
-- 多个快捷方式拖到一起 → 合并为文件夹
-- 点击文件夹 → 放大展开子网格，`Esc` 返回
+简要目标：多个快捷方式拖合为文件夹；点击放大展开子网格，`Esc` 返回。
+
+**完整交互、数据模型与验收**见独立方案：  
+[new-tab-launchpad-folder-design.md](new-tab-launchpad-folder-design.md)（FLD-1 + FLD-2）。
 
 ---
 

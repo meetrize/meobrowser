@@ -2,11 +2,18 @@
 #import "BrowserShortcutItem.h"
 
 static NSString * const kShortcutItemsKey = @"shortcutItems";
+static NSString * const kShortcutPayloadVersionKey = @"version";
+static NSString * const kShortcutPayloadItemsKey = @"shortcuts";
 static NSString * const kShortcutItemIDKey = @"id";
 static NSString * const kShortcutTitleKey = @"title";
 static NSString * const kShortcutURLKey = @"url";
 static NSString * const kShortcutIconURLKey = @"iconURL";
 static NSString * const kShortcutOrderKey = @"order";
+static NSString * const kShortcutKindKey = @"kind";
+static NSString * const kShortcutFolderIDKey = @"folderID";
+static NSString * const kShortcutKindLinkValue = @"link";
+static NSString * const kShortcutKindFolderValue = @"folder";
+static const NSInteger kShortcutPayloadVersion = 2;
 
 NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 
@@ -26,22 +33,42 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 }
 
 + (NSArray<BrowserShortcutItem *> *)loadShortcuts {
-    NSArray *stored = [[NSUserDefaults standardUserDefaults] arrayForKey:kShortcutItemsKey];
-    if (![stored isKindOfClass:[NSArray class]] || stored.count == 0) {
+    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:kShortcutItemsKey];
+    NSArray *rawItems = nil;
+    BOOL needsRewrite = NO;
+
+    if ([stored isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *payload = (NSDictionary *)stored;
+        id versionValue = payload[kShortcutPayloadVersionKey];
+        NSInteger version = [versionValue respondsToSelector:@selector(integerValue)] ? [versionValue integerValue] : 0;
+        if (version < kShortcutPayloadVersion) {
+            needsRewrite = YES;
+        }
+        id shortcutsValue = payload[kShortcutPayloadItemsKey];
+        if ([shortcutsValue isKindOfClass:[NSArray class]]) {
+            rawItems = shortcutsValue;
+        }
+    } else if ([stored isKindOfClass:[NSArray class]]) {
+        rawItems = stored;
+        needsRewrite = YES;
+    }
+
+    if (![rawItems isKindOfClass:[NSArray class]] || rawItems.count == 0) {
         NSArray<BrowserShortcutItem *> *defaults = [self defaultShortcuts];
         [self saveShortcuts:defaults];
         return defaults;
     }
 
-    NSMutableArray<BrowserShortcutItem *> *items = [[NSMutableArray alloc] initWithCapacity:stored.count];
-    for (id entry in stored) {
+    NSMutableArray<BrowserShortcutItem *> *items = [[NSMutableArray alloc] initWithCapacity:rawItems.count];
+    for (id entry in rawItems) {
         if (![entry isKindOfClass:[NSDictionary class]]) {
             continue;
         }
         BrowserShortcutItem *item = [self itemFromDictionary:(NSDictionary *)entry];
-        if (item.title.length > 0 && item.urlString.length > 0) {
-            [items addObject:item];
+        if (![self isValidPersistedItem:item]) {
+            continue;
         }
+        [items addObject:item];
     }
 
     if (items.count == 0) {
@@ -50,33 +77,95 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
         return defaults;
     }
 
-    [items sortUsingComparator:^NSComparisonResult(BrowserShortcutItem *a, BrowserShortcutItem *b) {
+    [self repairInvariantsInShortcuts:items];
+    [self normalizeSortOrdersInShortcuts:items];
+    if (needsRewrite) {
+        [self saveShortcuts:items];
+    }
+    return items;
+}
+
++ (void)saveShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
+    NSMutableArray<BrowserShortcutItem *> *mutableCopy = [shortcuts mutableCopy];
+    [self repairInvariantsInShortcuts:mutableCopy];
+    [self normalizeSortOrdersInShortcuts:mutableCopy];
+
+    NSMutableArray<NSDictionary *> *payloadItems = [[NSMutableArray alloc] initWithCapacity:mutableCopy.count];
+    for (BrowserShortcutItem *item in mutableCopy) {
+        [payloadItems addObject:[self dictionaryFromItem:item]];
+    }
+
+    NSDictionary *payload = @{
+        kShortcutPayloadVersionKey: @(kShortcutPayloadVersion),
+        kShortcutPayloadItemsKey: payloadItems,
+    };
+    [[NSUserDefaults standardUserDefaults] setObject:payload forKey:kShortcutItemsKey];
+
+    if (shortcuts != mutableCopy && [shortcuts isKindOfClass:[NSMutableArray class]]) {
+        NSMutableArray *mutable = (NSMutableArray *)shortcuts;
+        [mutable setArray:mutableCopy];
+    }
+}
+
++ (NSArray<BrowserShortcutItem *> *)topLevelShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
+    NSMutableArray<BrowserShortcutItem *> *topLevel = [[NSMutableArray alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isTopLevel) {
+            [topLevel addObject:item];
+        }
+    }
+    [topLevel sortUsingComparator:^NSComparisonResult(BrowserShortcutItem *a, BrowserShortcutItem *b) {
         if (a.sortOrder == b.sortOrder) {
             return [a.title compare:b.title];
         }
         return a.sortOrder < b.sortOrder ? NSOrderedAscending : NSOrderedDescending;
     }];
-    return items;
+    return topLevel;
 }
 
-+ (void)saveShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
-    NSMutableArray<NSDictionary *> *payload = [[NSMutableArray alloc] initWithCapacity:shortcuts.count];
-    for (NSUInteger i = 0; i < shortcuts.count; i++) {
-        BrowserShortcutItem *item = shortcuts[i];
-        item.sortOrder = (NSInteger)i;
-        [payload addObject:[self dictionaryFromItem:item]];
++ (NSArray<BrowserShortcutItem *> *)childrenOfFolderID:(NSString *)folderID
+                                           inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
+    if (folderID.length == 0) {
+        return @[];
     }
-    [[NSUserDefaults standardUserDefaults] setObject:payload forKey:kShortcutItemsKey];
+    NSMutableArray<BrowserShortcutItem *> *children = [[NSMutableArray alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (!item.isFolder && [item.folderID isEqualToString:folderID]) {
+            [children addObject:item];
+        }
+    }
+    [children sortUsingComparator:^NSComparisonResult(BrowserShortcutItem *a, BrowserShortcutItem *b) {
+        if (a.sortOrder == b.sortOrder) {
+            return [a.title compare:b.title];
+        }
+        return a.sortOrder < b.sortOrder ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    return children;
+}
+
++ (nullable BrowserShortcutItem *)shortcutWithID:(NSString *)itemID
+                                     inShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
+    if (itemID.length == 0) {
+        return nil;
+    }
+    for (BrowserShortcutItem *item in shortcuts) {
+        if ([item.itemID isEqualToString:itemID]) {
+            return item;
+        }
+    }
+    return nil;
 }
 
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
                                 iconURLString:(NSString *)iconURLString
                                   toShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    NSArray<BrowserShortcutItem *> *topLevel = [self topLevelShortcuts:shortcuts];
+    NSInteger order = (NSInteger)topLevel.count;
     BrowserShortcutItem *item = [BrowserShortcutItem itemWithTitle:title
                                                          urlString:urlString
                                                       iconURLString:iconURLString
-                                                         sortOrder:(NSInteger)shortcuts.count];
+                                                         sortOrder:order];
     [shortcuts addObject:item];
     [self saveShortcuts:shortcuts];
     return item;
@@ -88,7 +177,7 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
                iconURLString:(NSString *)iconURLString
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     for (BrowserShortcutItem *item in shortcuts) {
-        if ([item.itemID isEqualToString:itemID]) {
+        if ([item.itemID isEqualToString:itemID] && !item.isFolder) {
             item.title = [title copy];
             item.urlString = [urlString copy];
             item.iconURLString = [iconURLString copy];
@@ -100,18 +189,166 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 
 + (void)removeShortcutWithID:(NSString *)itemID
                  fromShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
-    NSUInteger index = NSNotFound;
-    for (NSUInteger i = 0; i < shortcuts.count; i++) {
-        if ([shortcuts[i].itemID isEqualToString:itemID]) {
-            index = i;
-            break;
-        }
-    }
-    if (index == NSNotFound) {
+    BrowserShortcutItem *item = [self shortcutWithID:itemID inShortcuts:shortcuts];
+    if (!item) {
         return;
     }
-    [shortcuts removeObjectAtIndex:index];
+    if (item.isFolder) {
+        [self disbandFolderWithID:itemID inShortcuts:shortcuts];
+        return;
+    }
+
+    NSString *parentFolderID = item.folderID;
+    [shortcuts removeObject:item];
+    if (parentFolderID.length > 0) {
+        [self removeEmptyFolderWithID:parentFolderID inShortcuts:shortcuts];
+    }
     [self saveShortcuts:shortcuts];
+}
+
++ (nullable BrowserShortcutItem *)createFolderWithTitle:(NSString *)title
+                                              fromItem:(BrowserShortcutItem *)targetItem
+                                          droppingItem:(BrowserShortcutItem *)droppingItem
+                                           inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    if (!targetItem || !droppingItem || targetItem == droppingItem) {
+        return nil;
+    }
+    if (targetItem.isFolder || droppingItem.isFolder) {
+        return nil;
+    }
+    if (!targetItem.isTopLevel || !droppingItem.isTopLevel) {
+        return nil;
+    }
+    if (![shortcuts containsObject:targetItem] || ![shortcuts containsObject:droppingItem]) {
+        return nil;
+    }
+
+    NSString *folderTitle = title.length > 0 ? title : @"文件夹";
+    BrowserShortcutItem *folder = [BrowserShortcutItem folderWithTitle:folderTitle sortOrder:targetItem.sortOrder];
+    NSInteger insertIndex = [shortcuts indexOfObject:targetItem];
+    if (insertIndex == NSNotFound) {
+        return nil;
+    }
+
+    targetItem.folderID = folder.itemID;
+    targetItem.sortOrder = 0;
+    droppingItem.folderID = folder.itemID;
+    droppingItem.sortOrder = 1;
+
+    [shortcuts insertObject:folder atIndex:insertIndex];
+    [self saveShortcuts:shortcuts];
+    return folder;
+}
+
++ (BOOL)moveItem:(BrowserShortcutItem *)item
+      intoFolder:(BrowserShortcutItem *)folder
+     inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    if (!item || !folder || item.isFolder || !folder.isFolder) {
+        return NO;
+    }
+    if (![shortcuts containsObject:item] || ![shortcuts containsObject:folder]) {
+        return NO;
+    }
+    if ([item.folderID isEqualToString:folder.itemID]) {
+        return YES;
+    }
+
+    NSString *previousFolderID = item.folderID;
+    NSArray<BrowserShortcutItem *> *children = [self childrenOfFolderID:folder.itemID inShortcuts:shortcuts];
+    item.folderID = folder.itemID;
+    item.sortOrder = (NSInteger)children.count;
+    if (previousFolderID.length > 0) {
+        [self removeEmptyFolderWithID:previousFolderID inShortcuts:shortcuts];
+    }
+    [self saveShortcuts:shortcuts];
+    return YES;
+}
+
++ (BOOL)moveItem:(BrowserShortcutItem *)item
+toTopLevelAtOrder:(NSInteger)order
+     inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    if (!item || item.isFolder || ![shortcuts containsObject:item]) {
+        return NO;
+    }
+
+    NSString *previousFolderID = item.folderID;
+    item.folderID = @"";
+
+    NSMutableArray<BrowserShortcutItem *> *topLevel = [[self topLevelShortcuts:shortcuts] mutableCopy];
+    [topLevel removeObject:item];
+    NSInteger clamped = MAX(0, MIN(order, (NSInteger)topLevel.count));
+    [topLevel insertObject:item atIndex:(NSUInteger)clamped];
+    [self reorderTopLevelItems:topLevel inShortcuts:shortcuts save:NO];
+
+    if (previousFolderID.length > 0) {
+        [self removeEmptyFolderWithID:previousFolderID inShortcuts:shortcuts];
+    }
+    [self saveShortcuts:shortcuts];
+    return YES;
+}
+
++ (void)renameFolderWithID:(NSString *)folderID
+                     title:(NSString *)title
+               inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    BrowserShortcutItem *folder = [self shortcutWithID:folderID inShortcuts:shortcuts];
+    if (!folder || !folder.isFolder) {
+        return;
+    }
+    NSString *trimmed = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return;
+    }
+    folder.title = trimmed;
+    [self saveShortcuts:shortcuts];
+}
+
++ (void)disbandFolderWithID:(NSString *)folderID
+                inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    BrowserShortcutItem *folder = [self shortcutWithID:folderID inShortcuts:shortcuts];
+    if (!folder || !folder.isFolder) {
+        return;
+    }
+
+    NSArray<BrowserShortcutItem *> *children = [self childrenOfFolderID:folderID inShortcuts:shortcuts];
+    NSMutableArray<BrowserShortcutItem *> *topLevel = [[self topLevelShortcuts:shortcuts] mutableCopy];
+    NSUInteger folderIndex = [topLevel indexOfObject:folder];
+    if (folderIndex == NSNotFound) {
+        folderIndex = topLevel.count;
+    }
+    [topLevel removeObject:folder];
+    for (NSInteger i = (NSInteger)children.count - 1; i >= 0; i--) {
+        BrowserShortcutItem *child = children[(NSUInteger)i];
+        child.folderID = @"";
+        [topLevel insertObject:child atIndex:folderIndex];
+    }
+    [shortcuts removeObject:folder];
+    [self reorderTopLevelItems:topLevel inShortcuts:shortcuts save:NO];
+    [self saveShortcuts:shortcuts];
+}
+
++ (void)removeFolderWithID:(NSString *)folderID
+            deleteChildren:(BOOL)deleteChildren
+               inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    if (!deleteChildren) {
+        [self disbandFolderWithID:folderID inShortcuts:shortcuts];
+        return;
+    }
+
+    BrowserShortcutItem *folder = [self shortcutWithID:folderID inShortcuts:shortcuts];
+    if (!folder || !folder.isFolder) {
+        return;
+    }
+    NSArray<BrowserShortcutItem *> *children = [self childrenOfFolderID:folderID inShortcuts:shortcuts];
+    for (BrowserShortcutItem *child in children) {
+        [shortcuts removeObject:child];
+    }
+    [shortcuts removeObject:folder];
+    [self saveShortcuts:shortcuts];
+}
+
++ (void)reorderTopLevelItems:(NSArray<BrowserShortcutItem *> *)orderedTopLevel
+                 inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    [self reorderTopLevelItems:orderedTopLevel inShortcuts:shortcuts save:YES];
 }
 
 + (nullable NSString *)normalizedURLStringFromInput:(NSString *)input {
@@ -129,6 +366,9 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
         return nil;
     }
     for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isFolder) {
+            continue;
+        }
         NSString *candidate = [self normalizedURLStringFromInput:item.urlString];
         if (candidate && [candidate isEqualToString:target]) {
             return item;
@@ -173,6 +413,10 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 }
 
 + (NSInteger)matchScoreForShortcut:(BrowserShortcutItem *)item query:(NSString *)query {
+    if (item.isFolder) {
+        return NSNotFound;
+    }
+
     NSString *lowercaseQuery = query.lowercaseString;
     if (lowercaseQuery.length == 0) {
         return NSNotFound;
@@ -214,6 +458,9 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     NSArray<BrowserShortcutItem *> *shortcuts = [self loadShortcuts];
     NSMutableArray<BrowserShortcutItem *> *matches = [[NSMutableArray alloc] init];
     for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isFolder) {
+            continue;
+        }
         if ([self matchScoreForShortcut:item query:trimmed] != NSNotFound) {
             [matches addObject:item];
         }
@@ -248,15 +495,117 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     return [self validateURLString:trimmed normalizedURL:outURL];
 }
 
+#pragma mark - Internals
+
++ (BOOL)isValidPersistedItem:(BrowserShortcutItem *)item {
+    if (item.title.length == 0) {
+        return NO;
+    }
+    if (item.isFolder) {
+        return YES;
+    }
+    return item.urlString.length > 0;
+}
+
++ (void)repairInvariantsInShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    NSMutableSet<NSString *> *folderIDs = [[NSMutableSet alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isFolder) {
+            item.folderID = @"";
+            [folderIDs addObject:item.itemID];
+        }
+    }
+
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isFolder) {
+            continue;
+        }
+        if (item.folderID.length > 0 && ![folderIDs containsObject:item.folderID]) {
+            item.folderID = @"";
+        }
+    }
+
+    NSArray<BrowserShortcutItem *> *folders = [shortcuts filteredArrayUsingPredicate:
+        [NSPredicate predicateWithBlock:^BOOL(BrowserShortcutItem *evaluated, NSDictionary *bindings) {
+            (void)bindings;
+            return evaluated.isFolder;
+        }]];
+    for (BrowserShortcutItem *folder in folders) {
+        [self removeEmptyFolderWithID:folder.itemID inShortcuts:shortcuts];
+    }
+}
+
++ (void)removeEmptyFolderWithID:(NSString *)folderID
+                    inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    if (folderID.length == 0) {
+        return;
+    }
+    NSArray<BrowserShortcutItem *> *children = [self childrenOfFolderID:folderID inShortcuts:shortcuts];
+    if (children.count > 0) {
+        return;
+    }
+    BrowserShortcutItem *folder = [self shortcutWithID:folderID inShortcuts:shortcuts];
+    if (folder && folder.isFolder) {
+        [shortcuts removeObject:folder];
+    }
+}
+
++ (void)normalizeSortOrdersInShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
+    NSArray<BrowserShortcutItem *> *topLevel = [self topLevelShortcuts:shortcuts];
+    for (NSUInteger i = 0; i < topLevel.count; i++) {
+        topLevel[i].sortOrder = (NSInteger)i;
+    }
+
+    NSMutableSet<NSString *> *folderIDs = [[NSMutableSet alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (item.isFolder) {
+            [folderIDs addObject:item.itemID];
+        }
+    }
+    for (NSString *folderID in folderIDs) {
+        NSArray<BrowserShortcutItem *> *children = [self childrenOfFolderID:folderID inShortcuts:shortcuts];
+        for (NSUInteger i = 0; i < children.count; i++) {
+            children[i].sortOrder = (NSInteger)i;
+        }
+    }
+}
+
++ (void)reorderTopLevelItems:(NSArray<BrowserShortcutItem *> *)orderedTopLevel
+                 inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts
+                        save:(BOOL)save {
+    NSMutableArray<BrowserShortcutItem *> *nested = [[NSMutableArray alloc] init];
+    for (BrowserShortcutItem *item in shortcuts) {
+        if (!item.isTopLevel) {
+            [nested addObject:item];
+        }
+    }
+
+    [shortcuts removeAllObjects];
+    for (NSUInteger i = 0; i < orderedTopLevel.count; i++) {
+        BrowserShortcutItem *item = orderedTopLevel[i];
+        item.folderID = @"";
+        item.sortOrder = (NSInteger)i;
+        [shortcuts addObject:item];
+    }
+    [shortcuts addObjectsFromArray:nested];
+
+    if (save) {
+        [self saveShortcuts:shortcuts];
+    }
+}
+
 #pragma mark - Serialization
 
 + (NSDictionary *)dictionaryFromItem:(BrowserShortcutItem *)item {
+    NSString *kindValue = item.isFolder ? kShortcutKindFolderValue : kShortcutKindLinkValue;
     return @{
         kShortcutItemIDKey: item.itemID ?: @"",
         kShortcutTitleKey: item.title ?: @"",
         kShortcutURLKey: item.urlString ?: @"",
         kShortcutIconURLKey: item.iconURLString ?: @"",
         kShortcutOrderKey: @(item.sortOrder),
+        kShortcutKindKey: kindValue,
+        kShortcutFolderIDKey: item.folderID ?: @"",
     };
 }
 
@@ -272,6 +621,22 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     item.iconURLString = [iconURL isKindOfClass:[NSString class]] ? iconURL : @"";
     id order = dictionary[kShortcutOrderKey];
     item.sortOrder = [order respondsToSelector:@selector(integerValue)] ? [order integerValue] : 0;
+
+    id kindValue = dictionary[kShortcutKindKey];
+    if ([kindValue isKindOfClass:[NSString class]] && [kindValue isEqualToString:kShortcutKindFolderValue]) {
+        item.kind = BrowserShortcutItemKindFolder;
+    } else if ([kindValue respondsToSelector:@selector(integerValue)] && [kindValue integerValue] == BrowserShortcutItemKindFolder) {
+        item.kind = BrowserShortcutItemKindFolder;
+    } else {
+        item.kind = BrowserShortcutItemKindLink;
+    }
+
+    id folderID = dictionary[kShortcutFolderIDKey];
+    item.folderID = [folderID isKindOfClass:[NSString class]] ? folderID : @"";
+    if (item.isFolder) {
+        item.folderID = @"";
+        item.urlString = @"";
+    }
     return item;
 }
 
