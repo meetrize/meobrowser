@@ -1,7 +1,10 @@
 #import "BrowserTabItemView.h"
 
-static const CGFloat kTabItemWidth = 160.0;
+const CGFloat BrowserTabItemMinWidth = 108.0;
+const CGFloat BrowserTabItemMaxWidth = 200.0;
+
 static const CGFloat kDefaultTabHeight = 33.0;
+static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
 
 NSColor *BrowserTabActiveFillColor(void) {
     if ([[NSApp effectiveAppearance].name containsString:@"Dark"]) {
@@ -14,6 +17,10 @@ NSColor *BrowserTabActiveFillColor(void) {
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *closeButton;
 @property (nonatomic, strong) NSLayoutConstraint *heightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *titleTrailingToClose;
+@property (nonatomic, strong) NSLayoutConstraint *titleTrailingToEdge;
+@property (nonatomic, assign) CGFloat appliedWidth;
+@property (nonatomic, assign) BOOL pointerInside;
 @end
 
 @implementation BrowserTabItemView
@@ -24,7 +31,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (NSSize)intrinsicContentSize {
     CGFloat height = self.heightConstraint ? self.heightConstraint.constant : kDefaultTabHeight;
-    return NSMakeSize(kTabItemWidth, height);
+    return NSMakeSize(BrowserTabItemMinWidth, height);
 }
 
 - (void)setTabHeight:(CGFloat)height {
@@ -43,22 +50,38 @@ NSColor *BrowserTabActiveFillColor(void) {
         self.translatesAutoresizingMaskIntoConstraints = NO;
         self.wantsLayer = YES;
         self.layer.masksToBounds = YES;
+        _appliedWidth = BrowserTabItemMaxWidth;
 
         _titleLabel = [NSTextField labelWithString:@"新标签页"];
         _titleLabel.font = [NSFont systemFontOfSize:12];
+        _titleLabel.editable = NO;
+        _titleLabel.selectable = NO;
+        _titleLabel.usesSingleLineMode = YES;
         _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+        _titleLabel.cell.lineBreakMode = NSLineBreakByTruncatingTail;
         _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        // 避免标题拦截点击，导致无法切换标签
+        _titleLabel.refusesFirstResponder = YES;
+        [_titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:_titleLabel];
 
         _closeButton = [NSButton buttonWithTitle:@"×" target:self action:@selector(onClose:)];
         _closeButton.bezelStyle = NSBezelStyleInline;
         _closeButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
+        [_closeButton setContentHuggingPriority:NSLayoutPriorityRequired
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [_closeButton setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:_closeButton];
 
-        [NSLayoutConstraint activateConstraints:@[
-            [self.widthAnchor constraintEqualToConstant:kTabItemWidth],
+        _titleTrailingToClose = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_closeButton.leadingAnchor
+                                                                                     constant:-4];
+        _titleTrailingToEdge = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor
+                                                                                    constant:-8];
 
+        [NSLayoutConstraint activateConstraints:@[
             [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
             [_closeButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_closeButton.widthAnchor constraintEqualToConstant:16],
@@ -66,10 +89,16 @@ NSColor *BrowserTabActiveFillColor(void) {
 
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
             [_titleLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_closeButton.leadingAnchor constant:-4],
+            _titleTrailingToClose,
         ]];
 
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+
         [self updateChromeAppearance];
+        [self updateCloseButtonVisibility];
     }
     return self;
 }
@@ -77,6 +106,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 - (void)setTabSelected:(BOOL)tabSelected {
     _tabSelected = tabSelected;
     [self updateChromeAppearance];
+    [self updateCloseButtonVisibility];
     [self invalidateIntrinsicContentSize];
 }
 
@@ -86,12 +116,24 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
     _tabTitle = [normalized copy];
-    NSString *display = tabTitle.length > 0 ? tabTitle : @"新标签页";
-    if (display.length > 20) {
-        display = [[display substringToIndex:19] stringByAppendingString:@"…"];
-    }
-    self.titleLabel.stringValue = display;
+    self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
     [self invalidateIntrinsicContentSize];
+}
+
+- (void)applyAvailableWidth:(CGFloat)width {
+    if (fabs(self.appliedWidth - width) < 0.5) {
+        return;
+    }
+    self.appliedWidth = width;
+    [self updateCloseButtonVisibility];
+}
+
+- (void)updateCloseButtonVisibility {
+    BOOL alwaysShow = self.tabSelected || self.appliedWidth >= kCloseAlwaysVisibleMinWidth;
+    BOOL visible = alwaysShow || self.pointerInside;
+    self.closeButton.hidden = !visible;
+    self.titleTrailingToClose.active = visible;
+    self.titleTrailingToEdge.active = !visible;
 }
 
 - (void)updateChromeAppearance {
@@ -121,8 +163,45 @@ NSColor *BrowserTabActiveFillColor(void) {
     [self updateChromeAppearance];
 }
 
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    for (NSTrackingArea *area in [self.trackingAreas copy]) {
+        [self removeTrackingArea:area];
+    }
+    NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
+    NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                        options:options
+                                                          owner:self
+                                                       userInfo:nil];
+    [self addTrackingArea:area];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    (void)event;
+    self.pointerInside = YES;
+    [self updateCloseButtonVisibility];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    (void)event;
+    self.pointerInside = NO;
+    [self updateCloseButtonVisibility];
+}
+
 - (BOOL)mouseDownCanMoveWindow {
     return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    NSView *hit = [super hitTest:point];
+    if (!hit) {
+        return nil;
+    }
+    // 关闭按钮保持可点；标题等其它子视图点击视为选中标签
+    if (hit == self.closeButton || [hit isDescendantOf:self.closeButton]) {
+        return hit;
+    }
+    return self;
 }
 
 - (void)mouseDown:(NSEvent *)event {

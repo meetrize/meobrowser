@@ -9,6 +9,7 @@
 | [minimal-browser/design.md](minimal-browser/design.md) | MeoBrowser 最精简浏览器 — 技术方案与架构设计 |
 | [minimal-browser/development-plan.md](minimal-browser/development-plan.md) | MeoBrowser 分阶段开发计划与验收标准 |
 | [minimal-browser/multi-tab-design.md](minimal-browser/multi-tab-design.md) | 多标签页（Chrome 式标题栏）设计方案 L2 |
+| [minimal-browser/tab-strip-adaptive-width-design.md](minimal-browser/tab-strip-adaptive-width-design.md) | 标签栏自适应宽度 — Safari 向伸缩与横向滚动 |
 | [minimal-browser/new-tab-launchpad-design.md](minimal-browser/new-tab-launchpad-design.md) | 新标签页 — Launchpad 式快捷方式设计方案 |
 | [minimal-browser/address-bar-shortcut-autocomplete-design.md](minimal-browser/address-bar-shortcut-autocomplete-design.md) | 地址栏快捷方式补全 — 交互与实现方案 |
 | [minimal-browser/address-bar-shortcut-autocomplete-development-plan.md](minimal-browser/address-bar-shortcut-autocomplete-development-plan.md) | 地址栏快捷方式补全 — 开发计划 |

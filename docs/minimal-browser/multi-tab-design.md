@@ -139,11 +139,12 @@ flowchart TB
 |------|--------|
 | 高度 | 38～40 pt |
 | 左内边距 | 78 pt（交通灯区，Big Sur+ 可微调） |
-| 标签最小宽 | 120 pt |
-| 标签最大宽 | 240 pt |
+| 标签最小宽 | 108 pt（详见 [tab-strip-adaptive-width-design.md](tab-strip-adaptive-width-design.md)） |
+| 标签最大宽 | 200 pt |
 | 激活标签 | 浅色背景，底边与内容区连通 |
 | 非激活标签 | 略深背景，右侧细分隔线 |
-| 关闭按钮 | 悬停显示 `×`，至少保留 1 个标签（关闭最后一个时等价新建或退出，可配置） |
+| 关闭按钮 | 宽 ≥ 120 或选中时常显；再窄未选中则悬停显示；至少保留 1 个标签 |
+| 过多标签 | 先等宽缩至最小宽，再显示 ▾ 溢出菜单；**不**抬高窗口 `minSize`（见 `tab-strip-adaptive-width-design.md`） |
 
 ### 5.2 工具栏
 
@@ -230,7 +231,7 @@ BrowserTab *tab = [self.tabController selectedTab];
 
 - [ ] Favicon（`WKWebView` 无直接 API，可用 `javaScript` 取 `link[rel~=icon]` 或默认地球图标）
 - [ ] 标签拖拽排序
-- [ ] 标签过多时横向滚动
+- [x] 标签过多时溢出箭头 + 菜单（见 `tab-strip-adaptive-width-design.md`）
 - [ ] 右键菜单：关闭/关闭其他/复制链接
 
 ---

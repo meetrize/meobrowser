@@ -55,7 +55,8 @@
                                                        defer:NO];
     window.title = BrowserAppDisplayName;
     window.releasedWhenClosed = NO;
-    window.minSize = NSMakeSize(640, 480);
+    // 多标签时由标签条自适应/溢出菜单承接；窗口下限刻意较小以便随时拖窄
+    window.minSize = NSMakeSize(400, 300);
 
     self = [super initWithWindow:window];
     if (self) {
