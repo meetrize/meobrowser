@@ -5,7 +5,8 @@
 const CGFloat BrowserTabStripHeight = 36.0;
 
 static const CGFloat kTrafficLightLeadingInset = 78.0;
-static const CGFloat kTabTopInset = 3.0;
+/// 标签顶部与条上缘间距（比早期 3pt 略大）
+static const CGFloat kTabTopInset = 5.0;
 static const CGFloat kTrailingDragWidth = 16.0;
 static const CGFloat kTabSpacing = 2.0;
 static const CGFloat kOverflowButtonWidth = 22.0;
@@ -19,6 +20,7 @@ static const CGFloat kChromeGap = 4.0;
 - (void)handleTitleBarDoubleClick;
 @end
 
+/// 空白区可拖窗（交通灯旁 / 尾部）
 @interface BrowserTabStripDragAreaView : NSView
 @property (nonatomic, weak) BrowserTabStripView *stripView;
 @end
@@ -39,6 +41,7 @@ static const CGFloat kChromeGap = 4.0;
 
 @end
 
+/// 标签区域：禁止标题栏默认拖窗，否则 FullSizeContentView 下会抢走标签拖拽
 @interface BrowserTabStripClipView : NSView
 @property (nonatomic, weak) BrowserTabStripView *stripView;
 @end
@@ -46,7 +49,7 @@ static const CGFloat kChromeGap = 4.0;
 @implementation BrowserTabStripClipView
 
 - (BOOL)mouseDownCanMoveWindow {
-    return YES;
+    return NO;
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -54,7 +57,75 @@ static const CGFloat kChromeGap = 4.0;
         [self.stripView handleTitleBarDoubleClick];
         return;
     }
-    [super mouseDown:event];
+    // 点在标签空隙时显式拖窗（不用 mouseDownCanMoveWindow，避免抢子视图）
+    if (self.window) {
+        [self.window performWindowDragWithEvent:event];
+    }
+}
+
+@end
+
+/// 承载标签项：命中区向上扩到条顶，覆盖标题与顶部留白
+@interface BrowserTabStripTabsContainerView : NSView
+@property (nonatomic, weak) BrowserTabStripView *stripView;
+@end
+
+@implementation BrowserTabStripTabsContainerView
+
+- (BOOL)mouseDownCanMoveWindow {
+    return NO;
+}
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    if (self.hidden || self.alphaValue < 0.01) {
+        return nil;
+    }
+    NSPoint local = [self convertPoint:point fromView:self.superview];
+    if (![self mouse:local inRect:self.bounds]) {
+        return nil;
+    }
+
+    // 倒序优先上层（拖拽中抬起的标签）
+    for (NSView *subview in [self.subviews reverseObjectEnumerator]) {
+        if (subview.hidden || ![subview isKindOfClass:[BrowserTabItemView class]]) {
+            continue;
+        }
+        BrowserTabItemView *item = (BrowserTabItemView *)subview;
+        NSRect hitRect = item.frame;
+        // 非翻转坐标：向上扩到容器顶，盖住顶部 inset
+        CGFloat maxY = NSMaxY(self.bounds);
+        if (NSMaxY(hitRect) < maxY) {
+            hitRect.size.height = maxY - hitRect.origin.y;
+        }
+        if (!NSPointInRect(local, hitRect)) {
+            continue;
+        }
+        // 点在标签本体：交给 item（关闭按钮等）
+        if (NSPointInRect(local, item.frame)) {
+            NSView *hit = [item hitTest:local];
+            if (hit) {
+                return hit;
+            }
+        }
+        // 点在顶部留白扩展区：仍算点中该标签，避免被标题栏拖窗抢走
+        return item;
+    }
+
+    return self;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        [self.stripView handleTitleBarDoubleClick];
+        return;
+    }
+    if (self.window) {
+        [self.window performWindowDragWithEvent:event];
+    }
 }
 
 @end
@@ -124,8 +195,8 @@ static const CGFloat kChromeGap = 4.0;
         [_tabsClipView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        _tabsContentView = [[BrowserTabStripDragAreaView alloc] initWithFrame:NSZeroRect];
-        ((BrowserTabStripDragAreaView *)_tabsContentView).stripView = self;
+        _tabsContentView = [[BrowserTabStripTabsContainerView alloc] initWithFrame:NSZeroRect];
+        ((BrowserTabStripTabsContainerView *)_tabsContentView).stripView = self;
         [_tabsClipView addSubview:_tabsContentView];
 
         // 「+」/溢出箭头用 frame 贴在末标签旁，不参与 AL 链，避免定宽抬高窗口 minSize
@@ -179,7 +250,7 @@ static const CGFloat kChromeGap = 4.0;
         ((BrowserTabStripDragAreaView *)_backgroundView).stripView = self;
         ((BrowserTabStripDragAreaView *)_leadingDragArea).stripView = self;
         ((BrowserTabStripDragAreaView *)_trailingDragArea).stripView = self;
-        ((BrowserTabStripDragAreaView *)_tabsContentView).stripView = self;
+        ((BrowserTabStripTabsContainerView *)_tabsContentView).stripView = self;
         _tabsClipView.stripView = self;
 
         _overflowButton.hidden = YES;
@@ -312,20 +383,12 @@ static const CGFloat kChromeGap = 4.0;
     if (length == 0) {
         return 0;
     }
-    CGFloat width = 0;
-    NSUInteger unpinned = 0;
-    for (NSUInteger i = start; i < start + length && i < self.tabItems.count; i++) {
-        if (self.tabItems[i].tabPinned) {
-            width += BrowserTabPinnedWidth;
-        } else {
-            unpinned++;
-            width += BrowserTabItemMinWidth;
-        }
-    }
+    // 固定/普通标签均显示标题，最小宽统一，超出后进溢出菜单
+    CGFloat width = length * BrowserTabItemMinWidth;
     if (length > 1) {
         width += (length - 1) * kTabSpacing;
     }
-    (void)unpinned;
+    (void)start;
     return width;
 }
 
@@ -444,7 +507,7 @@ static const CGFloat kChromeGap = 4.0;
     [self setOverflowVisible:needsOverflow];
 
     CGFloat available = needsOverflow
-        ? MAX(stripMiddle - kOverflowButtonWidth - 2.0, BrowserTabPinnedWidth)
+        ? MAX(stripMiddle - kOverflowButtonWidth - 2.0, BrowserTabItemMinWidth)
         : stripMiddle;
 
     NSUInteger visibleStart = 0;
@@ -452,29 +515,13 @@ static const CGFloat kChromeGap = 4.0;
     [self visibleRangeForCount:visibleCount start:&visibleStart count:&visibleLen];
 
     NSUInteger pinnedCount = [self pinnedTabCountInStrip];
-    NSUInteger visiblePinned = 0;
-    NSUInteger visibleUnpinned = 0;
-    for (NSUInteger i = visibleStart; i < visibleStart + visibleLen; i++) {
-        if (self.tabItems[i].tabPinned) {
-            visiblePinned++;
-        } else {
-            visibleUnpinned++;
-        }
-    }
-
     CGFloat spacingTotal = (visibleLen > 1) ? (visibleLen - 1) * kTabSpacing : 0;
-    CGFloat pinnedSpace = visiblePinned * BrowserTabPinnedWidth;
-    CGFloat unpinnedAvailable = MAX(available - pinnedSpace - spacingTotal, 0);
-    CGFloat unpinnedWidth = BrowserTabItemMinWidth;
-    if (visibleUnpinned > 0) {
-        CGFloat ideal = unpinnedAvailable / (CGFloat)visibleUnpinned;
-        unpinnedWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
-    }
-
-    CGFloat contentW = pinnedSpace + visibleUnpinned * unpinnedWidth + spacingTotal;
+    CGFloat ideal = visibleLen > 0 ? (available - spacingTotal) / (CGFloat)visibleLen : BrowserTabItemMinWidth;
+    CGFloat tabWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
+    CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : 0;
     CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
 
-    BOOL geometryChanged = fabs(unpinnedWidth - self.lastLaidOutTabWidth) > 0.5
+    BOOL geometryChanged = fabs(tabWidth - self.lastLaidOutTabWidth) > 0.5
         || fabs(available - self.lastLaidOutAvailableWidth) > 0.5
         || total != self.lastLaidOutTabCount
         || visibleStart != self.lastVisibleStart
@@ -489,7 +536,6 @@ static const CGFloat kChromeGap = 4.0;
         for (NSUInteger i = 0; i < total; i++) {
             BrowserTabItemView *item = self.tabItems[i];
             BOOL visible = (i >= visibleStart && i < visibleStart + visibleLen);
-            CGFloat tabWidth = item.tabPinned ? BrowserTabPinnedWidth : unpinnedWidth;
 
             if (item == self.draggingItem) {
                 // 拖拽中的标签保留纵向布局，横向由拖拽逻辑更新
@@ -519,7 +565,7 @@ static const CGFloat kChromeGap = 4.0;
         }
 
         self.tabsContentView.frame = NSMakeRect(0, 0, MAX(contentW, 1), BrowserTabStripHeight);
-        self.lastLaidOutTabWidth = unpinnedWidth;
+        self.lastLaidOutTabWidth = tabWidth;
         self.lastLaidOutAvailableWidth = available;
         self.lastLaidOutTabCount = total;
         self.lastVisibleStart = visibleStart;
@@ -626,52 +672,42 @@ static const CGFloat kChromeGap = 4.0;
 }
 
 - (NSUInteger)insertionIndexForDraggedItem:(BrowserTabItemView *)item centerX:(CGFloat)centerX {
-    NSUInteger pinnedCount = [self pinnedTabCountInStrip];
-    // 拖拽时 item 可能暂时不在「固定前缀」语义位置，用原始 pin 状态限制区间
     BOOL pinned = item.tabPinned;
-    NSUInteger low = pinned ? 0 : pinnedCount;
-    NSUInteger high = pinned ? pinnedCount : self.tabItems.count;
-    // pinnedCount 在拖拽重排过程中仍应等于固定标签个数
     NSUInteger actualPinned = 0;
     for (BrowserTabItemView *candidate in self.tabItems) {
         if (candidate.tabPinned) {
             actualPinned++;
         }
     }
-    low = pinned ? 0 : actualPinned;
-    high = pinned ? actualPinned : self.tabItems.count;
+    NSUInteger low = pinned ? 0 : actualPinned;
+    NSUInteger high = pinned ? actualPinned : self.tabItems.count;
     if (low >= high) {
         return low < self.tabItems.count ? low : NSNotFound;
     }
 
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     NSUInteger best = low;
     CGFloat bestDistance = CGFLOAT_MAX;
     CGFloat x = 0;
     for (NSUInteger i = 0; i < self.tabItems.count; i++) {
-        BrowserTabItemView *candidate = self.tabItems[i];
-        CGFloat width = candidate.tabPinned ? BrowserTabPinnedWidth : MAX(NSWidth(candidate.frame), BrowserTabItemMinWidth);
-        if (candidate == item) {
-            width = MAX(NSWidth(item.frame), candidate.tabPinned ? BrowserTabPinnedWidth : BrowserTabItemMinWidth);
-        }
         if (i >= low && i < high) {
-            CGFloat slotCenter = x + width * 0.5;
+            CGFloat slotCenter = x + tabWidth * 0.5;
             CGFloat distance = fabs(slotCenter - centerX);
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = i;
             }
         }
-        x += width + kTabSpacing;
+        x += tabWidth + kTabSpacing;
     }
     return best;
 }
 
 - (void)layoutTabsExcludingDraggedItem:(BrowserTabItemView *)dragged {
     CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
-    CGFloat unpinnedWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     for (BrowserTabItemView *item in self.tabItems) {
-        CGFloat tabWidth = item.tabPinned ? BrowserTabPinnedWidth : unpinnedWidth;
         if (item == dragged) {
             x += tabWidth + kTabSpacing;
             continue;

@@ -2,11 +2,36 @@
 
 const CGFloat BrowserTabItemMinWidth = 108.0;
 const CGFloat BrowserTabItemMaxWidth = 200.0;
-const CGFloat BrowserTabPinnedWidth = 36.0;
+/// 固定标签仍显示标题，宽度参与等宽分配时的最小宽与普通标签一致。
+const CGFloat BrowserTabPinnedWidth = 108.0;
 
-static const CGFloat kDefaultTabHeight = 33.0;
+static const CGFloat kDefaultTabHeight = 31.0;
 static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
 static const CGFloat kReorderDragThreshold = 4.0;
+static const CGFloat kPinIconSize = 12.0;
+static const CGFloat kLeadingPadding = 8.0;
+static const CGFloat kTitleAfterPinGap = 4.0;
+
+/// 标题不参与命中，避免 FullSizeContentView 下文字区被系统当成拖窗
+@interface BrowserTabTitleLabel : NSTextField
+@end
+
+@implementation BrowserTabTitleLabel
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+@interface BrowserTabPinIconView : NSImageView
+@end
+
+@implementation BrowserTabPinIconView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
 
 NSColor *BrowserTabActiveFillColor(void) {
     if ([[NSApp effectiveAppearance].name containsString:@"Dark"]) {
@@ -22,12 +47,11 @@ NSColor *BrowserTabActiveFillColor(void) {
 @property (nonatomic, strong) NSLayoutConstraint *heightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToClose;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToEdge;
-@property (nonatomic, strong) NSLayoutConstraint *titleLeadingConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *titleLeadingToPin;
+@property (nonatomic, strong) NSLayoutConstraint *titleLeadingToEdge;
+@property (nonatomic, strong) NSLayoutConstraint *pinLeadingConstraint;
 @property (nonatomic, assign) CGFloat appliedWidth;
 @property (nonatomic, assign) BOOL pointerInside;
-@property (nonatomic, assign) BOOL trackingMouse;
-@property (nonatomic, assign) BOOL isReorderDragging;
-@property (nonatomic, assign) NSPoint mouseDownWindowPoint;
 @end
 
 @implementation BrowserTabItemView
@@ -38,8 +62,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (NSSize)intrinsicContentSize {
     CGFloat height = self.heightConstraint ? self.heightConstraint.constant : kDefaultTabHeight;
-    CGFloat width = self.tabPinned ? BrowserTabPinnedWidth : BrowserTabItemMinWidth;
-    return NSMakeSize(width, height);
+    return NSMakeSize(BrowserTabItemMinWidth, height);
 }
 
 - (void)setTabHeight:(CGFloat)height {
@@ -61,7 +84,7 @@ NSColor *BrowserTabActiveFillColor(void) {
         _appliedWidth = BrowserTabItemMaxWidth;
         _tabTitle = @"";
 
-        _titleLabel = [NSTextField labelWithString:@"新标签页"];
+        _titleLabel = [BrowserTabTitleLabel labelWithString:@"新标签页"];
         _titleLabel.font = [NSFont systemFontOfSize:12];
         _titleLabel.editable = NO;
         _titleLabel.selectable = NO;
@@ -69,19 +92,18 @@ NSColor *BrowserTabActiveFillColor(void) {
         _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
         _titleLabel.cell.lineBreakMode = NSLineBreakByTruncatingTail;
         _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-        // 避免标题拦截点击，导致无法切换标签
         _titleLabel.refusesFirstResponder = YES;
         [_titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:_titleLabel];
 
-        _pinIconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _pinIconView = [[BrowserTabPinIconView alloc] initWithFrame:NSZeroRect];
         _pinIconView.translatesAutoresizingMaskIntoConstraints = NO;
         _pinIconView.imageScaling = NSImageScaleProportionallyDown;
         _pinIconView.hidden = YES;
         if (@available(macOS 11.0, *)) {
             NSImageSymbolConfiguration *config =
-                [NSImageSymbolConfiguration configurationWithPointSize:11
+                [NSImageSymbolConfiguration configurationWithPointSize:10
                                                                 weight:NSFontWeightMedium
                                                                  scale:NSImageSymbolScaleMedium];
             NSImage *symbol = [NSImage imageWithSystemSymbolName:@"pin.fill"
@@ -107,7 +129,12 @@ NSColor *BrowserTabActiveFillColor(void) {
                                                                                      constant:-4];
         _titleTrailingToEdge = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor
                                                                                     constant:-8];
-        _titleLeadingConstraint = [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10];
+        _pinLeadingConstraint = [_pinIconView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor
+                                                                           constant:kLeadingPadding];
+        _titleLeadingToPin = [_titleLabel.leadingAnchor constraintEqualToAnchor:_pinIconView.trailingAnchor
+                                                                       constant:kTitleAfterPinGap];
+        _titleLeadingToEdge = [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor
+                                                                        constant:10];
 
         [NSLayoutConstraint activateConstraints:@[
             [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
@@ -115,15 +142,16 @@ NSColor *BrowserTabActiveFillColor(void) {
             [_closeButton.widthAnchor constraintEqualToConstant:16],
             [_closeButton.heightAnchor constraintEqualToConstant:16],
 
-            _titleLeadingConstraint,
+            _pinLeadingConstraint,
+            [_pinIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_pinIconView.widthAnchor constraintEqualToConstant:kPinIconSize],
+            [_pinIconView.heightAnchor constraintEqualToConstant:kPinIconSize],
+
+            _titleLeadingToEdge,
             [_titleLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             _titleTrailingToClose,
-
-            [_pinIconView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-            [_pinIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [_pinIconView.widthAnchor constraintEqualToConstant:14],
-            [_pinIconView.heightAnchor constraintEqualToConstant:14],
         ]];
+        _titleLeadingToPin.active = NO;
 
         [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
                           forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -160,12 +188,7 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
     _tabTitle = [normalized copy];
-    if (self.tabPinned) {
-        [self updatePinnedAppearance];
-    } else {
-        self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
-        self.toolTip = nil;
-    }
+    self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
     [self invalidateIntrinsicContentSize];
 }
 
@@ -178,22 +201,18 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)updatePinnedAppearance {
-    BOOL hasPinImage = (self.pinIconView.image != nil);
-    self.pinIconView.hidden = !self.tabPinned || !hasPinImage;
-    self.titleLabel.hidden = self.tabPinned && hasPinImage;
-    if (self.tabPinned && !hasPinImage) {
-        NSString *title = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
-        self.titleLabel.stringValue = [title substringToIndex:MIN((NSUInteger)1, title.length)];
-        self.titleLeadingConstraint.constant = 10;
-    } else if (!self.tabPinned) {
-        self.titleLabel.stringValue = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
-        self.titleLeadingConstraint.constant = 10;
-    }
-    self.toolTip = self.tabPinned ? (self.tabTitle.length > 0 ? self.tabTitle : @"新标签页") : nil;
+    BOOL showPin = self.tabPinned && (self.pinIconView.image != nil);
+    self.pinIconView.hidden = !showPin;
+    self.titleLabel.hidden = NO;
+    self.titleLabel.stringValue = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
+
+    self.titleLeadingToPin.active = showPin;
+    self.titleLeadingToEdge.active = !showPin;
+
     if (self.tabPinned) {
         self.closeButton.hidden = YES;
         self.titleTrailingToClose.active = NO;
-        self.titleTrailingToEdge.active = NO;
+        self.titleTrailingToEdge.active = YES;
     }
 }
 
@@ -201,7 +220,7 @@ NSColor *BrowserTabActiveFillColor(void) {
     if (self.tabPinned) {
         self.closeButton.hidden = YES;
         self.titleTrailingToClose.active = NO;
-        self.titleTrailingToEdge.active = NO;
+        self.titleTrailingToEdge.active = YES;
         return;
     }
 
@@ -276,20 +295,35 @@ NSColor *BrowserTabActiveFillColor(void) {
     return NO;
 }
 
+- (BOOL)isOpaque {
+    return YES;
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    return YES;
+}
+
 - (NSView *)hitTest:(NSPoint)point {
-    NSView *hit = [super hitTest:point];
-    if (!hit) {
+    if (self.hidden || self.alphaValue < 0.01) {
         return nil;
     }
-    // 关闭按钮保持可点；标题等其它子视图点击视为选中标签
-    if (hit == self.closeButton || [hit isDescendantOf:self.closeButton]) {
-        return hit;
+    // point 位于 superview 坐标系：整块标签（含标题）都可拖，仅关闭按钮例外
+    NSPoint local = [self convertPoint:point fromView:self.superview];
+    if (![self mouse:local inRect:self.bounds]) {
+        return nil;
+    }
+    if (!self.closeButton.hidden) {
+        NSPoint inClose = [self.closeButton convertPoint:local fromView:self];
+        if ([self.closeButton mouse:inClose inRect:self.closeButton.bounds]) {
+            return self.closeButton;
+        }
     }
     return self;
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    // 双击标签关闭（固定标签除外）；单击切换
+    // 双击标签关闭（固定标签除外）；单击切换并进入拖拽跟踪
     if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
         if (!self.tabPinned && self.onClose) {
             self.onClose();
@@ -297,42 +331,52 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
 
-    self.trackingMouse = YES;
-    self.isReorderDragging = NO;
-    self.mouseDownWindowPoint = event.locationInWindow;
+    // 先选中。选中路径必须 sync 而非重建 strip，否则本视图被销毁后无法收到后续拖拽。
     if (self.onSelect) {
         self.onSelect();
     }
-}
 
-- (void)mouseDragged:(NSEvent *)event {
-    if (!self.trackingMouse) {
+    NSWindow *window = self.window;
+    if (!window) {
         return;
     }
 
-    CGFloat deltaX = event.locationInWindow.x - self.mouseDownWindowPoint.x;
-    if (!self.isReorderDragging) {
-        if (fabs(deltaX) < kReorderDragThreshold) {
-            return;
-        }
-        self.isReorderDragging = YES;
-        if (self.onReorderDragBegan) {
-            self.onReorderDragBegan();
-        }
-    }
+    NSPoint start = event.locationInWindow;
+    BOOL dragging = NO;
+    NSEventMask mask = NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp;
 
-    if (self.onReorderDragMoved) {
-        self.onReorderDragMoved(deltaX);
-    }
-}
+    while (YES) {
+        NSEvent *next = [window nextEventMatchingMask:mask
+                                            untilDate:[NSDate distantFuture]
+                                               inMode:NSEventTrackingRunLoopMode
+                                              dequeue:YES];
+        if (!next) {
+            break;
+        }
 
-- (void)mouseUp:(NSEvent *)event {
-    (void)event;
-    if (self.isReorderDragging && self.onReorderDragEnded) {
-        self.onReorderDragEnded();
+        if (next.type == NSEventTypeLeftMouseDragged) {
+            CGFloat deltaX = next.locationInWindow.x - start.x;
+            if (!dragging) {
+                if (fabs(deltaX) < kReorderDragThreshold) {
+                    continue;
+                }
+                dragging = YES;
+                if (self.onReorderDragBegan) {
+                    self.onReorderDragBegan();
+                }
+            }
+            if (self.onReorderDragMoved) {
+                self.onReorderDragMoved(deltaX);
+            }
+            continue;
+        }
+
+        // mouseUp
+        if (dragging && self.onReorderDragEnded) {
+            self.onReorderDragEnded();
+        }
+        break;
     }
-    self.trackingMouse = NO;
-    self.isReorderDragging = NO;
 }
 
 - (void)onClose:(id)sender {

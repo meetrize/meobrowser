@@ -7,6 +7,7 @@ NSColor *BrowserTabActiveFillColor(void);
 
 FOUNDATION_EXPORT const CGFloat BrowserTabItemMinWidth;
 FOUNDATION_EXPORT const CGFloat BrowserTabItemMaxWidth;
+/// 固定标签最小宽（与普通标签一致，仍显示标题）
 FOUNDATION_EXPORT const CGFloat BrowserTabPinnedWidth;
 
 @interface BrowserTabItemView : NSView

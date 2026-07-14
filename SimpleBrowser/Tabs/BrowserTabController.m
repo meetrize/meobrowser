@@ -139,6 +139,9 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     if (![self.mutableTabs containsObject:tab]) {
         return;
     }
+    if (self.selectedTab == tab) {
+        return;
+    }
     self.selectedTab = tab;
     [self notifyChange];
 }

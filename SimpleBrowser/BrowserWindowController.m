@@ -708,7 +708,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
     [self observeLoadingProgressForSelectedTab];
 
-    [self reloadTabStrip];
+    // sync：顺序/数量不变时保留标签视图，避免 mouseDown 选中后重建导致拖拽失效
+    [self updateTabStripDisplay];
+    [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
 }
 
