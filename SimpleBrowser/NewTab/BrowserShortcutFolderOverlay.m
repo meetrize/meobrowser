@@ -91,7 +91,7 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
     [self addSubview:_panelView];
 
     _titleLabel = [NSTextField labelWithString:@""];
-    _titleLabel.font = [NSFont systemFontOfSize:24 weight:NSFontWeightSemibold];
+    _titleLabel.font = [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold];
     _titleLabel.alignment = NSTextAlignmentCenter;
     _titleLabel.textColor = [NSColor labelColor];
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -101,7 +101,7 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
     [_panelView addSubview:_titleLabel];
 
     _titleField = [SBTextField standardField];
-    _titleField.font = [NSFont systemFontOfSize:24 weight:NSFontWeightSemibold];
+    _titleField.font = [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold];
     _titleField.alignment = NSTextAlignmentCenter;
     _titleField.delegate = self;
     _titleField.hidden = YES;
@@ -157,17 +157,17 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
         _panelWidthConstraint,
         _panelHeightConstraint,
 
-        [_titleLabel.topAnchor constraintEqualToAnchor:_panelView.topAnchor constant:28],
+        [_titleLabel.topAnchor constraintEqualToAnchor:_panelView.topAnchor constant:14],
         [_titleLabel.leadingAnchor constraintEqualToAnchor:_panelView.leadingAnchor constant:40],
         [_titleLabel.trailingAnchor constraintEqualToAnchor:_panelView.trailingAnchor constant:-40],
-        [_titleLabel.heightAnchor constraintEqualToConstant:34],
+        [_titleLabel.heightAnchor constraintEqualToConstant:26],
 
         [_titleField.topAnchor constraintEqualToAnchor:_titleLabel.topAnchor],
         [_titleField.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
         [_titleField.trailingAnchor constraintEqualToAnchor:_titleLabel.trailingAnchor],
-        [_titleField.heightAnchor constraintEqualToConstant:34],
+        [_titleField.heightAnchor constraintEqualToConstant:26],
 
-        [_scrollView.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:20],
+        [_scrollView.topAnchor constraintEqualToAnchor:_titleLabel.bottomAnchor constant:10],
         [_scrollView.leadingAnchor constraintEqualToAnchor:_panelView.leadingAnchor],
         [_scrollView.trailingAnchor constraintEqualToAnchor:_panelView.trailingAnchor],
         [_scrollView.bottomAnchor constraintEqualToAnchor:_panelView.bottomAnchor],
@@ -318,7 +318,7 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
     CGFloat contentWidth = columns * cellWidth + (columns - 1) * hSpacing + inset.left + inset.right;
     NSUInteger contentRows = count == 0 ? 1 : (count + columns - 1) / columns;
     NSUInteger rows = MAX(kFolderOverlayMinRows, contentRows);
-    CGFloat titleBlock = 28.0 + 34.0 + 20.0;
+    CGFloat titleBlock = 14.0 + 26.0 + 10.0;
     CGFloat contentHeight = titleBlock + rows * cellHeight + MAX((NSInteger)rows - 1, 0) * vSpacing
         + inset.top + inset.bottom;
 

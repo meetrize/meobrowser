@@ -90,4 +90,41 @@
     [mainMenu insertItem:fileMenuItem atIndex:insertIndex];
 }
 
++ (void)installViewMenuForTarget:(id)target {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        return;
+    }
+
+    // 插在「窗口」之前；符合 App / 编辑 / 查看 / 窗口 惯例。
+    NSInteger insertIndex = mainMenu.numberOfItems;
+    for (NSInteger i = 0; i < mainMenu.numberOfItems; i++) {
+        if ([mainMenu.itemArray[i].submenu.title isEqualToString:@"窗口"]) {
+            insertIndex = i;
+            break;
+        }
+    }
+
+    NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"查看"];
+
+    NSMenuItem *zoomIn = [menu addItemWithTitle:@"放大"
+                                         action:@selector(zoomIn:)
+                                  keyEquivalent:@"="];
+    zoomIn.target = target;
+
+    NSMenuItem *zoomOut = [menu addItemWithTitle:@"缩小"
+                                          action:@selector(zoomOut:)
+                                   keyEquivalent:@"-"];
+    zoomOut.target = target;
+
+    NSMenuItem *actualSize = [menu addItemWithTitle:@"实际大小"
+                                             action:@selector(actualSize:)
+                                      keyEquivalent:@"0"];
+    actualSize.target = target;
+
+    viewMenuItem.submenu = menu;
+    [mainMenu insertItem:viewMenuItem atIndex:insertIndex];
+}
+
 @end

@@ -18,7 +18,7 @@
 #import "BrowserDownloadPanel.h"
 #import "BrowserFaviconService.h"
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate, NSMenuItemValidation>
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSView *contentContainer;
@@ -72,6 +72,7 @@
         [self setupUI];
         [BrowserMenus installTabMenuForTarget:self];
         [BrowserMenus installDownloadMenuForTarget:self];
+        [BrowserMenus installViewMenuForTarget:self];
         [self setupInitialTabs];
     }
     return self;
@@ -852,6 +853,53 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)reloadPage:(id)sender {
     (void)sender;
     [self.webView reload];
+}
+
+#pragma mark - Page Zoom
+
+static const CGFloat kBrowserPageZoomStep = 1.1;
+static const CGFloat kBrowserPageZoomMin = 0.5;
+static const CGFloat kBrowserPageZoomMax = 3.0;
+
+- (BOOL)canZoomCurrentPage {
+    BrowserTab *tab = self.tabController.selectedTab;
+    return tab != nil && !tab.isNewTabPage && self.webView != nil;
+}
+
+- (void)zoomIn:(id)sender {
+    (void)sender;
+    if (![self canZoomCurrentPage]) {
+        return;
+    }
+    CGFloat next = self.webView.pageZoom * kBrowserPageZoomStep;
+    self.webView.pageZoom = MIN(next, kBrowserPageZoomMax);
+}
+
+- (void)zoomOut:(id)sender {
+    (void)sender;
+    if (![self canZoomCurrentPage]) {
+        return;
+    }
+    CGFloat next = self.webView.pageZoom / kBrowserPageZoomStep;
+    self.webView.pageZoom = MAX(next, kBrowserPageZoomMin);
+}
+
+- (void)actualSize:(id)sender {
+    (void)sender;
+    if (![self canZoomCurrentPage]) {
+        return;
+    }
+    self.webView.pageZoom = 1.0;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    SEL action = menuItem.action;
+    if (action == @selector(zoomIn:) ||
+        action == @selector(zoomOut:) ||
+        action == @selector(actualSize:)) {
+        return [self canZoomCurrentPage];
+    }
+    return YES;
 }
 
 - (void)loadAddressBarURL {
