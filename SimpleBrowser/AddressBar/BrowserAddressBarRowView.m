@@ -58,16 +58,4 @@ static const CGFloat kResizeHandleWidth = 10.0;
     return self;
 }
 
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    @throw [NSException exceptionWithName:NSInternalInconsistencyException
-                                   reason:@"Use initWithAddressField:actionGroup:"
-                                 userInfo:nil];
-}
-
-- (instancetype)initWithCoder:(NSCoder *)coder {
-    @throw [NSException exceptionWithName:NSInternalInconsistencyException
-                                   reason:@"Use initWithAddressField:actionGroup:"
-                                 userInfo:nil];
-}
-
 @end

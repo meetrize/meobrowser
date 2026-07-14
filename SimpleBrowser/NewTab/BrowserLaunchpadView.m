@@ -3,9 +3,8 @@
 #import "BrowserShortcutItem.h"
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutEditorSheet.h"
-
-static const CGFloat kCellSize = 96.0;
-static const CGFloat kItemSpacing = 8.0;
+#import "BrowserLaunchpadAppearance.h"
+#import "BrowserLaunchpadAppearancePanel.h"
 
 @class BrowserLaunchpadView;
 
@@ -44,7 +43,7 @@ static const CGFloat kItemSpacing = 8.0;
 
 @end
 
-@interface BrowserLaunchpadView () <NSCollectionViewDataSource, NSCollectionViewDelegate>
+@interface BrowserLaunchpadView () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSPopoverDelegate>
 @property (nonatomic, strong) NSVisualEffectView *effectView;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) BrowserLaunchpadCollectionView *collectionView;
@@ -53,6 +52,12 @@ static const CGFloat kItemSpacing = 8.0;
 @property (nonatomic, assign, getter=isEditingMode) BOOL editingMode;
 @property (nonatomic, strong, nullable) id escapeMonitor;
 @property (nonatomic, assign) CGFloat lastLayoutWidth;
+@property (nonatomic, strong) NSButton *settingsButton;
+@property (nonatomic, strong, nullable) NSPopover *appearancePopover;
+@property (nonatomic, strong) BrowserLaunchpadAppearancePanel *appearancePanel;
+@property (nonatomic, assign) CGFloat cachedIconSize;
+@property (nonatomic, assign) CGFloat cachedHorizontalSpacing;
+@property (nonatomic, assign) CGFloat cachedVerticalSpacing;
 @end
 
 @implementation BrowserLaunchpadView
@@ -61,12 +66,21 @@ static const CGFloat kItemSpacing = 8.0;
     self = [super initWithFrame:frame];
     if (self) {
         _mutableShortcuts = [[NSMutableArray alloc] init];
+        BrowserLaunchpadAppearance *appearance = [BrowserLaunchpadAppearance current];
+        _cachedIconSize = appearance.iconSize;
+        _cachedHorizontalSpacing = appearance.horizontalSpacing;
+        _cachedVerticalSpacing = appearance.verticalSpacing;
         [self setupViews];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(appearanceDidChange:)
+                                                     name:BrowserLaunchpadAppearanceDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self removeEscapeMonitor];
 }
 
@@ -80,11 +94,15 @@ static const CGFloat kItemSpacing = 8.0;
     _effectView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_effectView];
 
+    CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:self.cachedIconSize];
     _flowLayout = [[NSCollectionViewFlowLayout alloc] init];
-    _flowLayout.itemSize = NSMakeSize(kCellSize, kCellSize);
-    _flowLayout.minimumInteritemSpacing = kItemSpacing;
-    _flowLayout.minimumLineSpacing = kItemSpacing;
-    _flowLayout.sectionInset = NSEdgeInsetsMake(kItemSpacing, kItemSpacing, kItemSpacing, kItemSpacing);
+    _flowLayout.itemSize = NSMakeSize(cellWidth, [BrowserLaunchpadAppearance cellHeightForIconSize:self.cachedIconSize]);
+    _flowLayout.minimumInteritemSpacing = self.cachedHorizontalSpacing;
+    _flowLayout.minimumLineSpacing = self.cachedVerticalSpacing;
+    _flowLayout.sectionInset = NSEdgeInsetsMake(self.cachedVerticalSpacing,
+                                                 self.cachedHorizontalSpacing,
+                                                 self.cachedVerticalSpacing,
+                                                 self.cachedHorizontalSpacing);
     _flowLayout.scrollDirection = NSCollectionViewScrollDirectionVertical;
 
     _collectionView = [[BrowserLaunchpadCollectionView alloc] initWithFrame:NSZeroRect];
@@ -109,6 +127,27 @@ static const CGFloat kItemSpacing = 8.0;
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_scrollView];
 
+    _settingsButton = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleAppearancePopover:)];
+    _settingsButton.bezelStyle = NSBezelStyleToolbar;
+    _settingsButton.bordered = NO;
+    _settingsButton.toolTip = @"快捷方式外观";
+    _settingsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 11.0, *)) {
+        NSImage *gear = [NSImage imageWithSystemSymbolName:@"gearshape"
+                                  accessibilityDescription:@"快捷方式外观"];
+        gear.template = YES;
+        gear.size = NSMakeSize(16, 16);
+        _settingsButton.image = gear;
+        _settingsButton.imagePosition = NSImageOnly;
+    } else {
+        _settingsButton.title = @"⚙";
+        _settingsButton.font = [NSFont systemFontOfSize:16];
+    }
+    if (@available(macOS 10.14, *)) {
+        _settingsButton.contentTintColor = NSColor.secondaryLabelColor;
+    }
+    [self addSubview:_settingsButton];
+
     [NSLayoutConstraint activateConstraints:@[
         [_effectView.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_effectView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -119,12 +158,54 @@ static const CGFloat kItemSpacing = 8.0;
         [_scrollView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [_scrollView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_scrollView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+
+        [_settingsButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+        [_settingsButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-16],
+        [_settingsButton.widthAnchor constraintEqualToConstant:28],
+        [_settingsButton.heightAnchor constraintEqualToConstant:28],
     ]];
 }
 
 - (void)layout {
     [super layout];
     [self updateCollectionViewDocumentSize];
+}
+
+- (void)appearanceDidChange:(NSNotification *)notification {
+    (void)notification;
+    BrowserLaunchpadAppearance *appearance = [BrowserLaunchpadAppearance current];
+    self.cachedIconSize = appearance.iconSize;
+    self.cachedHorizontalSpacing = appearance.horizontalSpacing;
+    self.cachedVerticalSpacing = appearance.verticalSpacing;
+    [self applyAppearanceToVisibleCells];
+    self.lastLayoutWidth = 0;
+    [self setNeedsLayout:YES];
+}
+
+- (void)applyAppearanceToVisibleCells {
+    CGFloat iconSize = self.cachedIconSize;
+    for (NSCollectionViewItem *item in self.collectionView.visibleItems) {
+        if ([item isKindOfClass:[BrowserShortcutCellView class]]) {
+            [(BrowserShortcutCellView *)item applyIconSize:iconSize];
+        }
+    }
+}
+
+- (void)updateGridLayoutForWidth:(CGFloat)width {
+    CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:self.cachedIconSize];
+    CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:self.cachedIconSize];
+    CGFloat hSpacing = self.cachedHorizontalSpacing;
+    CGFloat vSpacing = self.cachedVerticalSpacing;
+
+    NSInteger columns = (NSInteger)floor((width - hSpacing) / (cellWidth + hSpacing));
+    columns = MAX((NSInteger)1, columns);
+    CGFloat usedWidth = columns * cellWidth + (columns - 1) * hSpacing;
+    CGFloat sideInset = MAX(hSpacing, (width - usedWidth) / 2.0);
+
+    self.flowLayout.itemSize = NSMakeSize(cellWidth, cellHeight);
+    self.flowLayout.minimumInteritemSpacing = hSpacing;
+    self.flowLayout.minimumLineSpacing = vSpacing;
+    self.flowLayout.sectionInset = NSEdgeInsetsMake(vSpacing, sideInset, vSpacing, sideInset);
 }
 
 - (void)updateCollectionViewDocumentSize {
@@ -137,6 +218,7 @@ static const CGFloat kItemSpacing = 8.0;
     BOOL widthChanged = fabs(width - self.lastLayoutWidth) > 0.5;
     if (widthChanged) {
         self.lastLayoutWidth = width;
+        [self updateGridLayoutForWidth:width];
         [self.flowLayout invalidateLayout];
     }
 
@@ -169,6 +251,50 @@ static const CGFloat kItemSpacing = 8.0;
 
 - (BOOL)mouseDownCanMoveWindow {
     return NO;
+}
+
+#pragma mark - Appearance Popover
+
+- (void)toggleAppearancePopover:(id)sender {
+    (void)sender;
+    if (self.appearancePopover.isShown) {
+        [self.appearancePopover close];
+        return;
+    }
+
+    // 每次新建面板，避免复用视图在 Popover 容器里残留错误布局。
+    NSSize panelSize = [BrowserLaunchpadAppearancePanel preferredPanelSize];
+    BrowserLaunchpadAppearancePanel *panel =
+        [[BrowserLaunchpadAppearancePanel alloc] initWithFrame:NSMakeRect(0, 0, panelSize.width, panelSize.height)];
+    [panel reloadFromAppearance];
+    self.appearancePanel = panel;
+
+    NSViewController *controller = [[NSViewController alloc] init];
+    controller.view = panel;
+    controller.preferredContentSize = panelSize;
+
+    NSPopover *popover = [[NSPopover alloc] init];
+    popover.contentViewController = controller;
+    popover.contentSize = panelSize;
+    popover.behavior = NSPopoverBehaviorTransient;
+    popover.animates = YES;
+    popover.delegate = self;
+    self.appearancePopover = popover;
+    // 实测：底部齿轮用 MinY 会向上展开；MaxY 反而向下，窗口靠下时会出屏。
+    [popover showRelativeToRect:self.settingsButton.bounds
+                         ofView:self.settingsButton
+                  preferredEdge:NSRectEdgeMinY];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification {
+    (void)notification;
+    self.appearancePopover = nil;
+}
+
+- (void)showAppearanceSettings {
+    if (!self.appearancePopover.isShown) {
+        [self toggleAppearancePopover:self.settingsButton];
+    }
 }
 
 #pragma mark - Edit Mode
@@ -330,6 +456,10 @@ static const CGFloat kItemSpacing = 8.0;
     [menu addItemWithTitle:editTitle action:@selector(contextToggleEditMode:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
 
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"快捷方式外观…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+
     return menu;
 }
 
@@ -342,6 +472,9 @@ static const CGFloat kItemSpacing = 8.0;
         [menu addItemWithTitle:@"添加快捷方式…" action:@selector(contextAddShortcut:) keyEquivalent:@""];
         menu.itemArray.lastObject.target = self;
     }
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"快捷方式外观…" action:@selector(contextShowAppearance:) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
     return menu;
 }
 
@@ -376,6 +509,11 @@ static const CGFloat kItemSpacing = 8.0;
     [self presentAddShortcutSheet];
 }
 
+- (void)contextShowAppearance:(NSMenuItem *)sender {
+    (void)sender;
+    [self showAppearanceSettings];
+}
+
 #pragma mark - NSCollectionViewDataSource
 
 - (NSInteger)collectionView:(NSCollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
@@ -388,6 +526,7 @@ static const CGFloat kItemSpacing = 8.0;
      itemForRepresentedObjectAtIndexPath:(NSIndexPath *)indexPath {
     BrowserShortcutCellView *cell = [collectionView makeItemWithIdentifier:@"ShortcutCell" forIndexPath:indexPath];
     cell.editingMode = self.isEditingMode;
+    [cell applyIconSize:self.cachedIconSize];
 
     __weak typeof(self) weakSelf = self;
     if ([self isAddIndexPath:indexPath]) {

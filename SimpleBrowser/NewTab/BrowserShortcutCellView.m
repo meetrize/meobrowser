@@ -1,12 +1,8 @@
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserLaunchpadAppearance.h"
 #import <QuartzCore/QuartzCore.h>
 
-static const CGFloat kCellSize = 96.0;
-static const CGFloat kIconSize = 64.0;
-static const CGFloat kIconCornerRadius = 14.0;
-static const CGFloat kIconShadowInset = 10.0;
-static const CGFloat kIconContainerSize = kIconSize + kIconShadowInset * 2.0;
 static const CGFloat kIconShadowBlur = 6.0;
 static const CGFloat kIconShadowOffsetY = -2.0;
 static const CGFloat kIconShadowAlpha = 0.22;
@@ -105,6 +101,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 
 @interface BrowserShortcutIconBackdropView : NSView
 @property (nonatomic, strong) NSColor *fillColor;
+@property (nonatomic, assign) CGFloat cornerRadius;
+@property (nonatomic, assign) CGFloat shadowInset;
 @end
 
 @implementation BrowserShortcutIconBackdropView
@@ -113,14 +111,33 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     return NO;
 }
 
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        _cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:[BrowserLaunchpadAppearance defaultIconSize]];
+        _shadowInset = [BrowserLaunchpadAppearance iconShadowInsetForIconSize:[BrowserLaunchpadAppearance defaultIconSize]];
+    }
+    return self;
+}
+
 - (void)setFillColor:(NSColor *)fillColor {
     _fillColor = fillColor;
     [self setNeedsDisplay:YES];
 }
 
+- (void)setCornerRadius:(CGFloat)cornerRadius {
+    _cornerRadius = cornerRadius;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)setShadowInset:(CGFloat)shadowInset {
+    _shadowInset = shadowInset;
+    [self setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
-    NSRect iconRect = NSInsetRect(self.bounds, kIconShadowInset, kIconShadowInset);
+    NSRect iconRect = NSInsetRect(self.bounds, self.shadowInset, self.shadowInset);
     if (iconRect.size.width <= 0 || iconRect.size.height <= 0) {
         return;
     }
@@ -135,8 +152,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     [shadow set];
 
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:iconRect
-                                                         xRadius:kIconCornerRadius
-                                                         yRadius:kIconCornerRadius];
+                                                         xRadius:self.cornerRadius
+                                                         yRadius:self.cornerRadius];
     NSColor *fill = self.fillColor ?: NSColor.whiteColor;
     [fill setFill];
     [path fill];
@@ -164,6 +181,15 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @property (nonatomic, strong, nullable) NSTimer *longPressTimer;
 @property (nonatomic, assign) BOOL longPressTriggered;
 @property (nonatomic, assign) NSUInteger iconLoadToken;
+@property (nonatomic, assign) CGFloat iconSize;
+@property (nonatomic, strong) NSLayoutConstraint *cellWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *cellHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *iconContainerWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *iconContainerHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *iconWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *iconHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *deleteTopConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *deleteLeadingConstraint;
 @end
 
 @implementation BrowserShortcutCellContentView
@@ -175,6 +201,7 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         self.layer.masksToBounds = NO;
         self.clipsToBounds = NO;
         self.canDrawSubviewsIntoLayer = NO;
+        _iconSize = [BrowserLaunchpadAppearance defaultIconSize];
 
         _iconAnimContainer = [[NSView alloc] initWithFrame:NSZeroRect];
         _iconAnimContainer.wantsLayer = YES;
@@ -191,7 +218,6 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconImageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         _iconImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
         _iconImageView.wantsLayer = YES;
-        _iconImageView.layer.cornerRadius = kIconCornerRadius;
         _iconImageView.layer.masksToBounds = YES;
         _iconImageView.translatesAutoresizingMaskIntoConstraints = NO;
         _iconImageView.hidden = YES;
@@ -220,12 +246,33 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _deleteButton.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_deleteButton];
 
-        [NSLayoutConstraint activateConstraints:@[
-            [self.widthAnchor constraintEqualToConstant:kCellSize],
-            [self.heightAnchor constraintEqualToConstant:kCellSize],
+        CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:_iconSize];
+        CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:_iconSize];
+        CGFloat shadowInset = [BrowserLaunchpadAppearance iconShadowInsetForIconSize:_iconSize];
+        CGFloat iconContainerSize = _iconSize + shadowInset * 2.0;
+        CGFloat cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:_iconSize];
+        _iconImageView.layer.cornerRadius = cornerRadius;
+        _iconBackdropView.cornerRadius = cornerRadius;
+        _iconBackdropView.shadowInset = shadowInset;
 
-            [_iconAnimContainer.widthAnchor constraintEqualToConstant:kIconContainerSize],
-            [_iconAnimContainer.heightAnchor constraintEqualToConstant:kIconContainerSize],
+        _cellWidthConstraint = [self.widthAnchor constraintEqualToConstant:cellWidth];
+        _cellHeightConstraint = [self.heightAnchor constraintEqualToConstant:cellHeight];
+        _iconContainerWidthConstraint = [_iconAnimContainer.widthAnchor constraintEqualToConstant:iconContainerSize];
+        _iconContainerHeightConstraint = [_iconAnimContainer.heightAnchor constraintEqualToConstant:iconContainerSize];
+        _iconWidthConstraint = [_iconImageView.widthAnchor constraintEqualToConstant:_iconSize];
+        _iconHeightConstraint = [_iconImageView.heightAnchor constraintEqualToConstant:_iconSize];
+        _deleteTopConstraint = [_deleteButton.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor
+                                                                      constant:shadowInset - 4];
+        _deleteLeadingConstraint = [_deleteButton.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor
+                                                                               constant:shadowInset - 4];
+
+        [NSLayoutConstraint activateConstraints:@[
+            _cellWidthConstraint,
+            _cellHeightConstraint,
+
+            _iconContainerWidthConstraint,
+            _iconContainerHeightConstraint,
+            // 阴影可画出 cell 左右边界，使「左右间距」直接作用在可视图标之间。
             [_iconAnimContainer.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_iconAnimContainer.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
 
@@ -234,8 +281,8 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [_iconBackdropView.trailingAnchor constraintEqualToAnchor:_iconAnimContainer.trailingAnchor],
             [_iconBackdropView.bottomAnchor constraintEqualToAnchor:_iconAnimContainer.bottomAnchor],
 
-            [_iconImageView.widthAnchor constraintEqualToConstant:kIconSize],
-            [_iconImageView.heightAnchor constraintEqualToConstant:kIconSize],
+            _iconWidthConstraint,
+            _iconHeightConstraint,
             [_iconImageView.centerXAnchor constraintEqualToAnchor:_iconAnimContainer.centerXAnchor],
             [_iconImageView.centerYAnchor constraintEqualToAnchor:_iconAnimContainer.centerYAnchor],
 
@@ -246,13 +293,40 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:2],
             [_titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-2],
 
-            [_deleteButton.topAnchor constraintEqualToAnchor:_iconAnimContainer.topAnchor constant:kIconShadowInset - 4],
-            [_deleteButton.leadingAnchor constraintEqualToAnchor:_iconAnimContainer.leadingAnchor constant:kIconShadowInset - 4],
+            _deleteTopConstraint,
+            _deleteLeadingConstraint,
             [_deleteButton.widthAnchor constraintEqualToConstant:18],
             [_deleteButton.heightAnchor constraintEqualToConstant:18],
         ]];
     }
     return self;
+}
+
+- (void)applyIconSize:(CGFloat)iconSize {
+    if (fabs(self.iconSize - iconSize) < 0.5) {
+        return;
+    }
+    self.iconSize = iconSize;
+    CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:iconSize];
+    CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:iconSize];
+    CGFloat shadowInset = [BrowserLaunchpadAppearance iconShadowInsetForIconSize:iconSize];
+    CGFloat iconContainerSize = iconSize + shadowInset * 2.0;
+    CGFloat cornerRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:iconSize];
+    CGFloat letterFontSize = 28.0 * (iconSize / [BrowserLaunchpadAppearance defaultIconSize]);
+
+    self.cellWidthConstraint.constant = cellWidth;
+    self.cellHeightConstraint.constant = cellHeight;
+    self.iconContainerWidthConstraint.constant = iconContainerSize;
+    self.iconContainerHeightConstraint.constant = iconContainerSize;
+    self.iconWidthConstraint.constant = iconSize;
+    self.iconHeightConstraint.constant = iconSize;
+    self.deleteTopConstraint.constant = shadowInset - 4;
+    self.deleteLeadingConstraint.constant = shadowInset - 4;
+    self.iconImageView.layer.cornerRadius = cornerRadius;
+    self.iconBackdropView.cornerRadius = cornerRadius;
+    self.iconBackdropView.shadowInset = shadowInset;
+    self.letterLabel.font = [NSFont systemFontOfSize:letterFontSize weight:NSFontWeightSemibold];
+    [self setNeedsLayout:YES];
 }
 
 - (void)updateTrackingAreas {
@@ -482,14 +556,19 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 @implementation BrowserShortcutCellView
 
 - (void)loadView {
-    self.shortcutContentView = [[BrowserShortcutCellContentView alloc] initWithFrame:NSMakeRect(0, 0, kCellSize, kCellSize)];
+    CGFloat iconSize = [BrowserLaunchpadAppearance current].iconSize;
+    CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:iconSize];
+    CGFloat cellHeight = [BrowserLaunchpadAppearance cellHeightForIconSize:iconSize];
+    self.shortcutContentView = [[BrowserShortcutCellContentView alloc] initWithFrame:NSMakeRect(0, 0, cellWidth, cellHeight)];
     self.shortcutContentView.clipsToBounds = NO;
+    [self.shortcutContentView applyIconSize:iconSize];
     self.view = self.shortcutContentView;
 }
 
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
     self.addCell = NO;
     self.shortcut = shortcut;
+    [self.shortcutContentView applyIconSize:[BrowserLaunchpadAppearance current].iconSize];
     [self.shortcutContentView configureWithShortcut:shortcut];
     [self bindHandlers];
 }
@@ -497,8 +576,13 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
 - (void)configureAsAddCell {
     self.addCell = YES;
     self.shortcut = nil;
+    [self.shortcutContentView applyIconSize:[BrowserLaunchpadAppearance current].iconSize];
     [self.shortcutContentView configureAsAddCell];
     [self bindHandlers];
+}
+
+- (void)applyIconSize:(CGFloat)iconSize {
+    [self.shortcutContentView applyIconSize:iconSize];
 }
 
 - (void)setEditingMode:(BOOL)editingMode {

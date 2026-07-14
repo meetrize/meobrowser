@@ -19,6 +19,7 @@ typedef void (^BrowserShortcutCellActionHandler)(BrowserShortcutItem *item);
 
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut;
 - (void)configureAsAddCell;
+- (void)applyIconSize:(CGFloat)iconSize;
 
 @end
 
