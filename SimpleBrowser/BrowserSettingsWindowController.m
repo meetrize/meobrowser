@@ -5,12 +5,14 @@
 @property (nonatomic, strong) NSPopUpButton *searchEnginePopUp;
 @property (nonatomic, strong) NSTextField *defaultBrowserStatusLabel;
 @property (nonatomic, strong) NSButton *setDefaultBrowserButton;
+@property (nonatomic, strong) NSButton *clearWebsiteDataButton;
+@property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
 @end
 
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 200)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 310)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -79,6 +81,28 @@
     browserHint.textColor = [NSColor secondaryLabelColor];
     browserHint.preferredMaxLayoutWidth = 388;
 
+    NSBox *separator2 = [[NSBox alloc] initWithFrame:NSZeroRect];
+    separator2.boxType = NSBoxSeparator;
+    separator2.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *privacyCaption = [NSTextField labelWithString:@"隐私与数据"];
+    privacyCaption.font = [NSFont systemFontOfSize:13];
+
+    self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…"
+                                                     target:self
+                                                     action:@selector(clearWebsiteDataClicked:)];
+    self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
+    self.clearWebsiteDataButton.controlSize = NSControlSizeRegular;
+
+    self.clearWebsiteDataStatusLabel = [NSTextField labelWithString:@"缓存、Cookie 与网站本地存储"];
+    self.clearWebsiteDataStatusLabel.font = [NSFont systemFontOfSize:11];
+    self.clearWebsiteDataStatusLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[self.clearWebsiteDataButton, self.clearWebsiteDataStatusLabel]];
+    privacyRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    privacyRow.alignment = NSLayoutAttributeCenterY;
+    privacyRow.spacing = 12;
+
     NSStackView *root = [NSStackView stackViewWithViews:@[
         searchGrid,
         searchHint,
@@ -86,6 +110,9 @@
         browserCaption,
         browserRow,
         browserHint,
+        separator2,
+        privacyCaption,
+        privacyRow,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
@@ -101,7 +128,9 @@
         [root.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
         [root.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
         [separator.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [separator2.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [browserRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [privacyRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
     ]];
 
     [self refreshDefaultBrowserStatus];
@@ -167,9 +196,49 @@
     }];
 }
 
+- (void)clearWebsiteDataClicked:(id)sender {
+    (void)sender;
+    NSAlert *confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"清除网站数据？";
+    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。";
+    confirm.alertStyle = NSAlertStyleWarning;
+    [confirm addButtonWithTitle:@"清除"];
+    [confirm addButtonWithTitle:@"取消"];
+    __weak typeof(self) weakSelf = self;
+    [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.clearWebsiteDataButton.enabled = NO;
+        strongSelf.clearWebsiteDataStatusLabel.stringValue = @"正在清除…";
+        [BrowsingPreferences clearWebsiteDataWithCompletion:^(NSError * _Nullable error) {
+            typeof(self) innerSelf = weakSelf;
+            if (!innerSelf) {
+                return;
+            }
+            innerSelf.clearWebsiteDataButton.enabled = YES;
+            if (error) {
+                innerSelf.clearWebsiteDataStatusLabel.stringValue = @"清除失败";
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"无法清除网站数据";
+                alert.informativeText = error.localizedDescription ?: @"未知错误";
+                alert.alertStyle = NSAlertStyleWarning;
+                [alert beginSheetModalForWindow:innerSelf.window completionHandler:nil];
+            } else {
+                innerSelf.clearWebsiteDataStatusLabel.stringValue = @"已清除";
+            }
+        }];
+    }];
+}
+
 - (void)showWindow:(id)sender {
     [self selectCurrentSearchEngineInPopUp];
     [self refreshDefaultBrowserStatus];
+    self.clearWebsiteDataStatusLabel.stringValue = @"缓存、Cookie 与网站本地存储";
     [super showWindow:sender];
 }
 

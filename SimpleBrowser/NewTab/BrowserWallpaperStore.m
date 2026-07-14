@@ -33,6 +33,7 @@ static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
 @property (nonatomic, copy, nullable) NSString *sourceFileName;
 @property (nonatomic, strong, nullable) NSImage *displayImage;
 @property (nonatomic, assign) NSInteger acquireCount;
+@property (nonatomic, assign) NSInteger displayLoadGeneration;
 @property (nonatomic, strong) dispatch_queue_t importQueue;
 @property (nonatomic, assign) CGFloat cachedImageLuminance;
 @property (nonatomic, assign) BOOL hasCachedImageLuminance;
@@ -278,7 +279,9 @@ static CGFloat BrowserWallpaperAverageLuminance(NSImage *image) {
     }
     self.acquireCount -= 1;
     if (self.acquireCount == 0) {
+        self.displayLoadGeneration += 1;
         self.displayImage = nil;
+        self.hasCachedImageLuminance = NO;
     }
 }
 
@@ -290,11 +293,28 @@ static CGFloat BrowserWallpaperAverageLuminance(NSImage *image) {
         return;
     }
     NSURL *url = [[self class] displayFileURL];
-    NSImage *image = [[NSImage alloc] initWithContentsOfURL:url];
-    if (image != nil) {
-        self.displayImage = image;
-        [self updateCachedLuminanceFromDisplayImage];
-    }
+    NSInteger generation = ++self.displayLoadGeneration;
+    dispatch_async(self.importQueue, ^{
+        NSImage *image = [[NSImage alloc] initWithContentsOfURL:url];
+        CGFloat luminance = 0.5;
+        BOOL hasLuminance = NO;
+        if (image != nil) {
+            luminance = BrowserWallpaperAverageLuminance(image);
+            hasLuminance = YES;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != self.displayLoadGeneration || self.acquireCount <= 0) {
+                return;
+            }
+            if (self.displayImage != nil || image == nil) {
+                return;
+            }
+            self.displayImage = image;
+            self.cachedImageLuminance = luminance;
+            self.hasCachedImageLuminance = hasLuminance;
+            [self postChangeReason:@"reload"];
+        });
+    });
 }
 
 - (void)reloadDisplayImageKeepingAcquire {
@@ -303,6 +323,7 @@ static CGFloat BrowserWallpaperAverageLuminance(NSImage *image) {
         self.hasCachedImageLuminance = NO;
         return;
     }
+    self.displayLoadGeneration += 1;
     self.displayImage = nil;
     self.hasCachedImageLuminance = NO;
     [self loadDisplayImageFromDiskIfNeeded];

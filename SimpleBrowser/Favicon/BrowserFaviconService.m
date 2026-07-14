@@ -95,6 +95,26 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
     } else {
         self.negativeFailures = [NSMutableDictionary dictionary];
     }
+    [self pruneExpiredNegativeFailures];
+}
+
+- (void)pruneExpiredNegativeFailures {
+    if (self.negativeFailures.count == 0) {
+        return;
+    }
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSMutableArray<NSString *> *expired = [NSMutableArray array];
+    [self.negativeFailures enumerateKeysAndObjectsUsingBlock:^(NSString *host, NSNumber *failedAt, BOOL *stop) {
+        (void)stop;
+        if (![failedAt isKindOfClass:[NSNumber class]] || (now - failedAt.doubleValue) > kNegativeCacheTTL) {
+            [expired addObject:host];
+        }
+    }];
+    if (expired.count == 0) {
+        return;
+    }
+    [self.negativeFailures removeObjectsForKeys:expired];
+    [self persistNegativeFailures];
 }
 
 - (void)persistNegativeFailures {
@@ -136,6 +156,7 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
 #pragma mark - Public
 
 - (nullable NSImage *)cachedImageForHost:(NSString *)host {
+    // 仅内存；避免主线程同步读盘。
     return [[BrowserFaviconCache sharedCache] imageForHost:host];
 }
 
@@ -155,6 +176,44 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
             });
             return;
         }
+
+        __weak typeof(self) weakSelf = self;
+        [[BrowserFaviconCache sharedCache] loadImageForHost:host completion:^(NSImage *diskImage) {
+            if (diskImage != nil) {
+                [weakSelf postDidUpdateForHost:host];
+                completion(diskImage);
+                return;
+            }
+            if (triggerFetch) {
+                [weakSelf fetchAndCacheForPageURLString:pageURLString
+                                        preferredIconURL:iconURLString
+                                                  reason:BrowserFaviconFetchReasonSilent
+                                              completion:^(NSURL *iconURL, NSImage *image, NSError *error) {
+                    (void)iconURL;
+                    (void)error;
+                    completion(image);
+                }];
+                return;
+            }
+            if (iconURLString.length > 0) {
+                [weakSelf downloadImageFromURLString:iconURLString completion:^(NSImage *image, NSURL *sourceURL, NSError *error) {
+                    (void)error;
+                    if (image != nil && host.length > 0) {
+                        [[BrowserFaviconCache sharedCache] storeImage:image
+                                                              forHost:host
+                                                            sourceURL:sourceURL.absoluteString
+                                                              channel:@"manual"];
+                        [weakSelf postDidUpdateForHost:host];
+                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        completion(image);
+                    });
+                }];
+                return;
+            }
+            completion(nil);
+        }];
+        return;
     }
 
     if (triggerFetch) {
@@ -173,13 +232,8 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
         __weak typeof(self) weakSelf = self;
         [self downloadImageFromURLString:iconURLString completion:^(NSImage *image, NSURL *sourceURL, NSError *error) {
             (void)error;
-            if (image != nil && host.length > 0) {
-                [[BrowserFaviconCache sharedCache] storeImage:image
-                                                      forHost:host
-                                                    sourceURL:sourceURL.absoluteString
-                                                      channel:@"manual"];
-                [weakSelf postDidUpdateForHost:host];
-            }
+            (void)sourceURL;
+            (void)weakSelf;
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(image);
             });
@@ -342,7 +396,7 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
     // Channel 1 — disk（Silent 命中清晰缓存可秒开；UserAction「自动获取」跳过，强制重拉）
     // 丢弃缓存里的 Google 默认模糊地球，避免永远不再走 Cravatar。
     if (job.reason != BrowserFaviconFetchReasonUserAction) {
-        NSImage *diskImage = [[BrowserFaviconCache sharedCache] imageForHost:job.host];
+        NSImage *diskImage = [[BrowserFaviconCache sharedCache] imageForHostLoadingFromDiskIfNeeded:job.host];
         if (diskImage != nil
             && BrowserFaviconMaxPixelEdge(diskImage) >= kPreferredMinPixelEdge
             && !BrowserFaviconImageLooksLikeGenericGlobePlaceholder(diskImage)) {

@@ -44,6 +44,8 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 @property (nonatomic, strong) BrowserDownloadManager *downloadManager;
 @property (nonatomic, strong) BrowserDownloadPanel *downloadPanel;
 @property (nonatomic, assign) BOOL downloadPanelVisible;
+@property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
+@property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @end
 
 @implementation BrowserWindowController
@@ -90,6 +92,16 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
     // WKWebView 默认 UA 不含 Safari 标识，部分站点（如百度）会识别为内嵌 WebView 并反复跳转验证页。
     configuration.applicationNameForUserAgent = @"Version/18.0 Safari/605.1.15";
+    // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
+    configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+
+    // 限制 URL 缓存上限，避免 App 进程内无限增长。
+    NSUInteger memoryCapacity = 16 * 1024 * 1024;
+    NSUInteger diskCapacity = 64 * 1024 * 1024;
+    NSURLCache *cache = [[NSURLCache alloc] initWithMemoryCapacity:memoryCapacity
+                                                      diskCapacity:diskCapacity
+                                                          diskPath:@"MeoBrowserURLCache"];
+    [NSURLCache setSharedURLCache:cache];
 }
 
 - (void)configureChromeWindow {
@@ -203,30 +215,43 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)scheduleTrafficLightPositioning {
+    // 用 generation 取消 resize/move 风暴中堆积的重试与延迟定位。
+    NSInteger generation = ++self.trafficLightScheduleGeneration;
     [self collapseSystemTitlebarDecoration];
-    [self tryPositionTrafficLightsStartingAtAttempt:0];
+    [self tryPositionTrafficLightsStartingAtAttempt:0 generation:generation];
 
     __weak typeof(self) weakSelf = self;
-    for (NSNumber *delayMs in @[@50, @150, @350]) {
+    for (NSNumber *delayMs in @[@50, @200]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs.doubleValue * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
-            [weakSelf collapseSystemTitlebarDecoration];
-            [weakSelf positionTrafficLightButtons];
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.trafficLightScheduleGeneration != generation) {
+                return;
+            }
+            [strongSelf collapseSystemTitlebarDecoration];
+            [strongSelf positionTrafficLightButtons];
         });
     }
 }
 
-- (void)tryPositionTrafficLightsStartingAtAttempt:(NSInteger)attempt {
+- (void)tryPositionTrafficLightsStartingAtAttempt:(NSInteger)attempt generation:(NSInteger)generation {
+    if (self.trafficLightScheduleGeneration != generation) {
+        return;
+    }
     if ([self positionTrafficLightButtons]) {
         return;
     }
-    if (attempt >= 40) {
+    if (attempt >= 20) {
         return;
     }
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(16 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
-        [weakSelf tryPositionTrafficLightsStartingAtAttempt:attempt + 1];
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.trafficLightScheduleGeneration != generation) {
+            return;
+        }
+        [strongSelf tryPositionTrafficLightsStartingAtAttempt:attempt + 1 generation:generation];
     });
 }
 
@@ -247,6 +272,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    if (self.pendingPersistBlock) {
+        dispatch_block_cancel(self.pendingPersistBlock);
+        self.pendingPersistBlock = nil;
+    }
     [self stopObservingLoadingProgress];
     [self.addressAutocompleteController uninstall];
     [self.downloadManager removeObserver:self];
@@ -609,7 +638,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)updateBookmarkButtonState {
     BrowserTab *tab = self.tabController.selectedTab;
-    NSURL *url = self.webView.URL;
+    NSURL *url = [tab currentOrRestorableURL];
     BOOL canBookmark = tab && !tab.isNewTabPage && [BrowsingPreferences isPersistableURL:url];
     if (!canBookmark) {
         [self setBookmarkButtonFilled:NO enabled:NO];
@@ -624,7 +653,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)toggleBookmark:(id)sender {
     (void)sender;
     BrowserTab *tab = self.tabController.selectedTab;
-    NSURL *url = self.webView.URL;
+    NSURL *url = [tab currentOrRestorableURL];
     if (!tab || tab.isNewTabPage || ![BrowsingPreferences isPersistableURL:url]) {
         return;
     }
@@ -692,8 +721,20 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 #pragma mark - Tab Management
 
+- (void)detachWebViewIfNeeded:(WKWebView *)webView {
+    if (webView == nil) {
+        return;
+    }
+    if (webView.superview == self.contentContainer) {
+        [webView removeFromSuperview];
+    }
+}
+
 - (void)attachWebViewForTab:(BrowserTab *)tab {
     WKWebView *webView = tab.webView;
+    if (webView == nil) {
+        return;
+    }
     if ([webView isKindOfClass:[BrowserWebView class]]) {
         __weak typeof(self) weakSelf = self;
         BrowserWebView *browserWebView = (BrowserWebView *)webView;
@@ -715,12 +756,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     if (webView.superview == self.contentContainer) {
+        webView.hidden = tab.isNewTabPage;
         return;
     }
 
     webView.translatesAutoresizingMaskIntoConstraints = NO;
     webView.navigationDelegate = self;
     webView.UIDelegate = self;
+    webView.hidden = tab.isNewTabPage;
     [self.contentContainer addSubview:webView];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -733,14 +776,23 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)refreshTabsUI {
     BrowserTab *selectedTab = self.tabController.selectedTab;
+
+    // 仅挂载当前标签的 WebView；其余离屏但仍可常驻（休眠由 TabController 销毁）。
     for (BrowserTab *tab in self.tabController.tabs) {
-        [self attachWebViewForTab:tab];
-        BOOL isSelected = (tab == selectedTab);
-        if (tab.isNewTabPage) {
-            tab.webView.hidden = YES;
-        } else {
-            tab.webView.hidden = !isSelected;
+        if (tab == selectedTab) {
+            continue;
         }
+        [self detachWebViewIfNeeded:tab.webView];
+    }
+
+    if (selectedTab != nil && !selectedTab.isNewTabPage) {
+        [selectedTab wakeFromHibernationIfNeeded];
+        [self attachWebViewForTab:selectedTab];
+        if (selectedTab.webView != nil) {
+            selectedTab.webView.hidden = NO;
+        }
+    } else if (selectedTab != nil) {
+        [self detachWebViewIfNeeded:selectedTab.webView];
     }
 
     BOOL showLaunchpad = selectedTab.isNewTabPage;
@@ -777,6 +829,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)observeLoadingProgressForSelectedTab {
     WKWebView *webView = self.webView;
     BrowserTab *tab = self.tabController.selectedTab;
+    // 下方多处共用；webView 可能为 nil（NTP / 休眠占位）。
     if (webView == self.observedProgressWebView) {
         [self syncLoadingProgressUI];
         return;
@@ -862,12 +915,43 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)persistTabSession {
+    if (self.pendingPersistBlock) {
+        dispatch_block_cancel(self.pendingPersistBlock);
+        self.pendingPersistBlock = nil;
+    }
+    [self persistTabSessionNow];
+}
+
+- (void)schedulePersistTabSession {
+    if (self.pendingPersistBlock) {
+        dispatch_block_cancel(self.pendingPersistBlock);
+        self.pendingPersistBlock = nil;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.pendingPersistBlock = nil;
+        [strongSelf persistTabSessionNow];
+    });
+    self.pendingPersistBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
+- (void)persistTabSessionNow {
     NSMutableArray<NSString *> *entries = [[NSMutableArray alloc] init];
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab.isNewTabPage) {
             [entries addObject:BrowserTabSessionNewTabMarker];
-        } else if ([BrowsingPreferences isPersistableURL:tab.webView.URL]) {
-            [entries addObject:tab.webView.URL.absoluteString];
+            continue;
+        }
+        NSURL *url = [tab currentOrRestorableURL];
+        if ([BrowsingPreferences isPersistableURL:url]) {
+            [entries addObject:url.absoluteString];
         } else {
             [entries addObject:BrowserTabSessionNewTabMarker];
         }
@@ -896,7 +980,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)tabControllerDidChange:(id)controller {
     (void)controller;
     [self refreshTabsUI];
-    [self persistTabSession];
+    [self schedulePersistTabSession];
 }
 
 - (void)tabControllerRequestsCloseWindow:(id)controller {
@@ -1090,6 +1174,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)reloadPage:(id)sender {
     (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.isHibernated) {
+        [tab wakeFromHibernationIfNeeded];
+        [self refreshTabsUI];
+        return;
+    }
     [self.webView reload];
 }
 
@@ -1189,7 +1279,8 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (!tab || tab.isNewTabPage) {
         return @"";
     }
-    return tab.webView.URL.absoluteString ?: @"";
+    NSURL *url = [tab currentOrRestorableURL];
+    return url.absoluteString ?: @"";
 }
 
 - (void)persistAddressBarDraftFromField {
@@ -1216,15 +1307,28 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 }
 
 - (void)updateNavigationState {
+    BrowserTab *tab = self.tabController.selectedTab;
     WKWebView *webView = self.webView;
-    if (!webView) {
+
+    if (!tab || tab.isNewTabPage || webView == nil) {
+        self.backButton.enabled = NO;
+        self.forwardButton.enabled = NO;
+        self.reloadButton.enabled = tab != nil && (tab.isHibernated || !tab.isNewTabPage);
+        [self setDisplayedWindowTitle:tab.displayTitle ?: BrowserAppDisplayName];
+        [self persistAddressBarDraftFromField];
+        if (tab) {
+            [self applyAddressBarStringForTab:tab];
+        } else {
+            self.addressField.stringValue = @"";
+            self.lastAddressBarTab = nil;
+        }
+        [self updateBookmarkButtonState];
         return;
     }
 
-    BrowserTab *tab = self.tabController.selectedTab;
-    self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
-    self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
-    self.reloadButton.enabled = !tab.isNewTabPage;
+    self.backButton.enabled = webView.canGoBack;
+    self.forwardButton.enabled = webView.canGoForward;
+    self.reloadButton.enabled = YES;
 
     NSString *title = tab.displayTitle;
     [self setDisplayedWindowTitle:title];
@@ -1416,7 +1520,7 @@ didFailNavigation:(WKNavigation *)navigation
     if (titleChanged) {
         [self updateTabStripDisplay];
     }
-    [self persistTabSession];
+    [self schedulePersistTabSession];
 }
 
 - (void)handleNavigationError:(NSError *)error forWebView:(WKWebView *)webView {

@@ -1,6 +1,7 @@
 #import "BrowsingPreferences.h"
 #import <AppKit/AppKit.h>
 #import <CoreServices/CoreServices.h>
+#import <WebKit/WebKit.h>
 
 static NSString * const kLastVisitedURLKey = @"lastVisitedURL";
 static NSString * const kTabSessionKey = @"tabSession";
@@ -242,6 +243,31 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
     } else {
         finish([NSError errorWithDomain:NSOSStatusErrorDomain code:httpsStatus userInfo:nil]);
     }
+}
+
++ (void)clearWebsiteDataWithCompletion:(void (^)(NSError * _Nullable error))completion {
+    void (^finish)(NSError * _Nullable) = ^(NSError * _Nullable error) {
+        if (!completion) {
+            return;
+        }
+        if ([NSThread isMainThread]) {
+            completion(error);
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(error);
+            });
+        }
+    };
+
+    [[NSURLCache sharedURLCache] removeAllCachedResponses];
+
+    NSSet<NSString *> *types = [WKWebsiteDataStore allWebsiteDataTypes];
+    NSDate *since = [NSDate dateWithTimeIntervalSince1970:0];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:types
+                                               modifiedSince:since
+                                           completionHandler:^{
+        finish(nil);
+    }];
 }
 
 @end

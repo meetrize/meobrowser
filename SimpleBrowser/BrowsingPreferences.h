@@ -33,6 +33,9 @@ extern NSString * const BrowserSearchEngineBaidu;
 + (BOOL)isDefaultBrowser;
 + (void)requestSetAsDefaultBrowserWithCompletion:(void (^)(NSError * _Nullable error))completion;
 
+/// 清除 WebKit 网站数据与共享 URL 缓存；completion 在主线程。
++ (void)clearWebsiteDataWithCompletion:(void (^ _Nullable)(NSError * _Nullable error))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

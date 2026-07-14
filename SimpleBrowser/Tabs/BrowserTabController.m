@@ -3,6 +3,9 @@
 #import "BrowsingPreferences.h"
 
 static const NSUInteger kRecentlyClosedTabLimit = 20;
+static const NSUInteger kMaxLiveWebViews = 8;
+static const NSTimeInterval kHibernateIdleSeconds = 600.0; // 10 minutes
+static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 @interface BrowserRecentlyClosedEntry : NSObject
 @property (nonatomic, copy) NSString *sessionEntry;
@@ -18,6 +21,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 @property (nonatomic, strong) NSMutableArray<BrowserTab *> *mutableTabs;
 @property (nonatomic, strong, nullable) BrowserTab *selectedTab;
 @property (nonatomic, strong) NSMutableArray<BrowserRecentlyClosedEntry *> *recentlyClosedEntries;
+@property (nonatomic, strong, nullable) NSTimer *hibernateTimer;
 @end
 
 @implementation BrowserTabController
@@ -28,8 +32,13 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         _configuration = configuration;
         _mutableTabs = [[NSMutableArray alloc] init];
         _recentlyClosedEntries = [[NSMutableArray alloc] init];
+        [self startHibernateTimer];
     }
     return self;
+}
+
+- (void)dealloc {
+    [self.hibernateTimer invalidate];
 }
 
 - (NSArray<BrowserTab *> *)tabs {
@@ -55,8 +64,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
     [tab loadNewTabPage];
     [self.mutableTabs addObject:tab];
-    self.selectedTab = tab;
-    [self notifyChange];
+    [self selectTabInternal:tab notify:YES];
     return tab;
 }
 
@@ -64,8 +72,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
     [tab loadURL:url];
     [self.mutableTabs addObject:tab];
-    self.selectedTab = tab;
-    [self notifyChange];
+    [self selectTabInternal:tab notify:YES];
     return tab;
 }
 
@@ -77,6 +84,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 
     if (self.mutableTabs.count <= 1) {
         [self rememberClosedTab:tab atIndex:index];
+        [tab prepareForClose];
         [self.delegate tabControllerRequestsCloseWindow:self];
         return;
     }
@@ -119,7 +127,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     }
     [self.recentlyClosedEntries removeLastObject];
 
-    BrowserTab *tab = [self tabFromSessionEntry:entry.sessionEntry];
+    BrowserTab *tab = [self tabFromSessionEntry:entry.sessionEntry materialize:YES];
     tab.pinned = entry.wasPinned;
 
     NSUInteger insertIndex = MIN(entry.insertionIndex, self.mutableTabs.count);
@@ -130,8 +138,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         insertIndex = MIN(insertIndex, self.mutableTabs.count);
     }
     [self.mutableTabs insertObject:tab atIndex:insertIndex];
-    self.selectedTab = tab;
-    [self notifyChange];
+    [self selectTabInternal:tab notify:YES];
     return tab;
 }
 
@@ -140,10 +147,10 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         return;
     }
     if (self.selectedTab == tab) {
+        [tab wakeFromHibernationIfNeeded];
         return;
     }
-    self.selectedTab = tab;
-    [self notifyChange];
+    [self selectTabInternal:tab notify:YES];
 }
 
 - (void)selectNextTab {
@@ -155,8 +162,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         return;
     }
     NSUInteger nextIndex = (index + 1) % self.mutableTabs.count;
-    self.selectedTab = self.mutableTabs[nextIndex];
-    [self notifyChange];
+    [self selectTabInternal:self.mutableTabs[nextIndex] notify:YES];
 }
 
 - (void)selectPreviousTab {
@@ -168,8 +174,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         return;
     }
     NSUInteger prevIndex = index == 0 ? self.mutableTabs.count - 1 : index - 1;
-    self.selectedTab = self.mutableTabs[prevIndex];
-    [self notifyChange];
+    [self selectTabInternal:self.mutableTabs[prevIndex] notify:YES];
 }
 
 - (void)moveTab:(BrowserTab *)tab toIndex:(NSUInteger)toIndex {
@@ -216,14 +221,15 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
                  selectedIndex:(NSInteger)selectedIndex
                    pinnedCount:(NSUInteger)pinnedCount {
     for (BrowserTab *tab in [self.mutableTabs copy]) {
-        [tab.webView removeFromSuperview];
+        [tab prepareForClose];
     }
     [self.mutableTabs removeAllObjects];
     self.selectedTab = nil;
 
     NSUInteger clampedPinned = MIN(pinnedCount, entries.count);
     for (NSUInteger i = 0; i < entries.count; i++) {
-        BrowserTab *tab = [self tabFromSessionEntry:entries[i]];
+        // 先全部占位；仅选中项在下方 materialize。
+        BrowserTab *tab = [self tabFromSessionEntry:entries[i] materialize:NO];
         tab.pinned = (i < clampedPinned);
         [self.mutableTabs addObject:tab];
     }
@@ -234,8 +240,8 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     }
 
     NSInteger clampedIndex = MAX(0, MIN(selectedIndex, (NSInteger)self.mutableTabs.count - 1));
-    self.selectedTab = self.mutableTabs[(NSUInteger)clampedIndex];
-    [self notifyChange];
+    BrowserTab *selected = self.mutableTabs[(NSUInteger)clampedIndex];
+    [self selectTabInternal:selected notify:YES];
 }
 
 - (NSInteger)indexOfSelectedTab {
@@ -246,6 +252,9 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 }
 
 - (nullable BrowserTab *)tabForWebView:(WKWebView *)webView {
+    if (webView == nil) {
+        return nil;
+    }
     for (BrowserTab *tab in self.mutableTabs) {
         if (tab.webView == webView) {
             return tab;
@@ -255,6 +264,16 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 }
 
 #pragma mark - Private
+
+- (void)selectTabInternal:(BrowserTab *)tab notify:(BOOL)notify {
+    self.selectedTab = tab;
+    tab.lastActiveTimestamp = [NSDate date].timeIntervalSince1970;
+    [tab wakeFromHibernationIfNeeded];
+    [self enforceLiveWebViewBudget];
+    if (notify) {
+        [self notifyChange];
+    }
+}
 
 - (void)removeTabsAtIndexes:(NSIndexSet *)indexes {
     if (indexes.count == 0) {
@@ -281,7 +300,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     }
 
     BOOL closingSelected = (tab == self.selectedTab);
-    [tab.webView removeFromSuperview];
+    [tab prepareForClose];
     [self.mutableTabs removeObjectAtIndex:index];
 
     if (closingSelected && self.mutableTabs.count > 0) {
@@ -289,7 +308,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
         if (nextIndex >= self.mutableTabs.count) {
             nextIndex = self.mutableTabs.count - 1;
         }
-        self.selectedTab = self.mutableTabs[nextIndex];
+        [self selectTabInternal:self.mutableTabs[nextIndex] notify:NO];
     }
 }
 
@@ -308,13 +327,14 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     if (tab.isNewTabPage) {
         return BrowserTabSessionNewTabMarker;
     }
-    if ([BrowsingPreferences isPersistableURL:tab.webView.URL]) {
-        return tab.webView.URL.absoluteString;
+    NSURL *url = [tab currentOrRestorableURL];
+    if ([BrowsingPreferences isPersistableURL:url]) {
+        return url.absoluteString;
     }
     return BrowserTabSessionNewTabMarker;
 }
 
-- (BrowserTab *)tabFromSessionEntry:(NSString *)entry {
+- (BrowserTab *)tabFromSessionEntry:(NSString *)entry materialize:(BOOL)materialize {
     if ([entry isEqualToString:BrowserTabSessionNewTabMarker]) {
         BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
         [tab loadNewTabPage];
@@ -329,8 +349,92 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
     }
 
     BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
-    [tab loadURL:url];
+    if (materialize) {
+        [tab loadURL:url];
+    } else {
+        tab.isNewTabPage = NO;
+        tab.restorableURL = url;
+        tab.title = url.host.length > 0 ? url.host : url.absoluteString;
+    }
     return tab;
+}
+
+#pragma mark - Hibernation
+
+- (void)startHibernateTimer {
+    __weak typeof(self) weakSelf = self;
+    self.hibernateTimer = [NSTimer scheduledTimerWithTimeInterval:kHibernateCheckInterval
+                                                          repeats:YES
+                                                            block:^(NSTimer *timer) {
+                                                                (void)timer;
+                                                                [weakSelf evaluateHibernation];
+                                                            }];
+    self.hibernateTimer.tolerance = 5.0;
+}
+
+- (void)evaluateHibernation {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    BOOL changed = NO;
+
+    for (BrowserTab *tab in self.mutableTabs) {
+        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+            continue;
+        }
+        if (now - tab.lastActiveTimestamp >= kHibernateIdleSeconds) {
+            [tab hibernate];
+            changed = YES;
+        }
+    }
+
+    if ([self liveWebViewCount] > kMaxLiveWebViews) {
+        [self enforceLiveWebViewBudget];
+        changed = YES;
+    }
+
+    if (changed) {
+        [self notifyChange];
+    }
+}
+
+- (NSUInteger)liveWebViewCount {
+    NSUInteger count = 0;
+    for (BrowserTab *tab in self.mutableTabs) {
+        if (tab.webView != nil) {
+            count++;
+        }
+    }
+    return count;
+}
+
+- (void)enforceLiveWebViewBudget {
+    NSUInteger live = [self liveWebViewCount];
+    if (live <= kMaxLiveWebViews) {
+        return;
+    }
+
+    NSMutableArray<BrowserTab *> *candidates = [NSMutableArray array];
+    for (BrowserTab *tab in self.mutableTabs) {
+        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+            continue;
+        }
+        [candidates addObject:tab];
+    }
+    [candidates sortUsingComparator:^NSComparisonResult(BrowserTab *a, BrowserTab *b) {
+        if (a.lastActiveTimestamp < b.lastActiveTimestamp) {
+            return NSOrderedAscending;
+        }
+        if (a.lastActiveTimestamp > b.lastActiveTimestamp) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+
+    for (BrowserTab *tab in candidates) {
+        if ([self liveWebViewCount] <= kMaxLiveWebViews) {
+            break;
+        }
+        [tab hibernate];
+    }
 }
 
 - (void)notifyChange {

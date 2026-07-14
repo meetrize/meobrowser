@@ -19,6 +19,12 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 
 @implementation BrowserShortcutStore
 
+static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
+
++ (void)invalidateMemoryCache {
+    sCachedShortcuts = nil;
+}
+
 + (NSArray<BrowserShortcutItem *> *)defaultShortcuts {
     return @[
         [BrowserShortcutItem itemWithTitle:@"Google" urlString:@"https://www.google.com" iconURLString:@"" sortOrder:0],
@@ -33,6 +39,10 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
 }
 
 + (NSArray<BrowserShortcutItem *> *)loadShortcuts {
+    if (sCachedShortcuts != nil) {
+        return sCachedShortcuts;
+    }
+
     id stored = [[NSUserDefaults standardUserDefaults] objectForKey:kShortcutItemsKey];
     NSArray *rawItems = nil;
     BOOL needsRewrite = NO;
@@ -56,7 +66,7 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     if (![rawItems isKindOfClass:[NSArray class]] || rawItems.count == 0) {
         NSArray<BrowserShortcutItem *> *defaults = [self defaultShortcuts];
         [self saveShortcuts:defaults];
-        return defaults;
+        return sCachedShortcuts ?: defaults;
     }
 
     NSMutableArray<BrowserShortcutItem *> *items = [[NSMutableArray alloc] initWithCapacity:rawItems.count];
@@ -74,15 +84,17 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
     if (items.count == 0) {
         NSArray<BrowserShortcutItem *> *defaults = [self defaultShortcuts];
         [self saveShortcuts:defaults];
-        return defaults;
+        return sCachedShortcuts ?: defaults;
     }
 
     [self repairInvariantsInShortcuts:items];
     [self normalizeSortOrdersInShortcuts:items];
     if (needsRewrite) {
         [self saveShortcuts:items];
+        return sCachedShortcuts ?: [items copy];
     }
-    return items;
+    sCachedShortcuts = [items copy];
+    return sCachedShortcuts;
 }
 
 + (void)saveShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {
@@ -100,6 +112,8 @@ NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
         kShortcutPayloadItemsKey: payloadItems,
     };
     [[NSUserDefaults standardUserDefaults] setObject:payload forKey:kShortcutItemsKey];
+
+    sCachedShortcuts = [mutableCopy copy];
 
     if (shortcuts != mutableCopy && [shortcuts isKindOfClass:[NSMutableArray class]]) {
         NSMutableArray *mutable = (NSMutableArray *)shortcuts;

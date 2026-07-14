@@ -139,21 +139,24 @@ static const NSUInteger kMaxDiskEntries = 500;
 #pragma mark - LRU
 
 - (void)evictIfNeededUnlocked {
-    while (self.indexMap.count > kMaxDiskEntries) {
-        NSString *oldestHost = nil;
-        NSTimeInterval oldestAt = DBL_MAX;
-        for (NSString *host in self.indexMap) {
-            NSDictionary *entry = self.indexMap[host];
-            NSTimeInterval updated = [entry[kEntryUpdatedAtKey] doubleValue];
-            if (updated < oldestAt) {
-                oldestAt = updated;
-                oldestHost = host;
-            }
+    NSUInteger count = self.indexMap.count;
+    if (count <= kMaxDiskEntries) {
+        return;
+    }
+    NSArray<NSString *> *hosts = [self.indexMap keysSortedByValueUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSTimeInterval ua = [a[kEntryUpdatedAtKey] doubleValue];
+        NSTimeInterval ub = [b[kEntryUpdatedAtKey] doubleValue];
+        if (ua < ub) {
+            return NSOrderedAscending;
         }
-        if (oldestHost == nil) {
-            break;
+        if (ua > ub) {
+            return NSOrderedDescending;
         }
-        [self removeHostUnlocked:oldestHost];
+        return NSOrderedSame;
+    }];
+    NSUInteger overflow = count - kMaxDiskEntries;
+    for (NSUInteger i = 0; i < overflow && i < hosts.count; i++) {
+        [self removeHostUnlocked:hosts[i]];
     }
 }
 
@@ -164,30 +167,72 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (key == nil) {
         return nil;
     }
+    return [self.memoryCache objectForKey:key];
+}
 
+- (void)loadImageForHost:(NSString *)host
+              completion:(void (^)(NSImage * _Nullable image))completion {
+    if (!completion) {
+        return;
+    }
+    NSString *key = [self normalizedHost:host];
+    if (key == nil) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(nil);
+        });
+        return;
+    }
+
+    NSImage *cached = [self.memoryCache objectForKey:key];
+    if (cached != nil) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(cached);
+        });
+        return;
+    }
+
+    dispatch_async(self.ioQueue, ^{
+        NSImage *diskImage = [self loadDiskImageUnlockedForHost:key];
+        if (diskImage != nil) {
+            [self.memoryCache setObject:diskImage forKey:key];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(diskImage);
+        });
+    });
+}
+
+- (nullable NSImage *)imageForHostLoadingFromDiskIfNeeded:(NSString *)host {
+    NSString *key = [self normalizedHost:host];
+    if (key == nil) {
+        return nil;
+    }
     NSImage *cached = [self.memoryCache objectForKey:key];
     if (cached != nil) {
         return cached;
     }
-
     __block NSImage *diskImage = nil;
     dispatch_sync(self.ioQueue, ^{
-        NSDictionary *entry = self.indexMap[key];
-        NSString *fileName = entry[kEntryFileNameKey];
-        if (![fileName isKindOfClass:[NSString class]] || fileName.length == 0) {
-            return;
-        }
-        NSURL *fileURL = [self blobURLForFileName:fileName];
-        NSImage *image = [[NSImage alloc] initWithContentsOfURL:fileURL];
-        if (image != nil && image.size.width > 0 && image.size.height > 0) {
-            diskImage = image;
-        }
+        diskImage = [self loadDiskImageUnlockedForHost:key];
     });
-
     if (diskImage != nil) {
         [self.memoryCache setObject:diskImage forKey:key];
     }
     return diskImage;
+}
+
+- (nullable NSImage *)loadDiskImageUnlockedForHost:(NSString *)key {
+    NSDictionary *entry = self.indexMap[key];
+    NSString *fileName = entry[kEntryFileNameKey];
+    if (![fileName isKindOfClass:[NSString class]] || fileName.length == 0) {
+        return nil;
+    }
+    NSURL *fileURL = [self blobURLForFileName:fileName];
+    NSImage *image = [[NSImage alloc] initWithContentsOfURL:fileURL];
+    if (image != nil && image.size.width > 0 && image.size.height > 0) {
+        return image;
+    }
+    return nil;
 }
 
 - (nullable NSString *)sourceURLForHost:(NSString *)host {

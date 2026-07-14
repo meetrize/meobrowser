@@ -10,8 +10,15 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSURL *)blobsDirectoryURL;
 + (NSURL *)indexFileURL;
 
-/// 优先内存，其次磁盘；均无则 nil。
+/// 仅查内存热缓存；miss 返回 nil（不堵主线程读盘）。
 - (nullable NSImage *)imageForHost:(NSString *)host;
+
+/// 内存 miss 时异步读盘，完成后回调主线程；若写入内存则一并 post 由 Service 发通知。
+- (void)loadImageForHost:(NSString *)host
+              completion:(void (^)(NSImage * _Nullable image))completion;
+
+/// 仅在后台队列调用：同步读盘并填充内存（供瀑布 fetch 使用）。
+- (nullable NSImage *)imageForHostLoadingFromDiskIfNeeded:(NSString *)host;
 
 - (nullable NSString *)sourceURLForHost:(NSString *)host;
 - (nullable NSString *)sourceChannelForHost:(NSString *)host;
