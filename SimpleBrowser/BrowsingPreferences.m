@@ -153,14 +153,26 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
 }
 
 + (BOOL)isDefaultBrowser {
-    NSURL *probe = [NSURL URLWithString:@"http://example.com"];
-    NSURL *handlerURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:probe];
-    if (!handlerURL) {
+    NSString *ourID = [[NSBundle mainBundle] bundleIdentifier];
+    if (ourID.length == 0) {
         return NO;
     }
-    NSString *handlerID = [[NSBundle bundleWithURL:handlerURL] bundleIdentifier];
-    NSString *ourID = [[NSBundle mainBundle] bundleIdentifier];
-    return handlerID.length > 0 && [handlerID isEqualToString:ourID];
+
+    NSArray<NSURL *> *probes = @[
+        [NSURL URLWithString:@"http://example.com"],
+        [NSURL URLWithString:@"https://example.com"],
+    ];
+    for (NSURL *probe in probes) {
+        NSURL *handlerURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:probe];
+        if (!handlerURL) {
+            return NO;
+        }
+        NSString *handlerID = [[NSBundle bundleWithURL:handlerURL] bundleIdentifier];
+        if (handlerID.length == 0 || ![handlerID isEqualToString:ourID]) {
+            return NO;
+        }
+    }
+    return YES;
 }
 
 + (void)requestSetAsDefaultBrowserWithCompletion:(void (^)(NSError * _Nullable error))completion {
@@ -181,8 +193,16 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
     if (@available(macOS 12.0, *)) {
         [[NSWorkspace sharedWorkspace] setDefaultApplicationAtURL:appURL
                                            toOpenURLsWithScheme:@"http"
-                                              completionHandler:^(NSError * _Nullable error) {
-            finish(error);
+                                              completionHandler:^(NSError * _Nullable httpError) {
+            if (httpError) {
+                finish(httpError);
+                return;
+            }
+            [[NSWorkspace sharedWorkspace] setDefaultApplicationAtURL:appURL
+                                               toOpenURLsWithScheme:@"https"
+                                                  completionHandler:^(NSError * _Nullable httpsError) {
+                finish(httpsError);
+            }];
         }];
         return;
     }
@@ -195,11 +215,16 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
         return;
     }
 
-    OSStatus status = LSSetDefaultHandlerForURLScheme(CFSTR("http"), (__bridge CFStringRef)bundleID);
-    if (status == noErr) {
+    OSStatus httpStatus = LSSetDefaultHandlerForURLScheme(CFSTR("http"), (__bridge CFStringRef)bundleID);
+    if (httpStatus != noErr) {
+        finish([NSError errorWithDomain:NSOSStatusErrorDomain code:httpStatus userInfo:nil]);
+        return;
+    }
+    OSStatus httpsStatus = LSSetDefaultHandlerForURLScheme(CFSTR("https"), (__bridge CFStringRef)bundleID);
+    if (httpsStatus == noErr) {
         finish(nil);
     } else {
-        finish([NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:nil]);
+        finish([NSError errorWithDomain:NSOSStatusErrorDomain code:httpsStatus userInfo:nil]);
     }
 }
 

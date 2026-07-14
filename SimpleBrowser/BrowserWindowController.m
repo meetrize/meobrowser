@@ -6,6 +6,7 @@
 #import "BrowserTabController.h"
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
+#import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutStore.h"
@@ -604,6 +605,13 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)attachWebViewForTab:(BrowserTab *)tab {
     WKWebView *webView = tab.webView;
+    if ([webView isKindOfClass:[BrowserWebView class]]) {
+        __weak typeof(self) weakSelf = self;
+        ((BrowserWebView *)webView).openURLHandler = ^(NSURL *url) {
+            [weakSelf.tabController addTabWithURL:url];
+        };
+    }
+
     if (webView.superview == self.contentContainer) {
         return;
     }

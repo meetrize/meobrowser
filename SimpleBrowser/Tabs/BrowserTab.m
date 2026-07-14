@@ -1,4 +1,5 @@
 #import "BrowserTab.h"
+#import "BrowserWebView.h"
 
 @interface BrowserTab ()
 @property (nonatomic, assign) BOOL hasPendingMainFrameNavigation;
@@ -11,7 +12,7 @@
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration {
     BrowserTab *tab = [[self alloc] init];
     tab->_tabID = [NSUUID UUID];
-    tab->_webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+    tab->_webView = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     tab.title = @"新标签页";
     tab.isNewTabPage = YES;
     return tab;

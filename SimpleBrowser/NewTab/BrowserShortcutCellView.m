@@ -183,19 +183,18 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self = [super initWithFrame:frameRect];
     if (self) {
         self.wantsLayer = YES;
+        self.layer.masksToBounds = YES;
         self.translatesAutoresizingMaskIntoConstraints = NO;
 
         _backdropView = [[BrowserShortcutIconBackdropView alloc] initWithFrame:NSZeroRect];
         _backdropView.translatesAutoresizingMaskIntoConstraints = NO;
         _backdropView.shadowInset = 0;
-        _backdropView.cornerRadius = 4;
         [self addSubview:_backdropView];
 
         _imageView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         _imageView.imageScaling = NSImageScaleProportionallyUpOrDown;
         _imageView.wantsLayer = YES;
         _imageView.layer.masksToBounds = YES;
-        _imageView.layer.cornerRadius = 4;
         _imageView.translatesAutoresizingMaskIntoConstraints = NO;
         _imageView.hidden = YES;
         [self addSubview:_imageView];
@@ -219,8 +218,31 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
             [_letterLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
             [_letterLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
         ]];
+
+        // 默认按小格尺寸套用与主图标同比例的圆角。
+        [self applyCornerRadiusForParentIconSize:[BrowserLaunchpadAppearance defaultIconSize]];
     }
     return self;
+}
+
+/// 与主图标保持相同圆角比例（radius/side），视觉上和大图标 squircle 一致。
+- (void)applyCornerRadiusForParentIconSize:(CGFloat)parentIconSize {
+    // folderGrid ≈ 0.86·icon，tile ≈ 0.46·grid → side ≈ 0.3956·icon
+    CGFloat tileSide = parentIconSize * 0.86 * 0.46;
+    CGFloat parentRadius = [BrowserLaunchpadAppearance iconCornerRadiusForIconSize:parentIconSize];
+    CGFloat radius = parentRadius * (tileSide / MAX(parentIconSize, 1.0));
+    // 小图标同等比例会显得更方，加大圆角以贴近外框弧度。
+    radius = MAX(9.0, radius * 2.05);
+
+    self.layer.cornerRadius = radius;
+    self.backdropView.cornerRadius = radius;
+    self.imageView.layer.cornerRadius = radius;
+    if (@available(macOS 10.15, *)) {
+        self.layer.cornerCurve = kCACornerCurveContinuous;
+        self.imageView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    CGFloat letterSize = MAX(9.0, 11.0 * (parentIconSize / [BrowserLaunchpadAppearance defaultIconSize]));
+    self.letterLabel.font = [NSFont systemFontOfSize:letterSize weight:NSFontWeightSemibold];
 }
 
 - (void)configureWithShortcut:(nullable BrowserShortcutItem *)shortcut {
@@ -367,6 +389,10 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconBackdropView.cornerRadius = cornerRadius;
         _iconBackdropView.shadowInset = shadowInset;
         _mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
+        if (@available(macOS 10.15, *)) {
+            _iconImageView.layer.cornerCurve = kCACornerCurveContinuous;
+            _mergeRingView.layer.cornerCurve = kCACornerCurveContinuous;
+        }
 
         _cellWidthConstraint = [self.widthAnchor constraintEqualToConstant:cellWidth];
         _cellHeightConstraint = [self.heightAnchor constraintEqualToConstant:cellHeight];
@@ -374,6 +400,10 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
         _iconContainerHeightConstraint = [_iconAnimContainer.heightAnchor constraintEqualToConstant:iconContainerSize];
         _iconWidthConstraint = [_iconImageView.widthAnchor constraintEqualToConstant:_iconSize];
         _iconHeightConstraint = [_iconImageView.heightAnchor constraintEqualToConstant:_iconSize];
+
+        for (BrowserShortcutFolderTileView *tile in _folderTiles) {
+            [tile applyCornerRadiusForParentIconSize:_iconSize];
+        }
 
         BrowserShortcutFolderTileView *tile0 = _folderTiles[0];
         BrowserShortcutFolderTileView *tile1 = _folderTiles[1];
@@ -451,7 +481,14 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     self.iconBackdropView.cornerRadius = cornerRadius;
     self.iconBackdropView.shadowInset = shadowInset;
     self.mergeRingView.layer.cornerRadius = cornerRadius + 3.0;
+    if (@available(macOS 10.15, *)) {
+        self.iconImageView.layer.cornerCurve = kCACornerCurveContinuous;
+        self.mergeRingView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
     self.letterLabel.font = [NSFont systemFontOfSize:letterFontSize weight:NSFontWeightSemibold];
+    for (BrowserShortcutFolderTileView *tile in self.folderTiles) {
+        [tile applyCornerRadiusForParentIconSize:iconSize];
+    }
     [self setNeedsLayout:YES];
 }
 

@@ -64,6 +64,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
 @property (nonatomic, strong) NSView *tabsContentView;
 @property (nonatomic, strong) NSButton *overflowButton;
 @property (nonatomic, strong) NSLayoutConstraint *overflowWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *tabsClipWidthConstraint;
 @property (nonatomic, strong) NSButton *addTabButton;
 @property (nonatomic, strong) NSMutableArray<BrowserTabItemView *> *tabItems;
 @property (nonatomic, strong) NSMapTable<BrowserTabItemView *, NSUUID *> *tabItemIDs;
@@ -72,6 +73,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
 @property (nonatomic, strong) NSMutableArray<NSUUID *> *overflowTabIDs;
 @property (nonatomic, assign) CGFloat lastLaidOutTabWidth;
 @property (nonatomic, assign) CGFloat lastLaidOutAvailableWidth;
+@property (nonatomic, assign) CGFloat lastLaidOutClipWidth;
 @property (nonatomic, assign) NSUInteger lastLaidOutTabCount;
 @property (nonatomic, assign) NSUInteger lastVisibleStart;
 @property (nonatomic, assign) NSUInteger lastVisibleCount;
@@ -92,6 +94,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
         _overflowTabIDs = [NSMutableArray array];
         _lastLaidOutTabWidth = -1;
         _lastLaidOutAvailableWidth = -1;
+        _lastLaidOutClipWidth = -1;
         _lastLaidOutTabCount = NSNotFound;
         _lastVisibleStart = NSNotFound;
         _lastVisibleCount = NSNotFound;
@@ -108,9 +111,9 @@ static const CGFloat kOverflowButtonWidth = 22.0;
         _tabsClipView.translatesAutoresizingMaskIntoConstraints = NO;
         _tabsClipView.wantsLayer = YES;
         _tabsClipView.layer.masksToBounds = YES;
-        [_tabsClipView setContentHuggingPriority:NSLayoutPriorityDefaultLow
+        [_tabsClipView setContentHuggingPriority:NSLayoutPriorityRequired
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [_tabsClipView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+        [_tabsClipView setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         _tabsContentView = [[BrowserTabStripDragAreaView alloc] initWithFrame:NSZeroRect];
@@ -133,9 +136,10 @@ static const CGFloat kOverflowButtonWidth = 22.0;
 
         _trailingDragArea = [[BrowserTabStripDragAreaView alloc] init];
         _trailingDragArea.translatesAutoresizingMaskIntoConstraints = NO;
-        [_trailingDragArea setContentHuggingPriority:NSLayoutPriorityRequired
+        // 吃掉标签与加号右侧的剩余宽度，加号才能贴在最后一个标签旁
+        [_trailingDragArea setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
-        [_trailingDragArea setContentCompressionResistancePriority:NSLayoutPriorityRequired
+        [_trailingDragArea setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         [self addSubview:_backgroundView];
@@ -146,6 +150,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
         [self addSubview:_trailingDragArea];
 
         _overflowWidthConstraint = [_overflowButton.widthAnchor constraintEqualToConstant:0];
+        _tabsClipWidthConstraint = [_tabsClipView.widthAnchor constraintEqualToConstant:1];
 
         [NSLayoutConstraint activateConstraints:@[
             [self.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
@@ -163,8 +168,9 @@ static const CGFloat kOverflowButtonWidth = 22.0;
             [_tabsClipView.leadingAnchor constraintEqualToAnchor:_leadingDragArea.trailingAnchor constant:4],
             [_tabsClipView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_tabsClipView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_tabsClipView.trailingAnchor constraintEqualToAnchor:_overflowButton.leadingAnchor constant:-2],
+            _tabsClipWidthConstraint,
 
+            [_overflowButton.leadingAnchor constraintEqualToAnchor:_tabsClipView.trailingAnchor constant:2],
             [_overflowButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_overflowButton.heightAnchor constraintEqualToConstant:24],
             _overflowWidthConstraint,
@@ -173,12 +179,12 @@ static const CGFloat kOverflowButtonWidth = 22.0;
             [_addTabButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_addTabButton.widthAnchor constraintEqualToConstant:24],
             [_addTabButton.heightAnchor constraintEqualToConstant:24],
-            [_addTabButton.trailingAnchor constraintEqualToAnchor:_trailingDragArea.leadingAnchor constant:-4],
 
+            [_trailingDragArea.leadingAnchor constraintEqualToAnchor:_addTabButton.trailingAnchor constant:4],
             [_trailingDragArea.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [_trailingDragArea.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_trailingDragArea.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_trailingDragArea.widthAnchor constraintEqualToConstant:kTrailingDragWidth],
+            [_trailingDragArea.widthAnchor constraintGreaterThanOrEqualToConstant:kTrailingDragWidth],
         ]];
 
         ((BrowserTabStripDragAreaView *)_backgroundView).stripView = self;
@@ -282,9 +288,23 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     [super mouseDown:event];
 }
 
+- (void)setFrameSize:(NSSize)newSize {
+    NSSize oldSize = self.frame.size;
+    [super setFrameSize:newSize];
+    if (fabs(oldSize.width - newSize.width) > 0.5) {
+        // clip 宽度依赖条宽，需在 Auto Layout 解算前更新约束
+        [self setNeedsUpdateConstraints:YES];
+    }
+}
+
+- (void)updateConstraints {
+    [self syncTabStripWidthConstraints];
+    [super updateConstraints];
+}
+
 - (void)layout {
     [super layout];
-    [self updateTabFrames];
+    [self applyTabItemFrames];
 }
 
 - (NSUInteger)indexOfSelectedTab {
@@ -368,24 +388,32 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     self.overflowWidthConstraint.constant = visible ? kOverflowButtonWidth : 0;
 }
 
-- (void)updateTabFrames {
+/// 根据条宽与标签数计算「可见窗口 / 单签宽度 / clip 宽度」
+- (BOOL)computeVisibleStart:(NSUInteger *)outStart
+                 visibleLen:(NSUInteger *)outLen
+                   tabWidth:(CGFloat *)outTabWidth
+                  available:(CGFloat *)outAvailable
+                   contentW:(CGFloat *)outContentW
+                      clipW:(CGFloat *)outClipW
+              needsOverflow:(BOOL *)outNeedsOverflow {
     NSUInteger total = self.tabItems.count;
-    // 中间可供「标签 + 可选箭头」的宽度（不含交通灯 / + / trailing）
-    // leading(78)+4 + middle + 4 + add(24) + 4 + trailing(16) = bounds.width
+    // leading(78)+4 + middle + 2 + overflow? + 4 + add(24) + 4 + trailing(>=16)
     CGFloat reservedChrome = kTrafficLightLeadingInset + 4.0 + 4.0 + 24.0 + 4.0 + kTrailingDragWidth;
     CGFloat stripMiddle = NSWidth(self.bounds) - reservedChrome;
 
     if (total == 0 || stripMiddle < 1.0) {
-        [self setOverflowVisible:NO];
-        self.tabsContentView.frame = NSMakeRect(0, 0, 1, BrowserTabStripHeight);
-        [self.overflowTabIDs removeAllObjects];
-        return;
+        *outStart = 0;
+        *outLen = 0;
+        *outTabWidth = BrowserTabItemMinWidth;
+        *outAvailable = MAX(stripMiddle, 0);
+        *outContentW = 1;
+        *outClipW = 1;
+        *outNeedsOverflow = NO;
+        return NO;
     }
 
     NSUInteger visibleCount = [self maxVisibleTabCountForWidth:stripMiddle];
     BOOL needsOverflow = visibleCount < total;
-    [self setOverflowVisible:needsOverflow];
-
     CGFloat available = needsOverflow
         ? MAX(stripMiddle - kOverflowButtonWidth - 2.0, BrowserTabItemMinWidth)
         : stripMiddle;
@@ -397,10 +425,73 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     CGFloat spacingTotal = (visibleLen > 1) ? (visibleLen - 1) * kTabSpacing : 0;
     CGFloat ideal = visibleLen > 0 ? (available - spacingTotal) / (CGFloat)visibleLen : BrowserTabItemMinWidth;
     CGFloat tabWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : 1;
+    // 标签未铺满时收窄 clip，让「+」贴在最后一个标签右侧；铺满时占满 available
+    CGFloat clipW = needsOverflow ? available : MIN(contentW, available);
+
+    *outStart = visibleStart;
+    *outLen = visibleLen;
+    *outTabWidth = tabWidth;
+    *outAvailable = available;
+    *outContentW = contentW;
+    *outClipW = MAX(clipW, 1);
+    *outNeedsOverflow = needsOverflow;
+    return YES;
+}
+
+/// 在 updateConstraints 中更新宽度，确保同轮 Auto Layout 就能把「+」摆到正确位置
+- (void)syncTabStripWidthConstraints {
+    NSUInteger visibleStart = 0;
+    NSUInteger visibleLen = 0;
+    CGFloat tabWidth = 0;
+    CGFloat available = 0;
+    CGFloat contentW = 0;
+    CGFloat clipW = 1;
+    BOOL needsOverflow = NO;
+    [self computeVisibleStart:&visibleStart
+                   visibleLen:&visibleLen
+                     tabWidth:&tabWidth
+                    available:&available
+                     contentW:&contentW
+                        clipW:&clipW
+                needsOverflow:&needsOverflow];
+    [self setOverflowVisible:needsOverflow];
+    self.tabsClipWidthConstraint.constant = clipW;
+}
+
+- (void)applyTabItemFrames {
+    NSUInteger total = self.tabItems.count;
+    NSUInteger visibleStart = 0;
+    NSUInteger visibleLen = 0;
+    CGFloat tabWidth = 0;
+    CGFloat available = 0;
+    CGFloat contentW = 1;
+    CGFloat clipW = 1;
+    BOOL needsOverflow = NO;
+    BOOL hasTabs = [self computeVisibleStart:&visibleStart
+                                 visibleLen:&visibleLen
+                                   tabWidth:&tabWidth
+                                  available:&available
+                                   contentW:&contentW
+                                      clipW:&clipW
+                              needsOverflow:&needsOverflow];
+
+    if (!hasTabs) {
+        self.tabsContentView.frame = NSMakeRect(0, 0, 1, BrowserTabStripHeight);
+        [self.overflowTabIDs removeAllObjects];
+        self.lastLaidOutTabWidth = -1;
+        self.lastLaidOutAvailableWidth = -1;
+        self.lastLaidOutClipWidth = clipW;
+        self.lastLaidOutTabCount = 0;
+        self.lastVisibleStart = NSNotFound;
+        self.lastVisibleCount = NSNotFound;
+        self.lastOverflowVisible = NO;
+        return;
+    }
 
     BOOL geometryChanged = fabs(tabWidth - self.lastLaidOutTabWidth) > 0.5
         || fabs(available - self.lastLaidOutAvailableWidth) > 0.5
+        || fabs(clipW - self.lastLaidOutClipWidth) > 0.5
         || total != self.lastLaidOutTabCount
         || visibleStart != self.lastVisibleStart
         || visibleLen != self.lastVisibleCount
@@ -409,6 +500,8 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     if (!geometryChanged) {
         return;
     }
+
+    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
 
     [self.overflowTabIDs removeAllObjects];
     CGFloat x = 0;
@@ -429,10 +522,10 @@ static const CGFloat kOverflowButtonWidth = 22.0;
         }
     }
 
-    CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : available;
     self.tabsContentView.frame = NSMakeRect(0, 0, MAX(contentW, 1), BrowserTabStripHeight);
     self.lastLaidOutTabWidth = tabWidth;
     self.lastLaidOutAvailableWidth = available;
+    self.lastLaidOutClipWidth = clipW;
     self.lastLaidOutTabCount = total;
     self.lastVisibleStart = visibleStart;
     self.lastVisibleCount = visibleLen;
@@ -486,6 +579,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     [self.overflowTabIDs removeAllObjects];
     self.lastLaidOutTabWidth = -1;
     self.lastLaidOutAvailableWidth = -1;
+    self.lastLaidOutClipWidth = -1;
     self.lastLaidOutTabCount = NSNotFound;
     self.lastVisibleStart = NSNotFound;
     self.lastVisibleCount = NSNotFound;
@@ -514,6 +608,8 @@ static const CGFloat kOverflowButtonWidth = 22.0;
         [self.tabsContentView addSubview:item];
     }
 
+    // 先更新 clip 宽度约束，再 layout，避免新标签被旧 clip 裁切、「+」停在原地
+    [self setNeedsUpdateConstraints:YES];
     [self setNeedsLayout:YES];
     [self layoutSubtreeIfNeeded];
 }
@@ -550,6 +646,7 @@ static const CGFloat kOverflowButtonWidth = 22.0;
     if (selectionChanged) {
         // 选中变化可能改变可见窗口（需把选中项滚入条内）
         self.lastVisibleStart = NSNotFound;
+        [self setNeedsUpdateConstraints:YES];
         [self setNeedsLayout:YES];
     }
 }
