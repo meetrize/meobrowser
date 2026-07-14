@@ -19,6 +19,9 @@ extern NSString * const BrowserWallpaperChangeReasonKey;
 @property (nonatomic, copy, readonly, nullable) NSString *sourceFileName;
 @property (nonatomic, strong, readonly, nullable) NSImage *displayImage;
 
+/// 快捷方式标题色：有壁纸时按（图片亮度 × 压暗后）选黑/白；无壁纸时为系统 labelColor。
+@property (nonatomic, strong, readonly) NSColor *shortcutTitleColor;
+
 - (void)acquireDisplayImage;
 - (void)releaseDisplayImage;
 

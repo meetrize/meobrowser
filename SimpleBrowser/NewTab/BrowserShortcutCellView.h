@@ -18,6 +18,7 @@ typedef void (^BrowserShortcutCellActivateHandler)(BrowserShortcutItem *item, BO
                      children:(NSArray<BrowserShortcutItem *> *)children;
 - (void)configureAsAddCell;
 - (void)applyIconSize:(CGFloat)iconSize;
+- (void)applyTitleColor:(NSColor *)color;
 
 /// 拖拽代理图（半透明图标影子）；contentView 为 cell 的 view。
 + (nullable NSImage *)draggingProxyImageFromContentView:(NSView *)contentView

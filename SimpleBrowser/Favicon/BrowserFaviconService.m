@@ -340,9 +340,12 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
     }
 
     // Channel 1 — disk（Silent 命中清晰缓存可秒开；UserAction「自动获取」跳过，强制重拉）
+    // 丢弃缓存里的 Google 默认模糊地球，避免永远不再走 Cravatar。
     if (job.reason != BrowserFaviconFetchReasonUserAction) {
         NSImage *diskImage = [[BrowserFaviconCache sharedCache] imageForHost:job.host];
-        if (diskImage != nil && BrowserFaviconMaxPixelEdge(diskImage) >= kPreferredMinPixelEdge) {
+        if (diskImage != nil
+            && BrowserFaviconMaxPixelEdge(diskImage) >= kPreferredMinPixelEdge
+            && !BrowserFaviconImageLooksLikeGenericGlobePlaceholder(diskImage)) {
             NSString *source = [[BrowserFaviconCache sharedCache] sourceURLForHost:job.host];
             NSURL *sourceURL = source.length > 0 ? [NSURL URLWithString:source] : nil;
             [self succeedJob:job image:diskImage sourceURL:sourceURL channel:@"disk" skipStore:YES];
@@ -355,35 +358,44 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
         return;
     }
 
-    // Channel 2 — Google s2（优先：通常最清晰；不通再走其它渠）
-    if (!job.cancelled) {
-        NSString *urlString =
-            [NSString stringWithFormat:@"https://www.google.com/s2/favicons?domain=%@&sz=64",
-                                       [self percentEncodedHost:job.host]];
-        if ([self tryThirdPartyURLString:urlString channel:@"google" job:job allowSmall:YES]) {
+    BOOL hostIsIP = BrowserFaviconHostLooksLikeIPAddress(job.host);
+    NSString *cravatarURL =
+        [NSString stringWithFormat:@"https://cn.cravatar.com/favicon/api/index.php?url=%@",
+                                   [self percentEncodedHost:job.host]];
+    NSString *googleURL =
+        [NSString stringWithFormat:@"https://www.google.com/s2/favicons?domain=%@&sz=64",
+                                   [self percentEncodedHost:job.host]];
+    NSString *ddgURL =
+        [NSString stringWithFormat:@"https://icons.duckduckgo.com/ip3/%@.ico", job.host];
+
+    // IP / 无真实站点图标时 Cravatar 通常比 Google 默认地球更清晰 → IP 优先 Cravatar
+    if (hostIsIP && !job.cancelled) {
+        if ([self tryThirdPartyURLString:cravatarURL channel:@"cravatar" job:job allowSmall:YES]) {
             return;
         }
     }
 
-    // Channel 3 — 站点候选（HTML / apple-touch / favicon.ico）
+    // Google s2（真实图标通常最清晰；默认模糊地球会被拒绝）
+    if (!job.cancelled) {
+        if ([self tryThirdPartyURLString:googleURL channel:@"google" job:job allowSmall:YES]) {
+            return;
+        }
+    }
+
+    // 站点候选（HTML / apple-touch / favicon.ico）
     if ([self trySiteCandidatesForJob:job]) {
         return;
     }
 
-    // Channel 4+ — 其它第三方兜底
-    if (!job.cancelled) {
-        NSString *urlString =
-            [NSString stringWithFormat:@"https://cn.cravatar.com/favicon/api/index.php?url=%@",
-                                       [self percentEncodedHost:job.host]];
-        if ([self tryThirdPartyURLString:urlString channel:@"cravatar" job:job allowSmall:YES]) {
+    // 域名场景：站点失败后再用 Cravatar
+    if (!hostIsIP && !job.cancelled) {
+        if ([self tryThirdPartyURLString:cravatarURL channel:@"cravatar" job:job allowSmall:YES]) {
             return;
         }
     }
 
     if (!job.cancelled) {
-        NSString *urlString =
-            [NSString stringWithFormat:@"https://icons.duckduckgo.com/ip3/%@.ico", job.host];
-        if ([self tryThirdPartyURLString:urlString channel:@"duckduckgo" job:job allowSmall:YES]) {
+        if ([self tryThirdPartyURLString:ddgURL channel:@"duckduckgo" job:job allowSmall:YES]) {
             return;
         }
     }
@@ -393,13 +405,10 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
         return;
     }
 
-    dispatch_async(self.stateQueue, ^{
-        [self recordNegativeFailureForHost:job.host];
-    });
-    NSError *error = [NSError errorWithDomain:BrowserFaviconErrorDomain
-                                         code:BrowserFaviconErrorAllChannelsFailed
-                                     userInfo:@{NSLocalizedDescriptionKey: @"未能获取图标"}];
-    [self completeJob:job iconURL:nil image:nil error:error];
+    // 最终兜底：本地清晰 SF Symbol 地球（不再用糊的第三方默认图）
+    NSImage *systemGlobe = BrowserFaviconMakeDefaultGlobeImage();
+    NSURL *systemURL = [NSURL URLWithString:@"meobrowser-favicon://system/globe"];
+    [self succeedJob:job image:systemGlobe sourceURL:systemURL channel:@"system-default"];
 }
 
 - (BOOL)trySiteCandidatesForJob:(BrowserFaviconFetchJob *)job {
@@ -517,6 +526,11 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
     }
     NSUInteger edge = BrowserFaviconMaxPixelEdge(image);
     if (!allowSmall && edge < kPreferredMinPixelEdge) {
+        return NO;
+    }
+    // Google / DDG 的默认「模糊地球」不当作成功，继续瀑布流（尤其让 Cravatar 有机会）
+    if (([channel isEqualToString:@"google"] || [channel isEqualToString:@"duckduckgo"])
+        && BrowserFaviconImageLooksLikeGenericGlobePlaceholder(image)) {
         return NO;
     }
     [self succeedJob:job image:image sourceURL:sourceURL channel:channel];

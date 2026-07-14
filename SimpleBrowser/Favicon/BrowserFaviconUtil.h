@@ -29,6 +29,15 @@ BrowserFaviconAnalyzeIconForDisplay(NSImage *image,
 /// 兼容：是否应按圆角矩形铺满显示。
 FOUNDATION_EXPORT BOOL BrowserFaviconImageLooksPreRounded(NSImage * _Nullable image);
 
+/// host 是否为 IPv4/IPv6（字面量）。
+FOUNDATION_EXPORT BOOL BrowserFaviconHostLooksLikeIPAddress(NSString * _Nullable host);
+
+/// 是否像 Google/DDG 常见的「模糊默认地球」占位图（应丢弃并换渠）。
+FOUNDATION_EXPORT BOOL BrowserFaviconImageLooksLikeGenericGlobePlaceholder(NSImage * _Nullable image);
+
+/// 本地清晰默认地球图标（SF Symbol 栅格化），作最终兜底。
+FOUNDATION_EXPORT NSImage *BrowserFaviconMakeDefaultGlobeImage(void);
+
 /// 将位图最长边缩至 ≤ maxPixelEdge，输出 PNG data；失败返回 nil。
 FOUNDATION_EXPORT NSData * _Nullable BrowserFaviconPNGDataByScalingImage(NSImage *image, NSUInteger maxPixelEdge);
 

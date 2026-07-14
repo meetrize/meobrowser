@@ -21,6 +21,9 @@ static const CGFloat kMinScrimAlpha = 0.0;
 static const CGFloat kMaxScrimAlpha = 0.70;
 static const NSUInteger kAbsoluteMaxPixelEdge = 3840;
 static const CGFloat kJPEGQuality = 0.85;
+/// 压暗后有效亮度低于此值 → 白字；否则黑字。
+static const CGFloat kShortcutTitleLuminanceThreshold = 0.50;
+static const NSInteger kLuminanceSampleSide = 32;
 
 static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
 
@@ -31,7 +34,65 @@ static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
 @property (nonatomic, strong, nullable) NSImage *displayImage;
 @property (nonatomic, assign) NSInteger acquireCount;
 @property (nonatomic, strong) dispatch_queue_t importQueue;
+@property (nonatomic, assign) CGFloat cachedImageLuminance;
+@property (nonatomic, assign) BOOL hasCachedImageLuminance;
 @end
+
+/// 将壁纸缩到小图后求平均相对亮度（0～1）。失败时返回 0.5。
+static CGFloat BrowserWallpaperAverageLuminance(NSImage *image) {
+    if (image == nil) {
+        return 0.5;
+    }
+    const NSInteger side = kLuminanceSampleSide;
+    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    if (space == NULL) {
+        space = CGColorSpaceCreateDeviceRGB();
+    }
+    CGContextRef ctx = CGBitmapContextCreate(NULL,
+                                             (size_t)side,
+                                             (size_t)side,
+                                             8,
+                                             0,
+                                             space,
+                                             kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(space);
+    if (ctx == NULL) {
+        return 0.5;
+    }
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationMedium);
+    CGContextClearRect(ctx, CGRectMake(0, 0, side, side));
+    NSGraphicsContext *previous = [NSGraphicsContext currentContext];
+    NSGraphicsContext *nsCtx = [NSGraphicsContext graphicsContextWithCGContext:ctx flipped:NO];
+    [NSGraphicsContext setCurrentContext:nsCtx];
+    [image drawInRect:NSMakeRect(0, 0, side, side)
+             fromRect:NSZeroRect
+            operation:NSCompositingOperationCopy
+             fraction:1.0
+       respectFlipped:YES
+                hints:@{NSImageHintInterpolation: @(NSImageInterpolationMedium)}];
+    [NSGraphicsContext setCurrentContext:previous];
+
+    UInt8 *bytes = CGBitmapContextGetData(ctx);
+    if (bytes == NULL) {
+        CGContextRelease(ctx);
+        return 0.5;
+    }
+    NSInteger bytesPerRow = (NSInteger)CGBitmapContextGetBytesPerRow(ctx);
+    double sum = 0;
+    NSInteger count = side * side;
+    for (NSInteger y = 0; y < side; y++) {
+        const UInt8 *row = bytes + y * bytesPerRow;
+        for (NSInteger x = 0; x < side; x++) {
+            const UInt8 *p = row + x * 4;
+            CGFloat r = p[0] / 255.0;
+            CGFloat g = p[1] / 255.0;
+            CGFloat b = p[2] / 255.0;
+            sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        }
+    }
+    CGContextRelease(ctx);
+    return (CGFloat)(sum / (double)count);
+}
 
 @implementation BrowserWallpaperStore
 
@@ -122,6 +183,29 @@ static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
     return self.enabledFlag && self.hasDisplayFile;
 }
 
+- (NSColor *)shortcutTitleColor {
+    BOOL showWallpaper = self.isWallpaperEnabled && self.displayImage != nil && self.hasCachedImageLuminance;
+    if (!showWallpaper) {
+        return [NSColor labelColor];
+    }
+    // 黑半透明 scrim 叠在图上：有效亮度 ≈ L * (1 - α)
+    CGFloat effective = self.cachedImageLuminance * (1.0 - self.scrimAlpha);
+    if (effective < kShortcutTitleLuminanceThreshold) {
+        return [NSColor whiteColor];
+    }
+    return [NSColor blackColor];
+}
+
+- (void)updateCachedLuminanceFromDisplayImage {
+    if (self.displayImage == nil) {
+        self.hasCachedImageLuminance = NO;
+        self.cachedImageLuminance = 0.5;
+        return;
+    }
+    self.cachedImageLuminance = BrowserWallpaperAverageLuminance(self.displayImage);
+    self.hasCachedImageLuminance = YES;
+}
+
 - (void)loadMetaFromDisk {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     if ([defaults objectForKey:kEnabledDefaultsKey] != nil) {
@@ -209,15 +293,18 @@ static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
     NSImage *image = [[NSImage alloc] initWithContentsOfURL:url];
     if (image != nil) {
         self.displayImage = image;
+        [self updateCachedLuminanceFromDisplayImage];
     }
 }
 
 - (void)reloadDisplayImageKeepingAcquire {
     if (self.acquireCount <= 0) {
         self.displayImage = nil;
+        self.hasCachedImageLuminance = NO;
         return;
     }
     self.displayImage = nil;
+    self.hasCachedImageLuminance = NO;
     [self loadDisplayImageFromDiskIfNeeded];
 }
 
@@ -264,6 +351,8 @@ static NSString * const kWallpaperErrorDomain = @"BrowserWallpaperStore";
     self.sourceFileName = nil;
     self.enabledFlag = NO;
     self.displayImage = nil;
+    self.hasCachedImageLuminance = NO;
+    self.cachedImageLuminance = 0.5;
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setBool:NO forKey:kEnabledDefaultsKey];
     [self postChangeReason:@"clear"];

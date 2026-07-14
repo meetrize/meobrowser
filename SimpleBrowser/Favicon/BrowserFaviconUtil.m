@@ -371,6 +371,175 @@ BOOL BrowserFaviconImageLooksPreRounded(NSImage * _Nullable image) {
     return BrowserFaviconAnalyzeIconForDisplay(image, NULL) == BrowserFaviconIconFitFillRoundedRect;
 }
 
+BOOL BrowserFaviconHostLooksLikeIPAddress(NSString * _Nullable host) {
+    if (host.length == 0) {
+        return NO;
+    }
+    NSString *h = host;
+    // [IPv6]
+    if ([h hasPrefix:@"["] && [h hasSuffix:@"]"] && h.length > 2) {
+        h = [h substringWithRange:NSMakeRange(1, h.length - 2)];
+    }
+    // IPv4
+    NSArray<NSString *> *parts = [h componentsSeparatedByString:@"."];
+    if (parts.count == 4) {
+        BOOL allNumeric = YES;
+        for (NSString *p in parts) {
+            if (p.length == 0 || p.length > 3) {
+                allNumeric = NO;
+                break;
+            }
+            NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+            if ([p rangeOfCharacterFromSet:nonDigits].location != NSNotFound) {
+                allNumeric = NO;
+                break;
+            }
+            NSInteger v = p.integerValue;
+            if (v < 0 || v > 255) {
+                allNumeric = NO;
+                break;
+            }
+        }
+        if (allNumeric) {
+            return YES;
+        }
+    }
+    // IPv6：含冒号且主要为十六进制
+    if ([h containsString:@":"]) {
+        NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF:"];
+        NSCharacterSet *inverted = [allowed invertedSet];
+        if ([h rangeOfCharacterFromSet:inverted].location == NSNotFound) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+BOOL BrowserFaviconImageLooksLikeGenericGlobePlaceholder(NSImage * _Nullable image) {
+    if (image == nil) {
+        return NO;
+    }
+    NSUInteger edge = BrowserFaviconMaxPixelEdge(image);
+    // 向 Google 要了 sz=64 却只有很小位图 → 几乎一定是默认占位
+    if (edge > 0 && edge <= 24) {
+        return YES;
+    }
+
+    UInt8 *bytes = NULL;
+    NSInteger width = 0;
+    NSInteger height = 0;
+    NSInteger bytesPerRow = 0;
+    CGContextRef ctx = NULL;
+    if (!BrowserFaviconRenderSample(image, 64, &bytes, &width, &height, &bytesPerRow, &ctx)) {
+        return NO;
+    }
+
+    NSInteger minX = width;
+    NSInteger minY = height;
+    NSInteger maxX = -1;
+    NSInteger maxY = -1;
+    NSInteger fgCount = 0;
+    NSInteger darkBgCount = 0;
+    double satSum = 0;
+    double lumSum = 0;
+    const NSInteger sampleCount = width * height;
+
+    for (NSInteger y = 0; y < height; y++) {
+        const UInt8 *row = bytes + y * bytesPerRow;
+        for (NSInteger x = 0; x < width; x++) {
+            const UInt8 *p = row + x * 4;
+            // Google 默认地球常铺近黑底
+            if (p[3] > 160 && p[0] < 45 && p[1] < 45 && p[2] < 45) {
+                darkBgCount++;
+                continue;
+            }
+            if (p[3] <= 40) {
+                continue;
+            }
+            fgCount++;
+            minX = MIN(minX, x);
+            maxX = MAX(maxX, x);
+            minY = MIN(minY, y);
+            maxY = MAX(maxY, y);
+            CGFloat r = p[0] / 255.0;
+            CGFloat g = p[1] / 255.0;
+            CGFloat b = p[2] / 255.0;
+            CGFloat h = 0;
+            CGFloat s = 0;
+            CGFloat l = 0;
+            BrowserFaviconRGBToHSL(r, g, b, &h, &s, &l);
+            satSum += s;
+            lumSum += l;
+        }
+    }
+
+    BOOL isGlobe = NO;
+    if (fgCount >= 40 && maxX >= minX && maxY >= minY) {
+        NSInteger bw = maxX - minX + 1;
+        NSInteger bh = maxY - minY + 1;
+        CGFloat fillRatio = (CGFloat)fgCount / (CGFloat)(bw * bh);
+        CGFloat aspect = (CGFloat)bw / (CGFloat)MAX(bh, 1);
+        if (aspect < 1.0) {
+            aspect = 1.0 / aspect;
+        }
+        CGFloat avgSat = (CGFloat)(satSum / (double)fgCount);
+        CGFloat avgLum = (CGFloat)(lumSum / (double)fgCount);
+        BOOL looksCircle = (fillRatio >= 0.55 && fillRatio <= 0.92 && aspect <= 1.25);
+        BOOL dullGlobeColors = (avgSat <= 0.50 && avgLum >= 0.30 && avgLum <= 0.92);
+        BOOL hasDarkCanvas = sampleCount > 0 && ((CGFloat)darkBgCount / (CGFloat)sampleCount) >= 0.18;
+        // 暗底软圆球，或偏小模糊地球
+        isGlobe = looksCircle && dullGlobeColors && (hasDarkCanvas || edge <= 48);
+    }
+    CGContextRelease(ctx);
+    return isGlobe;
+}
+
+NSImage *BrowserFaviconMakeDefaultGlobeImage(void) {
+    const CGFloat pointSize = 96.0;
+    NSImage *symbol = nil;
+    if (@available(macOS 11.0, *)) {
+        symbol = [NSImage imageWithSystemSymbolName:@"globe.americas.fill"
+                           accessibilityDescription:@"默认网站图标"];
+        if (symbol == nil) {
+            symbol = [NSImage imageWithSystemSymbolName:@"globe"
+                               accessibilityDescription:@"默认网站图标"];
+        }
+        if (symbol != nil) {
+            NSImageSymbolConfiguration *config =
+                [NSImageSymbolConfiguration configurationWithPointSize:pointSize
+                                                                weight:NSFontWeightRegular
+                                                                 scale:NSImageSymbolScaleLarge];
+            symbol = [symbol imageWithSymbolConfiguration:config];
+        }
+    }
+
+    NSSize size = NSMakeSize(128, 128);
+    NSColor *tint = [NSColor colorWithCalibratedRed:0.22 green:0.52 blue:0.92 alpha:1.0];
+    if (symbol == nil) {
+        return [NSImage imageWithSize:size
+                              flipped:NO
+                       drawingHandler:^BOOL(NSRect dstRect) {
+                           [tint setFill];
+                           [[NSBezierPath bezierPathWithOvalInRect:NSInsetRect(dstRect, 10, 10)] fill];
+                           return YES;
+                       }];
+    }
+
+    symbol.template = YES;
+    return [NSImage imageWithSize:size
+                          flipped:NO
+                   drawingHandler:^BOOL(NSRect dstRect) {
+                       [tint set];
+                       [symbol drawInRect:NSInsetRect(dstRect, 14, 14)
+                                 fromRect:NSZeroRect
+                                operation:NSCompositingOperationSourceOver
+                                 fraction:1.0
+                           respectFlipped:YES
+                                    hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+                       return YES;
+                   }];
+}
+
 BOOL BrowserFaviconIsDecodableImageData(NSData * _Nullable data) {
     return BrowserFaviconImageFromData(data) != nil;
 }

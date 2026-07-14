@@ -72,8 +72,9 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
     [_dimmingView addGestureRecognizer:dimClick];
 
     _panelView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+    // Menu/Popover 比 Sheet 更通透，壁纸与遮罩可透出，避免「实心白卡片」。
     if (@available(macOS 10.14, *)) {
-        _panelView.material = NSVisualEffectMaterialSheet;
+        _panelView.material = NSVisualEffectMaterialMenu;
     } else {
         _panelView.material = NSVisualEffectMaterialPopover;
     }
@@ -82,6 +83,7 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
     _panelView.wantsLayer = YES;
     _panelView.layer.cornerRadius = 30.0;
     _panelView.layer.masksToBounds = YES;
+    _panelView.layer.borderWidth = 0.5;
     if (@available(macOS 10.15, *)) {
         _panelView.layer.cornerCurve = kCACornerCurveContinuous;
     }
@@ -181,9 +183,13 @@ static const CGFloat kFolderOverlayMinHeight = 380.0;
         ]];
         dark = [match isEqualToString:NSAppearanceNameDarkAqua];
     }
-    // 略加深遮罩，突出中央大面板（贴近 Launchpad 展开层次）。
-    CGFloat alpha = dark ? 0.52 : 0.40;
+    // 稍淡的遮罩，让壁纸/背景透过磨砂面板，层次更接近系统 Launchpad。
+    CGFloat alpha = dark ? 0.42 : 0.28;
     self.dimmingView.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:alpha].CGColor;
+    // 细描边提升玻璃边缘可读性（深色略亮、浅色略白）。
+    CGFloat borderAlpha = dark ? 0.22 : 0.48;
+    self.panelView.layer.borderColor =
+        [[NSColor colorWithCalibratedWhite:1.0 alpha:1.0] colorWithAlphaComponent:borderAlpha].CGColor;
 }
 
 - (void)viewDidChangeEffectiveAppearance {

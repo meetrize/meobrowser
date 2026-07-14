@@ -7,6 +7,7 @@
 #import "BrowserFaviconService.h"
 #import "BrowserFaviconCache.h"
 #import "BrowserFaviconUtil.h"
+#import "BrowserWallpaperStore.h"
 #import <QuartzCore/QuartzCore.h>
 
 @interface BrowserLaunchpadView (CellDragSupport)
@@ -21,6 +22,39 @@ static const CGFloat kIconShadowOffsetY = -2.0;
 static const CGFloat kIconShadowAlpha = 0.22;
 static const CGFloat kHoverScale = 1.05;
 static const NSTimeInterval kHoverAnimationDuration = 0.15;
+
+static BOOL BrowserShortcutAppearanceIsDark(NSAppearance *appearance) {
+    if (appearance == nil) {
+        appearance = NSApp.effectiveAppearance;
+    }
+    if (@available(macOS 10.14, *)) {
+        NSString *match = [appearance bestMatchFromAppearancesWithNames:@[
+            NSAppearanceNameAqua,
+            NSAppearanceNameDarkAqua,
+        ]];
+        return [match isEqualToString:NSAppearanceNameDarkAqua];
+    }
+    return NO;
+}
+
+/// Launchpad 风格文件夹磨砂底板：半透明玻璃，壁纸可透出。
+/// 不用语义色再叠 alpha（易解析成实白），改用标定色。
+static NSColor *BrowserShortcutFolderPlateColor(NSAppearance *appearance) {
+    if (BrowserShortcutAppearanceIsDark(appearance)) {
+        // 深色：淡白雾面，与深色壁纸融为一体又略有质感
+        return [NSColor colorWithCalibratedWhite:1.0 alpha:0.16];
+    }
+    // 浅色：半透白玻璃（约 38%），避免实心白块抢视觉
+    return [NSColor colorWithCalibratedWhite:1.0 alpha:0.38];
+}
+
+/// 「添加」格：比文件夹更淡一档，保持可点但更克制。
+static NSColor *BrowserShortcutAddCellPlateColor(NSAppearance *appearance) {
+    if (BrowserShortcutAppearanceIsDark(appearance)) {
+        return [NSColor colorWithCalibratedWhite:1.0 alpha:0.10];
+    }
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.06];
+}
 
 static NSColor *ColorFromURLString(NSString *urlString) {
     NSUInteger hash = urlString.hash;
@@ -510,6 +544,14 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     BrowserShortcutWritebackIconIfNeeded(self.shortcut);
 }
 
+- (void)applyTitleColor:(NSColor *)color {
+    self.titleLabel.textColor = color ?: [NSColor labelColor];
+}
+
+- (void)refreshTitleColorFromWallpaper {
+    [self applyTitleColor:[[BrowserWallpaperStore sharedStore] shortcutTitleColor]];
+}
+
 - (void)applyIconSize:(CGFloat)iconSize {
     if (fabs(self.iconSize - iconSize) < 0.5) {
         return;
@@ -629,6 +671,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     self.boundHost = shortcut.isFolder ? nil : BrowserFaviconHostFromURLString(shortcut.urlString);
     self.titleLabel.stringValue = shortcut.title;
     self.titleLabel.hidden = NO;
+    [self refreshTitleColorFromWallpaper];
     self.mergeHighlighted = NO;
     if (shortcut.isFolder) {
         [self configureAsFolderWithChildren:self.folderChildren];
@@ -648,7 +691,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     self.iconImageView.hidden = YES;
     self.letterLabel.hidden = YES;
     self.folderGridView.hidden = NO;
-    [self updateIconFillColor:[NSColor.quaternaryLabelColor colorWithAlphaComponent:0.55]];
+    [self updateIconFillColor:BrowserShortcutFolderPlateColor(self.effectiveAppearance)];
     for (NSUInteger i = 0; i < self.folderTiles.count; i++) {
         BrowserShortcutItem *child = (i < children.count) ? children[i] : nil;
         [self.folderTiles[i] configureWithShortcut:child];
@@ -670,7 +713,17 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     self.letterLabel.hidden = NO;
     self.titleLabel.hidden = NO;
     self.letterLabel.textColor = [NSColor secondaryLabelColor];
-    [self updateIconFillColor:NSColor.quaternaryLabelColor];
+    [self refreshTitleColorFromWallpaper];
+    [self updateIconFillColor:BrowserShortcutAddCellPlateColor(self.effectiveAppearance)];
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    if (self.shortcut.isFolder) {
+        [self updateIconFillColor:BrowserShortcutFolderPlateColor(self.effectiveAppearance)];
+    } else if (self.addCell) {
+        [self updateIconFillColor:BrowserShortcutAddCellPlateColor(self.effectiveAppearance)];
+    }
 }
 
 - (void)setMergeHighlighted:(BOOL)mergeHighlighted {
@@ -887,6 +940,10 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
 
 - (void)applyIconSize:(CGFloat)iconSize {
     [self.shortcutContentView applyIconSize:iconSize];
+}
+
+- (void)applyTitleColor:(NSColor *)color {
+    [self.shortcutContentView applyTitleColor:color];
 }
 
 - (void)setMergeHighlighted:(BOOL)mergeHighlighted {

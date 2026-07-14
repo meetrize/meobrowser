@@ -555,6 +555,16 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
         self.scrimView.hidden = YES;
         self.effectView.hidden = NO;
     }
+    [self applyShortcutTitleColors];
+}
+
+- (void)applyShortcutTitleColors {
+    NSColor *color = [[BrowserWallpaperStore sharedStore] shortcutTitleColor];
+    for (NSCollectionViewItem *item in self.collectionView.visibleItems) {
+        if ([item isKindOfClass:[BrowserShortcutCellView class]]) {
+            [(BrowserShortcutCellView *)item applyTitleColor:color];
+        }
+    }
 }
 
 - (void)layout {
