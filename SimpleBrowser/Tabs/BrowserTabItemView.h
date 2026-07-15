@@ -23,7 +23,8 @@ FOUNDATION_EXPORT const CGFloat BrowserTabPinnedWidth;
 /// 水平拖拽超过阈值后开始排序；参数为相对按下时窗口坐标的位移
 @property (nonatomic, copy, nullable) void (^onReorderDragBegan)(void);
 @property (nonatomic, copy, nullable) void (^onReorderDragMoved)(CGFloat deltaX);
-@property (nonatomic, copy, nullable) void (^onReorderDragEnded)(void);
+/// 拖拽结束；locationInWindow 为松手时相对窗口的坐标。
+@property (nonatomic, copy, nullable) void (^onReorderDragEnded)(NSPoint locationInWindow);
 
 - (void)setTabTitle:(NSString *)tabTitle;
 - (void)setTabHeight:(CGFloat)height;

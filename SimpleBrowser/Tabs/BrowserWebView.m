@@ -3,7 +3,9 @@
 
 @interface BrowserWebView ()
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuDownload;
+@property (nonatomic, assign, readwrite) BOOL pendingContextMenuOpenInNewWindow;
 @property (nonatomic, weak) NSMenuItem *openResourceMenuItem;
+@property (nonatomic, weak) NSMenuItem *openLinkInNewWindowMenuItem;
 @property (nonatomic, strong, nullable) NSEvent *contextMenuEvent;
 @end
 
@@ -14,11 +16,14 @@
 
     self.contextMenuEvent = event;
     self.pendingContextMenuDownload = NO;
+    self.pendingContextMenuOpenInNewWindow = NO;
     self.openResourceMenuItem = nil;
+    self.openLinkInNewWindowMenuItem = nil;
 
     NSMenuItem *downloadItem = nil;
     NSMenuItem *openImageItem = nil;
     NSMenuItem *openMediaItem = nil;
+    NSMenuItem *openLinkInNewWindowItem = nil;
 
     NSString *engineName = [BrowsingPreferences displayNameForSearchEngineID:[BrowsingPreferences defaultSearchEngineID]];
     NSString *searchTitle = [NSString stringWithFormat:@"使用「%@」搜索", engineName];
@@ -39,6 +44,24 @@
             openImageItem = item;
         } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenMediaInNewWindow"]) {
             openMediaItem = item;
+        } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenLinkInNewWindow"]) {
+            openLinkInNewWindowItem = item;
+        }
+    }
+
+    // WebKit 该项实际会走 createWebView → 本应用开新标签，标题改为与行为一致。
+    if (openLinkInNewWindowItem) {
+        openLinkInNewWindowItem.title = @"在新标签页中打开链接";
+        self.openLinkInNewWindowMenuItem = openLinkInNewWindowItem;
+
+        NSInteger index = [menu indexOfItem:openLinkInNewWindowItem];
+        if (index != NSNotFound) {
+            NSMenuItem *openInWindow = [[NSMenuItem alloc] initWithTitle:@"在新窗口中打开链接"
+                                                                  action:@selector(meo_openLinkInNewWindow:)
+                                                           keyEquivalent:@""];
+            openInWindow.target = self;
+            openInWindow.representedObject = openLinkInNewWindowItem;
+            [menu insertItem:openInWindow atIndex:index + 1];
         }
     }
 
@@ -68,7 +91,9 @@
             return;
         }
         strongSelf.pendingContextMenuDownload = NO;
+        strongSelf.pendingContextMenuOpenInNewWindow = NO;
         strongSelf.openResourceMenuItem = nil;
+        strongSelf.openLinkInNewWindowMenuItem = nil;
         strongSelf.contextMenuEvent = nil;
     });
 }
@@ -126,6 +151,72 @@
             strongSelf.openURLHandler(url);
         } else {
             [strongSelf loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+    }];
+}
+
+- (void)meo_openLinkInNewWindow:(id)sender {
+    NSMenuItem *openItem = nil;
+    if ([sender isKindOfClass:[NSMenuItem class]]) {
+        openItem = [(NSMenuItem *)sender representedObject];
+    }
+    if (![openItem isKindOfClass:[NSMenuItem class]]) {
+        openItem = self.openLinkInNewWindowMenuItem;
+    }
+
+    if (openItem.action && openItem.target) {
+        self.pendingContextMenuOpenInNewWindow = YES;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [openItem.target performSelector:openItem.action withObject:openItem];
+#pragma clang diagnostic pop
+        return;
+    }
+
+    [self meo_openLinkAtContextMenuPointInNewWindow];
+}
+
+- (void)meo_openLinkAtContextMenuPointInNewWindow {
+    NSEvent *event = self.contextMenuEvent;
+    if (!event) {
+        return;
+    }
+
+    NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+    CGFloat x = locationInView.x;
+    CGFloat y = NSHeight(self.bounds) - locationInView.y;
+
+    NSString *script = [NSString stringWithFormat:
+        @"(function(x, y) {"
+         "  function absUrl(u) {"
+         "    try { return new URL(u, document.baseURI).href; } catch (e) { return u; }"
+         "  }"
+         "  var el = document.elementFromPoint(x, y);"
+         "  while (el) {"
+         "    if (el.tagName === 'A' && el.href) { return absUrl(el.href); }"
+         "    el = el.parentElement;"
+         "  }"
+         "  return null;"
+         "})(%f, %f)", x, y];
+
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        NSString *urlString = (NSString *)result;
+        if (urlString.length == 0) {
+            return;
+        }
+        NSURL *url = [NSURL URLWithString:urlString];
+        if (!url) {
+            return;
+        }
+        if (strongSelf.openURLInNewWindowHandler) {
+            strongSelf.openURLInNewWindowHandler(url);
+        } else if (strongSelf.openURLHandler) {
+            strongSelf.openURLHandler(url);
         }
     }];
 }
@@ -219,6 +310,18 @@
     }
     self.pendingContextMenuDownload = NO;
     self.openResourceMenuItem = nil;
+    if (!candidateURL) {
+        return nil;
+    }
+    return candidateURL;
+}
+
+- (nullable NSURL *)consumePendingContextMenuOpenInNewWindowURL:(NSURL *)candidateURL {
+    if (!self.pendingContextMenuOpenInNewWindow) {
+        return nil;
+    }
+    self.pendingContextMenuOpenInNewWindow = NO;
+    self.openLinkInNewWindowMenuItem = nil;
     if (!candidateURL) {
         return nil;
     }

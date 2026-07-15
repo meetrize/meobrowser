@@ -14,6 +14,8 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 
 @interface BrowserDownloadManager : NSObject <WKDownloadDelegate>
 
++ (instancetype)sharedManager;
+
 @property (nonatomic, copy, readonly) NSArray<BrowserDownloadItem *> *items;
 @property (nonatomic, assign, readonly) NSUInteger activeCount;
 @property (nonatomic, assign, readonly) NSUInteger unreadCompletedCount;

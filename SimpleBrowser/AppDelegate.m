@@ -5,27 +5,119 @@
 #import "BrowserAppInfo.h"
 #import "SBApplicationMenus.h"
 #import "BrowsingPreferences.h"
+#import "BrowserTab.h"
 
 @implementation AppDelegate {
-    BrowserWindowController *_browserWindowController;
+    NSMutableArray<BrowserWindowController *> *_browserWindows;
     BrowserSettingsWindowController *_settingsWindowController;
     NSMutableArray<NSURL *> *_pendingExternalURLs;
+    NSInteger _windowCascadeIndex;
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    _browserWindows = [NSMutableArray array];
     _pendingExternalURLs = [NSMutableArray array];
     [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
     [BrowserMenus installSettingsMenuForTarget:self];
+    [BrowserMenus installBrowserChromeMenus];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
-    _browserWindowController = [[BrowserWindowController alloc] init];
-    [_browserWindowController showWindow:nil];
-    [_browserWindowController.window center];
-    [_browserWindowController scheduleTrafficLightPositioning];
+    NSArray<NSDictionary *> *sessions = [BrowsingPreferences savedWindowSessions];
+    if (sessions.count == 0) {
+        [self createBrowserWindowWithSession:nil];
+    } else {
+        for (NSDictionary *session in sessions) {
+            [self createBrowserWindowWithSession:session];
+        }
+    }
     [self flushPendingExternalURLs];
+}
+
+- (BrowserWindowController *)createBrowserWindowWithSession:(NSDictionary *)session {
+    BrowserWindowController *controller = [[BrowserWindowController alloc] initWithSessionDictionary:session];
+    [_browserWindows addObject:controller];
+    [controller showWindow:nil];
+
+    NSString *frameString = session[BrowserWindowSessionFrameKey];
+    BOOL hasValidFrame = NO;
+    if ([frameString isKindOfClass:[NSString class]] && frameString.length > 0) {
+        NSRect frame = NSRectFromString(frameString);
+        if (frame.size.width >= 400 && frame.size.height >= 300) {
+            [controller.window setFrame:frame display:YES];
+            hasValidFrame = YES;
+        }
+    }
+    if (!hasValidFrame) {
+        if (_browserWindows.count == 1) {
+            [controller.window center];
+        } else {
+            [self cascadeWindow:controller.window];
+        }
+    }
+
+    [controller scheduleTrafficLightPositioning];
+    return controller;
+}
+
+- (BrowserWindowController *)createBrowserWindowAdoptingTab:(BrowserTab *)tab frame:(NSRect)frame {
+    BrowserWindowController *controller = [[BrowserWindowController alloc] initForTabAdoption];
+    [_browserWindows addObject:controller];
+    [controller adoptTab:tab];
+    [controller showWindow:nil];
+    if (frame.size.width >= 400 && frame.size.height >= 300) {
+        [controller.window setFrame:frame display:YES];
+    } else if (_browserWindows.count == 1) {
+        [controller.window center];
+    } else {
+        [self cascadeWindow:controller.window];
+    }
+    [controller scheduleTrafficLightPositioning];
+    return controller;
+}
+
+- (void)cascadeWindow:(NSWindow *)window {
+    NSRect screenFrame = NSScreen.mainScreen.visibleFrame;
+    CGFloat offset = 22.0 * (CGFloat)(_windowCascadeIndex % 8);
+    _windowCascadeIndex += 1;
+    NSRect frame = window.frame;
+    frame.origin.x = NSMinX(screenFrame) + 40.0 + offset;
+    frame.origin.y = NSMaxY(screenFrame) - NSHeight(frame) - 40.0 - offset;
+    [window setFrame:frame display:YES];
+}
+
+- (void)newBrowserWindow:(id)sender {
+    (void)sender;
+    [self createBrowserWindowWithSession:nil];
+}
+
+- (void)openURLInNewBrowserWindow:(NSURL *)url {
+    if (!url) {
+        [self createBrowserWindowWithSession:nil];
+        return;
+    }
+    NSDictionary *session = @{
+        BrowserWindowSessionTabsKey: @[url.absoluteString ?: BrowserTabSessionNewTabMarker],
+        BrowserWindowSessionSelectedIndexKey: @0,
+        BrowserWindowSessionPinnedCountKey: @0,
+    };
+    BrowserWindowController *controller = [self createBrowserWindowWithSession:session];
+    [controller.window makeKeyAndOrderFront:nil];
+}
+
+- (nullable BrowserWindowController *)keyBrowserWindowController {
+    NSWindowController *controller = NSApp.keyWindow.windowController;
+    if ([controller isKindOfClass:[BrowserWindowController class]]) {
+        return (BrowserWindowController *)controller;
+    }
+    for (BrowserWindowController *browser in _browserWindows) {
+        if (browser.window.isVisible) {
+            return browser;
+        }
+    }
+    return _browserWindows.firstObject;
 }
 
 - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
@@ -33,20 +125,26 @@
     if (urls.count == 0) {
         return;
     }
-    if (_browserWindowController) {
-        [_browserWindowController openURLsFromExternalSource:urls];
+    BrowserWindowController *target = [self keyBrowserWindowController];
+    if (target) {
+        [target openURLsFromExternalSource:urls];
+        [target.window makeKeyAndOrderFront:nil];
         return;
     }
     [_pendingExternalURLs addObjectsFromArray:urls];
 }
 
 - (void)flushPendingExternalURLs {
-    if (_pendingExternalURLs.count == 0 || !_browserWindowController) {
+    if (_pendingExternalURLs.count == 0) {
         return;
+    }
+    BrowserWindowController *target = [self keyBrowserWindowController];
+    if (!target) {
+        target = [self createBrowserWindowWithSession:nil];
     }
     NSArray<NSURL *> *urls = [_pendingExternalURLs copy];
     [_pendingExternalURLs removeAllObjects];
-    [_browserWindowController openURLsFromExternalSource:urls];
+    [target openURLsFromExternalSource:urls];
 }
 
 - (void)showBrowserSettings:(id)sender {
@@ -59,6 +157,25 @@
     [_settingsWindowController.window makeKeyAndOrderFront:nil];
 }
 
+- (void)browserWindowControllerWillClose:(BrowserWindowController *)controller {
+    if (!controller) {
+        return;
+    }
+    [_browserWindows removeObject:controller];
+    [self persistAllBrowserWindowSessions];
+}
+
+- (void)persistAllBrowserWindowSessions {
+    NSMutableArray<NSDictionary *> *sessions = [[NSMutableArray alloc] init];
+    for (BrowserWindowController *controller in _browserWindows) {
+        NSDictionary *session = [controller sessionDictionary];
+        if (session.count > 0) {
+            [sessions addObject:session];
+        }
+    }
+    [BrowsingPreferences saveWindowSessions:sessions];
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
@@ -66,7 +183,7 @@
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
-    [_browserWindowController persistTabSession];
+    [self persistAllBrowserWindowSessions];
 }
 
 @end

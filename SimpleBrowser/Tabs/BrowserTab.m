@@ -59,6 +59,7 @@
     if ([webView isKindOfClass:[BrowserWebView class]]) {
         BrowserWebView *browserWebView = (BrowserWebView *)webView;
         browserWebView.openURLHandler = nil;
+        browserWebView.openURLInNewWindowHandler = nil;
         browserWebView.downloadURLHandler = nil;
     }
     [webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"about:blank"]]];

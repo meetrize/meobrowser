@@ -368,7 +368,7 @@ NSColor *BrowserTabActiveFillColor(void) {
         }
 
         if (dragging && self.onReorderDragEnded) {
-            self.onReorderDragEnded();
+            self.onReorderDragEnded(next.locationInWindow);
         }
         break;
     }

@@ -758,7 +758,7 @@ NSColor *BrowserTabStripFillColor(void) {
     }
 }
 
-- (void)endReorderDragForItem:(BrowserTabItemView *)item {
+- (void)endReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
     if (item != self.draggingItem) {
         return;
     }
@@ -767,6 +767,16 @@ NSColor *BrowserTabStripFillColor(void) {
     NSUInteger fromIndex = self.draggingFromIndex;
     NSUUID *tabID = [self.tabItemIDs objectForKey:item];
 
+    NSWindow *window = self.window;
+    BOOL droppedOutsideWindow = NO;
+    NSPoint screenPoint = [NSEvent mouseLocation];
+    if (window) {
+        NSRect pointRect = NSMakeRect(locationInWindow.x, locationInWindow.y, 1, 1);
+        screenPoint = [window convertRectToScreen:pointRect].origin;
+        // 松手点在窗口 frame 外 → 移到新窗口（相对垂直也允许拖出标题栏外）
+        droppedOutsideWindow = !NSPointInRect(screenPoint, window.frame);
+    }
+
     self.draggingItem = nil;
     self.draggingFromIndex = NSNotFound;
     self.draggingPreviewIndex = NSNotFound;
@@ -774,6 +784,26 @@ NSColor *BrowserTabStripFillColor(void) {
     [self invalidateTabLayoutCache];
     [self setNeedsLayout:YES];
     [self layoutSubtreeIfNeeded];
+
+    if (droppedOutsideWindow && tabID) {
+        NSUUID *movedID = tabID;
+        NSPoint dropPoint = screenPoint;
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            // 拖拽中可能已改本地顺序但未写回模型，先按模型重载，再移出。
+            id<BrowserTabStripViewDelegate> delegate = strongSelf.delegate;
+            if ([delegate respondsToSelector:@selector(tabStripView:didRequestMoveTabIDToNewWindow:screenPoint:)]) {
+                [delegate tabStripView:strongSelf
+        didRequestMoveTabIDToNewWindow:movedID
+                           screenPoint:dropPoint];
+            }
+        });
+        return;
+    }
 
     if (tabID && toIndex != NSNotFound && toIndex != fromIndex) {
         // 推迟到下一个 runloop，避免在 mouseUp 栈内 reload 标签条
@@ -848,10 +878,10 @@ NSColor *BrowserTabStripFillColor(void) {
                 [weakSelf moveReorderDragForItem:strongItem deltaX:deltaX];
             }
         };
-        item.onReorderDragEnded = ^{
+        item.onReorderDragEnded = ^(NSPoint locationInWindow) {
             BrowserTabItemView *strongItem = weakItem;
             if (strongItem) {
-                [weakSelf endReorderDragForItem:strongItem];
+                [weakSelf endReorderDragForItem:strongItem locationInWindow:locationInWindow];
             }
         };
 
@@ -885,6 +915,12 @@ NSColor *BrowserTabStripFillColor(void) {
                                    keyEquivalent:@""];
     pinItem.target = self;
     pinItem.representedObject = tabID;
+
+    NSMenuItem *moveToWindow = [menu addItemWithTitle:@"将标签移到新窗口"
+                                               action:@selector(contextMoveTabToNewWindow:)
+                                        keyEquivalent:@""];
+    moveToWindow.target = self;
+    moveToWindow.representedObject = tabID;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -936,6 +972,19 @@ NSColor *BrowserTabStripFillColor(void) {
     }
 }
 
+- (void)contextMoveTabToNewWindow:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if (![delegate respondsToSelector:@selector(tabStripView:didRequestMoveTabIDToNewWindow:screenPoint:)]) {
+        return;
+    }
+    NSPoint screenPoint = [NSEvent mouseLocation];
+    [delegate tabStripView:self didRequestMoveTabIDToNewWindow:tabID screenPoint:screenPoint];
+}
+
 - (void)contextCloseTab:(NSMenuItem *)sender {
     NSUUID *tabID = sender.representedObject;
     if (![tabID isKindOfClass:[NSUUID class]]) {
@@ -984,6 +1033,11 @@ NSColor *BrowserTabStripFillColor(void) {
 
     if (action == @selector(contextTogglePinTab:)) {
         return tabID != nil;
+    }
+
+    if (action == @selector(contextMoveTabToNewWindow:)) {
+        return tabID != nil &&
+            [delegate respondsToSelector:@selector(tabStripView:didRequestMoveTabIDToNewWindow:screenPoint:)];
     }
 
     if (action == @selector(contextCloseOtherTabs:)) {

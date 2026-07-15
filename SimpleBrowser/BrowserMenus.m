@@ -2,47 +2,147 @@
 
 @implementation BrowserMenus
 
-+ (void)installTabMenuForTarget:(id)target {
++ (BOOL)menuExistsWithTitle:(NSString *)title {
     NSMenu *mainMenu = [NSApp mainMenu];
     if (!mainMenu) {
-        return;
+        return NO;
     }
+    for (NSMenuItem *item in mainMenu.itemArray) {
+        if ([item.submenu.title isEqualToString:title]) {
+            return YES;
+        }
+    }
+    return NO;
+}
 
-    NSMenuItem *tabMenuItem = [[NSMenuItem alloc] init];
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"标签页"];
++ (NSInteger)indexOfMenuTitled:(NSString *)title {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) {
+        return NSNotFound;
+    }
+    for (NSInteger i = 0; i < mainMenu.numberOfItems; i++) {
+        if ([mainMenu.itemArray[i].submenu.title isEqualToString:title]) {
+            return i;
+        }
+    }
+    return NSNotFound;
+}
 
-    NSMenuItem *newTab = [menu addItemWithTitle:@"新建标签页"
-                                         action:@selector(newBrowserTab:)
-                                  keyEquivalent:@"t"];
-    newTab.target = target;
++ (void)installBrowserChromeMenus {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMenu *mainMenu = [NSApp mainMenu];
+        if (!mainMenu) {
+            return;
+        }
 
-    NSMenuItem *closeTab = [menu addItemWithTitle:@"关闭标签页"
-                                           action:@selector(closeBrowserTab:)
-                                    keyEquivalent:@"w"];
-    closeTab.target = target;
+        // 文件：插在「编辑」之前 → App / 文件 / 编辑 / …
+        if (![self menuExistsWithTitle:@"文件"]) {
+            NSMenuItem *fileMenuItem = [[NSMenuItem alloc] init];
+            NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"文件"];
 
-    NSMenuItem *restoreTab = [menu addItemWithTitle:@"恢复最近关闭的标签页"
-                                             action:@selector(restoreRecentlyClosedBrowserTab:)
-                                      keyEquivalent:@"t"];
-    restoreTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    restoreTab.target = target;
+            NSMenuItem *newWindow = [fileMenu addItemWithTitle:@"新建窗口"
+                                                        action:@selector(newBrowserWindow:)
+                                                 keyEquivalent:@"n"];
+            newWindow.target = NSApp.delegate;
 
-    [menu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *openInNewWindow = [fileMenu addItemWithTitle:@"在新窗口打开当前页"
+                                                              action:@selector(openCurrentPageInNewBrowserWindow:)
+                                                       keyEquivalent:@""];
+            openInNewWindow.target = nil;
 
-    NSMenuItem *prevTab = [menu addItemWithTitle:@"上一个标签页"
-                                          action:@selector(selectPreviousBrowserTab:)
-                                   keyEquivalent:@"["];
-    prevTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    prevTab.target = target;
+            NSMenuItem *downloads = [fileMenu addItemWithTitle:@"下载"
+                                                        action:@selector(toggleDownloadsPanel:)
+                                                 keyEquivalent:@"j"];
+            downloads.target = nil;
 
-    NSMenuItem *nextTab = [menu addItemWithTitle:@"下一个标签页"
-                                          action:@selector(selectNextBrowserTab:)
-                                   keyEquivalent:@"]"];
-    nextTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
-    nextTab.target = target;
+            fileMenuItem.submenu = fileMenu;
+            NSInteger editIndex = [self indexOfMenuTitled:@"编辑"];
+            if (editIndex == NSNotFound) {
+                [mainMenu addItem:fileMenuItem];
+            } else {
+                [mainMenu insertItem:fileMenuItem atIndex:editIndex];
+            }
+        }
 
-    tabMenuItem.submenu = menu;
-    [mainMenu addItem:tabMenuItem];
+        // 查看：插在「窗口」之前
+        if (![self menuExistsWithTitle:@"查看"]) {
+            NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
+            NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"查看"];
+
+            NSMenuItem *zoomIn = [viewMenu addItemWithTitle:@"放大"
+                                                     action:@selector(zoomIn:)
+                                              keyEquivalent:@"="];
+            zoomIn.target = nil;
+
+            NSMenuItem *zoomOut = [viewMenu addItemWithTitle:@"缩小"
+                                                      action:@selector(zoomOut:)
+                                               keyEquivalent:@"-"];
+            zoomOut.target = nil;
+
+            NSMenuItem *actualSize = [viewMenu addItemWithTitle:@"实际大小"
+                                                         action:@selector(actualSize:)
+                                                  keyEquivalent:@"0"];
+            actualSize.target = nil;
+
+            viewMenuItem.submenu = viewMenu;
+            NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
+            if (windowIndex == NSNotFound) {
+                [mainMenu addItem:viewMenuItem];
+            } else {
+                [mainMenu insertItem:viewMenuItem atIndex:windowIndex];
+            }
+        }
+
+        // 标签页：插在「窗口」之前（查看之后）
+        if (![self menuExistsWithTitle:@"标签页"]) {
+            NSMenuItem *tabMenuItem = [[NSMenuItem alloc] init];
+            NSMenu *tabMenu = [[NSMenu alloc] initWithTitle:@"标签页"];
+
+            NSMenuItem *newTab = [tabMenu addItemWithTitle:@"新建标签页"
+                                                    action:@selector(newBrowserTab:)
+                                             keyEquivalent:@"t"];
+            newTab.target = nil;
+
+            NSMenuItem *closeTab = [tabMenu addItemWithTitle:@"关闭标签页"
+                                                      action:@selector(closeBrowserTab:)
+                                               keyEquivalent:@"w"];
+            closeTab.target = nil;
+
+            NSMenuItem *restoreTab = [tabMenu addItemWithTitle:@"恢复最近关闭的标签页"
+                                                        action:@selector(restoreRecentlyClosedBrowserTab:)
+                                                 keyEquivalent:@"t"];
+            restoreTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            restoreTab.target = nil;
+
+            [tabMenu addItem:[NSMenuItem separatorItem]];
+
+            NSMenuItem *prevTab = [tabMenu addItemWithTitle:@"上一个标签页"
+                                                     action:@selector(selectPreviousBrowserTab:)
+                                              keyEquivalent:@"["];
+            prevTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            prevTab.target = nil;
+
+            NSMenuItem *nextTab = [tabMenu addItemWithTitle:@"下一个标签页"
+                                                     action:@selector(selectNextBrowserTab:)
+                                              keyEquivalent:@"]"];
+            nextTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            nextTab.target = nil;
+
+            tabMenuItem.submenu = tabMenu;
+            NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
+            if (windowIndex == NSNotFound) {
+                [mainMenu addItem:tabMenuItem];
+            } else {
+                [mainMenu insertItem:tabMenuItem atIndex:windowIndex];
+            }
+        }
+    });
+}
+
++ (void)installTabMenuForTarget:(id)target {
+    (void)target;
+    [self installBrowserChromeMenus];
 }
 
 + (void)installSettingsMenuForTarget:(id)target {
@@ -56,6 +156,12 @@
         return;
     }
 
+    for (NSMenuItem *item in appMenu.itemArray) {
+        if (item.action == @selector(showBrowserSettings:)) {
+            return;
+        }
+    }
+
     NSInteger quitIndex = appMenu.numberOfItems - 1;
     if (quitIndex > 0) {
         [appMenu insertItem:[NSMenuItem separatorItem] atIndex:quitIndex];
@@ -63,74 +169,20 @@
     }
 
     NSMenuItem *settingsItem = [[NSMenuItem alloc] initWithTitle:@"设置…"
-                                                        action:@selector(showBrowserSettings:)
-                                                 keyEquivalent:@","];
+                                                          action:@selector(showBrowserSettings:)
+                                                   keyEquivalent:@","];
     settingsItem.target = target;
     [appMenu insertItem:settingsItem atIndex:quitIndex];
 }
 
 + (void)installDownloadMenuForTarget:(id)target {
-    NSMenu *mainMenu = [NSApp mainMenu];
-    if (!mainMenu) {
-        return;
-    }
-
-    // 插在「标签页」之前；若尚未安装标签页菜单则追加到末尾。
-    NSInteger insertIndex = mainMenu.numberOfItems;
-    for (NSInteger i = 0; i < mainMenu.numberOfItems; i++) {
-        if ([mainMenu.itemArray[i].submenu.title isEqualToString:@"标签页"]) {
-            insertIndex = i;
-            break;
-        }
-    }
-
-    NSMenuItem *fileMenuItem = [[NSMenuItem alloc] init];
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"文件"];
-
-    NSMenuItem *downloads = [menu addItemWithTitle:@"下载"
-                                            action:@selector(toggleDownloadsPanel:)
-                                     keyEquivalent:@"j"];
-    downloads.target = target;
-
-    fileMenuItem.submenu = menu;
-    [mainMenu insertItem:fileMenuItem atIndex:insertIndex];
+    (void)target;
+    [self installBrowserChromeMenus];
 }
 
 + (void)installViewMenuForTarget:(id)target {
-    NSMenu *mainMenu = [NSApp mainMenu];
-    if (!mainMenu) {
-        return;
-    }
-
-    // 插在「窗口」之前；符合 App / 编辑 / 查看 / 窗口 惯例。
-    NSInteger insertIndex = mainMenu.numberOfItems;
-    for (NSInteger i = 0; i < mainMenu.numberOfItems; i++) {
-        if ([mainMenu.itemArray[i].submenu.title isEqualToString:@"窗口"]) {
-            insertIndex = i;
-            break;
-        }
-    }
-
-    NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"查看"];
-
-    NSMenuItem *zoomIn = [menu addItemWithTitle:@"放大"
-                                         action:@selector(zoomIn:)
-                                  keyEquivalent:@"="];
-    zoomIn.target = target;
-
-    NSMenuItem *zoomOut = [menu addItemWithTitle:@"缩小"
-                                          action:@selector(zoomOut:)
-                                   keyEquivalent:@"-"];
-    zoomOut.target = target;
-
-    NSMenuItem *actualSize = [menu addItemWithTitle:@"实际大小"
-                                             action:@selector(actualSize:)
-                                      keyEquivalent:@"0"];
-    actualSize.target = target;
-
-    viewMenuItem.submenu = menu;
-    [mainMenu insertItem:viewMenuItem atIndex:insertIndex];
+    (void)target;
+    [self installBrowserChromeMenus];
 }
 
 @end

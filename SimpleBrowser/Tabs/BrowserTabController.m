@@ -1,9 +1,12 @@
 #import "BrowserTabController.h"
 #import "BrowserTab.h"
+#import "BrowserWebView.h"
 #import "BrowsingPreferences.h"
+#import <AppKit/AppKit.h>
 
 static const NSUInteger kRecentlyClosedTabLimit = 20;
 static const NSUInteger kMaxLiveWebViews = 8;
+static const NSUInteger kMaxLiveWebViewsGlobal = 12;
 static const NSTimeInterval kHibernateIdleSeconds = 600.0; // 10 minutes
 static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
@@ -26,12 +29,22 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 @implementation BrowserTabController
 
++ (NSHashTable<BrowserTabController *> *)registeredControllers {
+    static NSHashTable<BrowserTabController *> *controllers = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        controllers = [NSHashTable weakObjectsHashTable];
+    });
+    return controllers;
+}
+
 - (instancetype)initWithConfiguration:(WKWebViewConfiguration *)configuration {
     self = [super init];
     if (self) {
         _configuration = configuration;
         _mutableTabs = [[NSMutableArray alloc] init];
         _recentlyClosedEntries = [[NSMutableArray alloc] init];
+        [[[self class] registeredControllers] addObject:self];
         [self startHibernateTimer];
     }
     return self;
@@ -39,6 +52,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 - (void)dealloc {
     [self.hibernateTimer invalidate];
+    [[[self class] registeredControllers] removeObject:self];
 }
 
 - (NSArray<BrowserTab *> *)tabs {
@@ -97,6 +111,63 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     if (self.selectedTab) {
         [self closeTab:self.selectedTab];
     }
+}
+
+- (nullable BrowserTab *)extractTabKeepingAlive:(BrowserTab *)tab {
+    NSUInteger index = [self.mutableTabs indexOfObject:tab];
+    if (index == NSNotFound) {
+        return nil;
+    }
+
+    BOOL wasSelected = (tab == self.selectedTab);
+
+    WKWebView *webView = tab.webView;
+    if (webView != nil) {
+        [webView removeFromSuperview];
+        webView.navigationDelegate = nil;
+        webView.UIDelegate = nil;
+        if ([webView isKindOfClass:[BrowserWebView class]]) {
+            BrowserWebView *browserWebView = (BrowserWebView *)webView;
+            browserWebView.openURLHandler = nil;
+            browserWebView.openURLInNewWindowHandler = nil;
+            browserWebView.downloadURLHandler = nil;
+        }
+    }
+
+    [self.mutableTabs removeObjectAtIndex:index];
+
+    if (self.mutableTabs.count == 0) {
+        self.selectedTab = nil;
+        return tab;
+    }
+
+    if (wasSelected) {
+        NSUInteger nextIndex = index > 0 ? index - 1 : 0;
+        if (nextIndex >= self.mutableTabs.count) {
+            nextIndex = self.mutableTabs.count - 1;
+        }
+        [self selectTabInternal:self.mutableTabs[nextIndex] notify:NO];
+    }
+    [self notifyChange];
+    return tab;
+}
+
+- (void)adoptTab:(BrowserTab *)tab {
+    if (!tab) {
+        return;
+    }
+    if ([self.mutableTabs indexOfObject:tab] != NSNotFound) {
+        [self selectTabInternal:tab notify:YES];
+        return;
+    }
+
+    NSUInteger insertIndex = self.mutableTabs.count;
+    if (tab.isPinned) {
+        insertIndex = self.pinnedTabCount;
+    }
+    insertIndex = MIN(insertIndex, self.mutableTabs.count);
+    [self.mutableTabs insertObject:tab atIndex:insertIndex];
+    [self selectTabInternal:tab notify:YES];
 }
 
 - (void)closeOtherTabsExcept:(BrowserTab *)tab {
@@ -391,6 +462,12 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         changed = YES;
     }
 
+    if ([[self class] globalLiveWebViewCount] > kMaxLiveWebViewsGlobal) {
+        if ([[self class] enforceGlobalLiveWebViewBudget]) {
+            changed = YES;
+        }
+    }
+
     if (changed) {
         [self notifyChange];
     }
@@ -404,6 +481,76 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         }
     }
     return count;
+}
+
++ (NSUInteger)globalLiveWebViewCount {
+    NSUInteger count = 0;
+    for (BrowserTabController *controller in [self registeredControllers]) {
+        count += [controller liveWebViewCount];
+    }
+    return count;
+}
+
++ (nullable BrowserTabController *)keyWindowTabController {
+    id windowController = NSApp.keyWindow.windowController;
+    if (![windowController respondsToSelector:@selector(tabController)]) {
+        return nil;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    id tabController = [windowController performSelector:@selector(tabController)];
+#pragma clang diagnostic pop
+    if ([tabController isKindOfClass:[BrowserTabController class]]) {
+        return tabController;
+    }
+    return nil;
+}
+
++ (BOOL)enforceGlobalLiveWebViewBudget {
+    BOOL changed = NO;
+    while ([self globalLiveWebViewCount] > kMaxLiveWebViewsGlobal) {
+        BrowserTabController *keyController = [self keyWindowTabController];
+        BrowserTab *victim = nil;
+        BrowserTabController *victimController = nil;
+        NSTimeInterval oldest = DBL_MAX;
+        BOOL victimIsNonKey = NO;
+
+        for (BrowserTabController *controller in [self registeredControllers]) {
+            BOOL isNonKey = (controller != keyController);
+            for (BrowserTab *tab in controller.mutableTabs) {
+                if (tab == controller.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+                    continue;
+                }
+                if (victim == nil) {
+                    victim = tab;
+                    victimController = controller;
+                    oldest = tab.lastActiveTimestamp;
+                    victimIsNonKey = isNonKey;
+                    continue;
+                }
+                if (isNonKey && !victimIsNonKey) {
+                    victim = tab;
+                    victimController = controller;
+                    oldest = tab.lastActiveTimestamp;
+                    victimIsNonKey = YES;
+                    continue;
+                }
+                if (isNonKey == victimIsNonKey && tab.lastActiveTimestamp < oldest) {
+                    victim = tab;
+                    victimController = controller;
+                    oldest = tab.lastActiveTimestamp;
+                }
+            }
+        }
+
+        if (!victim) {
+            break;
+        }
+        [victim hibernate];
+        changed = YES;
+        (void)victimController;
+    }
+    return changed;
 }
 
 - (void)enforceLiveWebViewBudget {

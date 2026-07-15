@@ -2,7 +2,7 @@
 
 > 目标：为常用工作站点提供可控的一键登录与可选自动登录，覆盖账号密码、短信验证码、二维码三类流程；本地优先、按站点配置，不做全网密码管理器。  
 > 状态：设计草案（未实现）  
-> 关联：[professional-features-roadmap.md](professional-features-roadmap.md) · [design.md](design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md)
+> 关联：[auto-login-development-plan.md](auto-login-development-plan.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [design.md](design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md)
 
 ---
 
@@ -373,5 +373,6 @@ BrowserLoginAssistSettingsWC
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1 | 2026-07-15 | 初稿：可行性、三类登录、二维码策略、分阶段与架构落点 |
+| 0.2 | 2026-07-15 | 补充开发计划链接（LA-0～LA-7） |
 
-实现启动前可另补 `auto-login-development-plan.md`（拆任务与验收清单）；本文件保持产品与技术方案真相来源。
+分阶段任务与验收清单见 [auto-login-development-plan.md](auto-login-development-plan.md)；本文件保持产品与技术方案真相来源。

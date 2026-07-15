@@ -1,8 +1,9 @@
 # 多窗口 — 实现方案
 
 > 目标：在现有「单窗口 + 多标签」架构上支持多个浏览器窗口（⌘N、链接在新窗口打开、窗口级会话恢复），且不显著增加应用体积与空闲内存。  
-> 状态：**方案待实现**  
+> 状态：**已实现（MW-0～MW-3，2026-07-15）**  
 > 开发计划：[multi-window-development-plan.md](multi-window-development-plan.md)  
+> Cursor Plan（可 Build）：[.cursor/plans/multi-window.plan.md](../../.cursor/plans/multi-window.plan.md)  
 > 路线图：`professional-features-roadmap.md` §3.5 / M3
 
 ---

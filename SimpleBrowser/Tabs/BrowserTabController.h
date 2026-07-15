@@ -32,6 +32,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)selectPreviousTab;
 - (void)moveTab:(BrowserTab *)tab toIndex:(NSUInteger)toIndex;
 - (void)setTab:(BrowserTab *)tab pinned:(BOOL)pinned;
+/// 从本控制器摘出标签，保留 WebView / 页面状态；不写入「最近关闭」。若摘空则 selectedTab 置 nil（关窗由调用方处理）。
+- (nullable BrowserTab *)extractTabKeepingAlive:(BrowserTab *)tab;
+/// 接入已有标签（含存活 WebView），并选中。
+- (void)adoptTab:(BrowserTab *)tab;
 - (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries
                  selectedIndex:(NSInteger)selectedIndex
                    pinnedCount:(NSUInteger)pinnedCount;

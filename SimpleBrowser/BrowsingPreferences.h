@@ -9,6 +9,12 @@ extern NSString * const BrowserSearchEngineGoogle;
 extern NSString * const BrowserSearchEngineBing;
 extern NSString * const BrowserSearchEngineBaidu;
 
+/// 窗口会话字典键（tabs / selectedIndex / pinnedCount / frame）。
+extern NSString * const BrowserWindowSessionTabsKey;
+extern NSString * const BrowserWindowSessionSelectedIndexKey;
+extern NSString * const BrowserWindowSessionPinnedCountKey;
+extern NSString * const BrowserWindowSessionFrameKey;
+
 @interface BrowsingPreferences : NSObject
 
 + (nullable NSURL *)lastVisitedURL;
@@ -23,6 +29,10 @@ extern NSString * const BrowserSearchEngineBaidu;
 + (void)saveTabEntries:(NSArray<NSString *> *)entries
          selectedIndex:(NSInteger)selectedIndex
            pinnedCount:(NSUInteger)pinnedCount;
+
+/// 多窗口会话：每项为窗口字典。无 `windowSession` 时从旧 `tabSession` 迁移为单窗数组。
++ (NSArray<NSDictionary *> *)savedWindowSessions;
++ (void)saveWindowSessions:(NSArray<NSDictionary *> *)sessions;
 
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)availableSearchEngines;
 + (NSString *)defaultSearchEngineID;

@@ -8,6 +8,9 @@ static NSString * const kTabSessionKey = @"tabSession";
 static NSString * const kTabSessionTabsKey = @"tabs";
 static NSString * const kTabSessionSelectedIndexKey = @"selectedIndex";
 static NSString * const kTabSessionPinnedCountKey = @"pinnedCount";
+static NSString * const kWindowSessionKey = @"windowSession";
+static NSString * const kWindowSessionVersionKey = @"version";
+static NSString * const kWindowSessionWindowsKey = @"windows";
 static NSString * const kDefaultURLString = @"https://example.com";
 static NSString * const kDefaultSearchEngineKey = @"defaultSearchEngineID";
 
@@ -16,6 +19,11 @@ NSString * const BrowserSearchEngineDuckDuckGo = @"duckduckgo";
 NSString * const BrowserSearchEngineGoogle = @"google";
 NSString * const BrowserSearchEngineBing = @"bing";
 NSString * const BrowserSearchEngineBaidu = @"baidu";
+
+NSString * const BrowserWindowSessionTabsKey = @"tabs";
+NSString * const BrowserWindowSessionSelectedIndexKey = @"selectedIndex";
+NSString * const BrowserWindowSessionPinnedCountKey = @"pinnedCount";
+NSString * const BrowserWindowSessionFrameKey = @"frame";
 
 @implementation BrowsingPreferences
 
@@ -106,6 +114,109 @@ NSString * const BrowserSearchEngineBaidu = @"baidu";
         NSURL *url = [NSURL URLWithString:selectedEntry];
         [self setLastVisitedURL:url];
     }
+}
+
++ (nullable NSDictionary *)sanitizedWindowSessionDictionary:(NSDictionary *)raw {
+    if (![raw isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSArray *tabs = raw[BrowserWindowSessionTabsKey];
+    if (![tabs isKindOfClass:[NSArray class]] || tabs.count == 0) {
+        return nil;
+    }
+    NSMutableArray<NSString *> *entries = [[NSMutableArray alloc] init];
+    for (id item in tabs) {
+        if (![item isKindOfClass:[NSString class]] || ((NSString *)item).length == 0) {
+            [entries addObject:BrowserTabSessionNewTabMarker];
+            continue;
+        }
+        [entries addObject:item];
+    }
+    if (entries.count == 0) {
+        return nil;
+    }
+
+    NSInteger selectedIndex = 0;
+    id selectedValue = raw[BrowserWindowSessionSelectedIndexKey];
+    if ([selectedValue isKindOfClass:[NSNumber class]]) {
+        selectedIndex = ((NSNumber *)selectedValue).integerValue;
+    }
+    selectedIndex = MAX(0, MIN(selectedIndex, (NSInteger)entries.count - 1));
+
+    NSUInteger pinnedCount = 0;
+    id pinnedValue = raw[BrowserWindowSessionPinnedCountKey];
+    if ([pinnedValue isKindOfClass:[NSNumber class]]) {
+        pinnedCount = (NSUInteger)MAX(0, ((NSNumber *)pinnedValue).integerValue);
+    }
+    pinnedCount = MIN(pinnedCount, entries.count);
+
+    NSMutableDictionary *session = [[NSMutableDictionary alloc] init];
+    session[BrowserWindowSessionTabsKey] = [entries copy];
+    session[BrowserWindowSessionSelectedIndexKey] = @(selectedIndex);
+    session[BrowserWindowSessionPinnedCountKey] = @(pinnedCount);
+
+    id frameValue = raw[BrowserWindowSessionFrameKey];
+    if ([frameValue isKindOfClass:[NSString class]] && ((NSString *)frameValue).length > 0) {
+        session[BrowserWindowSessionFrameKey] = frameValue;
+    }
+    return [session copy];
+}
+
++ (NSArray<NSDictionary *> *)savedWindowSessions {
+    NSDictionary *root = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kWindowSessionKey];
+    NSArray *windows = root[kWindowSessionWindowsKey];
+    if ([windows isKindOfClass:[NSArray class]] && windows.count > 0) {
+        NSMutableArray<NSDictionary *> *result = [[NSMutableArray alloc] init];
+        for (id item in windows) {
+            NSDictionary *session = [self sanitizedWindowSessionDictionary:item];
+            if (session) {
+                [result addObject:session];
+            }
+        }
+        if (result.count > 0) {
+            return [result copy];
+        }
+    }
+
+    NSArray<NSString *> *legacyTabs = [self savedTabEntries];
+    if (legacyTabs.count == 0) {
+        return @[];
+    }
+    return @[
+        @{
+            BrowserWindowSessionTabsKey: legacyTabs,
+            BrowserWindowSessionSelectedIndexKey: @([self savedSelectedTabIndex]),
+            BrowserWindowSessionPinnedCountKey: @([self savedPinnedTabCount]),
+        },
+    ];
+}
+
++ (void)saveWindowSessions:(NSArray<NSDictionary *> *)sessions {
+    NSMutableArray<NSDictionary *> *sanitized = [[NSMutableArray alloc] init];
+    for (id item in sessions) {
+        NSDictionary *session = [self sanitizedWindowSessionDictionary:item];
+        if (session) {
+            [sanitized addObject:session];
+        }
+    }
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (sanitized.count == 0) {
+        [defaults removeObjectForKey:kWindowSessionKey];
+        [defaults removeObjectForKey:kTabSessionKey];
+        return;
+    }
+
+    [defaults setObject:@{
+        kWindowSessionVersionKey: @1,
+        kWindowSessionWindowsKey: [sanitized copy],
+    } forKey:kWindowSessionKey];
+
+    // 同步镜像第一窗到旧 tabSession，兼容仍调用 savedTabEntries 的路径。
+    NSDictionary *first = sanitized.firstObject;
+    [self saveTabEntries:first[BrowserWindowSessionTabsKey]
+           selectedIndex:[first[BrowserWindowSessionSelectedIndexKey] integerValue]
+             pinnedCount:[first[BrowserWindowSessionPinnedCountKey] unsignedIntegerValue]];
 }
 
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)availableSearchEngines {

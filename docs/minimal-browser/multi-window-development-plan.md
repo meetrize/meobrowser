@@ -2,7 +2,8 @@
 
 > 基于 [multi-window-design.md](multi-window-design.md) 的分阶段实施计划。  
 > 前置条件：多标签 L2、`BrowserTabController` 休眠预算、现有会话 `tabSession` 可用。  
-> **状态：待开发。**
+> **状态：已实现（2026-07-15）。**  
+> **Cursor Plan**：[.cursor/plans/multi-window.plan.md](../../.cursor/plans/multi-window.plan.md)
 
 ---
 

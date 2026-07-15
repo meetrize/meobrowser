@@ -24,6 +24,15 @@ static NSString *ExtensionForMIMEType(NSString *mime);
 
 @implementation BrowserDownloadManager
 
++ (instancetype)sharedManager {
+    static BrowserDownloadManager *shared = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        shared = [[BrowserDownloadManager alloc] init];
+    });
+    return shared;
+}
+
 - (instancetype)init {
     self = [super init];
     if (self) {

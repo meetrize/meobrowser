@@ -1,8 +1,8 @@
 #import "BrowserWindowController.h"
+#import "AppDelegate.h"
 #import "BrowserAppInfo.h"
 #import "SBTextField.h"
 #import "BrowsingPreferences.h"
-#import "BrowserMenus.h"
 #import "BrowserTabController.h"
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
@@ -22,6 +22,7 @@
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate, NSMenuItemValidation>
+- (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
@@ -54,7 +55,31 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
     return self.tabController.selectedTab.webView;
 }
 
++ (void)configureSharedWebKitDefaultsIfNeeded {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUInteger memoryCapacity = 16 * 1024 * 1024;
+        NSUInteger diskCapacity = 64 * 1024 * 1024;
+        NSURLCache *cache = [[NSURLCache alloc] initWithMemoryCapacity:memoryCapacity
+                                                          diskCapacity:diskCapacity
+                                                              diskPath:@"MeoBrowserURLCache"];
+        [NSURLCache setSharedURLCache:cache];
+    });
+}
+
 - (instancetype)init {
+    return [self initWithSessionDictionary:nil];
+}
+
+- (instancetype)initForTabAdoption {
+    return [self initWithSessionDictionary:nil loadTabs:NO];
+}
+
+- (instancetype)initWithSessionDictionary:(NSDictionary *)session {
+    return [self initWithSessionDictionary:session loadTabs:YES];
+}
+
+- (instancetype)initWithSessionDictionary:(NSDictionary *)session loadTabs:(BOOL)loadTabs {
     NSRect frame = NSMakeRect(0, 0, 1024, 700);
     NSWindowStyleMask style = NSWindowStyleMaskTitled |
                               NSWindowStyleMaskClosable |
@@ -72,17 +97,17 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
     self = [super initWithWindow:window];
     if (self) {
         [self configureChromeWindow];
+        [[self class] configureSharedWebKitDefaultsIfNeeded];
         _webViewConfiguration = [[WKWebViewConfiguration alloc] init];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
-        _downloadManager = [[BrowserDownloadManager alloc] init];
+        _downloadManager = [BrowserDownloadManager sharedManager];
         [_downloadManager addObserver:self];
         [self setupUI];
-        [BrowserMenus installTabMenuForTarget:self];
-        [BrowserMenus installDownloadMenuForTarget:self];
-        [BrowserMenus installViewMenuForTarget:self];
-        [self setupInitialTabs];
+        if (loadTabs) {
+            [self applySessionDictionary:session];
+        }
     }
     return self;
 }
@@ -94,14 +119,6 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
     configuration.applicationNameForUserAgent = @"Version/18.0 Safari/605.1.15";
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
-
-    // 限制 URL 缓存上限，避免 App 进程内无限增长。
-    NSUInteger memoryCapacity = 16 * 1024 * 1024;
-    NSUInteger diskCapacity = 64 * 1024 * 1024;
-    NSURLCache *cache = [[NSURLCache alloc] initWithMemoryCapacity:memoryCapacity
-                                                      diskCapacity:diskCapacity
-                                                          diskPath:@"MeoBrowserURLCache"];
-    [NSURLCache setSharedURLCache:cache];
 }
 
 - (void)configureChromeWindow {
@@ -258,6 +275,20 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)windowDidBecomeKey:(NSNotification *)notification {
     if (notification.object == self.window) {
         [self scheduleTrafficLightPositioning];
+    }
+}
+
+- (void)windowWillClose:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    if (self.pendingPersistBlock) {
+        dispatch_block_cancel(self.pendingPersistBlock);
+        self.pendingPersistBlock = nil;
+    }
+    id delegate = NSApp.delegate;
+    if ([delegate respondsToSelector:@selector(browserWindowControllerWillClose:)]) {
+        [(AppDelegate *)delegate browserWindowControllerWillClose:self];
     }
 }
 
@@ -707,16 +738,72 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)setupInitialTabs {
-    NSArray<NSString *> *entries = [BrowsingPreferences savedTabEntries];
-    if (entries.count > 0) {
-        NSInteger index = [BrowsingPreferences savedSelectedTabIndex];
-        NSUInteger pinnedCount = [BrowsingPreferences savedPinnedTabCount];
-        [self.tabController restoreTabsFromEntries:entries
-                                     selectedIndex:index
-                                       pinnedCount:pinnedCount];
+    NSArray<NSDictionary *> *windows = [BrowsingPreferences savedWindowSessions];
+    if (windows.count > 0) {
+        [self applySessionDictionary:windows.firstObject];
     } else {
         [self.tabController addNewTab];
     }
+}
+
+- (void)applySessionDictionary:(NSDictionary *)session {
+    NSArray *tabs = session[BrowserWindowSessionTabsKey];
+    if (![tabs isKindOfClass:[NSArray class]] || tabs.count == 0) {
+        [self.tabController addNewTab];
+        return;
+    }
+
+    NSInteger selectedIndex = 0;
+    NSNumber *selectedValue = session[BrowserWindowSessionSelectedIndexKey];
+    if ([selectedValue isKindOfClass:[NSNumber class]]) {
+        selectedIndex = selectedValue.integerValue;
+    }
+    NSUInteger pinnedCount = 0;
+    NSNumber *pinnedValue = session[BrowserWindowSessionPinnedCountKey];
+    if ([pinnedValue isKindOfClass:[NSNumber class]]) {
+        pinnedCount = pinnedValue.unsignedIntegerValue;
+    }
+    [self.tabController restoreTabsFromEntries:tabs
+                                 selectedIndex:selectedIndex
+                                   pinnedCount:pinnedCount];
+}
+
+- (NSDictionary *)sessionDictionary {
+    NSMutableArray<NSString *> *entries = [[NSMutableArray alloc] init];
+    for (BrowserTab *tab in self.tabController.tabs) {
+        if (tab.isNewTabPage) {
+            [entries addObject:BrowserTabSessionNewTabMarker];
+            continue;
+        }
+        NSURL *url = [tab currentOrRestorableURL];
+        if ([BrowsingPreferences isPersistableURL:url]) {
+            [entries addObject:url.absoluteString];
+        } else {
+            [entries addObject:BrowserTabSessionNewTabMarker];
+        }
+    }
+
+    if (entries.count == 0) {
+        return @{
+            BrowserWindowSessionTabsKey: @[BrowserTabSessionNewTabMarker],
+            BrowserWindowSessionSelectedIndexKey: @0,
+            BrowserWindowSessionPinnedCountKey: @0,
+        };
+    }
+
+    NSInteger selectedIndex = [self.tabController indexOfSelectedTab];
+    if (selectedIndex == NSNotFound) {
+        selectedIndex = 0;
+    }
+
+    NSMutableDictionary *session = [[NSMutableDictionary alloc] init];
+    session[BrowserWindowSessionTabsKey] = [entries copy];
+    session[BrowserWindowSessionSelectedIndexKey] = @(selectedIndex);
+    session[BrowserWindowSessionPinnedCountKey] = @(self.tabController.pinnedTabCount);
+    if (self.window) {
+        session[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
+    }
+    return [session copy];
 }
 
 #pragma mark - Tab Management
@@ -741,6 +828,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         __weak BrowserWebView *weakBrowserWebView = browserWebView;
         browserWebView.openURLHandler = ^(NSURL *url) {
             [weakSelf.tabController addTabWithURL:url];
+        };
+        browserWebView.openURLInNewWindowHandler = ^(NSURL *url) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            id delegate = NSApp.delegate;
+            if ([delegate respondsToSelector:@selector(openURLInNewBrowserWindow:)] && url) {
+                [(AppDelegate *)delegate openURLInNewBrowserWindow:url];
+            } else {
+                [strongSelf.tabController addTabWithURL:url];
+            }
         };
         browserWebView.downloadURLHandler = ^(NSURL *url) {
             typeof(self) strongSelf = weakSelf;
@@ -943,27 +1042,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)persistTabSessionNow {
-    NSMutableArray<NSString *> *entries = [[NSMutableArray alloc] init];
-    for (BrowserTab *tab in self.tabController.tabs) {
-        if (tab.isNewTabPage) {
-            [entries addObject:BrowserTabSessionNewTabMarker];
-            continue;
-        }
-        NSURL *url = [tab currentOrRestorableURL];
-        if ([BrowsingPreferences isPersistableURL:url]) {
-            [entries addObject:url.absoluteString];
-        } else {
-            [entries addObject:BrowserTabSessionNewTabMarker];
-        }
+    id delegate = NSApp.delegate;
+    if ([delegate respondsToSelector:@selector(persistAllBrowserWindowSessions)]) {
+        [(AppDelegate *)delegate persistAllBrowserWindowSessions];
+        return;
     }
-
-    NSInteger selectedIndex = [self.tabController indexOfSelectedTab];
-    if (selectedIndex == NSNotFound) {
-        selectedIndex = 0;
-    }
-    [BrowsingPreferences saveTabEntries:entries
-                          selectedIndex:selectedIndex
-                            pinnedCount:self.tabController.pinnedTabCount];
+    [BrowsingPreferences saveWindowSessions:@[[self sessionDictionary]]];
 }
 
 - (nullable BrowserTab *)tabForID:(NSUUID *)tabID {
@@ -1075,6 +1159,90 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     return tab.isPinned;
 }
 
+- (void)tabStripView:(id)stripView
+didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
+         screenPoint:(NSPoint)screenPoint {
+    (void)stripView;
+    [self moveTabIDToNewWindow:tabID screenPoint:screenPoint];
+}
+
+- (void)moveTabIDToNewWindow:(NSUUID *)tabID screenPoint:(NSPoint)screenPoint {
+    BrowserTab *tab = [self tabForID:tabID];
+    if (!tab) {
+        return;
+    }
+
+    NSSize defaultSize = self.window ? self.window.frame.size : NSMakeSize(1024, 700);
+    if (defaultSize.width < 400) {
+        defaultSize.width = 1024;
+    }
+    if (defaultSize.height < 300) {
+        defaultSize.height = 700;
+    }
+
+    NSRect newFrame = NSMakeRect(screenPoint.x - 60.0,
+                                 screenPoint.y - defaultSize.height + 24.0,
+                                 defaultSize.width,
+                                 defaultSize.height);
+    NSScreen *screen = [NSScreen mainScreen];
+    for (NSScreen *candidate in [NSScreen screens]) {
+        if (NSPointInRect(screenPoint, candidate.frame)) {
+            screen = candidate;
+            break;
+        }
+    }
+    NSRect visible = screen.visibleFrame;
+    if (NSMaxX(newFrame) > NSMaxX(visible)) {
+        newFrame.origin.x = NSMaxX(visible) - NSWidth(newFrame);
+    }
+    if (NSMinX(newFrame) < NSMinX(visible)) {
+        newFrame.origin.x = NSMinX(visible);
+    }
+    if (NSMinY(newFrame) < NSMinY(visible)) {
+        newFrame.origin.y = NSMinY(visible);
+    }
+    if (NSMaxY(newFrame) > NSMaxY(visible)) {
+        newFrame.origin.y = NSMaxY(visible) - NSHeight(newFrame);
+    }
+
+    id delegate = NSApp.delegate;
+    if (![delegate respondsToSelector:@selector(createBrowserWindowAdoptingTab:frame:)]) {
+        return;
+    }
+
+    if (tab == self.tabController.selectedTab) {
+        [self stopObservingLoadingProgress];
+    }
+    [self detachWebViewIfNeeded:tab.webView];
+
+    BOOL wasLastTab = (self.tabController.tabs.count <= 1);
+    BrowserTab *moved = [self.tabController extractTabKeepingAlive:tab];
+    if (!moved) {
+        return;
+    }
+
+    // 整页迁移 BrowserTab（含存活 WKWebView），不按 URL 重新加载。
+    BrowserWindowController *newController =
+        [(AppDelegate *)delegate createBrowserWindowAdoptingTab:moved frame:newFrame];
+    [newController.window makeKeyAndOrderFront:nil];
+
+    if (wasLastTab || self.tabController.tabs.count == 0) {
+        [self.window close];
+    } else {
+        [self refreshTabsUI];
+        [self schedulePersistTabSession];
+    }
+}
+
+- (void)adoptTab:(BrowserTab *)tab {
+    if (!tab) {
+        return;
+    }
+    [self.tabController adoptTab:tab];
+    [self refreshTabsUI];
+    [self schedulePersistTabSession];
+}
+
 - (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView {
     (void)stripView;
     [self.window performZoom:nil];
@@ -1143,6 +1311,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)newBrowserTab:(id)sender {
     (void)sender;
     [self.tabController addNewTab];
+}
+
+- (void)openCurrentPageInNewBrowserWindow:(id)sender {
+    (void)sender;
+    id delegate = NSApp.delegate;
+    if (![delegate respondsToSelector:@selector(openURLInNewBrowserWindow:)]) {
+        return;
+    }
+    BrowserTab *tab = self.tabController.selectedTab;
+    NSURL *url = nil;
+    if (tab && !tab.isNewTabPage) {
+        url = [tab currentOrRestorableURL];
+    }
+    if ([BrowsingPreferences isPersistableURL:url]) {
+        [(AppDelegate *)delegate openURLInNewBrowserWindow:url];
+    } else {
+        [(AppDelegate *)delegate newBrowserWindow:nil];
+    }
 }
 
 - (void)closeBrowserTab:(id)sender {
@@ -1606,6 +1792,15 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
         if (downloadURL) {
             if (browserWebView.downloadURLHandler) {
                 browserWebView.downloadURLHandler(downloadURL);
+            }
+            return nil;
+        }
+        NSURL *newWindowURL = [browserWebView consumePendingContextMenuOpenInNewWindowURL:navigationAction.request.URL];
+        if (newWindowURL) {
+            if (browserWebView.openURLInNewWindowHandler) {
+                browserWebView.openURLInNewWindowHandler(newWindowURL);
+            } else {
+                [self.tabController addTabWithURL:newWindowURL];
             }
             return nil;
         }
