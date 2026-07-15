@@ -12,7 +12,7 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     recipe.mode = LoginRecipeModePassword;
     recipe.autoLogin = NO;
     recipe.isDefault = NO;
-    recipe.submitByEnter = NO;
+    recipe.submitByEnter = YES; // 默认：密码框回车提交
     recipe.waitTimeoutMs = 8000;
     recipe.updatedAt = [NSDate date].timeIntervalSince1970;
     return recipe;
@@ -25,6 +25,7 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
         _title = @"";
         _host = @"";
         _mode = LoginRecipeModePassword;
+        _submitByEnter = YES;
         _waitTimeoutMs = 8000;
         _updatedAt = [NSDate date].timeIntervalSince1970;
     }

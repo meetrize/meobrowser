@@ -18,7 +18,7 @@ extern LoginRecipeMode const LoginRecipeModePassword;
 @property (nonatomic, copy, nullable) NSString *usernameSelector;
 @property (nonatomic, copy, nullable) NSString *passwordSelector;
 @property (nonatomic, copy, nullable) NSString *submitSelector;
-/// YES：对密码框回车；NO：点击 submitSelector。
+/// YES（默认）：对密码框回车提交；NO：点击 submitSelector。
 @property (nonatomic, assign) BOOL submitByEnter;
 @property (nonatomic, copy, nullable) NSString *successJSPredicate;
 /// waitFor 超时（毫秒），默认 8000。

@@ -92,6 +92,30 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     return [super titleRectForBounds:[self textAreaRectForBounds:theRect]];
 }
 
+- (void)editWithFrame:(NSRect)rect
+               inView:(NSView *)controlView
+               editor:(NSText *)textObj
+             delegate:(nullable id)delegate
+                event:(nullable NSEvent *)event {
+    NSRect adjusted = [self drawingRectForBounds:controlView.bounds];
+    [super editWithFrame:adjusted inView:controlView editor:textObj delegate:delegate event:event];
+}
+
+- (void)selectWithFrame:(NSRect)rect
+                 inView:(NSView *)controlView
+                 editor:(NSText *)textObj
+               delegate:(nullable id)delegate
+                  start:(NSInteger)selStart
+                 length:(NSInteger)selLength {
+    NSRect adjusted = [self drawingRectForBounds:controlView.bounds];
+    [super selectWithFrame:adjusted
+                    inView:controlView
+                    editor:textObj
+                  delegate:delegate
+                     start:selStart
+                    length:selLength];
+}
+
 @end
 
 @implementation SBTextField
@@ -112,6 +136,35 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         [SBTextInputConfiguration configureSingleLineTextField:self];
     }
     return self;
+}
+
+- (void)setLeadingContentInset:(CGFloat)leadingContentInset {
+    if (fabs(_leadingContentInset - leadingContentInset) < 0.5) {
+        return;
+    }
+    _leadingContentInset = leadingContentInset;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setTrailingContentInset:(CGFloat)trailingContentInset {
+    if (fabs(_trailingContentInset - trailingContentInset) < 0.5) {
+        return;
+    }
+    _trailingContentInset = trailingContentInset;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)syncFieldEditorFrameWithContentInsets {
+    NSText *editor = self.currentEditor;
+    if (!editor) {
+        return;
+    }
+    NSRect frame = [self.cell drawingRectForBounds:self.bounds];
+    if (!NSEqualRects(editor.frame, frame)) {
+        editor.frame = frame;
+    }
 }
 
 @end

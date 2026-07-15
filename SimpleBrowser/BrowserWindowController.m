@@ -25,7 +25,32 @@
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 
-static const CGFloat kSecurityBadgeLeadingInset = 88.0;
+static NSString * const kBrowserSecurityBadgeTitle = @"连接不安全";
+static const CGFloat kSecurityBadgeLeadingPadding = 6.0;
+static const CGFloat kSecurityBadgeTrailingGap = 4.0;
+
+static NSFont *BrowserSecurityBadgeFont(void) {
+    return [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+}
+
+static CGFloat BrowserSecurityBadgeContentWidth(void) {
+    NSSize size = [kBrowserSecurityBadgeTitle sizeWithAttributes:@{
+        NSFontAttributeName: BrowserSecurityBadgeFont()
+    }];
+    return ceil(size.width);
+}
+
+static CGFloat BrowserSecurityBadgeLeadingInset(void) {
+    return kSecurityBadgeLeadingPadding + BrowserSecurityBadgeContentWidth() + kSecurityBadgeTrailingGap;
+}
+
+static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
+    return [[NSAttributedString alloc] initWithString:kBrowserSecurityBadgeTitle
+                                           attributes:@{
+        NSFontAttributeName: BrowserSecurityBadgeFont(),
+        NSForegroundColorAttributeName: [NSColor systemOrangeColor],
+    }];
+}
 
 @interface BrowserPendingSSLAuth : NSObject
 @property (nonatomic, weak) WKWebView *webView;
@@ -402,23 +427,36 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.bookmarkButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
     ]];
 
-    self.securityBadgeButton = [NSButton buttonWithTitle:@"连接不安全"
-                                                  target:self
-                                                  action:@selector(showInsecureConnectionDetails:)];
-    self.securityBadgeButton.bezelStyle = NSBezelStyleInline;
-    self.securityBadgeButton.bordered = NO;
-    self.securityBadgeButton.hidden = YES;
-    self.securityBadgeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
-    self.securityBadgeButton.toolTip = @"此站点证书不受信任";
+    self.securityBadgeButton = [[NSButton alloc] initWithFrame:NSZeroRect];
     self.securityBadgeButton.translatesAutoresizingMaskIntoConstraints = NO;
-    if (@available(macOS 10.14, *)) {
-        self.securityBadgeButton.contentTintColor = [NSColor systemOrangeColor];
+    self.securityBadgeButton.bordered = NO;
+    self.securityBadgeButton.bezelStyle = NSBezelStyleShadowlessSquare;
+    [self.securityBadgeButton setButtonType:NSButtonTypeMomentaryChange];
+    self.securityBadgeButton.attributedTitle = BrowserSecurityBadgeAttributedTitle();
+    self.securityBadgeButton.imagePosition = NSNoImage;
+    self.securityBadgeButton.hidden = YES;
+    self.securityBadgeButton.toolTip = @"此站点证书不受信任";
+    self.securityBadgeButton.target = self;
+    self.securityBadgeButton.action = @selector(showInsecureConnectionDetails:);
+    // 禁止按压高亮铺开背景（Inline + contentTintColor 在地址栏编辑时会拉出很宽的色块）。
+    NSButtonCell *badgeCell = (NSButtonCell *)self.securityBadgeButton.cell;
+    badgeCell.highlightsBy = NSNoCellMask;
+    badgeCell.showsStateBy = NSNoCellMask;
+    if ([badgeCell respondsToSelector:@selector(setBackgroundColor:)]) {
+        badgeCell.backgroundColor = [NSColor clearColor];
     }
+    [self.securityBadgeButton setContentHuggingPriority:NSLayoutPriorityRequired
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.securityBadgeButton setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
     [self.addressField addSubview:self.securityBadgeButton];
+    CGFloat badgeWidth = BrowserSecurityBadgeContentWidth();
     [NSLayoutConstraint activateConstraints:@[
-        [self.securityBadgeButton.leadingAnchor constraintEqualToAnchor:self.addressField.leadingAnchor constant:6],
+        [self.securityBadgeButton.leadingAnchor constraintEqualToAnchor:self.addressField.leadingAnchor
+                                                               constant:kSecurityBadgeLeadingPadding],
         [self.securityBadgeButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
-        [self.securityBadgeButton.heightAnchor constraintLessThanOrEqualToConstant:22],
+        [self.securityBadgeButton.widthAnchor constraintEqualToConstant:badgeWidth],
+        [self.securityBadgeButton.heightAnchor constraintEqualToConstant:18],
     ]];
 
     self.addressAutocompleteController = [[BrowserAddressBarAutocompleteController alloc] initWithAddressField:self.addressField];
@@ -983,6 +1021,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
     [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
     [self observeLoadingProgressForSelectedTab];
+
+    // 切换标签时结束地址栏编辑，避免不安全徽章的 leading inset 留在 field editor 里带到新标签。
+    [self endAddressBarEditingIfNeeded];
 
     // sync：顺序/数量不变时保留标签视图，避免 mouseDown 选中后重建导致拖拽失效
     [self updateTabStripDisplay];
@@ -1861,16 +1902,37 @@ doCommandBySelector:(SEL)commandSelector {
     }
 }
 
+- (void)endAddressBarEditingIfNeeded {
+    NSWindow *window = self.window;
+    id firstResponder = window.firstResponder;
+    NSText *editor = self.addressField.currentEditor;
+    BOOL addressIsFocused = (firstResponder == self.addressField)
+        || (editor != nil && firstResponder == editor);
+    if (addressIsFocused) {
+        [window makeFirstResponder:nil];
+    }
+    self.addressFieldIsEditing = NO;
+    // 先清 inset，避免 updateNavigationState 前 field editor 仍带旧留白。
+    self.securityBadgeButton.hidden = YES;
+    self.addressField.leadingContentInset = 0;
+}
+
 - (void)updateSecurityBadgeVisibility {
     BrowserTab *tab = self.tabController.selectedTab;
-    BOOL show = !self.addressFieldIsEditing
-        && tab != nil
+    // 编辑地址栏时仍保留徽章与 inset，避免 Inline 按钮隐藏/展开跳动，并保持警示可见。
+    BOOL show = tab != nil
         && !tab.isNewTabPage
         && tab.connectionSecurityState == BrowserConnectionSecurityStateInsecureException
         && self.certificateWarningView.hidden;
     self.securityBadgeButton.hidden = !show;
-    self.addressField.leadingContentInset = show ? kSecurityBadgeLeadingInset : 0;
-    [self.addressField setNeedsDisplay:YES];
+    // 走 setter：会同步 field editor 外框，避免切到新标签后残留左侧留白。
+    self.addressField.leadingContentInset = show ? BrowserSecurityBadgeLeadingInset() : 0;
+    if (!show) {
+        [self.addressField syncFieldEditorFrameWithContentInsets];
+    } else {
+        // 编辑中 inset 不变也要校正 editor，避免选中全址时左侧色块被拉宽。
+        [self.addressField syncFieldEditorFrameWithContentInsets];
+    }
 }
 
 - (void)showInsecureConnectionDetails:(id)sender {

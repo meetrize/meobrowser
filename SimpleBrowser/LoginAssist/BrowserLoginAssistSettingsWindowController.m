@@ -156,7 +156,7 @@
     self.passwordSelectorField = [self makeField];
     self.submitSelectorField = [self makeField];
 
-    self.submitByEnterCheck = [NSButton checkboxWithTitle:@"密码框回车提交（否则点击提交按钮）"
+    self.submitByEnterCheck = [NSButton checkboxWithTitle:@"默认：密码框回车提交（不勾选则点击下方提交选择器）"
                                                    target:self
                                                    action:@selector(submitModeChanged:)];
     self.autoLoginCheck = [NSButton checkboxWithTitle:@"自动登录（进入匹配页后自动执行）"
@@ -262,10 +262,10 @@
     self.usernameSelectorField.stringValue = @"input[type=\"text\"], input[type=\"email\"], input[name=\"username\"]";
     self.passwordSelectorField.stringValue = @"input[type=\"password\"]";
     self.submitSelectorField.stringValue = @"button[type=\"submit\"], input[type=\"submit\"]";
-    self.submitByEnterCheck.state = NSControlStateValueOff;
+    self.submitByEnterCheck.state = NSControlStateValueOn;
     self.autoLoginCheck.state = NSControlStateValueOff;
     self.defaultCheck.state = NSControlStateValueOff;
-    self.submitSelectorField.enabled = YES;
+    self.submitSelectorField.enabled = NO;
     self.statusLabel.stringValue = @"凭证保存在本地钥匙串；清除「网站数据」不会删除登录配置。";
 }
 

@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 为右侧内嵌控件（如收藏按钮）预留的文字区域宽度。
 @property (nonatomic) CGFloat trailingContentInset;
 
+/// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
+- (void)syncFieldEditorFrameWithContentInsets;
+
 /// 鼠标点击获得焦点时全选文字（再次点击已聚焦时不全选，便于移动光标）。
 @property (nonatomic) BOOL selectsAllOnMouseFocus;
 

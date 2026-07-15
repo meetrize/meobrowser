@@ -158,7 +158,14 @@
             recipe.usernameSelector = [draft[@"usernameSelector"] isKindOfClass:[NSString class]] ? draft[@"usernameSelector"] : @"";
             recipe.passwordSelector = [draft[@"passwordSelector"] isKindOfClass:[NSString class]] ? draft[@"passwordSelector"] : @"";
             recipe.submitSelector = [draft[@"submitSelector"] isKindOfClass:[NSString class]] ? draft[@"submitSelector"] : @"";
-            recipe.submitByEnter = [draft[@"submitByEnter"] boolValue] || recipe.submitSelector.length == 0;
+            // 默认策略：回车提交；仅当草稿明确要求点击提交且有选择器时才关闭回车
+            BOOL draftEnter = [draft[@"submitByEnter"] boolValue];
+            BOOL hasSubmitSel = recipe.submitSelector.length > 0;
+            if ([draft objectForKey:@"submitByEnter"] != nil) {
+                recipe.submitByEnter = draftEnter || !hasSubmitSel;
+            } else {
+                recipe.submitByEnter = YES;
+            }
             recipe.autoLogin = NO;
             if (!existing) {
                 recipe.isDefault = YES;

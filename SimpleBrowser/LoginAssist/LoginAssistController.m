@@ -10,6 +10,7 @@
 #import "SystemPasswordBridge.h"
 #import "SaveRecipePromptCoordinator.h"
 #import "BrowserLoginAssistSettingsWindowController.h"
+#import "BrowserTransientToast.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
@@ -419,11 +420,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
             return;
         }
         if (notifyOTP && fillOnly) {
-            NSAlert *alert = [[NSAlert alloc] init];
-            alert.messageText = @"帐密已填入";
-            alert.informativeText = @"检测到验证码字段或已选择仅填入。请完成验证后手动点击登录。";
-            [alert addButtonWithTitle:@"好"];
-            [alert beginSheetModalForWindow:strongSelf.windowController.window completionHandler:nil];
+            NSString *toast = strongSelf.detectedHasOTP
+                ? @"帐密已填入，请完成验证后手动登录"
+                : @"帐密已填入";
+            [BrowserTransientToast showMessage:toast
+                                      inWindow:strongSelf.windowController.window
+                                      duration:2.0];
         }
     }];
 }

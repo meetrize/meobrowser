@@ -227,7 +227,7 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "        drafts[ctx.formId].usernameSelector = cssPath(ctx.user);\n"
 "        drafts[ctx.formId].passwordSelector = cssPath(ctx.pass);\n"
 "        drafts[ctx.formId].submitSelector = ctx.submit ? cssPath(ctx.submit) : '';\n"
-"        drafts[ctx.formId].submitByEnter = !ctx.submit;\n"
+"        drafts[ctx.formId].submitByEnter = true;\n"
 "        post({ type: 'credentialsDraft', formId: ctx.formId, hasUsername: true, hasPassword: true });\n"
 "      }\n"
 "    };\n"
