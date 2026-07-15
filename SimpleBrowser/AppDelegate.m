@@ -6,6 +6,7 @@
 #import "SBApplicationMenus.h"
 #import "BrowsingPreferences.h"
 #import "BrowserTab.h"
+#import "BrowserTabStripView.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -76,6 +77,41 @@
     }
     [controller scheduleTrafficLightPositioning];
     return controller;
+}
+
+- (nullable BrowserWindowController *)browserWindowAtScreenPoint:(NSPoint)screenPoint
+                                                       excluding:(BrowserWindowController *)source {
+    for (NSWindow *window in NSApp.orderedWindows) {
+        NSWindowController *wc = window.windowController;
+        if (![wc isKindOfClass:[BrowserWindowController class]]) {
+            continue;
+        }
+        BrowserWindowController *browser = (BrowserWindowController *)wc;
+        if (browser == source) {
+            continue;
+        }
+        if (![_browserWindows containsObject:browser]) {
+            continue;
+        }
+        BrowserTabStripView *strip = browser.tabStripView;
+        if (!strip) {
+            continue;
+        }
+        if (NSPointInRect(screenPoint, [strip stripEffectiveZoneInScreen])) {
+            return browser;
+        }
+    }
+    return nil;
+}
+
+- (void)hideForeignDropPlaceholdersExcludingStrip:(BrowserTabStripView *)strip {
+    for (BrowserWindowController *browser in _browserWindows) {
+        BrowserTabStripView *candidate = browser.tabStripView;
+        if (!candidate || candidate == strip) {
+            continue;
+        }
+        [candidate hideForeignDropPlaceholder];
+    }
 }
 
 - (void)cascadeWindow:(NSWindow *)window {

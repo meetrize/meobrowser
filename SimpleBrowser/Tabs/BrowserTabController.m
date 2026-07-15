@@ -153,6 +153,14 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 }
 
 - (void)adoptTab:(BrowserTab *)tab {
+    NSUInteger index = self.mutableTabs.count;
+    if (tab.isPinned) {
+        index = self.pinnedTabCount;
+    }
+    [self adoptTab:tab atIndex:index];
+}
+
+- (void)adoptTab:(BrowserTab *)tab atIndex:(NSUInteger)index {
     if (!tab) {
         return;
     }
@@ -161,9 +169,11 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         return;
     }
 
-    NSUInteger insertIndex = self.mutableTabs.count;
+    NSUInteger insertIndex = index;
     if (tab.isPinned) {
-        insertIndex = self.pinnedTabCount;
+        insertIndex = MIN(insertIndex, self.pinnedTabCount);
+    } else {
+        insertIndex = MAX(insertIndex, self.pinnedTabCount);
     }
     insertIndex = MIN(insertIndex, self.mutableTabs.count);
     [self.mutableTabs insertObject:tab atIndex:insertIndex];

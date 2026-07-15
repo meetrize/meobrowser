@@ -1,6 +1,8 @@
 #import <Cocoa/Cocoa.h>
 
 @class BrowserTab;
+@class BrowserTabStripView;
+@class BrowserWindowController;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -8,8 +10,6 @@ FOUNDATION_EXPORT const CGFloat BrowserTabStripHeight;
 
 /// 标签条背景色（窗口标题栏与之同色，避免 accessory 上方露白）
 NSColor *BrowserTabStripFillColor(void);
-
-@class BrowserTabStripView;
 
 @protocol BrowserTabStripViewDelegate <NSObject>
 - (void)tabStripView:(id)stripView didSelectTabID:(NSUUID *)tabID;
@@ -31,6 +31,11 @@ NSColor *BrowserTabStripFillColor(void);
 - (void)tabStripView:(id)stripView
 didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
          screenPoint:(NSPoint)screenPoint;
+/// 将标签真迁移到其它浏览器窗口的指定下标。
+- (void)tabStripView:(id)stripView
+didRequestTransferTabID:(NSUUID *)tabID
+           toWindow:(BrowserWindowController *)destination
+            atIndex:(NSUInteger)index;
 @end
 
 @interface BrowserTabStripView : NSView
@@ -39,6 +44,15 @@ didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
 
 - (void)reloadWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID;
 - (void)syncWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID;
+
+/// 标签条命中区（屏幕坐标，已外扩）。
+- (NSRect)stripEffectiveZoneInScreen;
+
+/// 跨窗拖放占位。
+- (void)showForeignDropPlaceholderAtIndex:(NSUInteger)index;
+- (void)updateForeignDropPlaceholderAtIndex:(NSUInteger)index;
+- (void)hideForeignDropPlaceholder;
+- (NSUInteger)insertionIndexForForeignDropAtScreenPoint:(NSPoint)screenPoint pinned:(BOOL)pinned;
 
 @end
 

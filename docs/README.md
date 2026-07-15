@@ -12,6 +12,8 @@
 | [minimal-browser/tab-strip-adaptive-width-design.md](minimal-browser/tab-strip-adaptive-width-design.md) | 标签栏自适应宽度 — Safari 向伸缩与横向滚动 |
 | [minimal-browser/tab-drag-ghost-design.md](minimal-browser/tab-drag-ghost-design.md) | 标签拖拽跟随阴影 — 条内排序 / 拖出新窗交互方案 |
 | [minimal-browser/tab-drag-ghost-development-plan.md](minimal-browser/tab-drag-ghost-development-plan.md) | 标签拖拽跟随阴影 — 分阶段开发计划（DG-0～DG-2） |
+| [minimal-browser/tab-cross-window-drop-design.md](minimal-browser/tab-cross-window-drop-design.md) | 跨窗口拖放标签 — 占位槽与真迁移方案 |
+| [minimal-browser/tab-cross-window-drop-development-plan.md](minimal-browser/tab-cross-window-drop-development-plan.md) | 跨窗口拖放标签 — 分阶段开发计划（XD-0～XD-2） |
 | [minimal-browser/new-tab-launchpad-design.md](minimal-browser/new-tab-launchpad-design.md) | 新标签页 — Launchpad 式快捷方式设计方案 |
 | [minimal-browser/new-tab-launchpad-folder-design.md](minimal-browser/new-tab-launchpad-folder-design.md) | Launchpad 快捷方式文件夹 — 拖合/展开交互方案 |
 | [minimal-browser/new-tab-launchpad-folder-development-plan.md](minimal-browser/new-tab-launchpad-folder-development-plan.md) | Launchpad 快捷方式文件夹 — 分阶段开发计划 |

@@ -36,6 +36,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable BrowserTab *)extractTabKeepingAlive:(BrowserTab *)tab;
 /// 接入已有标签（含存活 WebView），并选中。
 - (void)adoptTab:(BrowserTab *)tab;
+- (void)adoptTab:(BrowserTab *)tab atIndex:(NSUInteger)index;
 - (void)restoreTabsFromEntries:(NSArray<NSString *> *)entries
                  selectedIndex:(NSInteger)selectedIndex
                    pinnedCount:(NSUInteger)pinnedCount;

@@ -2,6 +2,9 @@
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
 #import "BrowserTabDragGhostController.h"
+#import "BrowserTabDropPlaceholderView.h"
+#import "AppDelegate.h"
+#import "BrowserWindowController.h"
 
 const CGFloat BrowserTabStripHeight = 36.0;
 
@@ -166,7 +169,13 @@ static const CGFloat kChromeGap = 4.0;
 @property (nonatomic, assign) BOOL suppressLayoutDuringDrag;
 @property (nonatomic, strong, nullable) BrowserTabDragGhostController *dragGhost;
 @property (nonatomic, assign) BOOL dragDetachMode;
+@property (nonatomic, assign) BOOL dragForeignMode;
 @property (nonatomic, assign) BOOL dragEnding;
+@property (nonatomic, strong, nullable) BrowserTabDropPlaceholderView *foreignPlaceholder;
+@property (nonatomic, assign) NSUInteger foreignPlaceholderIndex;
+@property (nonatomic, weak, nullable) BrowserTabStripView *activeForeignStrip;
+@property (nonatomic, weak, nullable) BrowserWindowController *activeForeignWindow;
+@property (nonatomic, assign) NSUInteger activeForeignIndex;
 @end
 
 @implementation BrowserTabStripView
@@ -204,6 +213,8 @@ static const CGFloat kChromeGap = 4.0;
         _lastPinnedCount = NSNotFound;
         _draggingFromIndex = NSNotFound;
         _draggingPreviewIndex = NSNotFound;
+        _foreignPlaceholderIndex = NSNotFound;
+        _activeForeignIndex = NSNotFound;
 
         _backgroundView = [[BrowserTabStripDragAreaView alloc] init];
         _backgroundView.wantsLayer = YES;
@@ -692,7 +703,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     self.draggingOriginalFrame = item.frame;
     self.suppressLayoutDuringDrag = YES;
     self.dragDetachMode = NO;
+    self.dragForeignMode = NO;
     self.dragEnding = NO;
+    self.activeForeignStrip = nil;
+    self.activeForeignWindow = nil;
+    self.activeForeignIndex = NSNotFound;
 
     NSPoint grabInItem = [item convertPoint:locationInWindow fromView:nil];
     self.dragGhost = [[BrowserTabDragGhostController alloc] init];
@@ -704,25 +719,76 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     [self layoutTabsExcludingDraggedItem:item];
 }
 
+- (nullable BrowserWindowController *)hostBrowserWindowController {
+    NSWindowController *wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        return (BrowserWindowController *)wc;
+    }
+    return nil;
+}
+
+- (void)clearForeignDropTarget {
+    if (self.activeForeignStrip) {
+        [self.activeForeignStrip hideForeignDropPlaceholder];
+    }
+    self.activeForeignStrip = nil;
+    self.activeForeignWindow = nil;
+    self.activeForeignIndex = NSNotFound;
+    self.dragForeignMode = NO;
+}
+
 - (void)moveReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
     if (item != self.draggingItem || self.dragEnding) {
         return;
     }
 
     NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
+    [self.dragGhost moveToScreenPoint:screenPoint];
+
+    BrowserWindowController *sourceWC = [self hostBrowserWindowController];
+    AppDelegate *appDelegate = (AppDelegate *)NSApp.delegate;
+    BrowserWindowController *foreignWC = nil;
+    if ([appDelegate respondsToSelector:@selector(browserWindowAtScreenPoint:excluding:)]) {
+        foreignWC = [appDelegate browserWindowAtScreenPoint:screenPoint excluding:sourceWC];
+    }
+
+    if (foreignWC && foreignWC.tabStripView) {
+        BrowserTabStripView *foreignStrip = foreignWC.tabStripView;
+        NSUInteger insertIndex =
+            [foreignStrip insertionIndexForForeignDropAtScreenPoint:screenPoint pinned:item.tabPinned];
+        if (self.activeForeignStrip != foreignStrip) {
+            [self clearForeignDropTarget];
+            self.activeForeignStrip = foreignStrip;
+            self.activeForeignWindow = foreignWC;
+            if ([appDelegate respondsToSelector:@selector(hideForeignDropPlaceholdersExcludingStrip:)]) {
+                [appDelegate hideForeignDropPlaceholdersExcludingStrip:foreignStrip];
+            }
+        }
+        self.activeForeignIndex = insertIndex;
+        self.dragForeignMode = YES;
+        self.dragDetachMode = NO;
+        [foreignStrip updateForeignDropPlaceholderAtIndex:insertIndex];
+        [self.dragGhost setStyle:BrowserTabDragGhostStyleForeign animated:YES];
+        [self layoutTabsCollapsingDraggedItem:item];
+        return;
+    }
+
+    if (self.dragForeignMode) {
+        [self clearForeignDropTarget];
+    }
+
     BOOL inStrip = NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
     BOOL detach = !inStrip;
-    if (detach != self.dragDetachMode) {
+    if (detach != self.dragDetachMode || self.dragGhost.style == BrowserTabDragGhostStyleForeign) {
         self.dragDetachMode = detach;
-        [self.dragGhost setDetachMode:detach animated:YES];
+        [self.dragGhost setStyle:(detach ? BrowserTabDragGhostStyleDetach : BrowserTabDragGhostStyleInStrip)
+                        animated:YES];
         if (detach) {
             [self layoutTabsCollapsingDraggedItem:item];
         } else {
             [self layoutTabsExcludingDraggedItem:item];
         }
     }
-
-    [self.dragGhost moveToScreenPoint:screenPoint];
 
     if (detach) {
         return;
@@ -820,6 +886,107 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     }
 }
 
+- (void)layoutTabsInsertingPlaceholderAtIndex:(NSUInteger)index {
+    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat x = 0;
+    NSUInteger slot = 0;
+    BOOL placedPlaceholder = NO;
+
+    for (BrowserTabItemView *item in self.tabItems) {
+        if (slot == index && !placedPlaceholder) {
+            self.foreignPlaceholder.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            self.foreignPlaceholder.hidden = NO;
+            x += tabWidth + kTabSpacing;
+            placedPlaceholder = YES;
+        }
+        if (!item.hidden) {
+            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            [item applyAvailableWidth:tabWidth];
+        }
+        x += tabWidth + kTabSpacing;
+        slot++;
+    }
+    if (!placedPlaceholder) {
+        self.foreignPlaceholder.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+        self.foreignPlaceholder.hidden = NO;
+    }
+
+    CGFloat contentW = MAX(x + (placedPlaceholder ? 0 : (tabWidth + kTabSpacing)), 1);
+    NSRect contentFrame = self.tabsContentView.frame;
+    contentFrame.size.width = MAX(contentW, NSWidth(self.tabsClipView.bounds));
+    contentFrame.size.height = BrowserTabStripHeight;
+    self.tabsContentView.frame = contentFrame;
+}
+
+- (void)showForeignDropPlaceholderAtIndex:(NSUInteger)index {
+    if (!self.foreignPlaceholder) {
+        self.foreignPlaceholder = [[BrowserTabDropPlaceholderView alloc] initWithFrame:NSZeroRect];
+        [self.tabsContentView addSubview:self.foreignPlaceholder];
+    }
+    self.foreignPlaceholderIndex = index;
+    self.suppressLayoutDuringDrag = YES;
+    [self layoutTabsInsertingPlaceholderAtIndex:index];
+}
+
+- (void)updateForeignDropPlaceholderAtIndex:(NSUInteger)index {
+    if (self.foreignPlaceholderIndex == index && self.foreignPlaceholder && !self.foreignPlaceholder.hidden) {
+        return;
+    }
+    [self showForeignDropPlaceholderAtIndex:index];
+}
+
+- (void)hideForeignDropPlaceholder {
+    self.foreignPlaceholderIndex = NSNotFound;
+    if (self.foreignPlaceholder) {
+        self.foreignPlaceholder.hidden = YES;
+    }
+    if (!self.draggingItem) {
+        self.suppressLayoutDuringDrag = NO;
+        [self invalidateTabLayoutCache];
+        [self setNeedsLayout:YES];
+        [self layoutSubtreeIfNeeded];
+    }
+}
+
+- (NSUInteger)insertionIndexForForeignDropAtScreenPoint:(NSPoint)screenPoint pinned:(BOOL)pinned {
+    NSWindow *window = self.window;
+    if (!window) {
+        return self.tabItems.count;
+    }
+    NSRect pointRect = NSMakeRect(screenPoint.x, screenPoint.y, 1, 1);
+    // screen → window → content
+    NSRect inWindow = [window convertRectFromScreen:pointRect];
+    NSPoint inContent = [self.tabsContentView convertPoint:inWindow.origin fromView:nil];
+
+    NSUInteger actualPinned = 0;
+    for (BrowserTabItemView *candidate in self.tabItems) {
+        if (candidate.tabPinned) {
+            actualPinned++;
+        }
+    }
+    NSUInteger low = pinned ? 0 : actualPinned;
+    // insertion can be at end of range (count of items in zone)
+    NSUInteger high = pinned ? actualPinned : self.tabItems.count;
+    // Allow inserting at index == high (append within zone).
+    // Best slot boundary: between tabs and ends.
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    NSUInteger best = low;
+    CGFloat bestDistance = CGFLOAT_MAX;
+    NSUInteger slotCount = high - low + 1; // insertion points
+    for (NSUInteger s = 0; s < slotCount; s++) {
+        NSUInteger insertAt = low + s;
+        CGFloat slotX = insertAt * (tabWidth + kTabSpacing);
+        CGFloat slotCenter = slotX + tabWidth * 0.5;
+        CGFloat distance = fabs(slotCenter - inContent.x);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = insertAt;
+        }
+    }
+    return best;
+}
+
 - (NSRect)screenRectForTabSlotAtIndex:(NSUInteger)index size:(NSSize)size {
     NSWindow *window = self.window;
     CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
@@ -835,6 +1002,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 - (void)finishDragSessionRestoringItem:(BrowserTabItemView *)item {
+    [self clearForeignDropTarget];
     item.hidden = NO;
     [self.dragGhost endAndRemoveImmediately];
     self.dragGhost = nil;
@@ -843,6 +1011,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     self.draggingPreviewIndex = NSNotFound;
     self.suppressLayoutDuringDrag = NO;
     self.dragDetachMode = NO;
+    self.dragForeignMode = NO;
     self.dragEnding = NO;
     [self invalidateTabLayoutCache];
     [self setNeedsLayout:YES];
@@ -858,11 +1027,53 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     NSUInteger fromIndex = self.draggingFromIndex;
     NSUUID *tabID = [self.tabItemIDs objectForKey:item];
     NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
-    BOOL detach = !NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
+
+    BrowserWindowController *foreignWC = self.activeForeignWindow;
+    BrowserTabStripView *foreignStrip = self.activeForeignStrip;
+    NSUInteger foreignIndex = self.activeForeignIndex;
+    BOOL foreignDrop = (foreignWC != nil && foreignStrip != nil && tabID != nil
+                        && NSPointInRect(screenPoint, [foreignStrip stripEffectiveZoneInScreen]));
 
     self.dragEnding = YES;
     __weak typeof(self) weakSelf = self;
     BrowserTabDragGhostController *ghost = self.dragGhost;
+
+    void (^commitForeign)(void) = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        NSUUID *movedID = tabID;
+        BrowserWindowController *destination = foreignWC;
+        NSUInteger atIndex = foreignIndex;
+        [strongSelf clearForeignDropTarget];
+        item.hidden = NO;
+        [strongSelf.dragGhost endAndRemoveImmediately];
+        strongSelf.dragGhost = nil;
+        strongSelf.draggingItem = nil;
+        strongSelf.draggingFromIndex = NSNotFound;
+        strongSelf.draggingPreviewIndex = NSNotFound;
+        strongSelf.suppressLayoutDuringDrag = NO;
+        strongSelf.dragDetachMode = NO;
+        strongSelf.dragForeignMode = NO;
+        strongSelf.dragEnding = NO;
+        [strongSelf invalidateTabLayoutCache];
+        [strongSelf setNeedsLayout:YES];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) inner = weakSelf;
+            if (!inner || !destination || !movedID) {
+                return;
+            }
+            id<BrowserTabStripViewDelegate> delegate = inner.delegate;
+            if ([delegate respondsToSelector:@selector(tabStripView:didRequestTransferTabID:toWindow:atIndex:)]) {
+                [delegate tabStripView:inner
+             didRequestTransferTabID:movedID
+                            toWindow:destination
+                             atIndex:atIndex];
+            }
+        });
+    };
 
     void (^commitDetach)(void) = ^{
         typeof(self) strongSelf = weakSelf;
@@ -911,6 +1122,16 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         }
     };
 
+    if (foreignDrop) {
+        [ghost fadeOutWithCompletion:^{
+            commitForeign();
+        }];
+        return;
+    }
+
+    [self clearForeignDropTarget];
+    BOOL detach = !NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
+
     if (detach && tabID) {
         NSSize ghostSize = ghost.ghostSize;
         if (ghostSize.width < 1) {
@@ -920,7 +1141,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
                                     screenPoint.y - ghostSize.height * 0.5,
                                     ghostSize.width,
                                     ghostSize.height);
-        [ghost setDetachMode:YES animated:NO];
+        [ghost setStyle:BrowserTabDragGhostStyleDetach animated:NO];
         [ghost animateToScreenRect:flyRect completion:^{
             commitDetach();
         }];
@@ -929,7 +1150,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
     NSUInteger slotIndex = (toIndex != NSNotFound) ? toIndex : fromIndex;
     NSRect slotRect = [self screenRectForTabSlotAtIndex:slotIndex size:ghost.ghostSize];
-    [ghost setDetachMode:NO animated:NO];
+    [ghost setStyle:BrowserTabDragGhostStyleInStrip animated:NO];
     [ghost animateToScreenRect:slotRect completion:^{
         commitReorder();
     }];
@@ -942,9 +1163,12 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         self.suppressLayoutDuringDrag = NO;
         self.dragEnding = NO;
         self.dragDetachMode = NO;
+        self.dragForeignMode = NO;
         [self.dragGhost endAndRemoveImmediately];
         self.dragGhost = nil;
+        [self clearForeignDropTarget];
     }
+    [self hideForeignDropPlaceholder];
 
     for (BrowserTabItemView *item in self.tabItems) {
         [item removeFromSuperview];

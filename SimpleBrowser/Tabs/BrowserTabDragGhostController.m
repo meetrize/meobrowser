@@ -3,6 +3,7 @@
 
 static const CGFloat kGhostInStripAlpha = 0.88;
 static const CGFloat kGhostDetachAlpha = 0.78;
+static const CGFloat kGhostForeignAlpha = 0.85;
 static const CGFloat kGhostDetachScale = 1.03;
 
 @interface BrowserTabDragGhostController ()
@@ -11,7 +12,7 @@ static const CGFloat kGhostDetachScale = 1.03;
 @property (nonatomic, strong, nullable) NSTextField *badgeLabel;
 @property (nonatomic, assign) NSPoint grabPointInSource;
 @property (nonatomic, assign) NSSize sourceSize;
-@property (nonatomic, assign, readwrite) BOOL detachMode;
+@property (nonatomic, assign, readwrite) BrowserTabDragGhostStyle style;
 @property (nonatomic, assign) BOOL animatingOut;
 @end
 
@@ -34,7 +35,7 @@ static const CGFloat kGhostDetachScale = 1.03;
 
     self.grabPointInSource = grabPointInSource;
     self.sourceSize = sourceView.bounds.size;
-    self.detachMode = NO;
+    self.style = BrowserTabDragGhostStyleInStrip;
     self.animatingOut = NO;
 
     NSBitmapImageRep *rep =
@@ -110,18 +111,10 @@ static const CGFloat kGhostDetachScale = 1.03;
         return;
     }
 
-    CGFloat scale = self.detachMode ? kGhostDetachScale : 1.0;
+    CGFloat scale = (self.style == BrowserTabDragGhostStyleDetach) ? kGhostDetachScale : 1.0;
     NSSize size = NSMakeSize(self.sourceSize.width * scale, self.sourceSize.height * scale);
     NSPoint origin = NSMakePoint(screenPoint.x - self.grabPointInSource.x * scale,
                                  screenPoint.y - self.grabPointInSource.y * scale);
-    // convertPointToScreen uses bottom-left; grabPointInSource is in flipped or non-flipped?
-    // BrowserTabItemView isFlipped? Check - NSView default is NO (y up from bottom).
-    // Tab item views are typically non-flipped. grabPoint from convertPoint:fromView:nil
-    // gives point in item coordinates (bottom-left origin if not flipped).
-
-    // If item is flipped, grab y is from top — strip view is flipped but item may not be.
-    // BrowserTabItemView - check isFlipped... not overridden, so NO (AppKit y-up).
-
     [self.panel setFrame:NSMakeRect(origin.x, origin.y, size.width, size.height) display:YES];
     if (!self.panel.isVisible) {
         [self.panel orderFrontRegardless];
@@ -129,27 +122,67 @@ static const CGFloat kGhostDetachScale = 1.03;
 }
 
 - (void)setDetachMode:(BOOL)detachMode animated:(BOOL)animated {
-    if (self.detachMode == detachMode && self.panel) {
+    [self setStyle:(detachMode ? BrowserTabDragGhostStyleDetach : BrowserTabDragGhostStyleInStrip)
+          animated:animated];
+}
+
+- (void)setStyle:(BrowserTabDragGhostStyle)style animated:(BOOL)animated {
+    if (self.style == style && self.panel) {
         return;
     }
-    self.detachMode = detachMode;
+    self.style = style;
     if (!self.panel || !self.imageView) {
         return;
     }
 
     void (^apply)(void) = ^{
-        self.imageView.alphaValue = detachMode ? kGhostDetachAlpha : kGhostInStripAlpha;
-        self.badgeLabel.hidden = !detachMode;
-        if (self.imageView.layer) {
-            self.imageView.layer.shadowOpacity = detachMode ? 0.35 : 0.25;
-            self.imageView.layer.shadowRadius = detachMode ? 12.0 : 8.0;
-            if (detachMode) {
+        switch (style) {
+            case BrowserTabDragGhostStyleDetach:
+                self.imageView.alphaValue = kGhostDetachAlpha;
+                self.badgeLabel.stringValue = @"新窗口";
+                [self.badgeLabel sizeToFit];
+                {
+                    NSRect badgeFrame = self.badgeLabel.frame;
+                    badgeFrame.size.width += 10.0;
+                    badgeFrame.size.height = MAX(NSHeight(badgeFrame), 16.0);
+                    badgeFrame.origin.x = NSWidth(self.panel.contentView.bounds) - NSWidth(badgeFrame) - 4.0;
+                    badgeFrame.origin.y = 4.0;
+                    self.badgeLabel.frame = badgeFrame;
+                }
+                self.badgeLabel.hidden = NO;
+                self.imageView.layer.shadowOpacity = 0.35;
+                self.imageView.layer.shadowRadius = 12.0;
                 self.imageView.layer.borderWidth = 1.0;
                 self.imageView.layer.borderColor =
                     [[NSColor controlAccentColor] colorWithAlphaComponent:0.35].CGColor;
-            } else {
+                break;
+            case BrowserTabDragGhostStyleForeign:
+                self.imageView.alphaValue = kGhostForeignAlpha;
+                self.badgeLabel.stringValue = @"移到此窗口";
+                [self.badgeLabel sizeToFit];
+                {
+                    NSRect badgeFrame = self.badgeLabel.frame;
+                    badgeFrame.size.width += 10.0;
+                    badgeFrame.size.height = MAX(NSHeight(badgeFrame), 16.0);
+                    badgeFrame.origin.x = NSWidth(self.panel.contentView.bounds) - NSWidth(badgeFrame) - 4.0;
+                    badgeFrame.origin.y = 4.0;
+                    self.badgeLabel.frame = badgeFrame;
+                }
+                self.badgeLabel.hidden = NO;
+                self.imageView.layer.shadowOpacity = 0.3;
+                self.imageView.layer.shadowRadius = 10.0;
+                self.imageView.layer.borderWidth = 1.0;
+                self.imageView.layer.borderColor =
+                    [[NSColor controlAccentColor] colorWithAlphaComponent:0.45].CGColor;
+                break;
+            case BrowserTabDragGhostStyleInStrip:
+            default:
+                self.imageView.alphaValue = kGhostInStripAlpha;
+                self.badgeLabel.hidden = YES;
+                self.imageView.layer.shadowOpacity = 0.25;
+                self.imageView.layer.shadowRadius = 8.0;
                 self.imageView.layer.borderWidth = 0.0;
-            }
+                break;
         }
     };
 
@@ -204,6 +237,34 @@ static const CGFloat kGhostDetachScale = 1.03;
     }];
 }
 
+- (void)fadeOutWithCompletion:(void (^)(void))completion {
+    if (!self.panel) {
+        if (completion) {
+            completion();
+        }
+        return;
+    }
+    self.animatingOut = YES;
+    if ([self shouldReduceMotion]) {
+        [self endAndRemoveImmediately];
+        if (completion) {
+            completion();
+        }
+        return;
+    }
+    NSImageView *imageView = self.imageView;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.08;
+        imageView.animator.alphaValue = 0.0;
+        self.badgeLabel.animator.alphaValue = 0.0;
+    } completionHandler:^{
+        [self endAndRemoveImmediately];
+        if (completion) {
+            completion();
+        }
+    }];
+}
+
 - (void)endAndRemoveImmediately {
     self.animatingOut = NO;
     if (self.panel) {
@@ -212,7 +273,7 @@ static const CGFloat kGhostDetachScale = 1.03;
     }
     self.imageView = nil;
     self.badgeLabel = nil;
-    self.detachMode = NO;
+    self.style = BrowserTabDragGhostStyleInStrip;
 }
 
 @end

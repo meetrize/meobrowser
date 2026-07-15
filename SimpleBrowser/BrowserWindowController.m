@@ -1166,6 +1166,47 @@ didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
     [self moveTabIDToNewWindow:tabID screenPoint:screenPoint];
 }
 
+- (void)tabStripView:(id)stripView
+didRequestTransferTabID:(NSUUID *)tabID
+           toWindow:(BrowserWindowController *)destination
+            atIndex:(NSUInteger)index {
+    (void)stripView;
+    [self transferTabID:tabID toWindow:destination atIndex:index];
+}
+
+- (void)transferTabID:(NSUUID *)tabID
+             toWindow:(BrowserWindowController *)destination
+              atIndex:(NSUInteger)index {
+    if (!destination || destination == self) {
+        return;
+    }
+    BrowserTab *tab = [self tabForID:tabID];
+    if (!tab) {
+        return;
+    }
+
+    if (tab == self.tabController.selectedTab) {
+        [self stopObservingLoadingProgress];
+    }
+    [self detachWebViewIfNeeded:tab.webView];
+
+    BOOL wasLastTab = (self.tabController.tabs.count <= 1);
+    BrowserTab *moved = [self.tabController extractTabKeepingAlive:tab];
+    if (!moved) {
+        return;
+    }
+
+    [destination adoptTab:moved atIndex:index];
+    [destination.window makeKeyAndOrderFront:nil];
+
+    if (wasLastTab || self.tabController.tabs.count == 0) {
+        [self.window close];
+    } else {
+        [self refreshTabsUI];
+        [self schedulePersistTabSession];
+    }
+}
+
 - (void)moveTabIDToNewWindow:(NSUUID *)tabID screenPoint:(NSPoint)screenPoint {
     BrowserTab *tab = [self tabForID:tabID];
     if (!tab) {
@@ -1235,10 +1276,18 @@ didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
 }
 
 - (void)adoptTab:(BrowserTab *)tab {
+    [self adoptTab:tab atIndex:NSUIntegerMax];
+}
+
+- (void)adoptTab:(BrowserTab *)tab atIndex:(NSUInteger)index {
     if (!tab) {
         return;
     }
-    [self.tabController adoptTab:tab];
+    if (index == NSUIntegerMax) {
+        [self.tabController adoptTab:tab];
+    } else {
+        [self.tabController adoptTab:tab atIndex:index];
+    }
     [self refreshTabsUI];
     [self schedulePersistTabSession];
 }

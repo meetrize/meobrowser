@@ -2,6 +2,7 @@
 
 @class BrowserWindowController;
 @class BrowserTab;
+@class BrowserTabStripView;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -15,6 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (BrowserWindowController *)createBrowserWindowWithSession:(nullable NSDictionary *)session;
 - (BrowserWindowController *)createBrowserWindowAdoptingTab:(BrowserTab *)tab
                                                       frame:(NSRect)frame;
+- (nullable BrowserWindowController *)browserWindowAtScreenPoint:(NSPoint)screenPoint
+                                                       excluding:(nullable BrowserWindowController *)source;
+- (void)hideForeignDropPlaceholdersExcludingStrip:(nullable BrowserTabStripView *)strip;
 
 @end
 

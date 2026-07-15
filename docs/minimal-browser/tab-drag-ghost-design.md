@@ -216,7 +216,7 @@ DraggingInStrip
 | D2 | 拖出时条内是否合拢 | 合拢 / 留槽 | **合拢** |
 | D3 | Detach 是否显示「新窗口」角标 | 要 / 不要 | **要**（可本地化一行字） |
 | D4 | Esc 取消 | 首版要 / 不要 | **不要**（记 V2） |
-| D5 | 跨窗拖入其它 Meo 窗口 | 首版要 / 不要 | **不要** |
+| D5 | 跨窗拖入其它 Meo 窗口 | 首版 ghost 不做 → **见 [tab-cross-window-drop-design.md](tab-cross-window-drop-design.md)** |
 
 ---
 
