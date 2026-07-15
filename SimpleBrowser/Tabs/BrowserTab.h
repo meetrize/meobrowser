@@ -3,6 +3,12 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
+    BrowserConnectionSecurityStateUnknown = 0,
+    BrowserConnectionSecurityStateTrusted,
+    BrowserConnectionSecurityStateInsecureException,
+};
+
 @interface BrowserTab : NSObject
 
 @property (nonatomic, readonly) NSUUID *tabID;
@@ -20,6 +26,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSURL *restorableURL;
 /// 最近一次被选中的时间（用于休眠策略）。
 @property (nonatomic, assign) NSTimeInterval lastActiveTimestamp;
+/// 当前主文档连接安全态（用于地址栏「连接不安全」指示）。
+@property (nonatomic, assign) BrowserConnectionSecurityState connectionSecurityState;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 

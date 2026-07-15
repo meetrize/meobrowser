@@ -4,6 +4,7 @@
 #import "LoginRecipeStore.h"
 #import "LoginCredentialStore.h"
 #import "LoginElementPicker.h"
+#import "LoginAssistPreferences.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 #import <WebKit/WebKit.h>
@@ -22,21 +23,23 @@
 @property (nonatomic, strong) NSButton *submitByEnterCheck;
 @property (nonatomic, strong) NSButton *autoLoginCheck;
 @property (nonatomic, strong) NSButton *defaultCheck;
+@property (nonatomic, strong) NSButton *inlineAssistCheck;
+@property (nonatomic, strong) NSButton *promptSaveCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
-@property (nonatomic, copy, nullable) NSString *pickingTarget; // username|password|submit
+@property (nonatomic, copy, nullable) NSString *pickingTarget;
 @end
 
 @implementation BrowserLoginAssistSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 720, 520)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 720, 580)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"登录助手";
     window.releasedWhenClosed = NO;
-    window.minSize = NSMakeSize(640, 460);
+    window.minSize = NSMakeSize(640, 520);
     self = [super initWithWindow:window];
     if (self) {
         _recipes = @[];
@@ -163,6 +166,15 @@
                                              target:nil
                                              action:nil];
 
+    self.inlineAssistCheck = [NSButton checkboxWithTitle:@"检测到登录表单时显示内联图标（新标签生效）"
+                                                  target:self
+                                                  action:@selector(prefsChanged:)];
+    self.promptSaveCheck = [NSButton checkboxWithTitle:@"登录成功后询问是否保存为配置"
+                                                target:self
+                                                action:@selector(prefsChanged:)];
+    self.inlineAssistCheck.state = [LoginAssistPreferences inlineAssistEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.promptSaveCheck.state = [LoginAssistPreferences promptSaveOnSuccess] ? NSControlStateValueOn : NSControlStateValueOff;
+
     NSButton *saveButton = [NSButton buttonWithTitle:@"保存"
                                               target:self
                                               action:@selector(saveRecipe:)];
@@ -187,6 +199,8 @@
         self.autoLoginCheck,
         self.defaultCheck,
         saveButton,
+        self.inlineAssistCheck,
+        self.promptSaveCheck,
         self.statusLabel,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -321,6 +335,13 @@
 - (void)submitModeChanged:(id)sender {
     (void)sender;
     self.submitSelectorField.enabled = (self.submitByEnterCheck.state != NSControlStateValueOn);
+}
+
+- (void)prefsChanged:(id)sender {
+    (void)sender;
+    [LoginAssistPreferences setInlineAssistEnabled:(self.inlineAssistCheck.state == NSControlStateValueOn)];
+    [LoginAssistPreferences setPromptSaveOnSuccess:(self.promptSaveCheck.state == NSControlStateValueOn)];
+    self.statusLabel.stringValue = @"偏好已保存。内联图标开关对新建标签 / 新导航后的页面生效。";
 }
 
 - (void)addRecipe:(id)sender {

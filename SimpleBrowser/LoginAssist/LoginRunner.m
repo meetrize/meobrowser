@@ -14,6 +14,20 @@ static NSInteger gLoginRunnerGeneration = 0;
          username:(NSString *)username
          password:(NSString *)password
        completion:(LoginRunnerCompletion)completion {
+    [self runRecipe:recipe
+          inWebView:webView
+           username:username
+           password:password
+           fillOnly:NO
+         completion:completion];
+}
+
++ (void)runRecipe:(LoginRecipe *)recipe
+        inWebView:(WKWebView *)webView
+         username:(NSString *)username
+         password:(NSString *)password
+         fillOnly:(BOOL)fillOnly
+       completion:(LoginRunnerCompletion)completion {
     if (!recipe || !webView) {
         if (completion) {
             completion(NO, [NSError errorWithDomain:@"LoginRunner"
@@ -30,7 +44,8 @@ static NSInteger gLoginRunnerGeneration = 0;
         }
         return;
     }
-    if (!recipe.submitByEnter && recipe.submitSelector.length == 0) {
+    BOOL willSubmit = !fillOnly;
+    if (willSubmit && !recipe.submitByEnter && recipe.submitSelector.length == 0) {
         if (completion) {
             completion(NO, [NSError errorWithDomain:@"LoginRunner"
                                                code:3
@@ -39,17 +54,66 @@ static NSInteger gLoginRunnerGeneration = 0;
         return;
     }
 
+    NSString *submitSel = willSubmit ? (recipe.submitSelector ?: @"") : @"";
+    BOOL submitByEnter = willSubmit && recipe.submitByEnter;
+    [self executeFillInWebView:webView
+              usernameSelector:recipe.usernameSelector
+              passwordSelector:recipe.passwordSelector
+                      username:username
+                      password:password
+                submitSelector:submitSel
+                 submitByEnter:submitByEnter
+                  waitTimeoutMs:recipe.waitTimeoutMs
+                    completion:completion];
+}
+
++ (void)fillInWebView:(WKWebView *)webView
+     usernameSelector:(NSString *)usernameSelector
+     passwordSelector:(NSString *)passwordSelector
+             username:(NSString *)username
+             password:(NSString *)password
+       submitSelector:(NSString *)submitSelector
+         shouldSubmit:(BOOL)shouldSubmit
+           completion:(LoginRunnerCompletion)completion {
+    [self executeFillInWebView:webView
+              usernameSelector:usernameSelector
+              passwordSelector:passwordSelector
+                      username:username
+                      password:password
+                submitSelector:shouldSubmit ? (submitSelector ?: @"") : @""
+                 submitByEnter:NO
+                  waitTimeoutMs:8000
+                    completion:completion];
+}
+
++ (void)executeFillInWebView:(WKWebView *)webView
+            usernameSelector:(NSString *)userSel
+            passwordSelector:(NSString *)passSel
+                    username:(NSString *)username
+                    password:(NSString *)password
+              submitSelector:(NSString *)submitSel
+               submitByEnter:(BOOL)submitByEnter
+                waitTimeoutMs:(NSInteger)timeoutMs
+                  completion:(LoginRunnerCompletion)completion {
+    if (!webView || userSel.length == 0 || passSel.length == 0) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                               code:1
+                                           userInfo:@{NSLocalizedDescriptionKey: @"无法填充表单"}]);
+        }
+        return;
+    }
+    if (timeoutMs <= 0) {
+        timeoutMs = 8000;
+    }
+
     NSInteger generation = ++gLoginRunnerGeneration;
-    NSInteger timeoutMs = recipe.waitTimeoutMs > 0 ? recipe.waitTimeoutMs : 8000;
-    NSString *userSel = recipe.usernameSelector;
-    NSString *passSel = recipe.passwordSelector;
-    NSString *submitSel = recipe.submitSelector ?: @"";
-    BOOL submitByEnter = recipe.submitByEnter;
+    BOOL doSubmit = (submitByEnter || submitSel.length > 0);
     NSString *userJSON = [self jsonStringFromString:username ?: @""];
     NSString *passJSON = [self jsonStringFromString:password ?: @""];
     NSString *userSelJSON = [self jsonStringFromString:userSel];
     NSString *passSelJSON = [self jsonStringFromString:passSel];
-    NSString *submitSelJSON = [self jsonStringFromString:submitSel];
+    NSString *submitSelJSON = [self jsonStringFromString:submitSel ?: @""];
 
     NSString *script = [NSString stringWithFormat:
         @"(async function() {\n"
@@ -58,11 +122,10 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  const passSel = %@;\n"
          "  const submitSel = %@;\n"
          "  const submitByEnter = %@;\n"
+         "  const doSubmit = %@;\n"
          "  const username = %@;\n"
          "  const password = %@;\n"
-         "  function qs(sel) {\n"
-         "    try { return document.querySelector(sel); } catch (e) { return null; }\n"
-         "  }\n"
+         "  function qs(sel) { try { return document.querySelector(sel); } catch (e) { return null; } }\n"
          "  async function waitFor(sel) {\n"
          "    const start = Date.now();\n"
          "    while (Date.now() - start < timeoutMs) {\n"
@@ -70,13 +133,11 @@ static NSInteger gLoginRunnerGeneration = 0;
          "      if (el) { return el; }\n"
          "      await new Promise(r => setTimeout(r, 100));\n"
          "    }\n"
-         "      throw new Error('等待元素超时: ' + sel);\n"
+         "    throw new Error('等待元素超时: ' + sel);\n"
          "  }\n"
          "  function setValue(el, value) {\n"
          "    el.focus();\n"
-         "    const proto = el.tagName === 'TEXTAREA'\n"
-         "      ? window.HTMLTextAreaElement.prototype\n"
-         "      : window.HTMLInputElement.prototype;\n"
+         "    const proto = window.HTMLInputElement.prototype;\n"
          "    const setter = Object.getOwnPropertyDescriptor(proto, 'value');\n"
          "    if (setter && setter.set) { setter.set.call(el, value); }\n"
          "    else { el.value = value; }\n"
@@ -96,11 +157,12 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  setValue(userEl, username);\n"
          "  setValue(passEl, password);\n"
          "  await new Promise(r => setTimeout(r, 80));\n"
-         "  if (submitByEnter) {\n"
-         "    pressEnter(passEl);\n"
-         "  } else {\n"
-         "    const btn = await waitFor(submitSel);\n"
-         "    btn.click();\n"
+         "  if (doSubmit) {\n"
+         "    if (submitByEnter) { pressEnter(passEl); }\n"
+         "    else {\n"
+         "      const btn = await waitFor(submitSel);\n"
+         "      btn.click();\n"
+         "    }\n"
          "  }\n"
          "  return 'ok';\n"
          "})()",
@@ -109,6 +171,7 @@ static NSInteger gLoginRunnerGeneration = 0;
         passSelJSON,
         submitSelJSON,
         submitByEnter ? @"true" : @"false",
+        doSubmit ? @"true" : @"false",
         userJSON,
         passJSON];
 
@@ -119,7 +182,6 @@ static NSInteger gLoginRunnerGeneration = 0;
         }
         if (evalError) {
             NSString *message = evalError.localizedDescription ?: @"执行失败";
-            // WK 常把 JS throw 放进 userInfo
             NSString *jsMessage = evalError.userInfo[@"WKJavaScriptExceptionMessage"];
             if ([jsMessage isKindOfClass:[NSString class]] && jsMessage.length > 0) {
                 message = jsMessage;
@@ -131,25 +193,9 @@ static NSInteger gLoginRunnerGeneration = 0;
             }
             return;
         }
-
-        NSString *predicate = recipe.successJSPredicate;
-        if (predicate.length == 0) {
-            if (completion) {
-                completion(YES, nil);
-            }
-            return;
+        if (completion) {
+            completion(YES, nil);
         }
-        NSString *check = [NSString stringWithFormat:@"!!(%@)", predicate];
-        [webView evaluateJavaScript:check completionHandler:^(id ok, NSError *checkError) {
-            (void)ok;
-            (void)checkError;
-            if (generation != gLoginRunnerGeneration) {
-                return;
-            }
-            if (completion) {
-                completion(YES, nil);
-            }
-        }];
     }];
 }
 
@@ -159,7 +205,6 @@ static NSInteger gLoginRunnerGeneration = 0;
     if (arrayJSON.length < 2) {
         return @"\"\"";
     }
-    // ["..."] → "..."
     return [arrayJSON substringWithRange:NSMakeRange(1, arrayJSON.length - 2)];
 }
 

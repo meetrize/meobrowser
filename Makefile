@@ -44,6 +44,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarActionGroup.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarRowView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
+                   $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
+                   $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
@@ -55,6 +57,10 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/BrowserLoginAssistSettingsWindowController.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginFormDetector.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistPreferences.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/SystemPasswordBridge.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/SaveRecipePromptCoordinator.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \
@@ -71,9 +77,9 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/Security -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool

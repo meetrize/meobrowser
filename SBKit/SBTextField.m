@@ -70,9 +70,15 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     NSRect area = theRect;
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]]) {
-        CGFloat inset = ((SBTextField *)controlView).trailingContentInset;
-        if (inset > 0) {
-            area.size.width = MAX(0, NSWidth(area) - inset);
+        SBTextField *field = (SBTextField *)controlView;
+        CGFloat leading = field.leadingContentInset;
+        CGFloat trailing = field.trailingContentInset;
+        if (leading > 0) {
+            area.origin.x += leading;
+            area.size.width = MAX(0, NSWidth(area) - leading);
+        }
+        if (trailing > 0) {
+            area.size.width = MAX(0, NSWidth(area) - trailing);
         }
     }
     return area;

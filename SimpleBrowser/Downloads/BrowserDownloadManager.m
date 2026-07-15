@@ -1,6 +1,8 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadItem.h"
+#import "BrowserSSLExceptionStore.h"
 #import <Cocoa/Cocoa.h>
+#import <Security/Security.h>
 
 NSNotificationName const BrowserDownloadManagerDidChangeNotification = @"BrowserDownloadManagerDidChangeNotification";
 
@@ -405,8 +407,21 @@ decideDestinationUsingResponse:(NSURLResponse *)response
 didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
 completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential * _Nullable))completionHandler {
     (void)download;
-    (void)challenge;
-    // 与未实现时 WebKit 默认不同：允许继续使用默认处理，避免证书站点下载直接失败。
+    NSString *method = challenge.protectionSpace.authenticationMethod;
+    if (![method isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+        return;
+    }
+
+    SecTrustRef trust = challenge.protectionSpace.serverTrust;
+    NSString *host = challenge.protectionSpace.host ?: @"";
+    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:challenge.protectionSpace.port];
+    if (trust && [[BrowserSSLExceptionStore sharedStore] allowsHostKey:hostKey]) {
+        NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
+        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+        return;
+    }
+
     completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
 }
 

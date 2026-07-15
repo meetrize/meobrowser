@@ -5,7 +5,12 @@
 #import "LoginCredentialStore.h"
 #import "LoginRunner.h"
 #import "LoginElementPicker.h"
+#import "LoginFormDetector.h"
+#import "LoginAssistPreferences.h"
+#import "SystemPasswordBridge.h"
+#import "SaveRecipePromptCoordinator.h"
 #import "BrowserLoginAssistSettingsWindowController.h"
+#import <AuthenticationServices/AuthenticationServices.h>
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
@@ -13,11 +18,20 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 @interface LoginAssistController ()
 @property (nonatomic, strong) NSArray<LoginRecipe *> *matchedRecipes;
 @property (nonatomic, assign) BOOL isRunning;
+@property (nonatomic, assign) BOOL hasDetectedLoginForm;
+@property (nonatomic, assign) BOOL detectedHasOTP;
+@property (nonatomic, copy, nullable) NSString *detectedUsernameSelector;
+@property (nonatomic, copy, nullable) NSString *detectedPasswordSelector;
+@property (nonatomic, copy, nullable) NSString *detectedSubmitSelector;
+@property (nonatomic, copy, nullable) NSString *detectedFormId;
 @property (nonatomic, copy, nullable) NSString *lastAutoRecipeID;
 @property (nonatomic, assign) NSTimeInterval lastAutoTimestamp;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingAutoBlock;
 @property (nonatomic, strong, nullable) id autoLoginEscapeMonitor;
 @property (nonatomic, strong, nullable) BrowserLoginAssistSettingsWindowController *settingsController;
+@property (nonatomic, strong) SystemPasswordBridge *passwordBridge;
+@property (nonatomic, strong) SaveRecipePromptCoordinator *savePromptCoordinator;
+@property (nonatomic, strong, nullable) NSDictionary *lastIconContext;
 @end
 
 @implementation LoginAssistController
@@ -27,6 +41,8 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     if (self) {
         _windowController = windowController;
         _matchedRecipes = @[];
+        _passwordBridge = [[SystemPasswordBridge alloc] init];
+        _savePromptCoordinator = [[SaveRecipePromptCoordinator alloc] initWithWindowController:windowController];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
@@ -42,6 +58,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
     [LoginElementPicker registerMessageHandlerOnConfiguration:configuration handler:self];
+    [LoginFormDetector installOnConfiguration:configuration messageHandler:self];
 }
 
 - (void)wireLoginButton:(NSButton *)button {
@@ -59,7 +76,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     if (!hasRightClick) {
         NSClickGestureRecognizer *rightClick = [[NSClickGestureRecognizer alloc] initWithTarget:self
                                                                                          action:@selector(loginButtonRightClicked:)];
-        rightClick.buttonMask = 0x2; // right
+        rightClick.buttonMask = 0x2;
         [button addGestureRecognizer:rightClick];
     }
     [self refreshButtonAppearance];
@@ -67,13 +84,13 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 
 - (void)recipesDidChange:(NSNotification *)notification {
     (void)notification;
-    NSURL *url = self.windowController.webView.URL;
-    [self updateForURL:url];
+    [self updateForURL:self.windowController.webView.URL];
 }
 
 - (void)updateForURL:(NSURL *)url {
     if (!url || url.absoluteString.length == 0) {
         self.matchedRecipes = @[];
+        self.hasDetectedLoginForm = NO;
     } else {
         self.matchedRecipes = [[LoginRecipeStore sharedStore] recipesMatchingURL:url];
     }
@@ -86,9 +103,10 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
     BOOL hasMatch = self.matchedRecipes.count > 0;
-    button.enabled = hasMatch && !self.isRunning;
+    BOOL useful = hasMatch || self.hasDetectedLoginForm;
+    button.enabled = useful && !self.isRunning;
     if (@available(macOS 10.14, *)) {
-        button.contentTintColor = (hasMatch && !self.isRunning)
+        button.contentTintColor = (useful && !self.isRunning)
             ? [NSColor controlAccentColor]
             : [NSColor tertiaryLabelColor];
     }
@@ -97,16 +115,18 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     } else if (hasMatch) {
         LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
         NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
-        button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L；右键选账号）", name ?: @"站点"];
+        button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L；右键更多）", name ?: @"站点"];
+    } else if (self.hasDetectedLoginForm) {
+        button.toolTip = @"检测到登录表单（单击打开登录助手）";
     } else {
         button.toolTip = @"当前页无可登录配置（拖动可调整顺序）";
     }
 }
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(NSURL *)url {
-    (void)webView;
     [self updateForURL:url];
     [self scheduleAutoLoginIfNeededForURL:url];
+    [self.savePromptCoordinator noteNavigationFinishedInWebView:webView URL:url];
 }
 
 - (void)scheduleAutoLoginIfNeededForURL:(NSURL *)url {
@@ -143,12 +163,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         }
         strongSelf.lastAutoRecipeID = recipeID;
         strongSelf.lastAutoTimestamp = [NSDate date].timeIntervalSince1970;
-        [strongSelf runRecipe:current];
+        [strongSelf runRecipe:current fillOnly:NO notifyOTP:NO];
     });
     self.pendingAutoBlock = block;
     self.autoLoginEscapeMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                                         handler:^NSEvent *(NSEvent *event) {
-        if (event.keyCode == 53) { // Esc
+        if (event.keyCode == 53) {
             [weakSelf cancelPendingAutoLogin];
             return nil;
         }
@@ -173,58 +193,173 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 - (IBAction)oneClickLogin:(id)sender {
     (void)sender;
     [self cancelPendingAutoLogin];
-    NSURL *url = self.windowController.webView.URL;
-    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url];
-    if (!recipe) {
+    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
+    if (recipe) {
+        BOOL fillOnly = self.detectedHasOTP;
+        [self runRecipe:recipe fillOnly:fillOnly notifyOTP:fillOnly];
         return;
     }
-    [self runRecipe:recipe];
+    [self presentAssistMenuFromView:self.loginButton context:nil];
 }
 
 - (void)loginButtonRightClicked:(NSClickGestureRecognizer *)gesture {
     if (gesture.state != NSGestureRecognizerStateEnded) {
         return;
     }
-    [self showRecipeMenuFromButton:self.loginButton];
+    [self presentAssistMenuFromView:self.loginButton context:nil];
 }
 
 - (void)showRecipeMenuFromButton:(NSButton *)button {
-    if (!button || self.matchedRecipes.count == 0) {
-        return;
-    }
+    [self presentAssistMenuFromView:button context:nil];
+}
+
+- (void)presentAssistMenuFromView:(NSView *)view context:(NSDictionary *)context {
+    NSDictionary *ctx = context ?: self.lastIconContext;
+    BOOL hasOTP = context ? [context[@"hasOTP"] boolValue] : self.detectedHasOTP;
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"登录助手"];
-    for (LoginRecipe *recipe in self.matchedRecipes) {
-        NSString *title = recipe.title.length > 0 ? recipe.title : recipe.host;
-        if (recipe.isDefault) {
-            title = [title stringByAppendingString:@"（默认）"];
-        }
-        if (recipe.autoLogin) {
-            title = [title stringByAppendingString:@" · 自动"];
-        }
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
-                                                      action:@selector(runRecipeFromMenu:)
-                                               keyEquivalent:@""];
-        item.target = self;
-        item.representedObject = recipe.recipeID;
-        [menu addItem:item];
-    }
+
+    NSMenuItem *systemItem = [[NSMenuItem alloc] initWithTitle:@"用系统密码填充…"
+                                                        action:@selector(fillWithSystemPassword:)
+                                                 keyEquivalent:@""];
+    systemItem.target = self;
+    systemItem.representedObject = ctx;
+    [menu addItem:systemItem];
     [menu addItem:[NSMenuItem separatorItem]];
+
+    NSArray<LoginRecipe *> *recipes = self.matchedRecipes;
+    if (recipes.count == 0) {
+        NSMenuItem *empty = [[NSMenuItem alloc] initWithTitle:@"（无匹配的登录配置）"
+                                                       action:nil
+                                                keyEquivalent:@""];
+        empty.enabled = NO;
+        [menu addItem:empty];
+    } else {
+        for (LoginRecipe *recipe in recipes) {
+            NSString *base = recipe.title.length > 0 ? recipe.title : recipe.host;
+            if (hasOTP) {
+                NSString *title = [NSString stringWithFormat:@"填入帐密 · %@（请手动完成验证）", base];
+                NSMenuItem *fill = [[NSMenuItem alloc] initWithTitle:title
+                                                              action:@selector(runRecipeFillOnlyFromMenu:)
+                                                       keyEquivalent:@""];
+                fill.target = self;
+                fill.representedObject = recipe.recipeID;
+                [menu addItem:fill];
+            } else {
+                NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"一键登录 · %@", base]
+                                                               action:@selector(runRecipeFromMenu:)
+                                                        keyEquivalent:@""];
+                login.target = self;
+                login.representedObject = recipe.recipeID;
+                [menu addItem:login];
+
+                NSMenuItem *fillOnly = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"仅填入 · %@", base]
+                                                                  action:@selector(runRecipeFillOnlyFromMenu:)
+                                                           keyEquivalent:@""];
+                fillOnly.target = self;
+                fillOnly.representedObject = recipe.recipeID;
+                [menu addItem:fillOnly];
+            }
+        }
+    }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    BOOL canSave = [ctx[@"hasUsername"] boolValue] && [ctx[@"hasPassword"] boolValue];
+    if (!canSave) {
+        canSave = YES; // 尝试读草稿
+    }
+    NSMenuItem *save = [[NSMenuItem alloc] initWithTitle:@"将当前输入保存为配置…"
+                                                  action:@selector(saveCurrentInputAsRecipe:)
+                                           keyEquivalent:@""];
+    save.target = self;
+    save.representedObject = ctx;
+    [menu addItem:save];
+
     NSMenuItem *manage = [[NSMenuItem alloc] initWithTitle:@"管理登录配置…"
                                                     action:@selector(openSettings:)
                                              keyEquivalent:@""];
     manage.target = self;
     [menu addItem:manage];
-    NSPoint location = NSMakePoint(0, NSHeight(button.bounds));
-    [menu popUpMenuPositioningItem:nil atLocation:location inView:button];
+
+    if (view) {
+        NSPoint location = NSMakePoint(0, NSHeight(view.bounds));
+        [menu popUpMenuPositioningItem:nil atLocation:location inView:view];
+    } else {
+        NSWindow *window = self.windowController.window;
+        NSPoint screen = [NSEvent mouseLocation];
+        NSPoint windowPoint = [window convertPointFromScreen:screen];
+        [menu popUpMenuPositioningItem:nil atLocation:windowPoint inView:window.contentView];
+    }
 }
 
 - (void)runRecipeFromMenu:(NSMenuItem *)item {
-    NSString *recipeID = item.representedObject;
-    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] recipeWithID:recipeID];
+    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] recipeWithID:item.representedObject];
     if (recipe) {
         [self cancelPendingAutoLogin];
-        [self runRecipe:recipe];
+        [self runRecipe:recipe fillOnly:NO notifyOTP:NO];
     }
+}
+
+- (void)runRecipeFillOnlyFromMenu:(NSMenuItem *)item {
+    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] recipeWithID:item.representedObject];
+    if (recipe) {
+        [self cancelPendingAutoLogin];
+        [self runRecipe:recipe fillOnly:YES notifyOTP:YES];
+    }
+}
+
+- (void)fillWithSystemPassword:(NSMenuItem *)item {
+    NSDictionary *ctx = [item.representedObject isKindOfClass:[NSDictionary class]] ? item.representedObject : nil;
+    NSString *userSel = ctx[@"usernameSelector"] ?: self.detectedUsernameSelector;
+    NSString *passSel = ctx[@"passwordSelector"] ?: self.detectedPasswordSelector;
+    if (userSel.length == 0 || passSel.length == 0) {
+        [self showError:@"无法填充" message:@"未检测到用户名或密码字段。" recipeID:nil];
+        return;
+    }
+
+    WKWebView *webView = self.windowController.webView;
+    NSWindow *window = self.windowController.window;
+    __weak typeof(self) weakSelf = self;
+    [self.passwordBridge requestPasswordWithAnchorWindow:window completion:^(NSString *username, NSString *password, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (error || username.length == 0) {
+            NSString *msg = error.localizedDescription ?: @"未选择密码";
+            if ([error.domain isEqualToString:ASAuthorizationErrorDomain] && error.code == ASAuthorizationErrorCanceled) {
+                return;
+            }
+            // ad-hoc / 无 entitlement 时常见失败，给出可读说明
+            if (msg.length == 0 || [msg containsString:@"canceled"] || [msg containsString:@"Cancelled"]) {
+                return;
+            }
+            [strongSelf showError:@"系统密码不可用"
+                          message:[NSString stringWithFormat:@"%@\n\n本地 ad-hoc 签名下系统密码选择器可能不可用；可改用登录助手配置，或使用正式开发者签名。", msg]
+                         recipeID:nil];
+            return;
+        }
+        [LoginRunner fillInWebView:webView
+                  usernameSelector:userSel
+                  passwordSelector:passSel
+                          username:username
+                          password:password ?: @""
+                    submitSelector:nil
+                      shouldSubmit:NO
+                        completion:^(BOOL success, NSError *fillError) {
+            if (!success) {
+                [strongSelf showError:@"填充失败" message:fillError.localizedDescription ?: @"未知错误" recipeID:nil];
+            }
+        }];
+    }];
+}
+
+- (void)saveCurrentInputAsRecipe:(NSMenuItem *)item {
+    (void)item;
+    WKWebView *webView = self.windowController.webView;
+    NSURL *url = webView.URL;
+    NSString *host = url.isFileURL ? @"file" : (url.host.lowercaseString ?: @"");
+    [self.savePromptCoordinator promptSaveFromWebView:webView preferredHost:host existingFormInfo:nil];
 }
 
 - (void)openSettings:(id)sender {
@@ -233,6 +368,10 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 }
 
 - (void)runRecipe:(LoginRecipe *)recipe {
+    [self runRecipe:recipe fillOnly:NO notifyOTP:NO];
+}
+
+- (void)runRecipe:(LoginRecipe *)recipe fillOnly:(BOOL)fillOnly notifyOTP:(BOOL)notifyOTP {
     if (self.isRunning || !recipe) {
         return;
     }
@@ -265,6 +404,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
                  inWebView:webView
                   username:username ?: @""
                   password:password ?: @""
+                  fillOnly:fillOnly
                 completion:^(BOOL success, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -276,6 +416,14 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
             [strongSelf showError:@"登录助手执行失败"
                           message:error.localizedDescription ?: @"未知错误"
                          recipeID:recipe.recipeID];
+            return;
+        }
+        if (notifyOTP && fillOnly) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"帐密已填入";
+            alert.informativeText = @"检测到验证码字段或已选择仅填入。请完成验证后手动点击登录。";
+            [alert addButtonWithTitle:@"好"];
+            [alert beginSheetModalForWindow:strongSelf.windowController.window completionHandler:nil];
         }
     }];
 }
@@ -318,13 +466,52 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     return self.windowController.webView;
 }
 
+#pragma mark - Script messages
+
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)userContentController;
-    if (![message.name isEqualToString:@"loginAssistPick"]) {
+    if ([message.name isEqualToString:@"loginAssistPick"]) {
+        [LoginElementPicker handleScriptMessageBody:message.body];
         return;
     }
-    [LoginElementPicker handleScriptMessageBody:message.body];
+    if (![message.name isEqualToString:LoginFormInlineHandlerName]) {
+        return;
+    }
+    if (![LoginAssistPreferences inlineAssistEnabled]) {
+        return;
+    }
+    if (![message.body isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+    NSDictionary *body = (NSDictionary *)message.body;
+    NSString *type = body[@"type"];
+    if ([type isEqualToString:@"formDetected"]) {
+        self.hasDetectedLoginForm = YES;
+        self.detectedHasOTP = [body[@"hasOTP"] boolValue];
+        self.detectedFormId = body[@"formId"];
+        self.detectedUsernameSelector = body[@"usernameSelector"];
+        self.detectedPasswordSelector = body[@"passwordSelector"];
+        self.detectedSubmitSelector = body[@"submitSelector"];
+        [self refreshButtonAppearance];
+    } else if ([type isEqualToString:@"formCleared"]) {
+        self.hasDetectedLoginForm = NO;
+        self.detectedHasOTP = NO;
+        self.detectedFormId = nil;
+        [self refreshButtonAppearance];
+    } else if ([type isEqualToString:@"iconClicked"]) {
+        self.lastIconContext = body;
+        self.hasDetectedLoginForm = YES;
+        self.detectedHasOTP = [body[@"hasOTP"] boolValue];
+        self.detectedUsernameSelector = body[@"usernameSelector"];
+        self.detectedPasswordSelector = body[@"passwordSelector"];
+        self.detectedSubmitSelector = body[@"submitSelector"];
+        [self presentAssistMenuFromView:nil context:body];
+    } else if ([type isEqualToString:@"credentialsDraft"]) {
+        [self.savePromptCoordinator noteCredentialsDraftOnPage];
+    } else if ([type isEqualToString:@"formSubmitted"]) {
+        [self.savePromptCoordinator noteFormSubmitted];
+    }
 }
 
 @end

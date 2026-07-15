@@ -66,6 +66,7 @@
     [webView removeFromSuperview];
     self.webView = nil;
     self.isLoading = NO;
+    self.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
     [self.mainFrameNavigations removeAllObjects];
     self.hasPendingMainFrameNavigation = NO;
 }

@@ -240,3 +240,37 @@ SimpleBrowser/Favicon/
 ### 结论
 
 **LA-0～LA-3（V1）代码已落地**；短信 / 二维码 / Companion 属后续阶段。
+
+---
+
+## 登录表单内联助手 V1.5 验收（IF-0～IF-3 · 2026-07-15）
+
+> 对照 [login-form-inline-design.md](login-form-inline-design.md) · [login-form-inline-development-plan.md](login-form-inline-development-plan.md)  
+> Cursor 计划：`.cursor/plans/login-form-inline.plan.md`
+
+### 自动化检查
+
+| 检查项 | 结果 |
+|--------|------|
+| `make browser` | 通过（含 AuthenticationServices） |
+| 新模块入链 | `LoginFormDetector` / `SystemPasswordBridge` / `SaveRecipePromptCoordinator` / Prefs |
+
+### 功能验收
+
+| 测试项 | 状态 |
+|--------|------|
+| 测试页密码框右侧内联钥匙 | 通过（逻辑）；待手测 |
+| 点图标弹出菜单（系统密码 / Recipe / 保存） | 通过（逻辑） |
+| Recipe 一键 / 仅填入；OTP 默认不提交 | 通过（逻辑） |
+| 系统密码桥不崩溃（ad-hoc 可能不可用） | 通过（逻辑） |
+| 提交后询问保存；设置可关 | 通过（逻辑） |
+
+### 手测
+
+1. `make run-browser` → 打开 `Resources/login-assist-test.html`  
+2. 密码框右侧应出现钥匙 → 点开菜单  
+3. 配置 Recipe 后可一键登录；手输 `demo`/`pass` 并登录成功后应询问保存  
+
+### 结论
+
+**IF-0～IF-3 已落地**；系统密码完整能力依赖正式签名 / web-browser entitlement。

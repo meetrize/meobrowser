@@ -7,6 +7,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)standardField;
 
+/// 为左侧内嵌控件（如安全指示）预留的文字区域宽度。
+@property (nonatomic) CGFloat leadingContentInset;
+
 /// 为右侧内嵌控件（如收藏按钮）预留的文字区域宽度。
 @property (nonatomic) CGFloat trailingContentInset;
 

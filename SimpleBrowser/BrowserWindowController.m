@@ -19,10 +19,43 @@
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
+#import "BrowserSSLExceptionStore.h"
+#import "BrowserCertificateWarningView.h"
+#import <Security/Security.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, NSWindowDelegate, NSMenuItemValidation>
+static const CGFloat kSecurityBadgeLeadingInset = 88.0;
+
+@interface BrowserPendingSSLAuth : NSObject
+@property (nonatomic, weak) WKWebView *webView;
+@property (nonatomic, copy) NSString *hostKey;
+@property (nonatomic, copy) NSString *hostDisplay;
+@property (nonatomic, strong, nullable) NSURLAuthenticationChallenge *challenge;
+@property (nonatomic, copy, nullable) void (^completionHandler)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential);
+@property (nonatomic, strong, nullable) NSURL *fallbackReloadURL;
+@property (nonatomic, assign) BOOL completionInvoked;
+- (void)finishWithDisposition:(NSURLSessionAuthChallengeDisposition)disposition
+                   credential:(nullable NSURLCredential *)credential;
+@end
+
+@implementation BrowserPendingSSLAuth
+- (void)finishWithDisposition:(NSURLSessionAuthChallengeDisposition)disposition
+                   credential:(NSURLCredential *)credential {
+    if (self.completionInvoked) {
+        return;
+    }
+    self.completionInvoked = YES;
+    void (^handler)(NSURLSessionAuthChallengeDisposition, NSURLCredential *) = self.completionHandler;
+    self.completionHandler = nil;
+    self.challenge = nil;
+    if (handler) {
+        handler(disposition, credential);
+    }
+}
+@end
+
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -35,6 +68,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong) NSButton *bookmarkButton;
+@property (nonatomic, strong) NSButton *securityBadgeButton;
 @property (nonatomic, strong) NSButton *downloadButton;
 @property (nonatomic, strong) NSView *downloadBadgeView;
 @property (nonatomic, strong) SBTextField *addressField;
@@ -49,6 +83,9 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 @property (nonatomic, strong) LoginAssistController *loginAssistController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
+@property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
+@property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingSSLAuth *> *pendingSSLAuthByWebView;
+@property (nonatomic, assign) BOOL addressFieldIsEditing;
 @end
 
 @implementation BrowserWindowController
@@ -107,6 +144,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
         _tabController.delegate = self;
         _downloadManager = [BrowserDownloadManager sharedManager];
         [_downloadManager addObserver:self];
+        _pendingSSLAuthByWebView = [NSMapTable weakToStrongObjectsMapTable];
         [self setupUI];
         if (loadTabs) {
             [self applySessionDictionary:session];
@@ -286,6 +324,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (notification.object != self.window) {
         return;
     }
+    [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
         self.pendingPersistBlock = nil;
@@ -307,6 +346,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
         self.pendingPersistBlock = nil;
@@ -362,6 +402,25 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.bookmarkButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
     ]];
 
+    self.securityBadgeButton = [NSButton buttonWithTitle:@"连接不安全"
+                                                  target:self
+                                                  action:@selector(showInsecureConnectionDetails:)];
+    self.securityBadgeButton.bezelStyle = NSBezelStyleInline;
+    self.securityBadgeButton.bordered = NO;
+    self.securityBadgeButton.hidden = YES;
+    self.securityBadgeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.securityBadgeButton.toolTip = @"此站点证书不受信任";
+    self.securityBadgeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        self.securityBadgeButton.contentTintColor = [NSColor systemOrangeColor];
+    }
+    [self.addressField addSubview:self.securityBadgeButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.securityBadgeButton.leadingAnchor constraintEqualToAnchor:self.addressField.leadingAnchor constant:6],
+        [self.securityBadgeButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
+        [self.securityBadgeButton.heightAnchor constraintLessThanOrEqualToConstant:22],
+    ]];
+
     self.addressAutocompleteController = [[BrowserAddressBarAutocompleteController alloc] initWithAddressField:self.addressField];
     self.addressAutocompleteController.delegate = self;
     [self.addressAutocompleteController install];
@@ -411,11 +470,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.loadingProgressView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.contentContainer addSubview:self.loadingProgressView];
 
+    self.certificateWarningView = [[BrowserCertificateWarningView alloc] initWithFrame:NSZeroRect];
+    self.certificateWarningView.delegate = self;
+    self.certificateWarningView.hidden = YES;
+    self.certificateWarningView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.contentContainer addSubview:self.certificateWarningView];
+
     [NSLayoutConstraint activateConstraints:@[
         [self.launchpadView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.launchpadView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.launchpadView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
         [self.launchpadView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+        [self.certificateWarningView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
+        [self.certificateWarningView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
+        [self.certificateWarningView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
+        [self.certificateWarningView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
         [self.loadingProgressView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.loadingProgressView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.loadingProgressView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
@@ -822,6 +891,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (webView == nil) {
         return;
     }
+    [self cancelPendingSSLAuthForWebView:webView];
     if (webView.superview == self.contentContainer) {
         [webView removeFromSuperview];
     }
@@ -911,12 +981,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
+    [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
     [self observeLoadingProgressForSelectedTab];
 
     // sync：顺序/数量不变时保留标签视图，避免 mouseDown 选中后重建导致拖拽失效
     [self updateTabStripDisplay];
     [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
+    [self syncCertificateWarningVisibilityForSelectedTab];
 }
 
 #pragma mark - Loading Progress
@@ -1414,11 +1486,13 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 - (void)goBack:(id)sender {
     (void)sender;
+    [self cancelPendingSSLAuthForWebView:self.webView];
     [self.webView goBack];
 }
 
 - (void)goForward:(id)sender {
     (void)sender;
+    [self cancelPendingSSLAuthForWebView:self.webView];
     [self.webView goForward];
 }
 
@@ -1430,6 +1504,7 @@ didRequestTransferTabID:(NSUUID *)tabID
         [self refreshTabsUI];
         return;
     }
+    [self cancelPendingSSLAuthForWebView:self.webView];
     [self.webView reload];
 }
 
@@ -1505,6 +1580,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab) {
+        [self cancelPendingSSLAuthForWebView:tab.webView];
         [tab loadURL:url];
         [self refreshTabsUI];
     }
@@ -1588,6 +1664,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
             self.lastAddressBarTab = nil;
         }
         [self updateBookmarkButtonState];
+        [self updateSecurityBadgeVisibility];
         [self.loginAssistController updateForURL:nil];
         return;
     }
@@ -1602,6 +1679,8 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self persistAddressBarDraftFromField];
     [self applyAddressBarStringForTab:tab];
     [self updateBookmarkButtonState];
+    [self updateConnectionSecurityStateForTab:tab webView:webView];
+    [self updateSecurityBadgeVisibility];
     [self.loginAssistController updateForURL:webView.URL];
 }
 
@@ -1614,6 +1693,20 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 }
 
 #pragma mark - NSTextFieldDelegate
+
+- (void)controlTextDidBeginEditing:(NSNotification *)notification {
+    if (notification.object == self.addressField) {
+        self.addressFieldIsEditing = YES;
+        [self updateSecurityBadgeVisibility];
+    }
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+    if (notification.object == self.addressField) {
+        self.addressFieldIsEditing = NO;
+        [self updateSecurityBadgeVisibility];
+    }
+}
 
 - (BOOL)control:(NSControl *)control
       textView:(NSTextView *)textView
@@ -1630,8 +1723,282 @@ doCommandBySelector:(SEL)commandSelector {
     return NO;
 }
 
+#pragma mark - Certificate / SSL
+
+- (BOOL)isCertificateRelatedError:(NSError *)error {
+    if (!error) {
+        return NO;
+    }
+    if ([error.domain isEqualToString:NSURLErrorDomain]) {
+        switch (error.code) {
+            case NSURLErrorSecureConnectionFailed:
+            case NSURLErrorServerCertificateHasBadDate:
+            case NSURLErrorServerCertificateUntrusted:
+            case NSURLErrorServerCertificateHasUnknownRoot:
+            case NSURLErrorServerCertificateNotYetValid:
+            case NSURLErrorClientCertificateRejected:
+            case NSURLErrorClientCertificateRequired:
+                return YES;
+            default:
+                break;
+        }
+    }
+    NSError *underlying = error.userInfo[NSUnderlyingErrorKey];
+    if ([underlying isKindOfClass:[NSError class]] && [self isCertificateRelatedError:underlying]) {
+        return YES;
+    }
+    NSString *description = error.localizedDescription.lowercaseString;
+    if ([description containsString:@"certificate"] || [description containsString:@"ssl"] ||
+        [description containsString:@"tls"] || [description containsString:@"证书"]) {
+        return YES;
+    }
+    return NO;
+}
+
+- (BOOL)serverTrustIsTrusted:(SecTrustRef)trust {
+    if (!trust) {
+        return NO;
+    }
+    return SecTrustEvaluateWithError(trust, NULL);
+}
+
+- (void)cancelPendingSSLAuthForWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    BrowserPendingSSLAuth *pending = [self.pendingSSLAuthByWebView objectForKey:webView];
+    if (!pending) {
+        return;
+    }
+    [self.pendingSSLAuthByWebView removeObjectForKey:webView];
+    [pending finishWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge credential:nil];
+    if (webView == self.webView) {
+        [self hideCertificateWarningOverlay];
+    }
+}
+
+- (void)cancelAllPendingSSLAuthWithDisposition:(NSURLSessionAuthChallengeDisposition)disposition {
+    NSArray<BrowserPendingSSLAuth *> *pendings = self.pendingSSLAuthByWebView.objectEnumerator.allObjects;
+    [self.pendingSSLAuthByWebView removeAllObjects];
+    for (BrowserPendingSSLAuth *pending in pendings) {
+        [pending finishWithDisposition:disposition credential:nil];
+    }
+    [self hideCertificateWarningOverlay];
+}
+
+- (void)showCertificateWarningForPending:(BrowserPendingSSLAuth *)pending {
+    if (!pending || pending.webView != self.webView) {
+        return;
+    }
+    [self.certificateWarningView configureWithHost:pending.hostDisplay];
+    self.certificateWarningView.hidden = NO;
+    [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
+    [self.loadingProgressView resetHidden];
+}
+
+- (void)hideCertificateWarningOverlay {
+    self.certificateWarningView.hidden = YES;
+}
+
+- (void)syncCertificateWarningVisibilityForSelectedTab {
+    WKWebView *webView = self.webView;
+    if (!webView) {
+        [self hideCertificateWarningOverlay];
+        return;
+    }
+    BrowserPendingSSLAuth *pending = [self.pendingSSLAuthByWebView objectForKey:webView];
+    if (pending && !pending.completionInvoked) {
+        [self showCertificateWarningForPending:pending];
+    } else {
+        [self hideCertificateWarningOverlay];
+    }
+}
+
+- (void)presentCertificateWarningForWebView:(WKWebView *)webView
+                                    hostKey:(NSString *)hostKey
+                                hostDisplay:(NSString *)hostDisplay
+                                  challenge:(NSURLAuthenticationChallenge *)challenge
+                          completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler
+                          fallbackReloadURL:(NSURL *)fallbackReloadURL {
+    [self cancelPendingSSLAuthForWebView:webView];
+
+    BrowserPendingSSLAuth *pending = [[BrowserPendingSSLAuth alloc] init];
+    pending.webView = webView;
+    pending.hostKey = hostKey;
+    pending.hostDisplay = hostDisplay.length > 0 ? hostDisplay : hostKey;
+    pending.challenge = challenge;
+    pending.completionHandler = completionHandler;
+    pending.fallbackReloadURL = fallbackReloadURL;
+    [self.pendingSSLAuthByWebView setObject:pending forKey:webView];
+
+    if (webView == self.webView) {
+        [self showCertificateWarningForPending:pending];
+        self.addressField.stringValue = fallbackReloadURL.absoluteString.length > 0
+            ? fallbackReloadURL.absoluteString
+            : [NSString stringWithFormat:@"https://%@", hostDisplay];
+        BrowserTab *tab = [self.tabController tabForWebView:webView];
+        tab.addressBarDraft = nil;
+        [self updateSecurityBadgeVisibility];
+    }
+}
+
+- (void)updateConnectionSecurityStateForTab:(BrowserTab *)tab webView:(WKWebView *)webView {
+    if (!tab || tab.isNewTabPage || !webView) {
+        if (tab) {
+            tab.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
+        }
+        return;
+    }
+    NSURL *url = webView.URL;
+    if (![url.scheme.lowercaseString isEqualToString:@"https"]) {
+        tab.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
+        return;
+    }
+    if ([[BrowserSSLExceptionStore sharedStore] allowsURL:url]) {
+        tab.connectionSecurityState = BrowserConnectionSecurityStateInsecureException;
+    } else {
+        tab.connectionSecurityState = BrowserConnectionSecurityStateTrusted;
+    }
+}
+
+- (void)updateSecurityBadgeVisibility {
+    BrowserTab *tab = self.tabController.selectedTab;
+    BOOL show = !self.addressFieldIsEditing
+        && tab != nil
+        && !tab.isNewTabPage
+        && tab.connectionSecurityState == BrowserConnectionSecurityStateInsecureException
+        && self.certificateWarningView.hidden;
+    self.securityBadgeButton.hidden = !show;
+    self.addressField.leadingContentInset = show ? kSecurityBadgeLeadingInset : 0;
+    [self.addressField setNeedsDisplay:YES];
+}
+
+- (void)showInsecureConnectionDetails:(id)sender {
+    (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    WKWebView *webView = self.webView;
+    NSURL *url = webView.URL;
+    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForURL:url];
+    NSString *host = url.host.length > 0 ? url.host : @"此站点";
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"连接不安全";
+    alert.informativeText =
+        [NSString stringWithFormat:
+         @"「%@」使用了无效或不受信任的证书。流量仍可能被加密，但无法验证你访问的是否为真正的服务器。",
+         host];
+    [alert addButtonWithTitle:@"知道了"];
+    if (hostKey.length > 0) {
+        [alert addButtonWithTitle:@"停止信任此主机"];
+    }
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertSecondButtonReturn || hostKey.length == 0) {
+            return;
+        }
+        [[BrowserSSLExceptionStore sharedStore] revokeHostKey:hostKey];
+        if (tab) {
+            tab.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
+        }
+        [self updateSecurityBadgeVisibility];
+        if (url) {
+            [webView loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+    }];
+}
+
+- (void)certificateWarningViewDidChooseGoBack:(BrowserCertificateWarningView *)view {
+    (void)view;
+    WKWebView *webView = self.webView;
+    BrowserPendingSSLAuth *pending = webView ? [self.pendingSSLAuthByWebView objectForKey:webView] : nil;
+    if (pending) {
+        [self.pendingSSLAuthByWebView removeObjectForKey:webView];
+        [pending finishWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge credential:nil];
+    }
+    [self hideCertificateWarningOverlay];
+    if (webView.canGoBack) {
+        [webView goBack];
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    tab.isLoading = NO;
+    [self updateNavigationState];
+    [self updateTabStripDisplay];
+}
+
+- (void)certificateWarningViewDidChooseProceed:(BrowserCertificateWarningView *)view {
+    (void)view;
+    WKWebView *webView = self.webView;
+    BrowserPendingSSLAuth *pending = webView ? [self.pendingSSLAuthByWebView objectForKey:webView] : nil;
+    if (!pending) {
+        [self hideCertificateWarningOverlay];
+        return;
+    }
+
+    [[BrowserSSLExceptionStore sharedStore] allowHostKey:pending.hostKey];
+    [self.pendingSSLAuthByWebView removeObjectForKey:webView];
+    [self hideCertificateWarningOverlay];
+
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    tab.connectionSecurityState = BrowserConnectionSecurityStateInsecureException;
+
+    if (pending.challenge.protectionSpace.serverTrust) {
+        NSURLCredential *credential =
+            [NSURLCredential credentialForTrust:pending.challenge.protectionSpace.serverTrust];
+        [pending finishWithDisposition:NSURLSessionAuthChallengeUseCredential credential:credential];
+        [self updateSecurityBadgeVisibility];
+        return;
+    }
+
+    // 失败路径兜底：无挂起 challenge 时重新加载。
+    NSURL *reloadURL = pending.fallbackReloadURL;
+    [pending finishWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge credential:nil];
+    if (reloadURL) {
+        [webView loadRequest:[NSURLRequest requestWithURL:reloadURL]];
+    }
+    [self updateSecurityBadgeVisibility];
+}
+
 #pragma mark - WKNavigationDelegate
 
+- (void)webView:(WKWebView *)webView
+didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
+completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler {
+    NSString *authMethod = challenge.protectionSpace.authenticationMethod;
+    if (![authMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+        return;
+    }
+
+    SecTrustRef trust = challenge.protectionSpace.serverTrust;
+    NSString *host = challenge.protectionSpace.host ?: @"";
+    NSInteger port = challenge.protectionSpace.port;
+    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:port];
+
+    if ([[BrowserSSLExceptionStore sharedStore] allowsHostKey:hostKey] && trust) {
+        NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
+        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+        return;
+    }
+
+    if ([self serverTrustIsTrusted:trust]) {
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+        return;
+    }
+
+    NSURL *fallbackURL = nil;
+    if (host.length > 0) {
+        NSString *urlString = (port > 0 && port != 443)
+            ? [NSString stringWithFormat:@"https://%@:%ld/", host, (long)port]
+            : [NSString stringWithFormat:@"https://%@/", host];
+        fallbackURL = [NSURL URLWithString:urlString];
+    }
+
+    [self presentCertificateWarningForWebView:webView
+                                      hostKey:hostKey
+                                  hostDisplay:host
+                                    challenge:challenge
+                            completionHandler:completionHandler
+                            fallbackReloadURL:fallbackURL];
+}
 - (void)webView:(WKWebView *)webView
 decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
@@ -1718,6 +2085,8 @@ didBecomeDownload:(WKDownload *)download {
         self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
         self.reloadButton.enabled = !tab.isNewTabPage;
         [self updateBookmarkButtonState];
+        [self updateConnectionSecurityStateForTab:tab webView:webView];
+        [self updateSecurityBadgeVisibility];
     }
 }
 
@@ -1769,6 +2138,8 @@ didFailNavigation:(WKNavigation *)navigation
         self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
         self.reloadButton.enabled = !tab.isNewTabPage;
         [self updateBookmarkButtonState];
+        [self updateConnectionSecurityStateForTab:tab webView:webView];
+        [self updateSecurityBadgeVisibility];
     }
 
     NSInteger generation = tab.titleUpdateGeneration;
@@ -1825,6 +2196,40 @@ didFailNavigation:(WKNavigation *)navigation
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     tab.isLoading = NO;
     [self updateTabStripDisplay];
+
+    // 已有挂起的证书挑战 / 正在展示警告页：不再弹通用 Alert。
+    BrowserPendingSSLAuth *pending = [self.pendingSSLAuthByWebView objectForKey:webView];
+    if (pending && !pending.completionInvoked) {
+        if (webView == self.webView) {
+            [self.loadingProgressView resetHidden];
+            [self updateNavigationState];
+        }
+        return;
+    }
+
+    if ([self isCertificateRelatedError:error]) {
+        NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
+        if (![failingURL isKindOfClass:[NSURL class]]) {
+            failingURL = webView.URL;
+        }
+        NSString *host = failingURL.host.length > 0 ? failingURL.host : @"未知主机";
+        NSInteger port = failingURL.port != nil ? failingURL.port.integerValue : 443;
+        NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:port];
+
+        if (webView == self.webView) {
+            [self.loadingProgressView resetHidden];
+        }
+        [self presentCertificateWarningForWebView:webView
+                                          hostKey:hostKey
+                                      hostDisplay:host
+                                        challenge:nil
+                                completionHandler:nil
+                                fallbackReloadURL:failingURL];
+        if (webView == self.webView) {
+            [self updateNavigationState];
+        }
+        return;
+    }
 
     if (webView != self.webView) {
         return;
