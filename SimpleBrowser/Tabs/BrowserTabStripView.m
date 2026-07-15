@@ -1,6 +1,7 @@
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
+#import "BrowserTabDragGhostController.h"
 
 const CGFloat BrowserTabStripHeight = 36.0;
 
@@ -163,6 +164,9 @@ static const CGFloat kChromeGap = 4.0;
 @property (nonatomic, assign) NSUInteger draggingPreviewIndex;
 @property (nonatomic, assign) NSRect draggingOriginalFrame;
 @property (nonatomic, assign) BOOL suppressLayoutDuringDrag;
+@property (nonatomic, strong, nullable) BrowserTabDragGhostController *dragGhost;
+@property (nonatomic, assign) BOOL dragDetachMode;
+@property (nonatomic, assign) BOOL dragEnding;
 @end
 
 @implementation BrowserTabStripView
@@ -656,7 +660,28 @@ NSColor *BrowserTabStripFillColor(void) {
 
 #pragma mark - Tab Reorder Drag
 
-- (void)beginReorderDragForItem:(BrowserTabItemView *)item {
+static const CGFloat kStripDragZoneOutset = 8.0;
+
+- (NSRect)stripEffectiveZoneInScreen {
+    NSWindow *window = self.window;
+    if (!window) {
+        return NSZeroRect;
+    }
+    NSRect stripRect = [self convertRect:self.bounds toView:nil];
+    NSRect screenRect = [window convertRectToScreen:stripRect];
+    return NSInsetRect(screenRect, -kStripDragZoneOutset, -kStripDragZoneOutset);
+}
+
+- (NSPoint)screenPointFromLocationInWindow:(NSPoint)locationInWindow {
+    NSWindow *window = self.window;
+    if (!window) {
+        return [NSEvent mouseLocation];
+    }
+    NSRect pointRect = NSMakeRect(locationInWindow.x, locationInWindow.y, 1, 1);
+    return [window convertRectToScreen:pointRect].origin;
+}
+
+- (void)beginReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
     NSUInteger index = [self.tabItems indexOfObject:item];
     if (index == NSNotFound) {
         return;
@@ -666,23 +691,45 @@ NSColor *BrowserTabStripFillColor(void) {
     self.draggingPreviewIndex = index;
     self.draggingOriginalFrame = item.frame;
     self.suppressLayoutDuringDrag = YES;
-    [self.tabsContentView addSubview:item positioned:NSWindowAbove relativeTo:nil];
+    self.dragDetachMode = NO;
+    self.dragEnding = NO;
+
+    NSPoint grabInItem = [item convertPoint:locationInWindow fromView:nil];
+    self.dragGhost = [[BrowserTabDragGhostController alloc] init];
+    [self.dragGhost beginWithSourceView:item grabPointInSource:grabInItem];
+    NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
+    [self.dragGhost moveToScreenPoint:screenPoint];
+
+    item.hidden = YES;
+    [self layoutTabsExcludingDraggedItem:item];
 }
 
-- (void)moveReorderDragForItem:(BrowserTabItemView *)item deltaX:(CGFloat)deltaX {
-    if (item != self.draggingItem) {
+- (void)moveReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
+    if (item != self.draggingItem || self.dragEnding) {
         return;
     }
 
-    NSRect frame = self.draggingOriginalFrame;
-    frame.origin.x += deltaX;
-    // 限制在内容区内
-    CGFloat minX = 0;
-    CGFloat maxX = MAX(NSWidth(self.tabsContentView.bounds) - NSWidth(frame), 0);
-    frame.origin.x = MIN(MAX(frame.origin.x, minX), maxX);
-    item.frame = frame;
+    NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
+    BOOL inStrip = NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
+    BOOL detach = !inStrip;
+    if (detach != self.dragDetachMode) {
+        self.dragDetachMode = detach;
+        [self.dragGhost setDetachMode:detach animated:YES];
+        if (detach) {
+            [self layoutTabsCollapsingDraggedItem:item];
+        } else {
+            [self layoutTabsExcludingDraggedItem:item];
+        }
+    }
 
-    CGFloat centerX = NSMidX(frame);
+    [self.dragGhost moveToScreenPoint:screenPoint];
+
+    if (detach) {
+        return;
+    }
+
+    NSPoint inContent = [self.tabsContentView convertPoint:locationInWindow fromView:nil];
+    CGFloat centerX = inContent.x;
     NSUInteger target = [self insertionIndexForDraggedItem:item centerX:centerX];
     if (target == self.draggingPreviewIndex || target == NSNotFound) {
         return;
@@ -697,7 +744,6 @@ NSColor *BrowserTabStripFillColor(void) {
     [self.tabItems removeObjectAtIndex:current];
     NSUInteger insertAt = target;
     if (target > current) {
-        // target 是最终下标；remove 后 insertAt == target 即可（见 BrowserTabController）
         insertAt = MIN(target, self.tabItems.count);
     } else {
         insertAt = target;
@@ -758,75 +804,146 @@ NSColor *BrowserTabStripFillColor(void) {
     }
 }
 
+- (void)layoutTabsCollapsingDraggedItem:(BrowserTabItemView *)dragged {
+    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat x = 0;
+    for (BrowserTabItemView *item in self.tabItems) {
+        if (item == dragged) {
+            continue;
+        }
+        if (!item.hidden) {
+            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            [item applyAvailableWidth:tabWidth];
+        }
+        x += tabWidth + kTabSpacing;
+    }
+}
+
+- (NSRect)screenRectForTabSlotAtIndex:(NSUInteger)index size:(NSSize)size {
+    NSWindow *window = self.window;
+    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat x = index * (tabWidth + kTabSpacing);
+    NSRect localInContent = NSMakeRect(x, kTabTopInset, size.width > 0 ? size.width : tabWidth,
+                                       size.height > 0 ? size.height : tabHeight);
+    NSRect inWindow = [self.tabsContentView convertRect:localInContent toView:nil];
+    if (!window) {
+        return inWindow;
+    }
+    return [window convertRectToScreen:inWindow];
+}
+
+- (void)finishDragSessionRestoringItem:(BrowserTabItemView *)item {
+    item.hidden = NO;
+    [self.dragGhost endAndRemoveImmediately];
+    self.dragGhost = nil;
+    self.draggingItem = nil;
+    self.draggingFromIndex = NSNotFound;
+    self.draggingPreviewIndex = NSNotFound;
+    self.suppressLayoutDuringDrag = NO;
+    self.dragDetachMode = NO;
+    self.dragEnding = NO;
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
+    [self layoutSubtreeIfNeeded];
+}
+
 - (void)endReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
-    if (item != self.draggingItem) {
+    if (item != self.draggingItem || self.dragEnding) {
         return;
     }
 
     NSUInteger toIndex = [self.tabItems indexOfObject:item];
     NSUInteger fromIndex = self.draggingFromIndex;
     NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+    NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
+    BOOL detach = !NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
 
-    NSWindow *window = self.window;
-    BOOL droppedOutsideWindow = NO;
-    NSPoint screenPoint = [NSEvent mouseLocation];
-    if (window) {
-        NSRect pointRect = NSMakeRect(locationInWindow.x, locationInWindow.y, 1, 1);
-        screenPoint = [window convertRectToScreen:pointRect].origin;
-        // 松手点在窗口 frame 外 → 移到新窗口（相对垂直也允许拖出标题栏外）
-        droppedOutsideWindow = !NSPointInRect(screenPoint, window.frame);
-    }
+    self.dragEnding = YES;
+    __weak typeof(self) weakSelf = self;
+    BrowserTabDragGhostController *ghost = self.dragGhost;
 
-    self.draggingItem = nil;
-    self.draggingFromIndex = NSNotFound;
-    self.draggingPreviewIndex = NSNotFound;
-    self.suppressLayoutDuringDrag = NO;
-    [self invalidateTabLayoutCache];
-    [self setNeedsLayout:YES];
-    [self layoutSubtreeIfNeeded];
-
-    if (droppedOutsideWindow && tabID) {
+    void (^commitDetach)(void) = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf finishDragSessionRestoringItem:item];
+        if (!tabID) {
+            return;
+        }
         NSUUID *movedID = tabID;
         NSPoint dropPoint = screenPoint;
-        __weak typeof(self) weakSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) strongSelf = weakSelf;
-            if (!strongSelf) {
+            typeof(self) inner = weakSelf;
+            if (!inner) {
                 return;
             }
-            // 拖拽中可能已改本地顺序但未写回模型，先按模型重载，再移出。
-            id<BrowserTabStripViewDelegate> delegate = strongSelf.delegate;
+            id<BrowserTabStripViewDelegate> delegate = inner.delegate;
             if ([delegate respondsToSelector:@selector(tabStripView:didRequestMoveTabIDToNewWindow:screenPoint:)]) {
-                [delegate tabStripView:strongSelf
+                [delegate tabStripView:inner
         didRequestMoveTabIDToNewWindow:movedID
                            screenPoint:dropPoint];
             }
         });
+    };
+
+    void (^commitReorder)(void) = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf finishDragSessionRestoringItem:item];
+        if (tabID && toIndex != NSNotFound && toIndex != fromIndex) {
+            NSUUID *movedID = tabID;
+            NSUInteger movedTo = toIndex;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) inner = weakSelf;
+                if (!inner) {
+                    return;
+                }
+                id<BrowserTabStripViewDelegate> delegate = inner.delegate;
+                if ([delegate respondsToSelector:@selector(tabStripView:didMoveTabID:toIndex:)]) {
+                    [delegate tabStripView:inner didMoveTabID:movedID toIndex:movedTo];
+                }
+            });
+        }
+    };
+
+    if (detach && tabID) {
+        NSSize ghostSize = ghost.ghostSize;
+        if (ghostSize.width < 1) {
+            ghostSize = item.bounds.size;
+        }
+        NSRect flyRect = NSMakeRect(screenPoint.x - ghostSize.width * 0.25,
+                                    screenPoint.y - ghostSize.height * 0.5,
+                                    ghostSize.width,
+                                    ghostSize.height);
+        [ghost setDetachMode:YES animated:NO];
+        [ghost animateToScreenRect:flyRect completion:^{
+            commitDetach();
+        }];
         return;
     }
 
-    if (tabID && toIndex != NSNotFound && toIndex != fromIndex) {
-        // 推迟到下一个 runloop，避免在 mouseUp 栈内 reload 标签条
-        NSUUID *movedID = tabID;
-        NSUInteger movedTo = toIndex;
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) strongSelf = weakSelf;
-            if (!strongSelf) {
-                return;
-            }
-            id<BrowserTabStripViewDelegate> delegate = strongSelf.delegate;
-            if ([delegate respondsToSelector:@selector(tabStripView:didMoveTabID:toIndex:)]) {
-                [delegate tabStripView:strongSelf didMoveTabID:movedID toIndex:movedTo];
-            }
-        });
-    }
+    NSUInteger slotIndex = (toIndex != NSNotFound) ? toIndex : fromIndex;
+    NSRect slotRect = [self screenRectForTabSlotAtIndex:slotIndex size:ghost.ghostSize];
+    [ghost setDetachMode:NO animated:NO];
+    [ghost animateToScreenRect:slotRect completion:^{
+        commitReorder();
+    }];
 }
 
 - (void)reloadWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID {
     if (self.draggingItem) {
+        self.draggingItem.hidden = NO;
         self.draggingItem = nil;
         self.suppressLayoutDuringDrag = NO;
+        self.dragEnding = NO;
+        self.dragDetachMode = NO;
+        [self.dragGhost endAndRemoveImmediately];
+        self.dragGhost = nil;
     }
 
     for (BrowserTabItemView *item in self.tabItems) {
@@ -866,16 +983,16 @@ NSColor *BrowserTabStripFillColor(void) {
         item.contextMenuProvider = ^{
             return [weakSelf contextMenuForTabID:tabID];
         };
-        item.onReorderDragBegan = ^{
+        item.onReorderDragBegan = ^(NSPoint locationInWindow) {
             BrowserTabItemView *strongItem = weakItem;
             if (strongItem) {
-                [weakSelf beginReorderDragForItem:strongItem];
+                [weakSelf beginReorderDragForItem:strongItem locationInWindow:locationInWindow];
             }
         };
-        item.onReorderDragMoved = ^(CGFloat deltaX) {
+        item.onReorderDragMoved = ^(NSPoint locationInWindow) {
             BrowserTabItemView *strongItem = weakItem;
             if (strongItem) {
-                [weakSelf moveReorderDragForItem:strongItem deltaX:deltaX];
+                [weakSelf moveReorderDragForItem:strongItem locationInWindow:locationInWindow];
             }
         };
         item.onReorderDragEnded = ^(NSPoint locationInWindow) {

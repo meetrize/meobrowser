@@ -352,17 +352,19 @@ NSColor *BrowserTabActiveFillColor(void) {
 
         if (next.type == NSEventTypeLeftMouseDragged) {
             CGFloat deltaX = next.locationInWindow.x - start.x;
+            CGFloat deltaY = next.locationInWindow.y - start.y;
+            CGFloat distance = hypot(deltaX, deltaY);
             if (!dragging) {
-                if (fabs(deltaX) < kReorderDragThreshold) {
+                if (distance < kReorderDragThreshold) {
                     continue;
                 }
                 dragging = YES;
                 if (self.onReorderDragBegan) {
-                    self.onReorderDragBegan();
+                    self.onReorderDragBegan(next.locationInWindow);
                 }
             }
             if (self.onReorderDragMoved) {
-                self.onReorderDragMoved(deltaX);
+                self.onReorderDragMoved(next.locationInWindow);
             }
             continue;
         }

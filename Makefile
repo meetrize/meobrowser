@@ -25,6 +25,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabItemView.m \
+                   $(BROWSER_SRC_DIR)/Tabs/BrowserTabDragGhostController.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutItem.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutStore.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutCellView.m \

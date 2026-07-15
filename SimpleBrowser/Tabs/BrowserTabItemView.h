@@ -20,9 +20,9 @@ FOUNDATION_EXPORT const CGFloat BrowserTabPinnedWidth;
 /// Option+点击关闭按钮时调用；未设置时退回 onClose
 @property (nonatomic, copy, nullable) void (^onCloseTabsToTheRight)(void);
 @property (nonatomic, copy, nullable) NSMenu * _Nullable (^contextMenuProvider)(void);
-/// 水平拖拽超过阈值后开始排序；参数为相对按下时窗口坐标的位移
-@property (nonatomic, copy, nullable) void (^onReorderDragBegan)(void);
-@property (nonatomic, copy, nullable) void (^onReorderDragMoved)(CGFloat deltaX);
+/// 拖拽超过阈值后开始；参数为当前指针相对窗口的坐标。
+@property (nonatomic, copy, nullable) void (^onReorderDragBegan)(NSPoint locationInWindow);
+@property (nonatomic, copy, nullable) void (^onReorderDragMoved)(NSPoint locationInWindow);
 /// 拖拽结束；locationInWindow 为松手时相对窗口的坐标。
 @property (nonatomic, copy, nullable) void (^onReorderDragEnded)(NSPoint locationInWindow);
 
