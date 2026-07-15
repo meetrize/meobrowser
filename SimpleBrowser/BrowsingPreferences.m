@@ -204,6 +204,7 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
     if (sanitized.count == 0) {
         [defaults removeObjectForKey:kWindowSessionKey];
         [defaults removeObjectForKey:kTabSessionKey];
+        [defaults synchronize];
         return;
     }
 
@@ -217,6 +218,7 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
     [self saveTabEntries:first[BrowserWindowSessionTabsKey]
            selectedIndex:[first[BrowserWindowSessionSelectedIndexKey] integerValue]
              pinnedCount:[first[BrowserWindowSessionPinnedCountKey] unsignedIntegerValue]];
+    [defaults synchronize];
 }
 
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)availableSearchEngines {

@@ -15,6 +15,8 @@
     BrowserLoginAssistSettingsWindowController *_loginAssistSettingsController;
     NSMutableArray<NSURL *> *_pendingExternalURLs;
     NSInteger _windowCascadeIndex;
+    /// 退出流程中窗口会先关闭再走 terminate；此标志避免关窗时把已保存的会话覆盖成空。
+    BOOL _isTerminating;
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
@@ -214,6 +216,24 @@
     if (!controller) {
         return;
     }
+
+    BOOL isLastBrowserWindow = (_browserWindows.count == 1 &&
+                                [_browserWindows containsObject:controller]);
+
+    if (_isTerminating) {
+        // ⌘Q 等路径已在 applicationShouldTerminate: 写过完整会话，勿再以空列表覆盖。
+        [_browserWindows removeObject:controller];
+        return;
+    }
+
+    if (isLastBrowserWindow) {
+        // 关最后一窗会触发退出：先写入含本窗的会话，再移出列表。
+        [self persistAllBrowserWindowSessions];
+        _isTerminating = YES;
+        [_browserWindows removeObject:controller];
+        return;
+    }
+
     [_browserWindows removeObject:controller];
     [self persistAllBrowserWindowSessions];
 }
@@ -234,9 +254,23 @@
     return YES;
 }
 
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    // Cmd+Q / Dock 退出：在 AppKit 关闭各窗口之前先落盘当前全部窗口+标签。
+    if (!_isTerminating) {
+        [self persistAllBrowserWindowSessions];
+        _isTerminating = YES;
+    }
+    return NSTerminateNow;
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
-    [self persistAllBrowserWindowSessions];
+    if (!_isTerminating) {
+        [self persistAllBrowserWindowSessions];
+        _isTerminating = YES;
+    }
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 @end
