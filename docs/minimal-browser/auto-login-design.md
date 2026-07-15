@@ -321,11 +321,12 @@ BrowserLoginAssistSettingsWC
 
 **验收**：对 2～3 个自选站（可含 localhost 测试页）一键登录成功；失效选择器有明确错误。
 
-### V2 — 短信 OTP
+### V2 — 短信 OTP（Android 优先）
 
-- Companion（至少 Android）+ 通道 A 或 C  
-- `waitOTP` 步骤 + 自动填码  
-- iOS 降级：通知共享 / 手动粘贴仍可用同一填码管线  
+- **主路径**：Android Companion 读短信/通知 → 加密推码 → Mac `waitOTP` 自动填入  
+- 通道：首版局域网 Bonjour（C）；自建 WS（A）为外出增强  
+- Mac 粘贴 / 剪贴板：同一 `OTPInbox` 降级  
+- iOS：通知共享 / 手动粘贴；完整读短信不做硬依赖  
 
 ### V3 — 二维码辅助
 
@@ -361,8 +362,8 @@ BrowserLoginAssistSettingsWC
 
 ## 9. 开放问题（待拍板）
 
-1. Companion 是否自研最小 App，还是 V2 先做「仅 Mac 端 + 通用剪贴板/手动粘贴 OTP」？  
-2. 中继服务是否由项目方托管，还是文档只提供自建模板？  
+1. Companion：**自研最小 Android App**（V2 主路径）；Mac 粘贴为降级。  
+2. 中继：首版 **Bonjour 局域网**；另提供自建 WS/Worker 模板；不做强制公有托管。  
 3. Recipe 是否允许 path 级多账号（同一 host 两个账号）？建议：**同一 match 多 Recipe，工具栏长按选账号**。  
 4. 与系统「密码」App / iCloud 钥匙串是否互通？建议 V1 **不通**，避免范围爆炸。  
 5. 自动登录是否允许在「仅固定标签」生效，进一步降低误触？  
@@ -376,5 +377,6 @@ BrowserLoginAssistSettingsWC
 | 0.1 | 2026-07-15 | 初稿：可行性、三类登录、二维码策略、分阶段与架构落点 |
 | 0.2 | 2026-07-15 | 补充开发计划链接（LA-0～LA-7） |
 | 0.3 | 2026-07-15 | V1 落地：Recipe/Keychain/Runner/设置/拾取/自动登录 |
+| 0.4 | 2026-07-15 | V2 开放问题拍板：Android Companion 主路径；Bonjour P0；粘贴降级 |
 
 分阶段任务与验收清单见 [auto-login-development-plan.md](auto-login-development-plan.md)；本文件保持产品与技术方案真相来源。

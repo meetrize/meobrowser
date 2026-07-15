@@ -4,6 +4,7 @@
 > 状态：**V1.5 已实现**（IF-0～IF-3 · 2026-07-15）  
 > 前置：登录助手 V1 已落地（[auto-login-design.md](auto-login-design.md) · [auto-login-development-plan.md](auto-login-development-plan.md)）  
 > 开发计划：[login-form-inline-development-plan.md](login-form-inline-development-plan.md) · Cursor：`.cursor/plans/login-form-inline.plan.md`  
+> 性能优化：**IF-P 已落地** — [login-form-detector-perf-design.md](login-form-detector-perf-design.md)（早退 / 按需 scroll / 空闲暂停）  
 > 关联：`SimpleBrowser/LoginAssist/*` · `MeoBrowser.entitlements`
 
 ---
@@ -205,7 +206,7 @@ LoginRecipeStore / LoginCredentialStore（V1）
 | 4 | 登录成功自动提示保存 | **确认框 + 可关 + 同账号改更新** | 防误存、防重复 |
 | 5 | — | 增加「仅填入」与「填入并登录」分项 | 覆盖内网 / 双因素站 |
 | 6 | — | 检测结果反哺工具栏点亮 | 无 Recipe 时仍有入口 |
-| 7 | — | SPA：`MutationObserver` 持续扫描，防抖 200–300ms | React/Vue 登录页晚渲染 |
+| 7 | — | SPA：`MutationObserver` 持续扫描，防抖 200–300ms | React/Vue 登录页晚渲染；重 SPA 浏览页见 [IF-P](login-form-detector-perf-design.md) |
 | 8 | — | iframe 内登录：V1.5 只做 **同站同源 frame**；跨域 iframe 标明「暂不支持」 | WK 跨域限制 |
 
 **可选下一增强（不进 V1.5 必做）**
