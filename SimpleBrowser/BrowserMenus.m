@@ -21,6 +21,12 @@
                                     keyEquivalent:@"w"];
     closeTab.target = target;
 
+    NSMenuItem *restoreTab = [menu addItemWithTitle:@"恢复最近关闭的标签页"
+                                             action:@selector(restoreRecentlyClosedBrowserTab:)
+                                      keyEquivalent:@"t"];
+    restoreTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    restoreTab.target = target;
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *prevTab = [menu addItemWithTitle:@"上一个标签页"

@@ -1150,6 +1150,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController closeSelectedTab];
 }
 
+- (void)restoreRecentlyClosedBrowserTab:(id)sender {
+    (void)sender;
+    [self.tabController restoreRecentlyClosedTab];
+}
+
 - (void)selectNextBrowserTab:(id)sender {
     (void)sender;
     [self.tabController selectNextTab];
@@ -1226,6 +1231,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         action == @selector(zoomOut:) ||
         action == @selector(actualSize:)) {
         return [self canZoomCurrentPage];
+    }
+    if (action == @selector(restoreRecentlyClosedBrowserTab:)) {
+        return self.tabController.canRestoreRecentlyClosedTab;
     }
     return YES;
 }
