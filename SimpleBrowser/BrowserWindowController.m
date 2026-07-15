@@ -1376,6 +1376,17 @@ doCommandBySelector:(SEL)commandSelector {
 - (void)webView:(WKWebView *)webView
 decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    // ⌘+点击链接：在新标签页中打开，取消当前页导航（避免与 createWebView 重复开页）
+    if (navigationAction.navigationType == WKNavigationTypeLinkActivated
+        && (navigationAction.modifierFlags & NSEventModifierFlagCommand) != 0) {
+        NSURL *url = navigationAction.request.URL;
+        if (url) {
+            [self.tabController addTabWithURL:url];
+        }
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+
     if (navigationAction.targetFrame.isMainFrame) {
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         [tab notePendingMainFrameNavigation];
