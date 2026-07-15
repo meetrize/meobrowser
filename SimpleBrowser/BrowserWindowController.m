@@ -18,6 +18,7 @@
 #import "BrowserDownloadPanel.h"
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
+#import "LoginAssistController.h"
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 
@@ -45,6 +46,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
 @property (nonatomic, strong) BrowserDownloadManager *downloadManager;
 @property (nonatomic, strong) BrowserDownloadPanel *downloadPanel;
 @property (nonatomic, assign) BOOL downloadPanelVisible;
+@property (nonatomic, strong) LoginAssistController *loginAssistController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @end
@@ -99,6 +101,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
         [self configureChromeWindow];
         [[self class] configureSharedWebKitDefaultsIfNeeded];
         _webViewConfiguration = [[WKWebViewConfiguration alloc] init];
+        _loginAssistController = [[LoginAssistController alloc] initWithWindowController:self];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -119,6 +122,7 @@ static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContex
     configuration.applicationNameForUserAgent = @"Version/18.0 Safari/605.1.15";
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    [self.loginAssistController configureWebViewConfiguration:configuration];
 }
 
 - (void)configureChromeWindow {
@@ -362,12 +366,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressAutocompleteController.delegate = self;
     [self.addressAutocompleteController install];
 
-        self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
+    self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
     self.addressBarActionGroup.minimumAddressWidth = 120;
     self.downloadButton = self.addressBarActionGroup.downloadButton;
     self.downloadButton.target = self;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
     [self installDownloadBadgeOnButton:self.downloadButton];
+    if (self.addressBarActionGroup.loginAssistButton) {
+        [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
+    }
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
@@ -529,6 +536,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.downloadButton.target = self;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
     [self updateDownloadButtonAppearance];
+    if (self.addressBarActionGroup.loginAssistButton) {
+        [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
+    }
 }
 
 - (void)toggleDownloadsPanel:(id)sender {
@@ -1470,7 +1480,19 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(restoreRecentlyClosedBrowserTab:)) {
         return self.tabController.canRestoreRecentlyClosedTab;
     }
+    if (action == @selector(oneClickLogin:)) {
+        return self.loginAssistController.loginButton.enabled;
+    }
     return YES;
+}
+
+- (void)oneClickLogin:(id)sender {
+    [self.loginAssistController oneClickLogin:sender];
+}
+
+- (void)showLoginAssistSettings:(id)sender {
+    (void)sender;
+    [self.loginAssistController presentSettingsEditingRecipeID:nil];
 }
 
 - (void)loadAddressBarURL {
@@ -1566,6 +1588,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
             self.lastAddressBarTab = nil;
         }
         [self updateBookmarkButtonState];
+        [self.loginAssistController updateForURL:nil];
         return;
     }
 
@@ -1579,6 +1602,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self persistAddressBarDraftFromField];
     [self applyAddressBarStringForTab:tab];
     [self updateBookmarkButtonState];
+    [self.loginAssistController updateForURL:webView.URL];
 }
 
 - (void)showErrorWithTitle:(NSString *)title message:(NSString *)message {
@@ -1704,6 +1728,9 @@ didBecomeDownload:(WKDownload *)download {
     }
     [tab endMainFrameNavigation:navigation];
     [self syncFromWebView:webView];
+    if (webView == self.webView) {
+        [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
+    }
 }
 
 - (void)webView:(WKWebView *)webView

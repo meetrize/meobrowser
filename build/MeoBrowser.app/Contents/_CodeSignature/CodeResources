@@ -8,6 +8,10 @@
 		<data>
 		27EfR9Y5vdqxhlTRgEdRFvkTsO4=
 		</data>
+		<key>Resources/login-assist-test.html</key>
+		<data>
+		1CaITYSbKniW2u/2tUcHwqRxIiY=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -16,6 +20,13 @@
 			<key>hash2</key>
 			<data>
 			q4kXU9BxlLz8IyT6MGmw53bPXKHUmM1WHA7FHeGZRrE=
+			</data>
+		</dict>
+		<key>Resources/login-assist-test.html</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			BMDBjJEEcRDBA0g4TnPubvtXijDiO5pH5VR9nTWZXH8=
 			</data>
 		</dict>
 	</dict>

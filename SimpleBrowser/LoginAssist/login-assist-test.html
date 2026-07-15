@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>登录助手测试页</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 420px; margin: 48px auto; padding: 0 16px; }
+    label { display: block; margin: 12px 0 4px; font-size: 13px; color: #555; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 14px; }
+    button { margin-top: 16px; padding: 8px 16px; font-size: 14px; }
+    #status { margin-top: 20px; color: #0a7; font-weight: 600; }
+    .hint { color: #888; font-size: 12px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h1>登录助手测试</h1>
+  <p class="hint">在 MeoBrowser「登录助手」中为本页创建配置（主机填 localhost 或 file 打开时的 host），拾取下方字段后一键登录。</p>
+  <form id="loginForm" onsubmit="return doLogin(event)">
+    <label for="username">用户名</label>
+    <input id="username" name="username" type="text" autocomplete="username" />
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" />
+    <button type="submit" id="loginBtn">登录</button>
+  </form>
+  <div id="status"></div>
+  <script>
+    function doLogin(e) {
+      e.preventDefault();
+      var u = document.getElementById('username').value;
+      var p = document.getElementById('password').value;
+      var el = document.getElementById('status');
+      if (u === 'demo' && p === 'pass') {
+        el.textContent = '登录成功';
+        history.replaceState(null, '', '#ok');
+      } else {
+        el.textContent = '账号或密码错误（试试 demo / pass）';
+        el.style.color = '#c00';
+      }
+      return false;
+    }
+  </script>
+</body>
+</html>

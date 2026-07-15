@@ -18,6 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 下载按钮（组内首项，优先保持可见）；由窗口控制器设置 target/action 与角标。
 @property (nonatomic, strong, readonly) NSButton *downloadButton;
 
+/// 登录助手按钮；由窗口控制器设置 target/action 与点亮态。
+@property (nonatomic, strong, readonly, nullable) NSButton *loginAssistButton;
+
 /// 根据拖拽增量调整按钮组宽度（正值为变宽）。
 - (void)applyWidthDelta:(CGFloat)deltaX;
 

@@ -56,6 +56,17 @@
                                                  keyEquivalent:@"j"];
             downloads.target = nil;
 
+            NSMenuItem *loginAssist = [fileMenu addItemWithTitle:@"一键登录"
+                                                          action:@selector(oneClickLogin:)
+                                                   keyEquivalent:@"l"];
+            loginAssist.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            loginAssist.target = nil;
+
+            NSMenuItem *loginSettings = [fileMenu addItemWithTitle:@"登录助手…"
+                                                            action:@selector(showLoginAssistSettings:)
+                                                     keyEquivalent:@""];
+            loginSettings.target = nil;
+
             fileMenuItem.submenu = fileMenu;
             NSInteger editIndex = [self indexOfMenuTitled:@"编辑"];
             if (editIndex == NSNotFound) {

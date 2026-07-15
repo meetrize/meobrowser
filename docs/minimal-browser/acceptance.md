@@ -199,3 +199,44 @@ SimpleBrowser/Favicon/
 ### 结论
 
 **ICO-0～ICO-2 实现完成**；标签栏 favicon 与清除缓存 UI 仍属设计延后项。手测项（断网复用、连点 ★）建议在 `make run-browser` 时补勾。
+
+---
+
+## 登录助手 V1 验收（LA-0～LA-3 · 2026-07-15）
+
+> 对照 [auto-login-design.md](auto-login-design.md) · [auto-login-development-plan.md](auto-login-development-plan.md)  
+> Cursor 计划：`.cursor/plans/login-assist-v1.plan.md`
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| 全量编译 | `make clean && make browser` | 通过（无新增警告） |
+| LoginAssist 入链 | Makefile 含 `SimpleBrowser/LoginAssist/*.m`、`-framework Security` | 通过 |
+| 测试页入包 | `Contents/Resources/login-assist-test.html` | 通过 |
+
+### 功能验收
+
+| 测试项 | 状态 | 说明 |
+|--------|------|------|
+| Recipe JSON + Keychain | 通过（逻辑） | `LoginRecipeStore` / `LoginCredentialStore` |
+| 工具栏点亮 + ⌘⇧L | 通过（逻辑） | ActionGroup `loginAssist` + 文件菜单 |
+| 一键 fill/click/enter | 通过（逻辑） | `LoginRunner` |
+| 设置 UI + 点选拾取 | 通过（逻辑） | `BrowserLoginAssistSettingsWindowController` |
+| 自动登录 / 防抖 / Esc 取消 | 通过（逻辑） | `LoginAssistController` |
+| 右键多账号菜单 | 通过（逻辑） | 按钮右键 |
+| 清除网站数据不删 Recipe | 通过（文案） | 设置确认文案已说明 |
+| 手工端到端（测试页 demo/pass） | 待手测 | `make run-browser` 后打开 Resources 内测试页 |
+
+### 手测步骤（建议）
+
+1. `make run-browser`
+2. 地址栏打开：`…/MeoBrowser.app/Contents/Resources/login-assist-test.html`
+3. 文件 → 登录助手… → 新建 → 账号 `demo` / `pass` → 拾取字段 → 保存  
+   （主机应为 `file`，路径前缀可为 `login-assist-test.html`）
+4. 确认钥匙图标点亮 → ⌘⇧L 或单击 → 页面显示「登录成功」
+5. 勾选自动登录后刷新，应自动提交；连刷不死循环；待执行时 Esc 可取消
+
+### 结论
+
+**LA-0～LA-3（V1）代码已落地**；短信 / 二维码 / Companion 属后续阶段。

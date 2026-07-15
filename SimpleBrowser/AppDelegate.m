@@ -1,6 +1,7 @@
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "BrowserSettingsWindowController.h"
+#import "BrowserLoginAssistSettingsWindowController.h"
 #import "BrowserMenus.h"
 #import "BrowserAppInfo.h"
 #import "SBApplicationMenus.h"
@@ -11,6 +12,7 @@
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
     BrowserSettingsWindowController *_settingsWindowController;
+    BrowserLoginAssistSettingsWindowController *_loginAssistSettingsController;
     NSMutableArray<NSURL *> *_pendingExternalURLs;
     NSInteger _windowCascadeIndex;
 }
@@ -191,6 +193,21 @@
     [_settingsWindowController showWindow:nil];
     [_settingsWindowController.window center];
     [_settingsWindowController.window makeKeyAndOrderFront:nil];
+}
+
+- (void)showLoginAssistSettings:(id)sender {
+    (void)sender;
+    BrowserWindowController *keyBrowser = [self keyBrowserWindowController];
+    if (keyBrowser) {
+        [keyBrowser showLoginAssistSettings:sender];
+        return;
+    }
+    if (!_loginAssistSettingsController) {
+        _loginAssistSettingsController = [[BrowserLoginAssistSettingsWindowController alloc] init];
+    }
+    [_loginAssistSettingsController showWindow:nil];
+    [_loginAssistSettingsController.window center];
+    [_loginAssistSettingsController.window makeKeyAndOrderFront:nil];
 }
 
 - (void)browserWindowControllerWillClose:(BrowserWindowController *)controller {

@@ -200,7 +200,7 @@
     (void)sender;
     NSAlert *confirm = [[NSAlert alloc] init];
     confirm.messageText = @"清除网站数据？";
-    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。";
+    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。不会删除「登录助手」中保存的账号配置。";
     confirm.alertStyle = NSAlertStyleWarning;
     [confirm addButtonWithTitle:@"清除"];
     [confirm addButtonWithTitle:@"取消"];

@@ -47,6 +47,14 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipe.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipeStore.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginCredentialStore.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginRunner.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistScriptMessageProxy.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/BrowserLoginAssistSettingsWindowController.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \
@@ -63,9 +71,9 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool
@@ -135,6 +143,7 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	$(CC) $(BROWSER_CFLAGS) -isysroot $(SDK_PATH) $(BROWSER_SOURCES) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
 	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
+	cp "$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html" "$(BROWSER_RES_DIR)/login-assist-test.html"
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
 		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \

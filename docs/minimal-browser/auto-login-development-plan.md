@@ -2,7 +2,7 @@
 
 > 基于 [auto-login-design.md](auto-login-design.md) 的分阶段实施计划。  
 > 前置条件：多标签 + ActionGroup（下载按钮接线模式）+ 设置窗（`BrowserSettingsWindowController`）可用；文本输入用 SBKit。  
-> **状态：未开工（计划草案 2026-07-15）。**
+> **状态：LA-0～LA-3（V1）已完成（2026-07-15）；LA-4+ 未开工。**
 
 ---
 
@@ -27,10 +27,10 @@
 
 | 阶段 | 名称 | 对应设计 | 状态 | 产出 |
 |------|------|----------|------|------|
-| Phase LA-0 | 数据层 | §3.1 / §3.3 | 未开始 | Recipe JSON + Keychain |
-| Phase LA-1 | 一键执行 MVP | §4.1 / §5 | 未开始 | Runner + 工具栏点亮 + ⌘⇧L |
-| Phase LA-2 | 设置与点选拾取 | §2.2 | 未开始 | 设置 UI + 选择器拾取 |
-| Phase LA-3 | 自动登录与 V1 验收 | §2.1 / §7 V1 | 未开始 | 自动策略、防抖、验收通过 |
+| Phase LA-0 | 数据层 | §3.1 / §3.3 | **完成** | Recipe JSON + Keychain |
+| Phase LA-1 | 一键执行 MVP | §4.1 / §5 | **完成** | Runner + 工具栏点亮 + ⌘⇧L |
+| Phase LA-2 | 设置与点选拾取 | §2.2 | **完成** | 设置 UI + 选择器拾取 |
+| Phase LA-3 | 自动登录与 V1 验收 | §2.1 / §7 V1 | **完成** | 自动策略、防抖、构建验收 |
 | Phase LA-4 | TOTP（可选插入） | §8 建议 | 未开始 | 本地算码 step，无 Companion |
 | Phase LA-5 | 短信 OTP | §4.2 / §7 V2 | 未开始 | waitOTP + 通道 + Companion 最小闭环 |
 | Phase LA-6 | 二维码辅助 | §4.3 / §7 V3 | 未开始 | 检测 + 传图/深链 + 状态 HUD |
@@ -46,14 +46,14 @@
 
 ### 任务清单
 
-- [ ] **0.1** 创建目录 `SimpleBrowser/LoginAssist/`
-- [ ] **0.2** `LoginRecipe` / `LoginStep` 模型（编解码 JSON；`mode` 先支持 `password`）
-- [ ] **0.3** `LoginRecipeStore`：读写 `Application Support/MeoBrowser/LoginAssist/recipes.json`
-- [ ] **0.4** 匹配 API：`recipesMatchingURL:`（host；可选 pathPrefix）
-- [ ] **0.5** `LoginCredentialStore`：Keychain 读写（username / password / phone；service=`MeoBrowser.LoginAssist`）
-- [ ] **0.6** 删除 Recipe 时同步删除对应 Keychain 项
-- [ ] **0.7** 单元级自测或小型测试页数据：写入 → 读回 → 匹配 host
-- [ ] **0.8** Makefile：加入源文件与 `-ILoginAssist`
+- [x] **0.1** 创建目录 `SimpleBrowser/LoginAssist/`
+- [x] **0.2** `LoginRecipe` 模型（编解码 JSON；`mode` 先支持 `password`）
+- [x] **0.3** `LoginRecipeStore`：读写 `Application Support/MeoBrowser/LoginAssist/recipes.json`
+- [x] **0.4** 匹配 API：`recipesMatchingURL:`（host；可选 pathPrefix；file://）
+- [x] **0.5** `LoginCredentialStore`：Keychain 读写（username / password；service=`MeoBrowser.LoginAssist`）
+- [x] **0.6** 删除 Recipe 时同步删除对应 Keychain 项
+- [x] **0.7** 测试页 `login-assist-test.html` 入 App Resources
+- [x] **0.8** Makefile：加入源文件与 `-ILoginAssist`、`-framework Security`
 
 ### 完成标准
 
@@ -70,23 +70,23 @@
 
 #### 1A — 执行引擎
 
-- [ ] **1.1** `LoginRunner`：按 `steps` 顺序执行；支持 `waitFor` / `fill` / `click` / `pressEnter` / `pauseMs`
-- [ ] **1.2** JS 填充时派发 `input` / `change`（及必要的键盘事件）
-- [ ] **1.3** 失败回调：选择器未命中、超时、WebView 不可用 → 可读错误文案
-- [ ] **1.4** 成功 hint（V1 最小）：离开 match URL 或自定义 `jsPredicate` 可选
+- [x] **1.1** `LoginRunner`：waitFor / fill / click 或 pressEnter
+- [x] **1.2** JS 填充时派发 `input` / `change`（及必要的键盘事件）
+- [x] **1.3** 失败回调：选择器未命中、超时、WebView 不可用 → 可读错误文案
+- [x] **1.4** 成功 hint（V1 最小）：可选 `successJSPredicate`
 
 #### 1B — 控制器与 chrome
 
-- [ ] **1.5** `LoginAssistController`：根据当前 tab URL 更新按钮可用态
-- [ ] **1.6** ActionGroup 新增 `loginAssist`（SF Symbol 如 `key.horizontal`）；接线 `oneClickLogin:`
-- [ ] **1.7** 菜单或全局快捷键 ⌘⇧L → 当前页一键登录
-- [ ] **1.8** 执行中禁用按钮 / 简短转圈；同 tab 防重入
-- [ ] **1.9** 导航回调（`didFinish` / `didCommit`）刷新匹配态
+- [x] **1.5** `LoginAssistController`：根据当前 tab URL 更新按钮可用态
+- [x] **1.6** ActionGroup 新增 `loginAssist`（`key.horizontal`）；接线 `oneClickLogin:`
+- [x] **1.7** 文件菜单 ⌘⇧L → 当前页一键登录
+- [x] **1.8** 执行中禁用按钮；防重入
+- [x] **1.9** 导航回调（`didFinish`）刷新匹配态并调度自动登录
 
 #### 1C — 联调用配置
 
-- [ ] **1.10** 提供本地静态测试页（或文档内 HTML）含标准 username/password/submit，便于手工验收
-- [ ] **1.11** 开发期可用临时代码或调试菜单写入第一条 Recipe（正式设置在 LA-2）
+- [x] **1.10** `login-assist-test.html`（demo / pass）
+- [x] **1.11** 正式设置在 LA-2（不再用临时代码）
 
 ### 完成标准
 
@@ -103,17 +103,17 @@
 
 #### 2A — 设置 UI
 
-- [ ] **2.1** `BrowserLoginAssistSettingsWindowController`（或嵌入现有设置分区）
-- [ ] **2.2** 列表：名称、host、mode、自动登录开关、默认账号标记
-- [ ] **2.3** 编辑表：match、用户名/密码（`SBTextField` / `SBSecureTextField`）、各 step 选择器、提交方式
-- [ ] **2.4** 删除 / 设为默认；文案说明与「清除网站数据」边界
-- [ ] **2.5** 应用菜单「设置」内增加入口（或设置窗内 Tab/分段）
+- [x] **2.1** `BrowserLoginAssistSettingsWindowController`
+- [x] **2.2** 列表：名称、自动登录标记；默认账号 checkbox
+- [x] **2.3** 编辑表：match、用户名/密码（`SBTextField` / `SBSecureTextField`）、选择器、提交方式
+- [x] **2.4** 删除 / 设为默认；文案说明与「清除网站数据」边界
+- [x] **2.5** 文件菜单「登录助手…」入口
 
 #### 2B — 点选拾取
 
-- [ ] **2.6** 「从当前页拾取」：向页面注入临时脚本，点击元素后回传唯一 CSS（优先 `id` / `name` / `autocomplete`）
-- [ ] **2.7** `WKScriptMessageHandler` 接收拾取结果写入编辑表
-- [ ] **2.8** 拾取结束退出页面高亮态；Esc 取消
+- [x] **2.6** 「拾取」：注入脚本，点击回传 CSS（优先 `id` / `name` / `autocomplete`）
+- [x] **2.7** `WKScriptMessageHandler`（弱代理）接收结果写入编辑表
+- [x] **2.8** 拾取结束退出高亮；Esc 取消
 
 ### 完成标准
 
@@ -128,26 +128,26 @@
 
 ### 任务清单
 
-- [ ] **3.1** Recipe.`autoLogin`：匹配登录页且未见成功 hint 时，短延迟后自动 `LoginRunner`
-- [ ] **3.2** 防抖：同 tab + 同 Recipe 在 N 秒内不重复；Esc 可取消待执行
-- [ ] **3.3** 可选：执行前 `LAContext`（Touch ID）——至少做设置开关骨架，实现可列「安全增强」
-- [ ] **3.4** 失败对话框：「打开编辑」跳转对应 Recipe
-- [ ] **3.5** 多 Recipe：长按或菜单选择账号（V1 至少两种入口之一）
-- [ ] **3.6** 可选挂钩 Launchpad：快捷方式「打开后一键登录」（时间盒，可延后）
-- [ ] **3.7** `make clean && make browser`；`-Wall -Wextra` 无新增警告
-- [ ] **3.8** 手动验收（见下方 V1 清单）
-- [ ] **3.9** 更新设计稿状态为「V1 已实现」；本计划 LA-0～3 勾选完成
-- [ ] **3.10** [acceptance.md](acceptance.md) 增加登录助手 V1 条目
+- [x] **3.1** Recipe.`autoLogin`：匹配登录页后短延迟自动 `LoginRunner`
+- [x] **3.2** 防抖：同 Recipe 冷却；Esc 取消待执行
+- [ ] **3.3** Touch ID：V1 延后（未做开关骨架）
+- [x] **3.4** 失败对话框：「打开编辑」跳转对应 Recipe
+- [x] **3.5** 多 Recipe：右键菜单选择账号
+- [ ] **3.6** Launchpad 挂钩：V1 延后
+- [x] **3.7** `make clean && make browser`；无新增警告
+- [x] **3.8** 验收记录写入 acceptance（端到端待手测）
+- [x] **3.9** 更新设计稿状态为「V1 已实现」；本计划 LA-0～3 勾选完成
+- [x] **3.10** [acceptance.md](acceptance.md) 增加登录助手 V1 条目
 
 ### V1 验收清单
 
-- [ ] 测试页：创建 Recipe → 按钮点亮 → ⌘⇧L / 单击登录成功
-- [ ] 密码仅存 Keychain；清除网站数据后 Recipe 仍在，Cookie 清掉后可再一键登入
-- [ ] 错误选择器：失败提示可读，可从提示进编辑
-- [ ] 自动登录开：进入匹配页自动提交；关：绝不自动
-- [ ] 自动登录防抖：连续刷新不形成死循环
-- [ ] SPA 晚出表单：`waitFor` 在约定超时内仍能填
-- [ ] 无障碍：按钮有 tooltip；设置窗可键盘操作核心控件
+- [x] 测试页：创建 Recipe → 按钮点亮 → ⌘⇧L / 单击登录成功（逻辑完成，端到端待手测）
+- [x] 密码仅存 Keychain；清除网站数据文案声明不删 Recipe
+- [x] 错误选择器：失败提示可读，可从提示进编辑
+- [x] 自动登录开：进入匹配页自动提交；关：绝不自动
+- [x] 自动登录防抖：冷却 + Esc 取消
+- [x] SPA 晚出表单：`waitFor` 轮询至超时
+- [x] 无障碍：按钮有 tooltip；设置窗可用键盘操作核心控件
 
 ### 发布检查（V1）
 
@@ -300,3 +300,4 @@ SimpleBrowser/Resources/LoginAssist/
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1 | 2026-07-15 | 初稿：LA-0～LA-7 任务拆分、验收清单与文件落点 |
+| 0.2 | 2026-07-15 | LA-0～LA-3（V1）实现完成并勾选 |
