@@ -2,7 +2,7 @@
 
 > 目标：为常用工作站点提供可控的一键登录与可选自动登录，覆盖账号密码、短信验证码、二维码三类流程；本地优先、按站点配置，不做全网密码管理器。  
 > 状态：**V1 已实现**；**V2 Mac 管线 + Android Companion 工程已落地**（端到端待手测 · 2026-07-15）；V3 未实现  
-> 后续：[login-form-inline-design.md](login-form-inline-design.md)（表单内联助手 V1.5 设计草案）  
+> 后续：[login-form-inline-design.md](login-form-inline-design.md)（表单内联助手 V1.5 设计草案）· [captcha-assist-design.md](captcha-assist-design.md)（图形验证码智能助手设计草案）  
 > 关联：[auto-login-development-plan.md](auto-login-development-plan.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [design.md](design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md)
 
 ---
@@ -50,7 +50,7 @@
 | 工具栏点亮 + 自动登录策略 | **高** | ActionGroup 已有占位扩展位；URL 匹配规则清晰 |
 | 短信验证码闭环 | **中** | 浏览器侧填码易；难在手机收短信与安全传通道；需 Companion |
 | 二维码减负 | **中偏低** | 无统一 Web API；按站点策略 + 图像检测/剪贴板/Companion 组合；无法「零操作通吃」 |
-| 滑块 / 图形验证 / 风控 | **低（刻意不做）** | 对抗风控超出产品边界；失败时回退人手 |
+| 滑块 / 图形验证 / 风控 | **中（可选模块）** | 见 [captcha-assist-design.md](captcha-assist-design.md)；默认关、白名单、不保证通杀 |
 
 **结论**：V1 做「密码 Recipe + 一键/自动」即可交付核心价值；短信与二维码作为 V2/V3 增量，且把 Companion 设计成同一通道复用。
 
