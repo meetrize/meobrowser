@@ -104,23 +104,181 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     BOOL waiting = [info[@"waiting"] boolValue];
     BOOL buffered = [info[@"buffered"] boolValue];
     BOOL copied = [info[@"copiedToClipboard"] boolValue];
+    NSString *code = info[@"code"];
+    if (![code isKindOfClass:[NSString class]]) {
+        code = @"";
+    }
     NSWindow *window = self.windowController.window;
     if (!window) {
         return;
     }
-    NSString *message = nil;
+
+    // 一键登录正在 waitOTP：LoginRunner 会填入，这里只提示
     if (waiting) {
-        message = copied
-            ? @"已收到手机验证码，正在填入…已复制到剪贴板，可 ⌘V 粘贴。"
-            : @"已收到手机验证码，正在填入…";
-    } else if (buffered) {
-        message = copied
-            ? @"已收到验证码并复制到剪贴板。可 ⌘V 粘贴，或点「一键登录」自动填入。"
-            : @"已收到验证码（暂存）。请在登录页点「一键登录」填入验证码栏。";
+        NSString *message = copied
+            ? @"已收到手机验证码，正在按 Recipe 填入…已复制到剪贴板。"
+            : @"已收到手机验证码，正在按 Recipe 填入…";
+        [BrowserTransientToast showMessage:message inWindow:window duration:3.0];
+        return;
     }
-    if (message.length > 0) {
-        [BrowserTransientToast showMessage:message inWindow:window duration:3.2];
+
+    if (!buffered || code.length == 0) {
+        return;
     }
+
+    // 未在 wait：有 Recipe 则填验证码栏；否则插入光标处
+    [self applyIncomingOTPCode:code copiedToClipboard:copied];
+}
+
+/// Companion/粘贴等到码且当前没有 waiter 时：优先按 Recipe 填栏，否则插入光标位置。
+- (void)applyIncomingOTPCode:(NSString *)code copiedToClipboard:(BOOL)copied {
+    WKWebView *webView = self.windowController.webView;
+    NSURL *url = webView.URL;
+    LoginRecipe *recipe = url ? [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url] : nil;
+    BOOL hasOTPRecipe = (recipe.otpSelector.length > 0);
+
+    if (hasOTPRecipe && webView) {
+        __weak typeof(self) weakSelf = self;
+        [LoginRunner fillOTPCode:code
+                       intoRecipe:recipe
+                        inWebView:webView
+                     shouldSubmit:NO
+                       completion:^(BOOL success, NSError *error) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if (success) {
+                [[OTPInbox sharedInbox] markCodeConsumed:code];
+                NSString *msg = copied
+                    ? @"已按 Recipe 填入验证码（并已复制到剪贴板）"
+                    : @"已按 Recipe 填入验证码";
+                [BrowserTransientToast showMessage:msg
+                                          inWindow:strongSelf.windowController.window
+                                          duration:2.8];
+            } else {
+                // Recipe 填入失败则退化为光标插入
+                [strongSelf insertOTPAtCaret:code
+                           copiedToClipboard:copied
+                              failureReason:error.localizedDescription];
+            }
+        }];
+        return;
+    }
+
+    [self insertOTPAtCaret:code copiedToClipboard:copied failureReason:nil];
+}
+
+- (void)insertOTPAtCaret:(NSString *)code
+       copiedToClipboard:(BOOL)copied
+           failureReason:(NSString *)failureReason {
+    NSWindow *window = self.windowController.window;
+    WKWebView *webView = self.windowController.webView;
+
+    // 1) AppKit 第一响应者可插入文本（地址栏等）
+    NSResponder *resp = window.firstResponder;
+    if (resp && ![resp isKindOfClass:[WKWebView class]] &&
+        [resp respondsToSelector:@selector(insertText:)]) {
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [resp performSelector:@selector(insertText:) withObject:code];
+        #pragma clang diagnostic pop
+        [[OTPInbox sharedInbox] markCodeConsumed:code];
+        NSString *msg = copied
+            ? @"已在光标处插入验证码（并已复制到剪贴板）"
+            : @"已在光标处插入验证码";
+        if (failureReason.length > 0) {
+            msg = [NSString stringWithFormat:@"Recipe 填入失败，已插入光标处。%@", msg];
+        }
+        [BrowserTransientToast showMessage:msg inWindow:window duration:2.8];
+        return;
+    }
+
+    // 2) 网页 activeElement / 可编辑处插入
+    if (!webView) {
+        NSString *msg = copied
+            ? @"已复制验证码到剪贴板，请 ⌘V 粘贴"
+            : @"已收到验证码，请手动粘贴";
+        [BrowserTransientToast showMessage:msg inWindow:window duration:2.8];
+        return;
+    }
+
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:@[code ?: @""] options:0 error:nil];
+    NSString *arrayJSON = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"[\"\"]";
+    NSString *script = [NSString stringWithFormat:
+        @"(function(){\n"
+         "  const code = (%@)[0];\n"
+         "  function dispatch(el) {\n"
+         "    el.dispatchEvent(new Event('input', {bubbles:true}));\n"
+         "    el.dispatchEvent(new Event('change', {bubbles:true}));\n"
+         "  }\n"
+         "  const el = document.activeElement;\n"
+         "  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {\n"
+         "    const start = (typeof el.selectionStart === 'number') ? el.selectionStart : (el.value||'').length;\n"
+         "    const end = (typeof el.selectionEnd === 'number') ? el.selectionEnd : start;\n"
+         "    const v = el.value || '';\n"
+         "    el.focus();\n"
+         "    el.value = v.slice(0, start) + code + v.slice(end);\n"
+         "    try { el.setSelectionRange(start + code.length, start + code.length); } catch (e) {}\n"
+         "    dispatch(el);\n"
+         "    return 'input';\n"
+         "  }\n"
+         "  if (el && el.isContentEditable) {\n"
+         "    el.focus();\n"
+         "    try {\n"
+         "      if (document.execCommand('insertText', false, code)) return 'editable';\n"
+         "    } catch (e) {}\n"
+         "    el.textContent = (el.textContent || '') + code;\n"
+         "    dispatch(el);\n"
+         "    return 'editable-fallback';\n"
+         "  }\n"
+         "  const guess = document.querySelector(\n"
+         "    'input[autocomplete=\"one-time-code\"],input[name*=\"otp\"],input[name*=\"code\"],'\n"
+         "    + 'input[placeholder*=\"验证码\"],input[type=\"tel\"]'\n"
+         "  );\n"
+         "  if (guess) {\n"
+         "    guess.focus();\n"
+         "    guess.value = code;\n"
+         "    dispatch(guess);\n"
+         "    return 'guess';\n"
+         "  }\n"
+         "  return 'none';\n"
+         "})()",
+        arrayJSON];
+
+    __weak typeof(self) weakSelf = self;
+    [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        NSString *status = [result isKindOfClass:[NSString class]] ? (NSString *)result : @"none";
+        BOOL ok = error == nil && status.length > 0 && ![status isEqualToString:@"none"];
+        if (ok) {
+            [[OTPInbox sharedInbox] markCodeConsumed:code];
+        }
+        NSString *msg = nil;
+        if (ok) {
+            msg = copied
+                ? @"已在光标处插入验证码（并已复制到剪贴板）"
+                : @"已在光标处插入验证码";
+            if ([status isEqualToString:@"guess"]) {
+                msg = copied
+                    ? @"已填入疑似验证码输入框（并已复制到剪贴板）"
+                    : @"已填入疑似验证码输入框";
+            }
+        } else {
+            msg = copied
+                ? @"已复制验证码到剪贴板，请点输入框后 ⌘V"
+                : @"已收到验证码，请手动粘贴";
+        }
+        if (failureReason.length > 0 && ok) {
+            msg = [NSString stringWithFormat:@"Recipe 填入失败，已改插入光标处。"];
+        }
+        [BrowserTransientToast showMessage:msg
+                                  inWindow:strongSelf.windowController.window
+                                  duration:2.8];
+    }];
 }
 
 - (void)updateForURL:(NSURL *)url {

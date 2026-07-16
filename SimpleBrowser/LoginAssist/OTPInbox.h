@@ -9,7 +9,7 @@ extern OTPInboxSource const OTPInboxSourceClipboard;
 extern OTPInboxSource const OTPInboxSourceMock;
 
 extern NSNotificationName const OTPInboxDidReceiveCodeNotification;
-/// userInfo: source, waiting, buffered, copiedToClipboard (NSNumber bool)
+/// userInfo: source, code, waiting, buffered, copiedToClipboard (NSNumber bool)
 
 typedef void (^OTPInboxWaitCompletion)(NSString * _Nullable code, NSError * _Nullable error);
 
@@ -30,6 +30,9 @@ typedef void (^OTPInboxWaitCompletion)(NSString * _Nullable code, NSError * _Nul
                     completion:(OTPInboxWaitCompletion)completion;
 
 - (void)cancelWait;
+
+/// 将指定验证码标为已使用，并清除 pending（自动填入后调用，避免再次被 wait 取走）。
+- (void)markCodeConsumed:(NSString *)code;
 
 /// 从文本中提取最后一组 4～8 位数字；无则 nil。
 + (nullable NSString *)extractOTPFromText:(NSString *)text;

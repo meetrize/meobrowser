@@ -142,6 +142,7 @@ NSNotificationName const OTPInboxDidReceiveCodeNotification = @"OTPInboxDidRecei
                                                             object:self
                                                           userInfo:@{
                                                               @"source": source ?: OTPInboxSourceMock,
+                                                              @"code": normalized,
                                                               @"waiting": @YES,
                                                               @"buffered": @NO,
                                                               @"copiedToClipboard": @(copied),
@@ -161,11 +162,22 @@ NSNotificationName const OTPInboxDidReceiveCodeNotification = @"OTPInboxDidRecei
                                                         object:self
                                                       userInfo:@{
                                                           @"source": source ?: OTPInboxSourceMock,
+                                                          @"code": normalized,
                                                           @"waiting": @NO,
                                                           @"buffered": @YES,
                                                           @"copiedToClipboard": @(copied),
                                                       }];
     return YES;
+}
+
+- (void)markCodeConsumed:(NSString *)code {
+    NSString *normalized = [code stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (normalized.length == 0) {
+        return;
+    }
+    self.pending = nil;
+    self.consumedCode = normalized;
+    self.consumedAt = [NSDate date].timeIntervalSince1970;
 }
 
 - (void)clearWaitStateKeepingPending:(BOOL)keepPending {

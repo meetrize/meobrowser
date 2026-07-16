@@ -188,6 +188,33 @@ static NSInteger gLoginRunnerGeneration = 0;
                       completion:completion];
 }
 
++ (void)fillOTPCode:(NSString *)code
+          intoRecipe:(LoginRecipe *)recipe
+           inWebView:(WKWebView *)webView
+        shouldSubmit:(BOOL)shouldSubmit
+          completion:(LoginRunnerCompletion)completion {
+    if (!webView || code.length == 0 || recipe.otpSelector.length == 0) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                               code:9
+                                           userInfo:@{NSLocalizedDescriptionKey: @"无法填入验证码：缺少页面或选择器"}]);
+        }
+        return;
+    }
+    // 不递增 generation，避免打断正在 waitOTP 的一键登录流程
+    NSInteger generation = gLoginRunnerGeneration;
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
+    NSInteger waitTimeout = recipe.waitTimeoutMs > 0 ? recipe.waitTimeoutMs : 8000;
+    [self evaluateStepsInWebView:webView
+                           recipe:recipe
+                      credentials:credentials
+                          fillOTP:code
+                         doSubmit:shouldSubmit
+                     waitTimeoutMs:waitTimeout
+                        generation:generation
+                        completion:completion];
+}
+
 + (BOOL)isBenignJavaScriptBridgeError:(NSError *)error {
     if (!error) {
         return NO;

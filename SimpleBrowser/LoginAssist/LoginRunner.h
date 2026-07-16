@@ -40,6 +40,13 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
          shouldSubmit:(BOOL)shouldSubmit
            completion:(nullable LoginRunnerCompletion)completion;
 
+/// 仅填入验证码栏（不重跑帐密/发码），用于 Companion 推码到达且页面已有 recipe。
++ (void)fillOTPCode:(NSString *)code
+          intoRecipe:(LoginRecipe *)recipe
+           inWebView:(WKWebView *)webView
+        shouldSubmit:(BOOL)shouldSubmit
+          completion:(nullable LoginRunnerCompletion)completion;
+
 + (void)cancelAll;
 
 @end
