@@ -3,6 +3,17 @@ package com.meobrowser.companion.pairing
 import android.content.Context
 import java.util.UUID
 
+enum class CompanionAuthMode {
+    PAIRING_CODE,
+    SECURITY_CODE;
+
+    companion object {
+        fun fromStorage(value: String?): CompanionAuthMode {
+            return if (value == SECURITY_CODE.name) SECURITY_CODE else PAIRING_CODE
+        }
+    }
+}
+
 class PairingPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("meo_companion", Context.MODE_PRIVATE)
 
@@ -33,6 +44,15 @@ class PairingPrefs(context: Context) {
         get() = prefs.getString(KEY_LAST_PAIRING_CODE, null)
         set(value) = prefs.edit().putString(KEY_LAST_PAIRING_CODE, value).apply()
 
+    /** 固定安全码（安全码模式） */
+    var securityCode: String?
+        get() = prefs.getString(KEY_SECURITY_CODE, null)
+        set(value) = prefs.edit().putString(KEY_SECURITY_CODE, value).apply()
+
+    var authMode: CompanionAuthMode
+        get() = CompanionAuthMode.fromStorage(prefs.getString(KEY_AUTH_MODE, null))
+        set(value) = prefs.edit().putString(KEY_AUTH_MODE, value.name).apply()
+
     /** 上次在表单里填写的手动主机，如 192.168.1.10:12345 */
     var lastHostOverride: String?
         get() = prefs.getString(KEY_LAST_HOST_OVERRIDE, null)
@@ -43,6 +63,14 @@ class PairingPrefs(context: Context) {
         val port = lastPort
         if (!host.isNullOrBlank() && port > 0) return "$host:$port"
         return lastHostOverride
+    }
+
+    /** 是否具备安全码模式下自动连接的条件 */
+    fun canAutoConnectSecurityMode(): Boolean {
+        if (authMode != CompanionAuthMode.SECURITY_CODE) return false
+        val hasCred = !deviceToken.isNullOrBlank() || !securityCode.isNullOrBlank()
+        val hasHost = (!lastHost.isNullOrBlank() && lastPort > 0) || !lastHostOverride.isNullOrBlank()
+        return hasCred && hasHost
     }
 
     fun clearSession() {
@@ -60,5 +88,7 @@ class PairingPrefs(context: Context) {
         private const val KEY_LAST_PORT = "last_port"
         private const val KEY_LAST_PAIRING_CODE = "last_pairing_code"
         private const val KEY_LAST_HOST_OVERRIDE = "last_host_override"
+        private const val KEY_AUTH_MODE = "auth_mode"
+        private const val KEY_SECURITY_CODE = "security_code"
     }
 }

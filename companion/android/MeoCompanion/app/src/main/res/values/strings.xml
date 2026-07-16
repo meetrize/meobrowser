@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Meo Companion</string>
-    <string name="pair_hint">在 MeoBrowser「登录助手」设置中查看配对码，输入后连接。</string>
+    <string name="pair_hint">在 MeoBrowser「登录助手」中查看配对码或设定安全码，选择相同连接方式后连接。</string>
+    <string name="pair_hint_pairing">临时配对码：在 Mac「登录助手」复制 6 位码（5 分钟有效），输入后连接。</string>
+    <string name="pair_hint_security">固定安全码：与 Mac 设定的安全码一致；保存主机地址后，打开 App 会自动连接。</string>
     <string name="privacy_note">仅上传验证码与时间戳，不上传短信全文。</string>
 </resources>

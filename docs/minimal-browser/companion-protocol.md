@@ -10,7 +10,9 @@
 |----|-----|
 | 类型 | `_meologin._tcp.` |
 | 名称 | `MeoBrowser`（可带主机后缀） |
-| 端口 | Mac 动态监听，经 TXT/`NSNetService` 发布 |
+| 端口 | **固定 sticky 端口**（首次启动写入 UserDefaults；仅用户在设置中确认「更换端口」后才变） |
+
+Android 应缓存 `lastHost:lastPort`，依赖 sticky 端口做快速重连；Bonjour 作兜底发现。
 
 ## 帧格式
 
@@ -20,6 +22,15 @@ UTF-8 JSON payload（length 字节）
 ```
 
 单帧上限 64 KiB。
+
+## 鉴权模式（Mac / Android 需一致）
+
+| 模式 | 说明 |
+|------|------|
+| 临时配对码 | 6 位数字，5 分钟有效，成功后作废（一次性） |
+| 固定安全码 | 用户自设 4～12 位字母/数字，可重复使用；适合日常自动连接 |
+
+线协议统一使用 `pairingToken` 字段承载配对码或安全码；Mac 按当前鉴权模式解释。
 
 ## 消息
 
@@ -64,10 +75,10 @@ UTF-8 JSON payload（length 字节）
 
 ## 配对规则
 
-1. Mac 生成 6 位数字 `pairingToken`，默认有效 5 分钟，可刷新。  
-2. Android 输入配对码并 `hello`；校验通过后 Mac 签发长期 `deviceToken` 并双方保存。  
+1. **临时配对码**：Mac 生成 6 位数字 `pairingToken`，默认有效 5 分钟，可刷新；校验通过后签发长期 `deviceToken` 并清除 pending 码。  
+2. **固定安全码**：用户在 Mac / Android 设定相同安全码；`pairingToken` 与安全码匹配即签发/更新 `deviceToken`，**安全码不清除**。Android 在安全码模式下打开 App 应默认自动连接。  
 3. 之后 `otp` 必须带有效 `deviceToken`。  
-4. Mac「注销设备」删除 token；需重新配对。
+4. Mac「注销设备」删除 token；临时配对码需重新配对，安全码模式可用同一安全码再次连接。
 
 ## OTP 接受规则（Mac `OTPInbox`）
 

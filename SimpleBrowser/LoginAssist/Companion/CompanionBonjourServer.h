@@ -15,8 +15,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, weak, nullable) id<CompanionBonjourServerDelegate> delegate;
 @property (nonatomic, assign, readonly) NSInteger listeningPort;
+@property (nonatomic, assign, readonly) NSInteger preferredPort;
 @property (nonatomic, assign, readonly, getter=isRunning) BOOL running;
 
+/// preferredPort > 0 时尝试绑定该端口；为 0 则由系统分配临时端口。
+- (BOOL)startWithPreferredPort:(NSInteger)preferredPort error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)startWithError:(NSError * _Nullable * _Nullable)error;
 - (void)stop;
 - (void)sendJSON:(NSDictionary *)json toConnectionID:(NSString *)connectionID;

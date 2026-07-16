@@ -13,6 +13,8 @@ import androidx.appcompat.app.AppCompatActivity
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
 import com.meobrowser.companion.databinding.ActivitySetupWizardBinding
+import com.meobrowser.companion.pairing.CompanionAuthMode
+import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.setup.SetupChecker
 import com.meobrowser.companion.sms.OtpNotificationListener
 
@@ -162,15 +164,24 @@ class SetupWizardActivity : AppCompatActivity() {
             }
             else -> {
                 val connected = CompanionSession.client.isConnected
+                val prefs = PairingPrefs(this)
+                val security = prefs.authMode == CompanionAuthMode.SECURITY_CODE
                 binding.wizardHeadline.text = "⑥ 配对 MeoBrowser"
-                binding.wizardBody.text =
+                binding.wizardBody.text = if (security) {
+                    "1. Mac「登录助手」切换到「固定安全码」并保存安全码\n" +
+                        "2. 本页填写相同安全码与主机 IP:端口\n" +
+                        "3. 连接成功后，以后打开 App 会自动连接\n\n" +
+                        "也可在主界面切换「临时配对码 / 固定安全码」。"
+                } else {
                     "1. Mac 打开「文件 → 登录助手…」\n" +
                         "2. 底部查看配对码（新设备可点「刷新配对码」）\n" +
                         "3. 在下方输入配对码并连接\n\n" +
-                        "配对成功后保持连接；登录页一键登录等待验证码时，短信会自动推送。"
+                        "日常建议改用「固定安全码」模式，打开即可自动连接。"
+                }
                 binding.wizardStatus.text = "状态：${CompanionSession.statusText}"
                 binding.wizardPairingLayout.visibility = View.VISIBLE
                 binding.wizardHostLayout.visibility = View.VISIBLE
+                binding.wizardPairingLayout.hint = if (security) "固定安全码" else "配对码（6 位）"
                 binding.wizardActionButton.text = if (connected) "已连接，完成向导" else "连接 / 配对"
                 binding.wizardNextButton.text = "完成"
             }
@@ -227,16 +238,27 @@ class SetupWizardActivity : AppCompatActivity() {
                 if (CompanionSession.client.isConnected) {
                     finishWizard()
                 } else {
+                    val prefs = PairingPrefs(this)
                     val code = binding.wizardPairingInput.text?.toString()?.trim().orEmpty()
                     val host = binding.wizardHostInput.text?.toString()?.trim().orEmpty()
+                    val security = prefs.authMode == CompanionAuthMode.SECURITY_CODE
                     if (code.isBlank() && !SetupChecker.hasDeviceToken(this)) {
-                        Toast.makeText(this, "请输入 Mac 上的 6 位配对码", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this,
+                            if (security) "请输入 Mac 上的固定安全码" else "请输入 Mac 上的 6 位配对码",
+                            Toast.LENGTH_SHORT
+                        ).show()
                         return
+                    }
+                    if (host.isNotBlank()) prefs.lastHostOverride = host
+                    if (code.isNotBlank()) {
+                        if (security) prefs.securityCode = code else prefs.lastPairingCode = code
                     }
                     CompanionConnectionService.startConnect(
                         this,
                         pairingCode = code.ifBlank { null },
-                        hostOverride = host.ifBlank { null }
+                        hostOverride = host.ifBlank { null },
+                        forceSecurityCode = if (security) prefs.securityCode else null
                     )
                     Toast.makeText(this, "正在连接…", Toast.LENGTH_SHORT).show()
                 }

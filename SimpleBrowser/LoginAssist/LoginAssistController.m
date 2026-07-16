@@ -22,6 +22,10 @@ static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
 /// kVK_ANSI_V — 模拟 ⌘V 粘贴（多格验证码框等场景比 insertText / JS 赋值更可靠）
 static const unsigned short kOTPCommandVKeyCode = 0x09;
+/// kVK_Return — 粘贴后默认回车提交；多格 OTP（豆包等粘贴即跳转）会跳过
+static const unsigned short kOTPReturnKeyCode = 0x24;
+/// 粘贴后稍等，让页面完成 paste 分发再回车（过短会导致回车无效）
+static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
 @interface LoginAssistController ()
 @property (nonatomic, strong) NSArray<LoginRecipe *> *matchedRecipes;
@@ -201,6 +205,18 @@ static const unsigned short kOTPCommandVKeyCode = 0x09;
     [pb setString:code forType:NSPasteboardTypeString];
 }
 
+/// 第一响应者是否在网页内容内（WK 内部 view，而非地址栏等）。
+- (BOOL)isWebContentFirstResponderInWindow:(NSWindow *)window webView:(WKWebView *)webView {
+    if (!window || !webView) {
+        return NO;
+    }
+    NSResponder *responder = window.firstResponder;
+    if (![responder isKindOfClass:[NSView class]]) {
+        return NO;
+    }
+    return [(NSView *)responder isDescendantOf:webView];
+}
+
 /// 向当前窗口投递 ⌘V 键事件，走与用户手动粘贴相同的快捷键路径。
 - (BOOL)postCommandVPasteInWindow:(NSWindow *)window {
     if (!window) {
@@ -246,24 +262,185 @@ static const unsigned short kOTPCommandVKeyCode = 0x09;
     return YES;
 }
 
+/// 向当前窗口投递回车，用于单框验证码粘贴后的提交。
+- (BOOL)postReturnKeyInWindow:(NSWindow *)window {
+    if (!window) {
+        return NO;
+    }
+    [window makeKeyAndOrderFront:nil];
+
+    NSTimeInterval timestamp = NSProcessInfo.processInfo.systemUptime;
+    NSUInteger windowNumber = window.windowNumber;
+    NSEvent *keyDown = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                        location:NSZeroPoint
+                                   modifierFlags:0
+                                       timestamp:timestamp
+                                    windowNumber:windowNumber
+                                         context:nil
+                                      characters:@"\r"
+                     charactersIgnoringModifiers:@"\r"
+                                       isARepeat:NO
+                                         keyCode:kOTPReturnKeyCode];
+    if (!keyDown) {
+        return NO;
+    }
+    NSEvent *keyUp = [NSEvent keyEventWithType:NSEventTypeKeyUp
+                                      location:NSZeroPoint
+                                 modifierFlags:0
+                                     timestamp:timestamp
+                                  windowNumber:windowNumber
+                                       context:nil
+                                    characters:@"\r"
+               charactersIgnoringModifiers:@"\r"
+                                     isARepeat:NO
+                                       keyCode:kOTPReturnKeyCode];
+    [NSApp sendEvent:keyDown];
+    if (keyUp) {
+        [NSApp sendEvent:keyUp];
+    }
+    return YES;
+}
+
+/// 检测豆包式多格验证码：粘贴即自动提交，再按回车会干扰跳转。
+- (void)detectAutoSubmitOTPFieldInWebView:(WKWebView *)webView
+                               completion:(void (^)(BOOL shouldSkipEnter))completion {
+    if (!webView || !completion) {
+        if (completion) {
+            completion(NO);
+        }
+        return;
+    }
+    NSString *script =
+        @"(function(){\n"
+         "  const el = document.activeElement;\n"
+         "  if (!el) return false;\n"
+         "  function maxLen(node) {\n"
+         "    const m = node.getAttribute && node.getAttribute('maxlength');\n"
+         "    if (m == null || m === '') return null;\n"
+         "    const n = parseInt(m, 10);\n"
+         "    return Number.isFinite(n) ? n : null;\n"
+         "  }\n"
+         "  const root = el.closest('form') || el.parentElement || document;\n"
+         "  const candidates = Array.from(root.querySelectorAll('input')).filter(function(inp) {\n"
+         "    if (inp.disabled || inp.readOnly) return false;\n"
+         "    const t = (inp.type || 'text').toLowerCase();\n"
+         "    if (t !== 'text' && t !== 'tel' && t !== 'number' && t !== 'password' && t !== 'search') return false;\n"
+         "    const ml = maxLen(inp);\n"
+         "    return ml === 1 || ml === 0;\n"
+         "  });\n"
+         "  // 4～8 个单字符框：豆包等粘贴后会自动进入，勿再回车\n"
+         "  if (candidates.length >= 4 && candidates.length <= 8) {\n"
+         "    if (candidates.indexOf(el) !== -1) return true;\n"
+         "    if (el.closest && candidates.some(function(c) { return el.contains(c) || c.contains(el); })) return true;\n"
+         "  }\n"
+         "  // 焦点在单字框且同级还有多个单字框\n"
+         "  const ml = maxLen(el);\n"
+         "  if ((el.tagName === 'INPUT') && (ml === 1 || ml === 0)) {\n"
+         "    const parent = el.parentElement;\n"
+         "    if (parent) {\n"
+         "      const sibs = Array.from(parent.querySelectorAll('input')).filter(function(inp) {\n"
+         "        const m = maxLen(inp);\n"
+         "        return m === 1 || m === 0;\n"
+         "      });\n"
+         "      if (sibs.length >= 4) return true;\n"
+         "    }\n"
+         "  }\n"
+         "  return false;\n"
+         "})()";
+    [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        BOOL skip = (error == nil && [result respondsToSelector:@selector(boolValue)] && [result boolValue]);
+        completion(skip);
+    }];
+}
+
+/// ⌘V 成功后：网页内默认再回车；多格自动提交页跳过回车。
+- (void)finishOTPPasteWithOptionalEnterForCode:(NSString *)code
+                             copiedToClipboard:(BOOL)copied
+                                failureReason:(NSString *)failureReason
+                                       window:(NSWindow *)window
+                                      webView:(WKWebView *)webView {
+    [[OTPInbox sharedInbox] markCodeConsumed:code];
+
+    BOOL inWeb = [self isWebContentFirstResponderInWindow:window webView:webView];
+    if (!inWeb || !webView) {
+        NSString *status = copied
+            ? @"已通过 ⌘V 粘贴（并已复制到剪贴板）"
+            : @"已通过 ⌘V 粘贴";
+        if (failureReason.length > 0) {
+            status = @"Recipe 填入失败，已改 ⌘V 粘贴";
+        }
+        [self showOTPFollowUpToastWithCode:code status:status];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [self detectAutoSubmitOTPFieldInWebView:webView completion:^(BOOL shouldSkipEnter) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (shouldSkipEnter) {
+            NSString *status = copied
+                ? @"已通过 ⌘V 粘贴（多格验证码，未回车以免打断自动进入）"
+                : @"已通过 ⌘V 粘贴（多格验证码，未回车）";
+            if (failureReason.length > 0) {
+                status = @"Recipe 填入失败，已改 ⌘V 粘贴（未回车）";
+            }
+            [strongSelf showOTPFollowUpToastWithCode:code status:status];
+            return;
+        }
+
+        NSWindow *w = strongSelf.windowController.window;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kOTPPasteThenEnterDelay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) innerSelf = weakSelf;
+            if (!innerSelf) {
+                return;
+            }
+            NSWindow *liveWindow = innerSelf.windowController.window ?: w;
+            // 粘贴后页面若已自动跳转/失焦，不再回车
+            WKWebView *liveWeb = innerSelf.windowController.webView;
+            if (![innerSelf isWebContentFirstResponderInWindow:liveWindow webView:liveWeb]) {
+                NSString *status = copied
+                    ? @"已通过 ⌘V 粘贴（页面已继续，未回车）"
+                    : @"已通过 ⌘V 粘贴（页面已继续，未回车）";
+                [innerSelf showOTPFollowUpToastWithCode:code status:status];
+                return;
+            }
+            BOOL sent = [innerSelf postReturnKeyInWindow:liveWindow];
+            NSString *status = nil;
+            if (sent) {
+                status = copied
+                    ? @"已通过 ⌘V 粘贴并回车（并已复制到剪贴板）"
+                    : @"已通过 ⌘V 粘贴并回车";
+                if (failureReason.length > 0) {
+                    status = @"Recipe 填入失败，已改 ⌘V 粘贴并回车";
+                }
+            } else {
+                status = copied
+                    ? @"已通过 ⌘V 粘贴（并已复制到剪贴板）"
+                    : @"已通过 ⌘V 粘贴";
+            }
+            [innerSelf showOTPFollowUpToastWithCode:code status:status];
+        });
+    }];
+}
+
 - (void)insertOTPAtCaret:(NSString *)code
        copiedToClipboard:(BOOL)copied
            failureReason:(NSString *)failureReason {
     NSWindow *window = self.windowController.window;
     WKWebView *webView = self.windowController.webView;
 
-    // 1) 优先 ⌘V：多格验证码（如豆包）等仅响应快捷键粘贴的表单
+    // 1) 优先 ⌘V：多格验证码（如豆包）等仅响应快捷键粘贴的表单；成功后再视情况回车
     if (window && code.length > 0) {
         [self ensureOTPCodeOnPasteboard:code];
         if ([self postCommandVPasteInWindow:window]) {
-            [[OTPInbox sharedInbox] markCodeConsumed:code];
-            NSString *status = copied
-                ? @"已通过 ⌘V 粘贴（并已复制到剪贴板）"
-                : @"已通过 ⌘V 粘贴";
-            if (failureReason.length > 0) {
-                status = @"Recipe 填入失败，已改 ⌘V 粘贴";
-            }
-            [self showOTPFollowUpToastWithCode:code status:status];
+            [self finishOTPPasteWithOptionalEnterForCode:code
+                                       copiedToClipboard:copied
+                                          failureReason:failureReason
+                                                 window:window
+                                                webView:webView];
             return;
         }
     }

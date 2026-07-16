@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.meobrowser.companion.R
+import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.ui.MainActivity
 import org.json.JSONObject
@@ -38,8 +39,9 @@ class CompanionConnectionService : Service() {
             ACTION_CONNECT -> {
                 val pairingCode = intent.getStringExtra(EXTRA_PAIRING_CODE)
                 val hostOverride = intent.getStringExtra(EXTRA_HOST_OVERRIDE)
+                val forceSecurityCode = intent.getStringExtra(EXTRA_FORCE_SECURITY_CODE)
                 startForeground(NOTIF_ID, buildNotification("正在连接…"))
-                executor.execute { connectInternal(pairingCode, hostOverride) }
+                executor.execute { connectInternal(pairingCode, hostOverride, forceSecurityCode) }
             }
             ACTION_DISCONNECT -> {
                 CompanionSession.userRequestedDisconnect = true
@@ -60,17 +62,32 @@ class CompanionConnectionService : Service() {
                 CompanionSession.sendOtp(code)
             }
             else -> {
-                // 被系统重启时尝试用已保存 token 重连
-                if (!prefs.deviceToken.isNullOrBlank() && !client.isConnected) {
-                    startForeground(NOTIF_ID, buildNotification("正在重连…"))
-                    executor.execute { connectInternal(null, null) }
+                // 被系统重启时尝试重连：优先 deviceToken；安全码模式可回退用安全码
+                if (!client.isConnected) {
+                    val canToken = !prefs.deviceToken.isNullOrBlank()
+                    val canSecurity = prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
+                        !prefs.securityCode.isNullOrBlank()
+                    if (canToken || canSecurity) {
+                        startForeground(NOTIF_ID, buildNotification("正在重连…"))
+                        executor.execute {
+                            connectInternal(
+                                pairingCode = if (canToken) null else prefs.securityCode,
+                                hostOverride = null,
+                                forceSecurityCode = prefs.securityCode
+                            )
+                        }
+                    }
                 }
             }
         }
         return START_STICKY
     }
 
-    private fun connectInternal(pairingCode: String?, hostOverride: String?) {
+    private fun connectInternal(
+        pairingCode: String?,
+        hostOverride: String?,
+        forceSecurityCode: String? = null
+    ) {
         try {
             CompanionSession.userRequestedDisconnect = false
             // 已连接且只需保活：不重复建连
@@ -85,8 +102,22 @@ class CompanionConnectionService : Service() {
             prefs.lastHost = host
             prefs.lastPort = port
             prefs.lastHostOverride = "$host:$port"
-            if (!pairingCode.isNullOrBlank()) {
-                prefs.lastPairingCode = pairingCode
+
+            val securityMode = prefs.authMode == CompanionAuthMode.SECURITY_CODE
+            val codeToSend = when {
+                !pairingCode.isNullOrBlank() -> pairingCode
+                securityMode && !forceSecurityCode.isNullOrBlank() && prefs.deviceToken.isNullOrBlank() ->
+                    forceSecurityCode
+                securityMode && prefs.deviceToken.isNullOrBlank() && !prefs.securityCode.isNullOrBlank() ->
+                    prefs.securityCode
+                else -> null
+            }
+            if (!codeToSend.isNullOrBlank()) {
+                if (securityMode) {
+                    prefs.securityCode = codeToSend
+                } else {
+                    prefs.lastPairingCode = codeToSend
+                }
             }
 
             val hello = JSONObject()
@@ -94,13 +125,16 @@ class CompanionConnectionService : Service() {
             hello.put("type", "hello")
             hello.put("deviceId", prefs.deviceId)
             val token = prefs.deviceToken
-            if (!token.isNullOrBlank() && pairingCode.isNullOrBlank()) {
+            if (!token.isNullOrBlank() && codeToSend.isNullOrBlank()) {
                 hello.put("deviceToken", token)
             } else {
-                if (pairingCode.isNullOrBlank()) {
-                    throw IllegalStateException("需要配对码")
+                val code = codeToSend
+                if (code.isNullOrBlank()) {
+                    throw IllegalStateException(
+                        if (securityMode) "需要安全码" else "需要配对码"
+                    )
                 }
-                hello.put("pairingToken", pairingCode)
+                hello.put("pairingToken", code)
             }
             client.send(hello)
             CompanionSession.statusText = "已连接 $host:$port，等待 hello_ok"
@@ -149,8 +183,29 @@ class CompanionConnectionService : Service() {
                 CompanionSession.notifyStatus()
             }
             "error" -> {
-                CompanionSession.statusText = "错误：${json.optString("message")}"
+                val message = json.optString("message")
+                CompanionSession.statusText = "错误：$message"
                 CompanionSession.notifyStatus()
+                // 安全码模式：token 失效时清掉并用安全码重连
+                if (prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
+                    message.contains("deviceToken", ignoreCase = true) &&
+                    !prefs.securityCode.isNullOrBlank()
+                ) {
+                    prefs.deviceToken = null
+                    executor.execute {
+                        try {
+                            Thread.sleep(300)
+                            if (CompanionSession.userRequestedDisconnect) return@execute
+                            connectInternal(
+                                pairingCode = prefs.securityCode,
+                                hostOverride = null,
+                                forceSecurityCode = prefs.securityCode
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "security re-pair failed", e)
+                        }
+                    }
+                }
             }
         }
     }
@@ -162,13 +217,19 @@ class CompanionConnectionService : Service() {
         CompanionSession.statusText = "连接中断，尝试重连…"
         CompanionSession.notifyStatus()
         updateNotification(CompanionSession.statusText)
-        // 有 deviceToken 时自动重连，不 stopSelf，保持前台服务
-        if (!prefs.deviceToken.isNullOrBlank()) {
+        val canToken = !prefs.deviceToken.isNullOrBlank()
+        val canSecurity = prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
+            !prefs.securityCode.isNullOrBlank()
+        if (canToken || canSecurity) {
             executor.execute {
                 try {
                     Thread.sleep(400)
                     if (CompanionSession.userRequestedDisconnect || client.isConnected) return@execute
-                    connectInternal(null, null)
+                    connectInternal(
+                        pairingCode = if (canToken) null else prefs.securityCode,
+                        hostOverride = null,
+                        forceSecurityCode = prefs.securityCode
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "reconnect failed", e)
                     CompanionSession.statusText = "重连失败：${e.message}"
@@ -231,13 +292,20 @@ class CompanionConnectionService : Service() {
         const val ACTION_SEND_OTP = "com.meobrowser.companion.SEND_OTP"
         const val EXTRA_PAIRING_CODE = "pairing_code"
         const val EXTRA_HOST_OVERRIDE = "host_override"
+        const val EXTRA_FORCE_SECURITY_CODE = "force_security_code"
         const val EXTRA_OTP_CODE = "otp_code"
 
-        fun startConnect(context: Context, pairingCode: String?, hostOverride: String?) {
+        fun startConnect(
+            context: Context,
+            pairingCode: String?,
+            hostOverride: String?,
+            forceSecurityCode: String? = null
+        ) {
             val intent = Intent(context, CompanionConnectionService::class.java).apply {
                 action = ACTION_CONNECT
                 putExtra(EXTRA_PAIRING_CODE, pairingCode)
                 putExtra(EXTRA_HOST_OVERRIDE, hostOverride)
+                putExtra(EXTRA_FORCE_SECURITY_CODE, forceSecurityCode)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

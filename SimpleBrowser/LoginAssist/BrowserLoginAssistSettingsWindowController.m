@@ -36,10 +36,16 @@
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSTextField *companionConnectionLabel;
 @property (nonatomic, strong) NSButton *companionEndpointButton;
+@property (nonatomic, strong) NSSegmentedControl *companionAuthModeControl;
+@property (nonatomic, strong) NSStackView *pairingModeStack;
+@property (nonatomic, strong) NSStackView *securityModeStack;
 @property (nonatomic, strong) NSTextField *pairingCodeCaption;
 @property (nonatomic, strong) NSButton *pairingCodeButton;
 @property (nonatomic, strong) NSButton *refreshPairingButton;
 @property (nonatomic, strong) NSStackView *pairingRow;
+@property (nonatomic, strong) SBTextField *securityCodeField;
+@property (nonatomic, strong) NSButton *saveSecurityCodeButton;
+@property (nonatomic, strong) NSButton *changePortButton;
 @property (nonatomic, strong) NSTextField *companionHintLabel;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
@@ -236,6 +242,41 @@
     self.companionEndpointButton.toolTip = @"点击复制完整地址（IP:端口）";
     self.companionEndpointButton.alignment = NSTextAlignmentLeft;
 
+    self.changePortButton = [NSButton buttonWithTitle:@"更换端口…"
+                                               target:self
+                                               action:@selector(changeCompanionPort:)];
+    self.changePortButton.bezelStyle = NSBezelStyleRounded;
+    self.changePortButton.toolTip = @"端口默认固定；仅在手动确认后才会更换";
+
+    NSStackView *endpointRow = [NSStackView stackViewWithViews:@[self.companionEndpointButton, self.changePortButton]];
+    endpointRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    endpointRow.alignment = NSLayoutAttributeCenterY;
+    endpointRow.spacing = 12;
+
+    self.companionAuthModeControl = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
+    self.companionAuthModeControl.segmentCount = 2;
+    [self.companionAuthModeControl setLabel:@"临时配对码" forSegment:0];
+    [self.companionAuthModeControl setLabel:@"固定安全码" forSegment:1];
+    self.companionAuthModeControl.selectedSegment =
+        ([CompanionPairingStore sharedStore].authMode == CompanionAuthModeSecurityCode) ? 1 : 0;
+    self.companionAuthModeControl.target = self;
+    self.companionAuthModeControl.action = @selector(companionAuthModeChanged:);
+    self.companionAuthModeControl.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.companionAuthModeControl.widthAnchor constraintEqualToConstant:260].active = YES;
+
+    NSStackView *authModeRow = [NSStackView stackViewWithViews:@[
+        ({
+            NSTextField *c = [self caption:@"连接方式"];
+            c.translatesAutoresizingMaskIntoConstraints = NO;
+            [c.widthAnchor constraintEqualToConstant:88].active = YES;
+            c;
+        }),
+        self.companionAuthModeControl
+    ]];
+    authModeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    authModeRow.alignment = NSLayoutAttributeCenterY;
+    authModeRow.spacing = 8;
+
     self.pairingCodeCaption = [NSTextField labelWithString:@"配对码（点击可复制）"];
     self.pairingCodeCaption.font = [NSFont systemFontOfSize:11];
     self.pairingCodeCaption.textColor = [NSColor secondaryLabelColor];
@@ -258,6 +299,38 @@
     self.pairingRow.alignment = NSLayoutAttributeCenterY;
     self.pairingRow.spacing = 12;
 
+    self.pairingModeStack = [NSStackView stackViewWithViews:@[self.pairingCodeCaption, self.pairingRow]];
+    self.pairingModeStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.pairingModeStack.alignment = NSLayoutAttributeLeading;
+    self.pairingModeStack.spacing = 4;
+
+    NSTextField *securityCaption = [NSTextField labelWithString:@"固定安全码（4～12 位字母或数字，手机端保存后可自动连接）"];
+    securityCaption.font = [NSFont systemFontOfSize:11];
+    securityCaption.textColor = [NSColor secondaryLabelColor];
+
+    self.securityCodeField = [self makeField];
+    self.securityCodeField.placeholderString = @"例如 884422";
+    NSString *existingSecurity = [CompanionPairingStore sharedStore].securityCode;
+    if (existingSecurity.length > 0) {
+        self.securityCodeField.stringValue = existingSecurity;
+    }
+    [self.securityCodeField.widthAnchor constraintEqualToConstant:180].active = YES;
+
+    self.saveSecurityCodeButton = [NSButton buttonWithTitle:@"保存安全码"
+                                                     target:self
+                                                     action:@selector(saveSecurityCode:)];
+    self.saveSecurityCodeButton.bezelStyle = NSBezelStyleRounded;
+
+    NSStackView *securityInputRow = [NSStackView stackViewWithViews:@[self.securityCodeField, self.saveSecurityCodeButton]];
+    securityInputRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    securityInputRow.alignment = NSLayoutAttributeCenterY;
+    securityInputRow.spacing = 12;
+
+    self.securityModeStack = [NSStackView stackViewWithViews:@[securityCaption, securityInputRow]];
+    self.securityModeStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.securityModeStack.alignment = NSLayoutAttributeLeading;
+    self.securityModeStack.spacing = 4;
+
     NSButton *revokeDevices = [NSButton buttonWithTitle:@"注销已配对设备"
                                                  target:self
                                                  action:@selector(revokeCompanionDevices:)];
@@ -268,7 +341,7 @@
     self.companionHintLabel.textColor = [NSColor secondaryLabelColor];
     self.companionHintLabel.preferredMaxLayoutWidth = 460;
 
-    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。手机可填上方主机地址，或同 Wi‑Fi 用 Bonjour 发现。"];
+    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。手机可填上方主机地址，或同 Wi‑Fi 用 Bonjour 发现。端口默认固定，仅手动确认后才会更换。"];
     privacyNote.font = [NSFont systemFontOfSize:11];
     privacyNote.textColor = [NSColor secondaryLabelColor];
     privacyNote.preferredMaxLayoutWidth = 460;
@@ -309,9 +382,10 @@
         self.statusLabel,
         companionTitle,
         self.companionConnectionLabel,
-        self.companionEndpointButton,
-        self.pairingCodeCaption,
-        self.pairingRow,
+        endpointRow,
+        authModeRow,
+        self.pairingModeStack,
+        self.securityModeStack,
         revokeDevices,
         self.companionHintLabel,
         privacyNote,
@@ -729,8 +803,17 @@
         [channel start];
     }
 
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    BOOL securityMode = (store.authMode == CompanionAuthModeSecurityCode);
+    self.companionAuthModeControl.selectedSegment = securityMode ? 1 : 0;
+    self.pairingModeStack.hidden = securityMode;
+    self.securityModeStack.hidden = !securityMode;
+    if (securityMode && store.securityCode.length > 0 && self.securityCodeField.stringValue.length == 0) {
+        self.securityCodeField.stringValue = store.securityCode;
+    }
+
     BOOL connected = (channel.state == CompanionChannelStateConnected);
-    NSUInteger paired = [CompanionPairingStore sharedStore].pairedDevices.count;
+    NSUInteger paired = store.pairedDevices.count;
 
     if (connected) {
         self.companionConnectionLabel.stringValue = @"● 已连接";
@@ -749,14 +832,30 @@
         } else {
             self.companionConnectionLabel.textColor = [NSColor orangeColor];
         }
-        self.companionHintLabel.stringValue = paired > 0
-            ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
-            : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
+        if (channel.usingTemporaryPort) {
+            self.companionHintLabel.stringValue =
+                [NSString stringWithFormat:@"固定端口被占用，当前临时使用 %ld。点「更换端口…」确认采用新端口，或关闭占用后重启浏览器。",
+                 (long)channel.listeningPort];
+        } else if (securityMode) {
+            self.companionHintLabel.stringValue = store.securityCode.length > 0
+                ? @"安全码模式：手机 Companion 选「固定安全码」并保存后，打开即可自动连接。"
+                : @"请先设定并保存固定安全码，再在手机 Companion 选择相同模式。";
+        } else {
+            self.companionHintLabel.stringValue = paired > 0
+                ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
+                : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
+        }
     }
 
     NSString *endpoint = [channel preferredLANEndpoint] ?: @"—";
     self.displayedEndpoint = ([endpoint isEqualToString:@"—"] || [endpoint containsString:@"未检测到"]) ? nil : endpoint;
-    self.companionEndpointButton.title = [NSString stringWithFormat:@"主机：%@", endpoint];
+    NSString *portNote = channel.usingTemporaryPort ? @"（临时）" : @"（固定）";
+    self.companionEndpointButton.title = [NSString stringWithFormat:@"主机：%@%@", endpoint, portNote];
+
+    if (securityMode) {
+        self.displayedPairingCode = store.securityCode;
+        return;
+    }
 
     // 未连接：显著显示配对码；已连接：不显示「已配对」占位，仅在有有效码时展示，并保留刷新
     NSString *code = [channel ensurePairingCode];
@@ -788,8 +887,90 @@
     }
 }
 
+- (void)companionAuthModeChanged:(id)sender {
+    (void)sender;
+    CompanionAuthMode mode = (self.companionAuthModeControl.selectedSegment == 1)
+        ? CompanionAuthModeSecurityCode
+        : CompanionAuthModePairingCode;
+    [CompanionPairingStore sharedStore].authMode = mode;
+    if (mode == CompanionAuthModeSecurityCode) {
+        self.statusLabel.stringValue = @"已切换为固定安全码模式。请设定安全码，手机端同步选择该模式。";
+    } else {
+        self.statusLabel.stringValue = @"已切换为临时配对码模式。";
+        (void)[[CompanionChannel sharedChannel] ensurePairingCode];
+    }
+    [self refreshCompanionUI];
+}
+
+- (void)saveSecurityCode:(id)sender {
+    (void)sender;
+    NSError *error = nil;
+    NSString *code = self.securityCodeField.stringValue;
+    if (![[CompanionPairingStore sharedStore] setSecurityCode:code error:&error]) {
+        self.statusLabel.stringValue = error.localizedDescription ?: @"保存安全码失败";
+        return;
+    }
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    store.authMode = CompanionAuthModeSecurityCode;
+    self.companionAuthModeControl.selectedSegment = 1;
+    if (store.securityCode.length == 0) {
+        self.statusLabel.stringValue = @"已清除安全码。";
+    } else {
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已保存固定安全码（%lu 位）。手机 Companion 选「固定安全码」后可自动连接。",
+                                        (unsigned long)store.securityCode.length];
+    }
+    [self refreshCompanionUI];
+}
+
+- (void)changeCompanionPort:(id)sender {
+    (void)sender;
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    NSInteger sticky = [CompanionPairingStore sharedStore].stickyListeningPort;
+    NSString *message = sticky > 0
+        ? [NSString stringWithFormat:
+           @"当前固定端口为 %ld。\n\n更换后将重新分配端口并固定下来，手机需更新「主机 IP:端口」。确定更换？",
+           (long)sticky]
+        : @"将重新分配并固定监听端口。手机需使用新的「主机 IP:端口」。确定？";
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"更换 Companion 端口";
+    alert.informativeText = message;
+    [alert addButtonWithTitle:@"更换"];
+    [alert addButtonWithTitle:@"取消"];
+    if (channel.usingTemporaryPort && channel.listeningPort > 0) {
+        [alert addButtonWithTitle:@"采用当前临时端口"];
+    }
+    NSModalResponse response = [alert runModal];
+    if (response == NSAlertFirstButtonReturn) {
+        [[CompanionChannel sharedChannel] restartListeningClearingStickyPort:YES];
+        self.statusLabel.stringValue = @"正在更换端口…完成后请复制新主机地址到手机。";
+    } else if (response == NSAlertThirdButtonReturn) {
+        // 将当前临时端口确认为固定端口
+        NSInteger temp = channel.listeningPort;
+        if (temp > 0) {
+            [CompanionPairingStore sharedStore].stickyListeningPort = temp;
+            [[CompanionChannel sharedChannel] restartListeningClearingStickyPort:NO];
+            self.statusLabel.stringValue = [NSString stringWithFormat:@"已将端口 %ld 设为固定端口。", (long)temp];
+        }
+    }
+    [self refreshCompanionUI];
+}
+
 - (void)copyPairingCode:(id)sender {
     (void)sender;
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    if (store.authMode == CompanionAuthModeSecurityCode) {
+        NSString *code = store.securityCode;
+        if (code.length == 0) {
+            self.statusLabel.stringValue = @"尚未设定安全码。";
+            return;
+        }
+        NSPasteboard *pb = NSPasteboard.generalPasteboard;
+        [pb clearContents];
+        [pb setString:code forType:NSPasteboardTypeString];
+        self.statusLabel.stringValue = @"已复制安全码到剪贴板";
+        return;
+    }
     NSString *code = self.displayedPairingCode;
     if (code.length == 0) {
         code = [[CompanionChannel sharedChannel] ensurePairingCode];
@@ -822,6 +1003,10 @@
 
 - (void)refreshPairingCode:(id)sender {
     (void)sender;
+    if ([CompanionPairingStore sharedStore].authMode == CompanionAuthModeSecurityCode) {
+        self.statusLabel.stringValue = @"当前为安全码模式，请直接修改并保存安全码。";
+        return;
+    }
     NSString *code = [[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
     self.displayedPairingCode = code;
     self.pairingCodeButton.hidden = NO;
@@ -842,6 +1027,14 @@
 - (void)revokeCompanionDevices:(id)sender {
     (void)sender;
     [[CompanionPairingStore sharedStore] revokeAllDevices];
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    if (store.authMode == CompanionAuthModeSecurityCode) {
+        self.statusLabel.stringValue = store.securityCode.length > 0
+            ? @"已注销设备。安全码仍有效，手机可再次用安全码连接。"
+            : @"已注销全部配对设备。";
+        [self refreshCompanionUI];
+        return;
+    }
     NSString *code = [[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
     if (code.length > 0) {
         NSPasteboard *pb = NSPasteboard.generalPasteboard;

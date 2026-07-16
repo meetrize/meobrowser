@@ -6,6 +6,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
@@ -13,6 +15,7 @@ import androidx.annotation.Nullable;
 import androidx.viewbinding.ViewBinding;
 import androidx.viewbinding.ViewBindings;
 import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
 import com.meobrowser.companion.R;
 import java.lang.NullPointerException;
 import java.lang.Override;
@@ -21,6 +24,15 @@ import java.lang.String;
 public final class ActivityMainBinding implements ViewBinding {
   @NonNull
   private final ScrollView rootView;
+
+  @NonNull
+  public final RadioGroup authModeGroup;
+
+  @NonNull
+  public final RadioButton authModePairing;
+
+  @NonNull
+  public final RadioButton authModeSecurity;
 
   @NonNull
   public final LinearLayout checklistContainer;
@@ -53,7 +65,13 @@ public final class ActivityMainBinding implements ViewBinding {
   public final TextView notifAccessHint;
 
   @NonNull
+  public final TextView pairHintText;
+
+  @NonNull
   public final TextInputEditText pairingCodeInput;
+
+  @NonNull
+  public final TextInputLayout pairingCodeLayout;
 
   @NonNull
   public final Button readRecentOtpButton;
@@ -76,17 +94,22 @@ public final class ActivityMainBinding implements ViewBinding {
   @NonNull
   public final Button toggleChecksButton;
 
-  private ActivityMainBinding(@NonNull ScrollView rootView,
+  private ActivityMainBinding(@NonNull ScrollView rootView, @NonNull RadioGroup authModeGroup,
+      @NonNull RadioButton authModePairing, @NonNull RadioButton authModeSecurity,
       @NonNull LinearLayout checklistContainer, @NonNull TextView checksEmptyHint,
       @NonNull Button connectButton, @NonNull Button disconnectButton,
       @NonNull TextInputEditText hostOverrideInput, @NonNull TextView lastOtpCodeText,
       @NonNull TextView lastOtpMetaText, @NonNull Button manualOtpButton,
       @NonNull Button notifAccessButton, @NonNull TextView notifAccessHint,
-      @NonNull TextInputEditText pairingCodeInput, @NonNull Button readRecentOtpButton,
+      @NonNull TextView pairHintText, @NonNull TextInputEditText pairingCodeInput,
+      @NonNull TextInputLayout pairingCodeLayout, @NonNull Button readRecentOtpButton,
       @NonNull TextView readinessSummary, @NonNull TextView recentOtpResultText,
       @NonNull Button rescanNotifButton, @NonNull Button setupWizardButton,
       @NonNull TextView statusText, @NonNull Button toggleChecksButton) {
     this.rootView = rootView;
+    this.authModeGroup = authModeGroup;
+    this.authModePairing = authModePairing;
+    this.authModeSecurity = authModeSecurity;
     this.checklistContainer = checklistContainer;
     this.checksEmptyHint = checksEmptyHint;
     this.connectButton = connectButton;
@@ -97,7 +120,9 @@ public final class ActivityMainBinding implements ViewBinding {
     this.manualOtpButton = manualOtpButton;
     this.notifAccessButton = notifAccessButton;
     this.notifAccessHint = notifAccessHint;
+    this.pairHintText = pairHintText;
     this.pairingCodeInput = pairingCodeInput;
+    this.pairingCodeLayout = pairingCodeLayout;
     this.readRecentOtpButton = readRecentOtpButton;
     this.readinessSummary = readinessSummary;
     this.recentOtpResultText = recentOtpResultText;
@@ -134,6 +159,24 @@ public final class ActivityMainBinding implements ViewBinding {
     // This is done to optimize the compiled bytecode for size and performance.
     int id;
     missingId: {
+      id = R.id.authModeGroup;
+      RadioGroup authModeGroup = ViewBindings.findChildViewById(rootView, id);
+      if (authModeGroup == null) {
+        break missingId;
+      }
+
+      id = R.id.authModePairing;
+      RadioButton authModePairing = ViewBindings.findChildViewById(rootView, id);
+      if (authModePairing == null) {
+        break missingId;
+      }
+
+      id = R.id.authModeSecurity;
+      RadioButton authModeSecurity = ViewBindings.findChildViewById(rootView, id);
+      if (authModeSecurity == null) {
+        break missingId;
+      }
+
       id = R.id.checklistContainer;
       LinearLayout checklistContainer = ViewBindings.findChildViewById(rootView, id);
       if (checklistContainer == null) {
@@ -194,9 +237,21 @@ public final class ActivityMainBinding implements ViewBinding {
         break missingId;
       }
 
+      id = R.id.pairHintText;
+      TextView pairHintText = ViewBindings.findChildViewById(rootView, id);
+      if (pairHintText == null) {
+        break missingId;
+      }
+
       id = R.id.pairingCodeInput;
       TextInputEditText pairingCodeInput = ViewBindings.findChildViewById(rootView, id);
       if (pairingCodeInput == null) {
+        break missingId;
+      }
+
+      id = R.id.pairingCodeLayout;
+      TextInputLayout pairingCodeLayout = ViewBindings.findChildViewById(rootView, id);
+      if (pairingCodeLayout == null) {
         break missingId;
       }
 
@@ -242,11 +297,12 @@ public final class ActivityMainBinding implements ViewBinding {
         break missingId;
       }
 
-      return new ActivityMainBinding((ScrollView) rootView, checklistContainer, checksEmptyHint,
-          connectButton, disconnectButton, hostOverrideInput, lastOtpCodeText, lastOtpMetaText,
-          manualOtpButton, notifAccessButton, notifAccessHint, pairingCodeInput,
-          readRecentOtpButton, readinessSummary, recentOtpResultText, rescanNotifButton,
-          setupWizardButton, statusText, toggleChecksButton);
+      return new ActivityMainBinding((ScrollView) rootView, authModeGroup, authModePairing,
+          authModeSecurity, checklistContainer, checksEmptyHint, connectButton, disconnectButton,
+          hostOverrideInput, lastOtpCodeText, lastOtpMetaText, manualOtpButton, notifAccessButton,
+          notifAccessHint, pairHintText, pairingCodeInput, pairingCodeLayout, readRecentOtpButton,
+          readinessSummary, recentOtpResultText, rescanNotifButton, setupWizardButton, statusText,
+          toggleChecksButton);
     }
     String missingId = rootView.getResources().getResourceName(id);
     throw new NullPointerException("Missing required view with ID: ".concat(missingId));

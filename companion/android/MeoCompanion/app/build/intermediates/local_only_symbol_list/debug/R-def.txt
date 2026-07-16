@@ -1,5 +1,8 @@
 R_DEF: Internal format may change without notice
 local
+id authModeGroup
+id authModePairing
+id authModeSecurity
 id checklistContainer
 id checksEmptyHint
 id connectButton
@@ -10,7 +13,9 @@ id lastOtpMetaText
 id manualOtpButton
 id notifAccessButton
 id notifAccessHint
+id pairHintText
 id pairingCodeInput
+id pairingCodeLayout
 id readRecentOtpButton
 id readinessSummary
 id recentOtpResultText
@@ -36,5 +41,7 @@ layout activity_main
 layout activity_setup_wizard
 string app_name
 string pair_hint
+string pair_hint_pairing
+string pair_hint_security
 string privacy_note
 style Theme.MeoCompanion

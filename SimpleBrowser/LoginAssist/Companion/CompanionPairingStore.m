@@ -5,6 +5,9 @@ static NSString * const kCompanionKeychainService = @"MeoBrowser.LoginAssist.Com
 static NSString * const kCompanionKeychainAccount = @"paired-devices";
 static NSString * const kPendingCodeKey = @"CompanionPendingPairingCode";
 static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt";
+static NSString * const kAuthModeKey = @"CompanionAuthMode";
+static NSString * const kSecurityCodeKey = @"CompanionSecurityCode";
+static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
 
 @implementation CompanionPairedDevice
 @end
@@ -12,6 +15,7 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
 @interface CompanionPairingStore ()
 @property (nonatomic, copy, readwrite, nullable) NSString *pendingPairingCode;
 @property (nonatomic, assign, readwrite) NSTimeInterval pendingPairingExpiresAt;
+@property (nonatomic, copy, readwrite, nullable) NSString *securityCode;
 @property (nonatomic, copy, readwrite) NSArray<CompanionPairedDevice *> *pairedDevices;
 @end
 
@@ -34,8 +38,35 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         _pendingPairingCode = [defaults stringForKey:kPendingCodeKey];
         _pendingPairingExpiresAt = [defaults doubleForKey:kPendingExpiresKey];
+        _securityCode = [defaults stringForKey:kSecurityCodeKey];
+        _authMode = (CompanionAuthMode)[defaults integerForKey:kAuthModeKey];
+        if (_authMode != CompanionAuthModeSecurityCode) {
+            _authMode = CompanionAuthModePairingCode;
+        }
+        _stickyListeningPort = [defaults integerForKey:kStickyPortKey];
     }
     return self;
+}
+
+- (void)setAuthMode:(CompanionAuthMode)authMode {
+    if (_authMode == authMode) {
+        return;
+    }
+    _authMode = authMode;
+    [NSUserDefaults.standardUserDefaults setInteger:authMode forKey:kAuthModeKey];
+}
+
+- (void)setStickyListeningPort:(NSInteger)stickyListeningPort {
+    if (_stickyListeningPort == stickyListeningPort) {
+        return;
+    }
+    _stickyListeningPort = stickyListeningPort;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (stickyListeningPort > 0) {
+        [defaults setInteger:stickyListeningPort forKey:kStickyPortKey];
+    } else {
+        [defaults removeObjectForKey:kStickyPortKey];
+    }
 }
 
 - (void)reloadFromKeychain {
@@ -146,6 +177,35 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
     return [code isEqualToString:self.pendingPairingCode];
 }
 
+- (BOOL)setSecurityCode:(NSString *)code error:(NSError **)error {
+    NSString *trimmed = [code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmed.length == 0) {
+        self.securityCode = nil;
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:kSecurityCodeKey];
+        return YES;
+    }
+    NSCharacterSet *allowed = [NSCharacterSet alphanumericCharacterSet];
+    NSCharacterSet *inverted = [allowed invertedSet];
+    if (trimmed.length < 4 || trimmed.length > 12 || [trimmed rangeOfCharacterFromSet:inverted].location != NSNotFound) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"CompanionPairingStore"
+                                         code:3
+                                     userInfo:@{NSLocalizedDescriptionKey: @"安全码需为 4～12 位字母或数字"}];
+        }
+        return NO;
+    }
+    self.securityCode = trimmed;
+    [NSUserDefaults.standardUserDefaults setObject:trimmed forKey:kSecurityCodeKey];
+    return YES;
+}
+
+- (BOOL)isSecurityCodeValid:(NSString *)code {
+    if (code.length == 0 || self.securityCode.length == 0) {
+        return NO;
+    }
+    return [code isEqualToString:self.securityCode];
+}
+
 - (NSString *)issueDeviceTokenForDeviceId:(NSString *)deviceId
                               pairingCode:(NSString *)pairingCode
                                     error:(NSError **)error {
@@ -157,14 +217,28 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
         }
         return nil;
     }
-    if (![self isPendingPairingCodeValid:pairingCode]) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"CompanionPairingStore"
-                                         code:2
-                                     userInfo:@{NSLocalizedDescriptionKey: @"配对码无效或已过期"}];
+
+    BOOL securityMode = (self.authMode == CompanionAuthModeSecurityCode);
+    if (securityMode) {
+        if (![self isSecurityCodeValid:pairingCode]) {
+            if (error) {
+                *error = [NSError errorWithDomain:@"CompanionPairingStore"
+                                             code:2
+                                         userInfo:@{NSLocalizedDescriptionKey: @"安全码不正确"}];
+            }
+            return nil;
         }
-        return nil;
+    } else {
+        if (![self isPendingPairingCodeValid:pairingCode]) {
+            if (error) {
+                *error = [NSError errorWithDomain:@"CompanionPairingStore"
+                                             code:2
+                                         userInfo:@{NSLocalizedDescriptionKey: @"配对码无效或已过期"}];
+            }
+            return nil;
+        }
     }
+
     NSString *token = [[NSUUID UUID] UUIDString];
     NSMutableArray<CompanionPairedDevice *> *devices = [self.pairedDevices mutableCopy] ?: [NSMutableArray array];
     CompanionPairedDevice *existing = nil;
@@ -185,11 +259,14 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
     if (![self persistDevices:error]) {
         return nil;
     }
-    // 一次性配对码
-    self.pendingPairingCode = nil;
-    self.pendingPairingExpiresAt = 0;
-    [NSUserDefaults.standardUserDefaults removeObjectForKey:kPendingCodeKey];
-    [NSUserDefaults.standardUserDefaults removeObjectForKey:kPendingExpiresKey];
+
+    // 临时配对码一次性；固定安全码保持不变，便于手机下次自动连接。
+    if (!securityMode) {
+        self.pendingPairingCode = nil;
+        self.pendingPairingExpiresAt = 0;
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:kPendingCodeKey];
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:kPendingExpiresKey];
+    }
     return token;
 }
 

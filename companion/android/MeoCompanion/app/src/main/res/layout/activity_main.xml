@@ -85,13 +85,36 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/pairHintText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:text="@string/pair_hint"
             android:textSize="14sp" />
 
+        <RadioGroup
+            android:id="@+id/authModeGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/authModePairing"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="16dp"
+                android:text="临时配对码" />
+
+            <RadioButton
+                android:id="@+id/authModeSecurity"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="固定安全码" />
+        </RadioGroup>
+
         <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/pairingCodeLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
@@ -101,8 +124,8 @@
                 android:id="@+id/pairingCodeInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:inputType="number"
-                android:maxLength="6" />
+                android:inputType="textVisiblePassword"
+                android:maxLength="12" />
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout

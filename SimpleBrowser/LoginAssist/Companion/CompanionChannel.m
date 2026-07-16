@@ -14,7 +14,9 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
 @property (nonatomic, copy, readwrite, nullable) NSString *statusText;
 @property (nonatomic, assign, readwrite) NSInteger listeningPort;
 @property (nonatomic, copy, readwrite, nullable) NSString *lastConnectedDeviceId;
+@property (nonatomic, assign, readwrite) BOOL usingTemporaryPort;
 @property (nonatomic, strong) NSMutableSet<NSString *> *activeConnectionIDs;
+@property (nonatomic, assign) BOOL intentionallyChangingPort;
 @end
 
 @implementation CompanionChannel
@@ -44,8 +46,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     if (self.state != CompanionChannelStateStopped) {
         return;
     }
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    NSInteger preferred = store.stickyListeningPort;
     NSError *error = nil;
-    if (![self.server startWithError:&error]) {
+    if (![self.server startWithPreferredPort:preferred error:&error]) {
         self.state = CompanionChannelStateStopped;
         self.statusText = error.localizedDescription ?: @"启动失败";
         [self postStateChange];
@@ -53,7 +57,13 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     }
     (void)[self ensurePairingCode];
     self.state = CompanionChannelStateAdvertising;
-    self.statusText = @"等待手机连接（Bonjour）";
+    if (store.authMode == CompanionAuthModeSecurityCode) {
+        self.statusText = store.securityCode.length > 0
+            ? @"等待手机连接（安全码模式）"
+            : @"请先在设置中设定固定安全码";
+    } else {
+        self.statusText = @"等待手机连接（Bonjour）";
+    }
     [self postStateChange];
 }
 
@@ -62,13 +72,27 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     [self.activeConnectionIDs removeAllObjects];
     self.state = CompanionChannelStateStopped;
     self.listeningPort = 0;
+    self.usingTemporaryPort = NO;
     self.lastConnectedDeviceId = nil;
     self.statusText = @"已停止";
     [self postStateChange];
 }
 
+- (void)restartListeningClearingStickyPort:(BOOL)clearSticky {
+    self.intentionallyChangingPort = YES;
+    [self stop];
+    if (clearSticky) {
+        [CompanionPairingStore sharedStore].stickyListeningPort = 0;
+    }
+    [self start];
+    // intentionallyChangingPort 在 didChangeListeningPort 里清除
+}
+
 - (NSString *)ensurePairingCode {
     CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    if (store.authMode == CompanionAuthModeSecurityCode) {
+        return store.securityCode.length > 0 ? store.securityCode : @"";
+    }
     if ([store isPendingPairingCodeValid:store.pendingPairingCode]) {
         return store.pendingPairingCode;
     }
@@ -81,7 +105,11 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
 
 /// 用户主动刷新（注销或重新配对时用）。
 - (NSString *)refreshPairingCodeForNewDevice {
-    return [[CompanionPairingStore sharedStore] refreshPendingPairingCode];
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    if (store.authMode == CompanionAuthModeSecurityCode) {
+        return store.securityCode ?: @"";
+    }
+    return [store refreshPendingPairingCode];
 }
 
 - (NSArray<NSString *> *)localLANIPv4Addresses {
@@ -147,14 +175,24 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
 }
 
 - (void)refreshConnectedState {
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
     if (self.activeConnectionIDs.count > 0) {
         self.state = CompanionChannelStateConnected;
         NSString *device = self.lastConnectedDeviceId.length > 0 ? self.lastConnectedDeviceId : @"已配对设备";
         self.statusText = [NSString stringWithFormat:@"已连接 · %@", device];
     } else if (self.server.isRunning) {
         self.state = CompanionChannelStateAdvertising;
-        NSUInteger paired = [CompanionPairingStore sharedStore].pairedDevices.count;
-        if (paired > 0) {
+        NSUInteger paired = store.pairedDevices.count;
+        if (self.usingTemporaryPort) {
+            self.statusText = [NSString stringWithFormat:@"临时端口 %ld（固定端口被占用，请确认更换）",
+                               (long)self.listeningPort];
+        } else if (store.authMode == CompanionAuthModeSecurityCode) {
+            self.statusText = store.securityCode.length > 0
+                ? (paired > 0
+                   ? [NSString stringWithFormat:@"等待连接（安全码 · 已配对 %lu 台）", (unsigned long)paired]
+                   : @"等待手机连接（安全码模式）")
+                : @"请先设定固定安全码";
+        } else if (paired > 0) {
             self.statusText = [NSString stringWithFormat:@"等待连接（已配对 %lu 台）", (unsigned long)paired];
         } else {
             self.statusText = @"等待手机配对（Bonjour）";
@@ -171,6 +209,24 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
 - (void)bonjourServer:(CompanionBonjourServer *)server didChangeListeningPort:(NSInteger)port {
     (void)server;
     self.listeningPort = port;
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    NSInteger sticky = store.stickyListeningPort;
+
+    if (sticky <= 0 || self.intentionallyChangingPort) {
+        // 首次分配，或用户确认更换：固化为 sticky
+        store.stickyListeningPort = port;
+        self.usingTemporaryPort = NO;
+        self.intentionallyChangingPort = NO;
+    } else if (port == sticky) {
+        self.usingTemporaryPort = NO;
+        self.intentionallyChangingPort = NO;
+    } else {
+        // 固定端口被占用，临时落到其他端口；不自动改写 sticky
+        self.usingTemporaryPort = YES;
+        self.intentionallyChangingPort = NO;
+        NSLog(@"[Companion] sticky port %ld busy, temporary port %ld (not auto-saved)",
+              (long)sticky, (long)port);
+    }
     [self refreshConnectedState];
 }
 
@@ -227,6 +283,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     NSString *pairingToken = json[@"pairingToken"];
     if (![pairingToken isKindOfClass:[NSString class]]) {
         [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"missing pairingToken"} toConnectionID:connectionID];
+        return;
+    }
+    if (store.authMode == CompanionAuthModeSecurityCode && store.securityCode.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"security code not configured"} toConnectionID:connectionID];
         return;
     }
     NSError *error = nil;

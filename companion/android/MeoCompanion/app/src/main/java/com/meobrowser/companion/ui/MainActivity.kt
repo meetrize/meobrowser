@@ -10,9 +10,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.meobrowser.companion.R
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
 import com.meobrowser.companion.databinding.ActivityMainBinding
+import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.setup.SetupCheckItem
 import com.meobrowser.companion.setup.SetupChecker
@@ -31,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: PairingPrefs
     private var readingRecentOtp = false
     private var showAllChecks = false
+    private var didAutoConnect = false
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -63,6 +66,16 @@ class MainActivity : AppCompatActivity() {
         prefs = PairingPrefs(this)
         SmsListenCoordinator.start(this)
         restoreConnectionForm()
+        applyAuthModeUi()
+
+        binding.authModeGroup.setOnCheckedChangeListener { _, checkedId ->
+            prefs.authMode = when (checkedId) {
+                binding.authModeSecurity.id -> CompanionAuthMode.SECURITY_CODE
+                else -> CompanionAuthMode.PAIRING_CODE
+            }
+            applyAuthModeUi()
+            persistCodeFromInput()
+        }
 
         binding.toggleChecksButton.setOnClickListener {
             showAllChecks = !showAllChecks
@@ -91,20 +104,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.connectButton.setOnClickListener {
-            val code = binding.pairingCodeInput.text?.toString()?.trim().orEmpty()
-            val host = binding.hostOverrideInput.text?.toString()?.trim().orEmpty()
-            // 保存表单，便于下次打开自动填入
-            if (code.isNotBlank()) prefs.lastPairingCode = code
-            if (host.isNotBlank()) {
-                prefs.lastHostOverride = host
-            }
-            CompanionSession.statusText = "正在连接…"
-            CompanionSession.notifyStatus()
-            CompanionConnectionService.startConnect(
-                this,
-                pairingCode = code.ifBlank { null },
-                hostOverride = host.ifBlank { null }
-            )
+            connectFromForm(manual = true)
         }
 
         binding.disconnectButton.setOnClickListener {
@@ -147,11 +147,95 @@ class MainActivity : AppCompatActivity() {
 
         if (SetupChecker.shouldAutoShowWizard(this)) {
             SetupWizardActivity.start(this)
+        } else {
+            maybeAutoConnect()
         }
     }
 
+    private fun persistCodeFromInput() {
+        val code = binding.pairingCodeInput.text?.toString()?.trim().orEmpty()
+        if (code.isBlank()) return
+        if (prefs.authMode == CompanionAuthMode.SECURITY_CODE) {
+            prefs.securityCode = code
+        } else {
+            prefs.lastPairingCode = code
+        }
+    }
+
+    private fun applyAuthModeUi() {
+        val security = prefs.authMode == CompanionAuthMode.SECURITY_CODE
+        binding.authModeSecurity.isChecked = security
+        binding.authModePairing.isChecked = !security
+        binding.pairHintText.setText(
+            if (security) R.string.pair_hint_security else R.string.pair_hint_pairing
+        )
+        binding.pairingCodeLayout.hint = if (security) "固定安全码（4～12 位）" else "配对码（6 位）"
+        binding.connectButton.text = if (security) "连接（安全码）" else "连接 / 配对"
+        // 切换模式时恢复对应字段
+        val code = if (security) prefs.securityCode else prefs.lastPairingCode
+        if (!code.isNullOrBlank()) {
+            binding.pairingCodeInput.setText(code)
+        } else if (!security) {
+            binding.pairingCodeInput.text = null
+        }
+    }
+
+    private fun connectFromForm(manual: Boolean) {
+        val code = binding.pairingCodeInput.text?.toString()?.trim().orEmpty()
+        val host = binding.hostOverrideInput.text?.toString()?.trim().orEmpty()
+        if (host.isNotBlank()) {
+            prefs.lastHostOverride = host
+        }
+        if (prefs.authMode == CompanionAuthMode.SECURITY_CODE) {
+            if (code.isNotBlank()) {
+                prefs.securityCode = code
+            }
+            val securityCode = prefs.securityCode
+            val token = prefs.deviceToken
+            if (securityCode.isNullOrBlank() && token.isNullOrBlank()) {
+                if (manual) {
+                    Toast.makeText(this, "请输入 Mac 上设定的固定安全码", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+            CompanionSession.statusText = "正在连接（安全码）…"
+            CompanionSession.notifyStatus()
+            CompanionConnectionService.startConnect(
+                this,
+                pairingCode = if (token.isNullOrBlank()) securityCode else null,
+                hostOverride = host.ifBlank { null },
+                forceSecurityCode = securityCode
+            )
+        } else {
+            if (code.isNotBlank()) prefs.lastPairingCode = code
+            CompanionSession.statusText = "正在连接…"
+            CompanionSession.notifyStatus()
+            CompanionConnectionService.startConnect(
+                this,
+                pairingCode = code.ifBlank { null },
+                hostOverride = host.ifBlank { null }
+            )
+        }
+    }
+
+    private fun maybeAutoConnect() {
+        if (didAutoConnect) return
+        if (CompanionSession.client.isConnected) return
+        if (prefs.authMode != CompanionAuthMode.SECURITY_CODE) return
+        if (!prefs.canAutoConnectSecurityMode()) return
+        didAutoConnect = true
+        CompanionSession.statusText = "安全码模式：自动连接中…"
+        CompanionSession.notifyStatus()
+        binding.statusText.text = "状态：${CompanionSession.statusText}"
+        connectFromForm(manual = false)
+    }
+
     private fun restoreConnectionForm() {
-        val code = prefs.lastPairingCode
+        val code = if (prefs.authMode == CompanionAuthMode.SECURITY_CODE) {
+            prefs.securityCode
+        } else {
+            prefs.lastPairingCode
+        }
         if (!code.isNullOrBlank()) {
             binding.pairingCodeInput.setText(code)
         }
@@ -328,6 +412,10 @@ class MainActivity : AppCompatActivity() {
                 "通知使用权未连接（点此开关一次）"
         }
         OtpNotificationListener.ensureBound(this)
+        // 从向导返回或再次进入前台时，安全码模式补一次自动连接
+        if (!SetupChecker.shouldAutoShowWizard(this)) {
+            maybeAutoConnect()
+        }
     }
 
     private fun refreshChecks() {

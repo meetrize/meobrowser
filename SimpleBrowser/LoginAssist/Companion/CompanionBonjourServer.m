@@ -14,6 +14,7 @@
 @property (nonatomic, strong, nullable) nw_listener_t listener;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, CompanionBonjourConnection *> *connections;
 @property (nonatomic, assign, readwrite) NSInteger listeningPort;
+@property (nonatomic, assign, readwrite) NSInteger preferredPort;
 @property (nonatomic, assign, readwrite, getter=isRunning) BOOL running;
 @end
 
@@ -32,6 +33,10 @@
 }
 
 - (BOOL)startWithError:(NSError **)error {
+    return [self startWithPreferredPort:0 error:error];
+}
+
+- (BOOL)startWithPreferredPort:(NSInteger)preferredPort error:(NSError **)error {
     if (self.running) {
         return YES;
     }
@@ -40,7 +45,18 @@
                                                                NW_PARAMETERS_DEFAULT_CONFIGURATION);
     nw_parameters_set_include_peer_to_peer(parameters, true);
 
-    nw_listener_t listener = nw_listener_create(parameters);
+    self.preferredPort = preferredPort;
+    nw_listener_t listener = nil;
+    if (preferredPort > 0 && preferredPort <= 65535) {
+        NSString *portString = [NSString stringWithFormat:@"%ld", (long)preferredPort];
+        listener = nw_listener_create_with_port(portString.UTF8String, parameters);
+        if (!listener) {
+            NSLog(@"[Companion] preferred port %ld unavailable, falling back to ephemeral", (long)preferredPort);
+            listener = nw_listener_create(parameters);
+        }
+    } else {
+        listener = nw_listener_create(parameters);
+    }
     if (!listener) {
         if (error) {
             *error = [NSError errorWithDomain:@"CompanionBonjourServer"
@@ -66,7 +82,8 @@
             if ([delegate respondsToSelector:@selector(bonjourServer:didChangeListeningPort:)]) {
                 [delegate bonjourServer:strongSelf didChangeListeningPort:port];
             }
-            NSLog(@"[Companion] listening on port %ld (_meologin._tcp)", (long)port);
+            NSLog(@"[Companion] listening on port %ld (_meologin._tcp, preferred=%ld)",
+                  (long)port, (long)strongSelf.preferredPort);
         } else if (state == nw_listener_state_failed) {
             NSLog(@"[Companion] listener failed: %@", nwError);
             strongSelf.running = NO;
