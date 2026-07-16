@@ -2,6 +2,9 @@
 #import "CompanionBonjourServer.h"
 #import "CompanionPairingStore.h"
 #import "OTPInbox.h"
+#import <ifaddrs.h>
+#import <arpa/inet.h>
+#import <net/if.h>
 
 NSNotificationName const CompanionChannelStateDidChangeNotification = @"CompanionChannelStateDidChangeNotification";
 
@@ -79,6 +82,63 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
 /// 用户主动刷新（注销或重新配对时用）。
 - (NSString *)refreshPairingCodeForNewDevice {
     return [[CompanionPairingStore sharedStore] refreshPendingPairingCode];
+}
+
+- (NSArray<NSString *> *)localLANIPv4Addresses {
+    NSMutableArray<NSString *> *preferred = [NSMutableArray array];
+    NSMutableArray<NSString *> *others = [NSMutableArray array];
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0) {
+        return @[];
+    }
+    for (struct ifaddrs *ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if ((ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+            continue;
+        }
+        char host[INET_ADDRSTRLEN] = {0};
+        struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+        if (!inet_ntop(AF_INET, &addr->sin_addr, host, sizeof(host))) {
+            continue;
+        }
+        NSString *ip = [NSString stringWithUTF8String:host];
+        if (ip.length == 0 || [ip hasPrefix:@"127."] || [ip hasPrefix:@"169.254."]) {
+            continue;
+        }
+        NSString *name = ifa->ifa_name ? [NSString stringWithUTF8String:ifa->ifa_name] : @"";
+        // macOS Wi‑Fi 多为 en0；有线/其他 en*
+        if ([name isEqualToString:@"en0"] || [name isEqualToString:@"en1"]) {
+            [preferred addObject:ip];
+        } else if ([name hasPrefix:@"en"] || [name hasPrefix:@"bridge"] || [name hasPrefix:@"wlan"]) {
+            [others addObject:ip];
+        } else {
+            [others addObject:ip];
+        }
+    }
+    freeifaddrs(interfaces);
+    NSMutableArray<NSString *> *all = [preferred mutableCopy];
+    for (NSString *ip in others) {
+        if (![all containsObject:ip]) {
+            [all addObject:ip];
+        }
+    }
+    return [all copy];
+}
+
+- (NSString *)preferredLANEndpoint {
+    NSArray<NSString *> *ips = [self localLANIPv4Addresses];
+    if (ips.count == 0) {
+        return self.listeningPort > 0
+            ? [NSString stringWithFormat:@"端口 %ld（未检测到局域网 IPv4）", (long)self.listeningPort]
+            : nil;
+    }
+    NSString *ip = ips.firstObject;
+    if (self.listeningPort > 0) {
+        return [NSString stringWithFormat:@"%@:%ld", ip, (long)self.listeningPort];
+    }
+    return ip;
 }
 
 - (void)postStateChange {

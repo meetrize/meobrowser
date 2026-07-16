@@ -113,12 +113,29 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
 
-    // 一键登录正在 waitOTP：LoginRunner 会填入，这里只提示
+    // 第一时间用 Toast 展示完整验证码（后续状态 Toast 稍晚，避免立刻盖住）
+    if (code.length > 0) {
+        [BrowserTransientToast showMessage:[NSString stringWithFormat:@"验证码：%@", code]
+                                  inWindow:window
+                                  duration:3.6];
+    }
+
+    // 一键登录正在 waitOTP：LoginRunner 会填入
     if (waiting) {
-        NSString *message = copied
-            ? @"已收到手机验证码，正在按 Recipe 填入…已复制到剪贴板。"
-            : @"已收到手机验证码，正在按 Recipe 填入…";
-        [BrowserTransientToast showMessage:message inWindow:window duration:3.0];
+        NSString *status = copied
+            ? @"正在按 Recipe 填入…（已复制到剪贴板）"
+            : @"正在按 Recipe 填入…";
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            NSWindow *w = self.windowController.window;
+            if (!w) {
+                return;
+            }
+            NSString *msg = code.length > 0
+                ? [NSString stringWithFormat:@"验证码：%@\n%@", code, status]
+                : status;
+            [BrowserTransientToast showMessage:msg inWindow:w duration:2.5];
+        });
         return;
     }
 
@@ -126,7 +143,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
 
-    // 未在 wait：有 Recipe 则填验证码栏；否则插入光标处
+    // 未在 wait：有 Recipe 则填验证码栏；否则插入光标处（操作立即执行，状态 Toast 稍后）
     [self applyIncomingOTPCode:code copiedToClipboard:copied];
 }
 
@@ -150,12 +167,10 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
             }
             if (success) {
                 [[OTPInbox sharedInbox] markCodeConsumed:code];
-                NSString *msg = copied
-                    ? @"已按 Recipe 填入验证码（并已复制到剪贴板）"
-                    : @"已按 Recipe 填入验证码";
-                [BrowserTransientToast showMessage:msg
-                                          inWindow:strongSelf.windowController.window
-                                          duration:2.8];
+                NSString *status = copied
+                    ? @"已按 Recipe 填入（并已复制到剪贴板）"
+                    : @"已按 Recipe 填入";
+                [strongSelf showOTPFollowUpToastWithCode:code status:status];
             } else {
                 // Recipe 填入失败则退化为光标插入
                 [strongSelf insertOTPAtCaret:code
@@ -184,22 +199,22 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         [resp performSelector:@selector(insertText:) withObject:code];
         #pragma clang diagnostic pop
         [[OTPInbox sharedInbox] markCodeConsumed:code];
-        NSString *msg = copied
-            ? @"已在光标处插入验证码（并已复制到剪贴板）"
-            : @"已在光标处插入验证码";
+        NSString *status = copied
+            ? @"已在光标处插入（并已复制到剪贴板）"
+            : @"已在光标处插入";
         if (failureReason.length > 0) {
-            msg = [NSString stringWithFormat:@"Recipe 填入失败，已插入光标处。%@", msg];
+            status = [NSString stringWithFormat:@"Recipe 填入失败，已插入光标处"];
         }
-        [BrowserTransientToast showMessage:msg inWindow:window duration:2.8];
+        [self showOTPFollowUpToastWithCode:code status:status];
         return;
     }
 
     // 2) 网页 activeElement / 可编辑处插入
     if (!webView) {
-        NSString *msg = copied
-            ? @"已复制验证码到剪贴板，请 ⌘V 粘贴"
-            : @"已收到验证码，请手动粘贴";
-        [BrowserTransientToast showMessage:msg inWindow:window duration:2.8];
+        NSString *status = copied
+            ? @"已复制到剪贴板，请 ⌘V 粘贴"
+            : @"请手动粘贴";
+        [self showOTPFollowUpToastWithCode:code status:status];
         return;
     }
 
@@ -252,33 +267,46 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         if (!strongSelf) {
             return;
         }
-        NSString *status = [result isKindOfClass:[NSString class]] ? (NSString *)result : @"none";
-        BOOL ok = error == nil && status.length > 0 && ![status isEqualToString:@"none"];
+        NSString *resultStatus = [result isKindOfClass:[NSString class]] ? (NSString *)result : @"none";
+        BOOL ok = error == nil && resultStatus.length > 0 && ![resultStatus isEqualToString:@"none"];
         if (ok) {
             [[OTPInbox sharedInbox] markCodeConsumed:code];
         }
-        NSString *msg = nil;
+        NSString *follow = nil;
         if (ok) {
-            msg = copied
-                ? @"已在光标处插入验证码（并已复制到剪贴板）"
-                : @"已在光标处插入验证码";
-            if ([status isEqualToString:@"guess"]) {
-                msg = copied
-                    ? @"已填入疑似验证码输入框（并已复制到剪贴板）"
-                    : @"已填入疑似验证码输入框";
+            follow = copied
+                ? @"已在光标处插入（并已复制到剪贴板）"
+                : @"已在光标处插入";
+            if ([resultStatus isEqualToString:@"guess"]) {
+                follow = copied
+                    ? @"已填入疑似验证码框（并已复制到剪贴板）"
+                    : @"已填入疑似验证码框";
+            }
+            if (failureReason.length > 0) {
+                follow = @"Recipe 填入失败，已改插入光标处";
             }
         } else {
-            msg = copied
-                ? @"已复制验证码到剪贴板，请点输入框后 ⌘V"
-                : @"已收到验证码，请手动粘贴";
+            follow = copied
+                ? @"已复制到剪贴板，请点输入框后 ⌘V"
+                : @"请手动粘贴";
         }
-        if (failureReason.length > 0 && ok) {
-            msg = [NSString stringWithFormat:@"Recipe 填入失败，已改插入光标处。"];
-        }
-        [BrowserTransientToast showMessage:msg
-                                  inWindow:strongSelf.windowController.window
-                                  duration:2.8];
+        [strongSelf showOTPFollowUpToastWithCode:code status:follow];
     }];
+}
+
+/// 延后显示后续状态，避免盖住「验证码：xxxxxx」首条 Toast
+- (void)showOTPFollowUpToastWithCode:(NSString *)code status:(NSString *)status {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        NSWindow *w = self.windowController.window;
+        if (!w || status.length == 0) {
+            return;
+        }
+        NSString *msg = code.length > 0
+            ? [NSString stringWithFormat:@"验证码：%@\n%@", code, status]
+            : status;
+        [BrowserTransientToast showMessage:msg inWindow:w duration:2.6];
+    });
 }
 
 - (void)updateForURL:(NSURL *)url {

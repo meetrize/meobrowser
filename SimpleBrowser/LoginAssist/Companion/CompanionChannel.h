@@ -28,6 +28,11 @@ extern NSNotificationName const CompanionChannelStateDidChangeNotification;
 /// 用户主动刷新配对码（新设备配对）。
 - (NSString *)refreshPairingCodeForNewDevice;
 
+/// 本机局域网 IPv4（优先 en0/en1 Wi‑Fi），不含端口。
+- (NSArray<NSString *> *)localLANIPv4Addresses;
+/// 首选 `IP:端口`，无端口时仅 IP；都没有则 nil。
+- (nullable NSString *)preferredLANEndpoint;
+
 @end
 
 NS_ASSUME_NONNULL_END

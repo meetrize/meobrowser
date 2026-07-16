@@ -9,6 +9,7 @@
 #import "CompanionPairingStore.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
+#import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 
 @interface BrowserLoginAssistSettingsWindowController () <NSTableViewDataSource, NSTableViewDelegate>
@@ -33,10 +34,17 @@
 @property (nonatomic, strong) NSButton *inlineAssistCheck;
 @property (nonatomic, strong) NSButton *promptSaveCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSTextField *pairingCodeLabel;
-@property (nonatomic, strong) NSTextField *companionStatusLabel;
+@property (nonatomic, strong) NSTextField *companionConnectionLabel;
+@property (nonatomic, strong) NSButton *companionEndpointButton;
+@property (nonatomic, strong) NSTextField *pairingCodeCaption;
+@property (nonatomic, strong) NSButton *pairingCodeButton;
+@property (nonatomic, strong) NSButton *refreshPairingButton;
+@property (nonatomic, strong) NSStackView *pairingRow;
+@property (nonatomic, strong) NSTextField *companionHintLabel;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
+@property (nonatomic, copy, nullable) NSString *displayedPairingCode;
+@property (nonatomic, copy, nullable) NSString *displayedEndpoint;
 @end
 
 @implementation BrowserLoginAssistSettingsWindowController
@@ -214,24 +222,53 @@
     // Companion 分区
     NSTextField *companionTitle = [NSTextField labelWithString:@"手机 Companion（短信自动填入）"];
     companionTitle.font = [NSFont boldSystemFontOfSize:13];
-    self.pairingCodeLabel = [NSTextField labelWithString:@"配对码：----"];
-    self.pairingCodeLabel.font = [NSFont monospacedDigitSystemFontOfSize:22 weight:NSFontWeightSemibold];
-    self.companionStatusLabel = [NSTextField wrappingLabelWithString:@"状态：…"];
-    self.companionStatusLabel.font = [NSFont systemFontOfSize:12];
-    self.companionStatusLabel.textColor = [NSColor secondaryLabelColor];
-    self.companionStatusLabel.preferredMaxLayoutWidth = 460;
-    NSButton *refreshPairing = [NSButton buttonWithTitle:@"刷新配对码"
-                                                  target:self
-                                                  action:@selector(refreshPairingCode:)];
-    refreshPairing.bezelStyle = NSBezelStyleRounded;
+
+    self.companionConnectionLabel = [NSTextField labelWithString:@"连接状态：…"];
+    self.companionConnectionLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
+    self.companionConnectionLabel.selectable = NO;
+
+    self.companionEndpointButton = [NSButton buttonWithTitle:@"主机：—"
+                                                      target:self
+                                                      action:@selector(copyCompanionEndpoint:)];
+    self.companionEndpointButton.bordered = NO;
+    self.companionEndpointButton.font = [NSFont monospacedDigitSystemFontOfSize:15 weight:NSFontWeightMedium];
+    self.companionEndpointButton.contentTintColor = [NSColor linkColor];
+    self.companionEndpointButton.toolTip = @"点击复制完整地址（IP:端口）";
+    self.companionEndpointButton.alignment = NSTextAlignmentLeft;
+
+    self.pairingCodeCaption = [NSTextField labelWithString:@"配对码（点击可复制）"];
+    self.pairingCodeCaption.font = [NSFont systemFontOfSize:11];
+    self.pairingCodeCaption.textColor = [NSColor secondaryLabelColor];
+
+    self.pairingCodeButton = [NSButton buttonWithTitle:@"----"
+                                                target:self
+                                                action:@selector(copyPairingCode:)];
+    self.pairingCodeButton.bordered = NO;
+    self.pairingCodeButton.font = [NSFont monospacedDigitSystemFontOfSize:28 weight:NSFontWeightBold];
+    self.pairingCodeButton.toolTip = @"点击复制配对码";
+    self.pairingCodeButton.alignment = NSTextAlignmentLeft;
+
+    self.refreshPairingButton = [NSButton buttonWithTitle:@"刷新配对码"
+                                                   target:self
+                                                   action:@selector(refreshPairingCode:)];
+    self.refreshPairingButton.bezelStyle = NSBezelStyleRounded;
+
+    self.pairingRow = [NSStackView stackViewWithViews:@[self.pairingCodeButton, self.refreshPairingButton]];
+    self.pairingRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.pairingRow.alignment = NSLayoutAttributeCenterY;
+    self.pairingRow.spacing = 12;
+
     NSButton *revokeDevices = [NSButton buttonWithTitle:@"注销已配对设备"
                                                  target:self
                                                  action:@selector(revokeCompanionDevices:)];
     revokeDevices.bezelStyle = NSBezelStyleRounded;
-    NSStackView *companionButtons = [NSStackView stackViewWithViews:@[refreshPairing, revokeDevices]];
-    companionButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    companionButtons.spacing = 8;
-    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。同 Wi‑Fi 使用 Bonjour（_meologin._tcp）。"];
+
+    self.companionHintLabel = [NSTextField wrappingLabelWithString:@""];
+    self.companionHintLabel.font = [NSFont systemFontOfSize:11];
+    self.companionHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.companionHintLabel.preferredMaxLayoutWidth = 460;
+
+    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。手机可填上方主机地址，或同 Wi‑Fi 用 Bonjour 发现。"];
     privacyNote.font = [NSFont systemFontOfSize:11];
     privacyNote.textColor = [NSColor secondaryLabelColor];
     privacyNote.preferredMaxLayoutWidth = 460;
@@ -271,9 +308,12 @@
         self.promptSaveCheck,
         self.statusLabel,
         companionTitle,
-        self.pairingCodeLabel,
-        self.companionStatusLabel,
-        companionButtons,
+        self.companionConnectionLabel,
+        self.companionEndpointButton,
+        self.pairingCodeCaption,
+        self.pairingRow,
+        revokeDevices,
+        self.companionHintLabel,
         privacyNote,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -688,35 +728,129 @@
     if (channel.state == CompanionChannelStateStopped) {
         [channel start];
     }
-    NSString *code = [channel ensurePairingCode];
+
+    BOOL connected = (channel.state == CompanionChannelStateConnected);
     NSUInteger paired = [CompanionPairingStore sharedStore].pairedDevices.count;
-    if (paired > 0 && [code isEqualToString:@"------"]) {
-        self.pairingCodeLabel.stringValue = @"配对码：已配对（新设备请点「刷新配对码」）";
+
+    if (connected) {
+        self.companionConnectionLabel.stringValue = @"● 已连接";
+        if (@available(macOS 10.14, *)) {
+            self.companionConnectionLabel.textColor = [NSColor systemGreenColor];
+        } else {
+            self.companionConnectionLabel.textColor = [NSColor colorWithCalibratedRed:0.1 green:0.55 blue:0.2 alpha:1];
+        }
+        self.companionHintLabel.stringValue = paired > 1
+            ? [NSString stringWithFormat:@"手机已在线推码。另有 %lu 台曾配对设备。", (unsigned long)paired]
+            : @"手机已在线，验证码会自动推送到本浏览器。";
     } else {
-        self.pairingCodeLabel.stringValue = [NSString stringWithFormat:@"配对码：%@", code ?: @"----"];
+        self.companionConnectionLabel.stringValue = @"○ 未连接";
+        if (@available(macOS 10.14, *)) {
+            self.companionConnectionLabel.textColor = [NSColor systemOrangeColor];
+        } else {
+            self.companionConnectionLabel.textColor = [NSColor orangeColor];
+        }
+        self.companionHintLabel.stringValue = paired > 0
+            ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
+            : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
     }
-    NSString *portInfo = channel.listeningPort > 0
-        ? [NSString stringWithFormat:@"端口 %ld · ", (long)channel.listeningPort]
-        : @"";
-    self.companionStatusLabel.stringValue = [NSString stringWithFormat:@"%@%@（已配对 %lu 台）",
-                                             portInfo,
-                                             channel.statusText ?: @"未知",
-                                             (unsigned long)paired];
+
+    NSString *endpoint = [channel preferredLANEndpoint] ?: @"—";
+    self.displayedEndpoint = ([endpoint isEqualToString:@"—"] || [endpoint containsString:@"未检测到"]) ? nil : endpoint;
+    self.companionEndpointButton.title = [NSString stringWithFormat:@"主机：%@", endpoint];
+
+    // 未连接：显著显示配对码；已连接：不显示「已配对」占位，仅在有有效码时展示，并保留刷新
+    NSString *code = [channel ensurePairingCode];
+    BOOL hasUsableCode = (code.length > 0 && ![code isEqualToString:@"------"]);
+    if (!connected && !hasUsableCode) {
+        code = [channel refreshPairingCodeForNewDevice];
+        hasUsableCode = code.length > 0;
+    }
+    self.displayedPairingCode = hasUsableCode ? code : nil;
+
+    if (!connected) {
+        self.pairingCodeCaption.stringValue = @"配对码（点击可复制）";
+        self.pairingCodeCaption.hidden = NO;
+        self.pairingRow.hidden = NO;
+        self.pairingCodeButton.hidden = NO;
+        self.pairingCodeButton.title = hasUsableCode ? code : @"----";
+        self.refreshPairingButton.hidden = NO;
+    } else {
+        self.pairingCodeCaption.stringValue = hasUsableCode
+            ? @"当前配对码（点击可复制；新设备请刷新）"
+            : @"新手机配对时，点「刷新配对码」";
+        self.pairingCodeCaption.hidden = NO;
+        self.pairingRow.hidden = NO;
+        self.pairingCodeButton.hidden = !hasUsableCode;
+        if (hasUsableCode) {
+            self.pairingCodeButton.title = code;
+        }
+        self.refreshPairingButton.hidden = NO;
+    }
+}
+
+- (void)copyPairingCode:(id)sender {
+    (void)sender;
+    NSString *code = self.displayedPairingCode;
+    if (code.length == 0) {
+        code = [[CompanionChannel sharedChannel] ensurePairingCode];
+    }
+    if (code.length == 0 || [code isEqualToString:@"------"]) {
+        self.statusLabel.stringValue = @"暂无配对码，请先点「刷新配对码」。";
+        return;
+    }
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    [pb clearContents];
+    [pb setString:code forType:NSPasteboardTypeString];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"已复制配对码 %@ 到剪贴板", code];
+}
+
+- (void)copyCompanionEndpoint:(id)sender {
+    (void)sender;
+    NSString *endpoint = self.displayedEndpoint;
+    if (endpoint.length == 0) {
+        endpoint = [[CompanionChannel sharedChannel] preferredLANEndpoint];
+    }
+    if (endpoint.length == 0) {
+        self.statusLabel.stringValue = @"暂无可用主机地址。";
+        return;
+    }
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    [pb clearContents];
+    [pb setString:endpoint forType:NSPasteboardTypeString];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"已复制主机地址 %@ 到剪贴板", endpoint];
 }
 
 - (void)refreshPairingCode:(id)sender {
     (void)sender;
     NSString *code = [[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
-    self.pairingCodeLabel.stringValue = [NSString stringWithFormat:@"配对码：%@", code];
-    self.statusLabel.stringValue = @"已刷新配对码（5 分钟内有效）。在 Android Companion 中输入此码。";
+    self.displayedPairingCode = code;
+    self.pairingCodeButton.hidden = NO;
+    self.pairingCodeButton.title = code.length > 0 ? code : @"----";
+    self.pairingRow.hidden = NO;
+    // 刷新后直接复制，方便贴到手机
+    if (code.length > 0) {
+        NSPasteboard *pb = NSPasteboard.generalPasteboard;
+        [pb clearContents];
+        [pb setString:code forType:NSPasteboardTypeString];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已刷新并复制配对码 %@（5 分钟内有效）", code];
+    } else {
+        self.statusLabel.stringValue = @"刷新配对码失败。";
+    }
     [self refreshCompanionUI];
 }
 
 - (void)revokeCompanionDevices:(id)sender {
     (void)sender;
     [[CompanionPairingStore sharedStore] revokeAllDevices];
-    (void)[[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
-    self.statusLabel.stringValue = @"已注销全部配对设备，请用新配对码重新配对。";
+    NSString *code = [[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
+    if (code.length > 0) {
+        NSPasteboard *pb = NSPasteboard.generalPasteboard;
+        [pb clearContents];
+        [pb setString:code forType:NSPasteboardTypeString];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已注销设备，新配对码 %@ 已复制", code];
+    } else {
+        self.statusLabel.stringValue = @"已注销全部配对设备，请刷新配对码。";
+    }
     [self refreshCompanionUI];
 }
 
