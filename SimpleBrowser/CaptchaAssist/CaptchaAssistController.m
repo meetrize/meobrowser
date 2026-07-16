@@ -6,6 +6,7 @@
 #import "CaptchaCaptureService.h"
 #import "CaptchaSessionLog.h"
 #import "CaptchaAssistPanel.h"
+#import "CaptchaPipeline.h"
 #import "BrowserTransientToast.h"
 
 static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
@@ -18,6 +19,7 @@ static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
 @property (nonatomic, copy, nullable) NSString *lastDebounceKey;
 @property (nonatomic, assign) NSTimeInterval lastDebounceTimestamp;
 @property (nonatomic, copy, nullable) NSString *statusMessage;
+@property (nonatomic, assign) BOOL isSolving;
 @end
 
 @implementation CaptchaAssistController
@@ -193,10 +195,14 @@ static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
 }
 
 - (void)refreshPanelContent {
+    CaptchaDetection *solvable = [CaptchaPipeline preferredSolvableDetectionFrom:self.currentDetections];
+    BOOL solveEnabled = (solvable != nil) && [CaptchaAssistPreferences assistEnabled];
     [self.panel updateWithDetections:self.currentDetections
                        previewImage:self.lastPreviewImage
                             enabled:[CaptchaAssistPreferences assistEnabled]
-                             status:self.statusMessage];
+                             status:self.statusMessage
+                            solving:self.isSolving
+                       solveEnabled:solveEnabled];
 }
 
 #pragma mark - Capture
@@ -248,6 +254,56 @@ static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
     }];
 }
 
+#pragma mark - Solve (CA-1)
+
+- (void)solveNow {
+    if (self.isSolving) {
+        return;
+    }
+    if (![CaptchaAssistPreferences assistEnabled]) {
+        self.statusMessage = @"请先启用验证码助手。";
+        [self refreshPanelIfVisible];
+        return;
+    }
+
+    CaptchaDetection *target = [CaptchaPipeline preferredSolvableDetectionFrom:self.currentDetections];
+    if (!target) {
+        self.statusMessage = @"当前页无可求解的 OCR/算术验证码。";
+        [self refreshPanelIfVisible];
+        return;
+    }
+
+    WKWebView *webView = self.windowController.webView;
+    if (!webView) {
+        self.statusMessage = @"当前没有可操作的页面。";
+        [self refreshPanelIfVisible];
+        return;
+    }
+
+    self.isSolving = YES;
+    self.statusMessage = @"正在求解 OCR / 算术…";
+    [self refreshPanelIfVisible];
+
+    __weak typeof(self) weakSelf = self;
+    [CaptchaPipeline solveAllSolvableFrom:self.currentDetections inWebView:webView completion:^(BOOL success, NSString *message, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.isSolving = NO;
+        if (success) {
+            strongSelf.statusMessage = message ?: @"求解成功";
+            NSWindow *window = strongSelf.windowController.window;
+            if (window) {
+                [BrowserTransientToast showMessage:strongSelf.statusMessage inWindow:window duration:2.5];
+            }
+        } else {
+            strongSelf.statusMessage = message.length > 0 ? message : (error.localizedDescription ?: @"求解失败");
+        }
+        [strongSelf refreshPanelIfVisible];
+    }];
+}
+
 #pragma mark - Panel delegate
 
 - (void)captchaAssistPanelDidRequestClose:(CaptchaAssistPanel *)panel {
@@ -273,7 +329,7 @@ static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
     (void)panel;
     [CaptchaAssistPreferences setAssistEnabled:enabled];
     self.statusMessage = enabled
-        ? @"已启用点亮与后续自动能力（CA-0 仅检测/截图）。"
+        ? @"已启用点亮与 OCR/算术求解。"
         : @"已关闭：仍检测但不点亮工具栏。";
     [self refreshButtonAppearance];
     [self refreshPanelContent];
@@ -289,6 +345,11 @@ static const NSTimeInterval kDetectionDebounceSeconds = 5.0;
     (void)panel;
     NSURL *root = [CaptchaSessionLog sessionsRootDirectory];
     [[NSWorkspace sharedWorkspace] openURL:root];
+}
+
+- (void)captchaAssistPanelDidRequestSolve:(CaptchaAssistPanel *)panel {
+    (void)panel;
+    [self solveNow];
 }
 
 @end

@@ -8,6 +8,7 @@
 @property (nonatomic, strong) NSImageView *previewView;
 @property (nonatomic, strong) NSButton *enabledCheckbox;
 @property (nonatomic, strong) NSButton *captureButton;
+@property (nonatomic, strong) NSButton *solveButton;
 @property (nonatomic, strong) NSButton *clearButton;
 @property (nonatomic, strong) NSButton *revealButton;
 @property (nonatomic, strong) id localMouseMonitor;
@@ -16,7 +17,7 @@
 @implementation CaptchaAssistPanel
 
 - (instancetype)init {
-    NSRect contentRect = NSMakeRect(0, 0, 340, 420);
+    NSRect contentRect = NSMakeRect(0, 0, 340, 460);
     self = [super initWithContentRect:contentRect
                             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow)
                               backing:NSBackingStoreBuffered
@@ -59,19 +60,22 @@
     self.captureButton = [NSButton buttonWithTitle:@"立即截图"
                                             target:self
                                             action:@selector(capture:)];
+    self.solveButton = [NSButton buttonWithTitle:@"求解（OCR/算术）"
+                                          target:self
+                                          action:@selector(solve:)];
     self.clearButton = [NSButton buttonWithTitle:@"清空检测"
                                           target:self
                                           action:@selector(clear:)];
     self.revealButton = [NSButton buttonWithTitle:@"打开会话目录"
                                            target:self
                                            action:@selector(reveal:)];
-    for (NSButton *b in @[self.captureButton, self.clearButton, self.revealButton]) {
+    for (NSButton *b in @[self.captureButton, self.solveButton, self.clearButton, self.revealButton]) {
         b.bezelStyle = NSBezelStyleRounded;
         b.translatesAutoresizingMaskIntoConstraints = NO;
         b.controlSize = NSControlSizeSmall;
     }
 
-    NSStackView *buttons = [NSStackView stackViewWithViews:@[self.captureButton, self.clearButton, self.revealButton]];
+    NSStackView *buttons = [NSStackView stackViewWithViews:@[self.captureButton, self.solveButton, self.clearButton, self.revealButton]];
     buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     buttons.spacing = 8;
     buttons.translatesAutoresizingMaskIntoConstraints = NO;
@@ -113,8 +117,19 @@
 - (void)updateWithDetections:(NSArray<CaptchaDetection *> *)detections
                previewImage:(NSImage *)image
                     enabled:(BOOL)enabled
-                     status:(NSString *)status {
+                     status:(NSString *)status
+                    solving:(BOOL)solving
+               solveEnabled:(BOOL)solveEnabled {
     self.enabledCheckbox.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.captureButton.enabled = !solving;
+    self.solveButton.enabled = solveEnabled && !solving;
+    self.clearButton.enabled = !solving;
+    self.revealButton.enabled = !solving;
+    if (solving) {
+        self.solveButton.title = @"求解中…";
+    } else {
+        self.solveButton.title = @"求解（OCR/算术）";
+    }
     if (status.length > 0) {
         self.statusLabel.stringValue = status;
     }
@@ -137,7 +152,7 @@
         }
         self.detailLabel.stringValue = [lines componentsJoinedByString:@"\n"];
         if (status.length == 0) {
-            self.statusLabel.stringValue = @"CA-0：仅检测与截图，暂不自动解题。";
+            self.statusLabel.stringValue = @"CA-1：支持 OCR / 算术自动填入。";
         }
     }
 
@@ -236,6 +251,13 @@
     (void)sender;
     if ([self.panelDelegate respondsToSelector:@selector(captchaAssistPanelDidRequestRevealSessions:)]) {
         [self.panelDelegate captchaAssistPanelDidRequestRevealSessions:self];
+    }
+}
+
+- (void)solve:(id)sender {
+    (void)sender;
+    if ([self.panelDelegate respondsToSelector:@selector(captchaAssistPanelDidRequestSolve:)]) {
+        [self.panelDelegate captchaAssistPanelDidRequestSolve:self];
     }
 }
 

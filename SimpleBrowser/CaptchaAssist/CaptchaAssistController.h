@@ -19,6 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(nullable NSURL *)url;
 
 - (IBAction)toggleCaptchaAssistPanel:(nullable id)sender;
+- (void)solveNow;
 - (void)captureNow;
 
 @end

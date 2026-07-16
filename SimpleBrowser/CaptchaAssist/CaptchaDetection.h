@@ -13,6 +13,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *pageURL;
 @property (nonatomic, strong) NSDate *detectedAt;
 @property (nonatomic, copy, nullable) NSString *detail;
+@property (nonatomic, copy, nullable) NSString *inputSelector;
+@property (nonatomic, copy, nullable) NSString *imageSelector;
+@property (nonatomic, copy, nullable) NSString *containerSelector;
+@property (nonatomic, copy, nullable) NSString *mathText;
 
 + (nullable instancetype)detectionFromMessageBody:(id)body pageURL:(nullable NSString *)pageURL;
 

@@ -8,9 +8,13 @@
 		<data>
 		27EfR9Y5vdqxhlTRgEdRFvkTsO4=
 		</data>
+		<key>Resources/CaptchaAssist/helpers/captcha_helper.py</key>
+		<data>
+		VUBHJ1L/Jeza2VWlg9ZPzkT1KNE=
+		</data>
 		<key>Resources/captcha-assist-test.html</key>
 		<data>
-		pxmMzSnUNjTtQSFUZN6+2S1XY0w=
+		9MpcS1w7hR0L56VF+DFyZZdArA8=
 		</data>
 		<key>Resources/login-assist-test.html</key>
 		<data>
@@ -26,11 +30,18 @@
 			q4kXU9BxlLz8IyT6MGmw53bPXKHUmM1WHA7FHeGZRrE=
 			</data>
 		</dict>
+		<key>Resources/CaptchaAssist/helpers/captcha_helper.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			SsMVrvN49X272JX63RSHF7+p6aluXaNBW+F2w/mHMeA=
+			</data>
+		</dict>
 		<key>Resources/captcha-assist-test.html</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			rnNCGhEnxUzmfyD+0XKOcQxUV39Cm3WTLkMPkXnlq3c=
+			jJlWfDGzkYZCK8W6/iYWTWfqxObi0ipAYKfs+jhfgfw=
 			</data>
 		</dict>
 		<key>Resources/login-assist-test.html</key>

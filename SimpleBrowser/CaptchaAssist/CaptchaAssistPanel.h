@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)captchaAssistPanelDidRequestClear:(CaptchaAssistPanel *)panel;
 - (void)captchaAssistPanelDidRequestToggleEnabled:(CaptchaAssistPanel *)panel enabled:(BOOL)enabled;
 - (void)captchaAssistPanelDidRequestRevealSessions:(CaptchaAssistPanel *)panel;
+- (void)captchaAssistPanelDidRequestSolve:(CaptchaAssistPanel *)panel;
 @end
 
 @interface CaptchaAssistPanel : NSPanel
@@ -24,7 +25,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateWithDetections:(NSArray<CaptchaDetection *> *)detections
                    previewImage:(nullable NSImage *)image
                       enabled:(BOOL)enabled
-                       status:(nullable NSString *)status;
+                       status:(nullable NSString *)status
+                      solving:(BOOL)solving
+                 solveEnabled:(BOOL)solveEnabled;
 
 @end
 

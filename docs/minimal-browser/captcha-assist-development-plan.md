@@ -2,7 +2,7 @@
 
 > 基于 [captcha-assist-design.md](captcha-assist-design.md) 的分阶段实施计划。  
 > 前置条件：多标签 + ActionGroup + Login Assist（`LoginRunner` / ScriptMessage 代理）可用；文本输入用 SBKit。  
-> **状态：CA-0 骨架已落地（2026-07-16）；CA-1～CA-6 未开工。**  
+> **状态：CA-0 / CA-1 已落地（2026-07-16）；CA-2～CA-6 未开工。**  
 > 关联：[auto-login-design.md](auto-login-design.md) · [auto-login-development-plan.md](auto-login-development-plan.md) · [professional-features-roadmap.md](professional-features-roadmap.md)
 
 ---
@@ -30,7 +30,7 @@
 | 阶段 | 名称 | 对应设计 | 状态 | 产出 |
 |------|------|----------|------|------|
 | Phase CA-0 | 检测 + 截图骨架 | §3 / §5 / §8 | **完成** | Detector + Capture + 面板 + 日志；不解题 |
-| Phase CA-1 | 文本 / 算术 | §2.1 A–B / §4.4 | 未开始 | ddddocr Helper + type |
+| Phase CA-1 | 文本 / 算术 | §2.1 A–B / §4.4 | **完成** | ddddocr Helper + 原生算术 + type |
 | Phase CA-2 | 滑块 | §2.1 E / §4.5 | 未开始 | OpenCV 缺口 + 轨迹 + Geetest/Aliyun |
 | Phase CA-3 | VLM 通用 | §3.3 / §4.4 | 未开始 | ModelGateway + Plan/Act |
 | Phase CA-4 | Login 集成 | §1.5 / §4.6 | 未开始 | `solveCaptcha` 步骤 |
@@ -94,20 +94,27 @@
 
 ### 任务清单
 
-- [ ] **1.1** `Resources/CaptchaAssist/helpers/captcha_helper.py`：ddddocr / 算术解析 CLI  
-- [ ] **1.2** `CaptchaHelperBridge`：`NSTask` 调 Helper，超时与错误映射  
-- [ ] **1.3** `MathCaptchaAdapter`：解析「a ± b = ?」  
-- [ ] **1.4** `OCRCaptchaAdapter`：图 → 文本  
-- [ ] **1.5** `CaptchaActor`（最小）：同源 `type` + 派发 `input`/`change`（可复用 LoginRunner fill 片段）  
-- [ ] **1.6** Pipeline：Detect → Capture → Tier1/2 Plan → Act → Verify（输入框有值 / 提交按钮可点）  
-- [ ] **1.7** 面板增加「求解（OCR/算术）」按钮；失败可读错误  
-- [ ] **1.8** 测试页增加可提交的 OCR / 算术样例与期望答案  
+- [x] **1.1** `Resources/CaptchaAssist/helpers/captcha_helper.py`：ddddocr / 算术解析 CLI  
+- [x] **1.2** `CaptchaHelperBridge`：`NSTask` 调 Helper，超时与错误映射  
+- [x] **1.3** `MathCaptchaAdapter`：解析「a ± b = ?」  
+- [x] **1.4** `OCRCaptchaAdapter`：图 → 文本  
+- [x] **1.5** `CaptchaActor`（最小）：同源 `type` + 派发 `input`/`change`  
+- [x] **1.6** Pipeline：Detect → Capture → Tier1/2 Plan → Act → Verify  
+- [x] **1.7** 面板增加「求解（OCR/算术）」按钮；失败可读错误  
+- [x] **1.8** 测试页增加可提交的 OCR / 算术样例与期望答案  
 
 ### 完成标准
 
-- 测试页 OCR：成功率 ≥ 80%（固定样例图可重复）。  
-- 算术题：规则引擎 100% 通过固定用例。  
-- Helper 缺失时提示安装路径，不崩溃。
+- 测试页 OCR：成功率 ≥ 80%（固定样例图可重复；需本机 `pip3 install ddddocr`）。  
+- 算术题：规则引擎 100% 通过固定用例（离线，无需 Python 包）。  
+- Helper 缺失 / ddddocr 未装时提示安装路径，不崩溃。
+
+### 手测清单
+
+- [ ] 算术：启用助手 → 求解 → `#mathInput` 为 `8` → 点「验证算术」通过  
+- [ ] OCR：已装 ddddocr → 求解 → `#ocrInput` 接近 `a7Kp` → 「验证 OCR」通过  
+- [ ] 未装 ddddocr：OCR 求解给出可读错误，算术仍可用  
+- [ ] 仅检测到滑块时：求解按钮不可用或提示不支持  
 
 ---
 
@@ -251,3 +258,4 @@ SimpleBrowser/CaptchaAssist/
 |------|------|
 | 2026-07-16 | 初稿：CA-0～CA-6 任务与验收；与设计稿 §8 对齐 |
 | 2026-07-16 | CA-0 骨架落地：Detector / Capture / Panel / 工具栏 / 测试页 |
+| 2026-07-16 | CA-1 落地：算术规则引擎 + ddddocr Helper + Pipeline/Actor/面板求解 |

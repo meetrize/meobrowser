@@ -24,6 +24,10 @@
         : 0.5;
     d.frameHint = [dict[@"frame"] isKindOfClass:[NSString class]] ? dict[@"frame"] : nil;
     d.detail = [dict[@"detail"] isKindOfClass:[NSString class]] ? dict[@"detail"] : nil;
+    d.inputSelector = [dict[@"inputSelector"] isKindOfClass:[NSString class]] ? dict[@"inputSelector"] : nil;
+    d.imageSelector = [dict[@"imageSelector"] isKindOfClass:[NSString class]] ? dict[@"imageSelector"] : nil;
+    d.containerSelector = [dict[@"containerSelector"] isKindOfClass:[NSString class]] ? dict[@"containerSelector"] : nil;
+    d.mathText = [dict[@"mathText"] isKindOfClass:[NSString class]] ? dict[@"mathText"] : nil;
     d.pageURL = pageURL;
     d.detectedAt = [NSDate date];
     d.rect = CGRectNull;
@@ -52,6 +56,10 @@
     c.pageURL = self.pageURL;
     c.detectedAt = self.detectedAt;
     c.detail = self.detail;
+    c.inputSelector = self.inputSelector;
+    c.imageSelector = self.imageSelector;
+    c.containerSelector = self.containerSelector;
+    c.mathText = self.mathText;
     return c;
 }
 
@@ -70,6 +78,18 @@
     }
     if (self.detail) {
         d[@"detail"] = self.detail;
+    }
+    if (self.inputSelector) {
+        d[@"inputSelector"] = self.inputSelector;
+    }
+    if (self.imageSelector) {
+        d[@"imageSelector"] = self.imageSelector;
+    }
+    if (self.containerSelector) {
+        d[@"containerSelector"] = self.containerSelector;
+    }
+    if (self.mathText) {
+        d[@"mathText"] = self.mathText;
     }
     if (!CGRectIsNull(self.rect)) {
         d[@"rect"] = @{

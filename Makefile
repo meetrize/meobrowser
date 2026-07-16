@@ -76,6 +76,11 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaSessionLog.m \
                    $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaAssistPanel.m \
                    $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaAssistController.m \
+                   $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaHelperBridge.m \
+                   $(BROWSER_SRC_DIR)/CaptchaAssist/MathCaptchaAdapter.m \
+                   $(BROWSER_SRC_DIR)/CaptchaAssist/OCRCaptchaAdapter.m \
+                   $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaActor.m \
+                   $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaPipeline.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
                    $(SBKIT_DIR)/SBTextField.m \
@@ -170,6 +175,8 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
 	cp "$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html" "$(BROWSER_RES_DIR)/login-assist-test.html"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/captcha-assist-test.html" "$(BROWSER_RES_DIR)/captcha-assist-test.html"
+	mkdir -p "$(BROWSER_RES_DIR)/CaptchaAssist/helpers"
+	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py" "$(BROWSER_RES_DIR)/CaptchaAssist/helpers/captcha_helper.py"
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
 		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \
