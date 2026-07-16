@@ -1,5 +1,6 @@
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
+#import "BrowserUserAgent.h"
 #import "BrowsingPreferences.h"
 
 @interface BrowserTab ()
@@ -45,6 +46,7 @@
         return self.webView;
     }
     self.webView = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:self.configuration];
+    self.webView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
     return self.webView;
 }
 

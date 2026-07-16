@@ -383,4 +383,77 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
     }];
 }
 
++ (BOOL)dataRecord:(WKWebsiteDataRecord *)record matchesHost:(NSString *)host {
+    if (!record || host.length == 0) {
+        return NO;
+    }
+    NSString *normalizedHost = host.lowercaseString;
+    if ([normalizedHost hasPrefix:@"www."]) {
+        normalizedHost = [normalizedHost substringFromIndex:4];
+    }
+    NSString *display = record.displayName.lowercaseString ?: @"";
+    if (display.length == 0) {
+        return NO;
+    }
+    if ([display hasPrefix:@"www."]) {
+        display = [display substringFromIndex:4];
+    }
+    if ([display isEqualToString:normalizedHost]) {
+        return YES;
+    }
+    NSString *dotHost = [@"." stringByAppendingString:normalizedHost];
+    if ([display hasSuffix:dotHost] || [normalizedHost hasSuffix:[@"." stringByAppendingString:display]]) {
+        return YES;
+    }
+    // displayName 有时是 eTLD+1，host 为子域。
+    if ([normalizedHost hasSuffix:[@"." stringByAppendingString:display]]) {
+        return YES;
+    }
+    return NO;
+}
+
++ (void)clearWebsiteDataForHost:(NSString *)host
+                     completion:(void (^)(NSError * _Nullable error))completion {
+    void (^finish)(NSError * _Nullable) = ^(NSError * _Nullable error) {
+        if (!completion) {
+            return;
+        }
+        if ([NSThread isMainThread]) {
+            completion(error);
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(error);
+            });
+        }
+    };
+
+    NSString *trimmed = [host stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        finish([NSError errorWithDomain:NSPOSIXErrorDomain
+                                   code:EINVAL
+                               userInfo:@{NSLocalizedDescriptionKey: @"当前页没有可清除的网站主机名。"}]);
+        return;
+    }
+
+    NSSet<NSString *> *types = [WKWebsiteDataStore allWebsiteDataTypes];
+    [[WKWebsiteDataStore defaultDataStore] fetchDataRecordsOfTypes:types
+                                                 completionHandler:^(NSArray<WKWebsiteDataRecord *> *records) {
+        NSMutableArray<WKWebsiteDataRecord *> *matched = [NSMutableArray array];
+        for (WKWebsiteDataRecord *record in records) {
+            if ([self dataRecord:record matchesHost:trimmed]) {
+                [matched addObject:record];
+            }
+        }
+        if (matched.count == 0) {
+            finish(nil);
+            return;
+        }
+        [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:types
+                                                  forDataRecords:matched
+                                               completionHandler:^{
+            finish(nil);
+        }];
+    }];
+}
+
 @end

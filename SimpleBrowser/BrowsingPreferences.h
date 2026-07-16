@@ -46,6 +46,10 @@ extern NSString * const BrowserWindowSessionFrameKey;
 /// 清除 WebKit 网站数据与共享 URL 缓存；completion 在主线程。
 + (void)clearWebsiteDataWithCompletion:(void (^ _Nullable)(NSError * _Nullable error))completion;
 
+/// 仅清除与 host 匹配的网站数据记录（不删 Recipe/Keychain）；completion 在主线程。
++ (void)clearWebsiteDataForHost:(NSString *)host
+                     completion:(void (^ _Nullable)(NSError * _Nullable error))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

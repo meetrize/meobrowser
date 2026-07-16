@@ -1,6 +1,7 @@
 #import "BrowserTabController.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
+#import "BrowserRiskHostPolicy.h"
 #import "BrowsingPreferences.h"
 #import <AppKit/AppKit.h>
 
@@ -461,6 +462,10 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage) {
             continue;
         }
+        NSURL *protectURL = tab.webView.URL ?: tab.restorableURL;
+        if ([BrowserRiskHostPolicy URLIsHibernationProtected:protectURL]) {
+            continue;
+        }
         if (now - tab.lastActiveTimestamp >= kHibernateIdleSeconds) {
             [tab hibernate];
             changed = YES;
@@ -516,14 +521,29 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     return nil;
 }
 
+/// 预算淘汰优先级：非保护优先；同级再比非 key 窗、再比最久未活动。
++ (NSInteger)hibernationVictimRankForTab:(BrowserTab *)tab isNonKeyWindow:(BOOL)isNonKey {
+    NSURL *url = tab.webView.URL ?: tab.restorableURL;
+    BOOL protectedHost = [BrowserRiskHostPolicy URLIsHibernationProtected:url];
+    // 更大 = 更不宜被杀；选择时取 rank 更小者。
+    NSInteger rank = 0;
+    if (protectedHost) {
+        rank += 100;
+    }
+    if (!isNonKey) {
+        rank += 10;
+    }
+    return rank;
+}
+
 + (BOOL)enforceGlobalLiveWebViewBudget {
     BOOL changed = NO;
     while ([self globalLiveWebViewCount] > kMaxLiveWebViewsGlobal) {
         BrowserTabController *keyController = [self keyWindowTabController];
         BrowserTab *victim = nil;
         BrowserTabController *victimController = nil;
+        NSInteger bestRank = NSIntegerMax;
         NSTimeInterval oldest = DBL_MAX;
-        BOOL victimIsNonKey = NO;
 
         for (BrowserTabController *controller in [self registeredControllers]) {
             BOOL isNonKey = (controller != keyController);
@@ -531,23 +551,13 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
                 if (tab == controller.selectedTab || tab.webView == nil || tab.isNewTabPage) {
                     continue;
                 }
-                if (victim == nil) {
+                NSInteger rank = [self hibernationVictimRankForTab:tab isNonKeyWindow:isNonKey];
+                if (victim == nil ||
+                    rank < bestRank ||
+                    (rank == bestRank && tab.lastActiveTimestamp < oldest)) {
                     victim = tab;
                     victimController = controller;
-                    oldest = tab.lastActiveTimestamp;
-                    victimIsNonKey = isNonKey;
-                    continue;
-                }
-                if (isNonKey && !victimIsNonKey) {
-                    victim = tab;
-                    victimController = controller;
-                    oldest = tab.lastActiveTimestamp;
-                    victimIsNonKey = YES;
-                    continue;
-                }
-                if (isNonKey == victimIsNonKey && tab.lastActiveTimestamp < oldest) {
-                    victim = tab;
-                    victimController = controller;
+                    bestRank = rank;
                     oldest = tab.lastActiveTimestamp;
                 }
             }
@@ -577,6 +587,12 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         [candidates addObject:tab];
     }
     [candidates sortUsingComparator:^NSComparisonResult(BrowserTab *a, BrowserTab *b) {
+        BOOL aProtected = [BrowserRiskHostPolicy URLIsHibernationProtected:(a.webView.URL ?: a.restorableURL)];
+        BOOL bProtected = [BrowserRiskHostPolicy URLIsHibernationProtected:(b.webView.URL ?: b.restorableURL)];
+        if (aProtected != bProtected) {
+            // 非保护排前（先休眠）。
+            return aProtected ? NSOrderedDescending : NSOrderedAscending;
+        }
         if (a.lastActiveTimestamp < b.lastActiveTimestamp) {
             return NSOrderedAscending;
         }

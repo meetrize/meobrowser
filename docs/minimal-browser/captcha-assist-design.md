@@ -2,7 +2,7 @@
 
 > 目标：为 MeoBrowser 提供**可控、可解释、本地优先**的图形验证码识别与交互能力，与登录助手（Login Assist）协同，覆盖主流验证码形态；通过多模态大模型 + 专用小模型 + 规则引擎组合，自动完成识别、点击、拖拽、计算、拼接、旋转等操作。  
 > 状态：**设计草案**（2026-07-16）  
-> 关联：[auto-login-design.md](auto-login-design.md) · [login-form-inline-design.md](login-form-inline-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [companion-protocol.md](companion-protocol.md) · [design.md](design.md)
+> 关联：[auto-login-design.md](auto-login-design.md) · [login-form-inline-design.md](login-form-inline-design.md) · [anti-bot-session-design.md](anti-bot-session-design.md)（减触发 /sorry/ 等误伤） · [professional-features-roadmap.md](professional-features-roadmap.md) · [companion-protocol.md](companion-protocol.md) · [design.md](design.md)
 
 ---
 

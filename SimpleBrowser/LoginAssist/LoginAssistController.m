@@ -1,5 +1,6 @@
 #import "LoginAssistController.h"
 #import "BrowserWindowController.h"
+#import "BrowserRiskHostPolicy.h"
 #import "LoginRecipe.h"
 #import "LoginRecipeStore.h"
 #import "LoginCredentialStore.h"
@@ -313,6 +314,11 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     if (!url || url.absoluteString.length == 0) {
         self.matchedRecipes = @[];
         self.hasDetectedLoginForm = NO;
+    } else if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
+        self.matchedRecipes = @[];
+        self.hasDetectedLoginForm = NO;
+        self.detectedHasOTP = NO;
+        self.detectedFormId = nil;
     } else {
         self.matchedRecipes = [[LoginRecipeStore sharedStore] recipesMatchingURL:url];
     }
@@ -354,6 +360,9 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 - (void)scheduleAutoLoginIfNeededForURL:(NSURL *)url {
     [self cancelPendingAutoLogin];
     if (self.isRunning || !url) {
+        return;
+    }
+    if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
         return;
     }
     LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url];
@@ -619,6 +628,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         [self showError:@"无法登录" message:@"当前没有可操作的网页。" recipeID:recipe.recipeID];
         return;
     }
+    if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:webView.URL]) {
+        [BrowserTransientToast showMessage:@"当前页为人机验证或高风险域，请手动完成"
+                                  inWindow:self.windowController.window
+                                  duration:2.5];
+        return;
+    }
 
     NSError *loadError = nil;
     LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID
@@ -797,6 +812,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
     if (![LoginAssistPreferences inlineAssistEnabled]) {
+        return;
+    }
+    NSURL *pageURL = message.webView.URL;
+    if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:pageURL]) {
+        self.hasDetectedLoginForm = NO;
+        [self refreshButtonAppearance];
         return;
     }
     if (![message.body isKindOfClass:[NSDictionary class]]) {

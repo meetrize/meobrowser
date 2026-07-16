@@ -177,8 +177,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 #pragma mark - UI Setup
 
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
-    // WKWebView 默认 UA 不含 Safari 标识，部分站点（如百度）会识别为内嵌 WebView 并反复跳转验证页。
-    configuration.applicationNameForUserAgent = @"Version/18.0 Safari/605.1.15";
+    // UA 由 BrowserUserAgent + WebView.customUserAgent 对齐本机 Safari；此处不再写死 Version。
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     [self.loginAssistController configureWebViewConfiguration:configuration];

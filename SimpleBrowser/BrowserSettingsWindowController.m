@@ -1,18 +1,24 @@
 #import "BrowserSettingsWindowController.h"
 #import "BrowsingPreferences.h"
+#import "BrowserUserAgent.h"
+#import "AppDelegate.h"
+#import "BrowserWindowController.h"
+#import <WebKit/WebKit.h>
 
 @interface BrowserSettingsWindowController ()
 @property (nonatomic, strong) NSPopUpButton *searchEnginePopUp;
 @property (nonatomic, strong) NSTextField *defaultBrowserStatusLabel;
 @property (nonatomic, strong) NSButton *setDefaultBrowserButton;
 @property (nonatomic, strong) NSButton *clearWebsiteDataButton;
+@property (nonatomic, strong) NSButton *userAgentCopyButton;
 @property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
+@property (nonatomic, strong) NSTextField *privacyHintLabel;
 @end
 
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 310)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 440, 400)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -79,7 +85,7 @@
     NSTextField *browserHint = [NSTextField wrappingLabelWithString:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。更改时系统可能会弹出确认对话框。"];
     browserHint.font = [NSFont systemFontOfSize:11];
     browserHint.textColor = [NSColor secondaryLabelColor];
-    browserHint.preferredMaxLayoutWidth = 388;
+    browserHint.preferredMaxLayoutWidth = 408;
 
     NSBox *separator2 = [[NSBox alloc] initWithFrame:NSZeroRect];
     separator2.boxType = NSBoxSeparator;
@@ -94,14 +100,31 @@
     self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
     self.clearWebsiteDataButton.controlSize = NSControlSizeRegular;
 
+    self.userAgentCopyButton = [NSButton buttonWithTitle:@"复制 User-Agent"
+                                                  target:self
+                                                  action:@selector(copyUserAgentClicked:)];
+    self.userAgentCopyButton.bezelStyle = NSBezelStyleRounded;
+    self.userAgentCopyButton.controlSize = NSControlSizeRegular;
+
     self.clearWebsiteDataStatusLabel = [NSTextField labelWithString:@"缓存、Cookie 与网站本地存储"];
     self.clearWebsiteDataStatusLabel.font = [NSFont systemFontOfSize:11];
     self.clearWebsiteDataStatusLabel.textColor = [NSColor secondaryLabelColor];
 
-    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[self.clearWebsiteDataButton, self.clearWebsiteDataStatusLabel]];
+    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[
+        self.clearWebsiteDataButton,
+        self.userAgentCopyButton,
+        self.clearWebsiteDataStatusLabel
+    ]];
     privacyRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     privacyRow.alignment = NSLayoutAttributeCenterY;
     privacyRow.spacing = 12;
+
+    self.privacyHintLabel = [NSTextField wrappingLabelWithString:
+        @"频繁清除 Cookie 可能导致 Google 等站点反复要求人机验证。"
+        @"若使用 VPN/共享网络仍频繁验证，可先关闭 VPN 用本机网络重试。"];
+    self.privacyHintLabel.font = [NSFont systemFontOfSize:11];
+    self.privacyHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.privacyHintLabel.preferredMaxLayoutWidth = 408;
 
     NSStackView *root = [NSStackView stackViewWithViews:@[
         searchGrid,
@@ -113,6 +136,7 @@
         separator2,
         privacyCaption,
         privacyRow,
+        self.privacyHintLabel,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
@@ -131,9 +155,23 @@
         [separator2.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [browserRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [privacyRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.privacyHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
     ]];
 
     [self refreshDefaultBrowserStatus];
+}
+
+- (nullable NSString *)currentBrowserPageHost {
+    id delegate = NSApp.delegate;
+    if (![delegate isKindOfClass:[AppDelegate class]]) {
+        return nil;
+    }
+    BrowserWindowController *browser = [(AppDelegate *)delegate keyBrowserWindowController];
+    NSURL *url = browser.webView.URL;
+    if (![BrowsingPreferences isPersistableURL:url]) {
+        return nil;
+    }
+    return url.host;
 }
 
 - (void)selectCurrentSearchEngineInPopUp {
@@ -196,26 +234,57 @@
     }];
 }
 
+- (void)copyUserAgentClicked:(id)sender {
+    (void)sender;
+    NSString *ua = [BrowserUserAgent safariAlignedUserAgent];
+    if (ua.length == 0) {
+        self.clearWebsiteDataStatusLabel.stringValue = @"无法读取 User-Agent";
+        return;
+    }
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:ua forType:NSPasteboardTypeString];
+    self.clearWebsiteDataStatusLabel.stringValue = @"已复制 User-Agent";
+}
+
 - (void)clearWebsiteDataClicked:(id)sender {
     (void)sender;
+    NSString *currentHost = [self currentBrowserPageHost];
+
     NSAlert *confirm = [[NSAlert alloc] init];
     confirm.messageText = @"清除网站数据？";
-    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。不会删除「登录助手」中保存的账号配置。";
+    confirm.informativeText =
+        @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。"
+        @"不会删除「登录助手」中保存的账号配置。\n\n"
+        @"频繁清除全部数据可能导致 Google 等站点反复要求人机验证。";
     confirm.alertStyle = NSAlertStyleWarning;
-    [confirm addButtonWithTitle:@"清除"];
+    [confirm addButtonWithTitle:@"清除全部"];
+    NSButton *currentButton = [confirm addButtonWithTitle:@"清除当前站点"];
+    currentButton.enabled = (currentHost.length > 0);
     [confirm addButtonWithTitle:@"取消"];
+
     __weak typeof(self) weakSelf = self;
     [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
-        if (returnCode != NSAlertFirstButtonReturn) {
-            return;
-        }
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
         }
+        if (returnCode == NSAlertThirdButtonReturn) {
+            return;
+        }
+        BOOL clearAll = (returnCode == NSAlertFirstButtonReturn);
+        BOOL clearCurrent = (returnCode == NSAlertSecondButtonReturn);
+        if (!clearAll && !clearCurrent) {
+            return;
+        }
+        if (clearCurrent && currentHost.length == 0) {
+            return;
+        }
+
         strongSelf.clearWebsiteDataButton.enabled = NO;
         strongSelf.clearWebsiteDataStatusLabel.stringValue = @"正在清除…";
-        [BrowsingPreferences clearWebsiteDataWithCompletion:^(NSError * _Nullable error) {
+
+        void (^finishUI)(NSError * _Nullable, NSString *) = ^(NSError * _Nullable error, NSString *okText) {
             typeof(self) innerSelf = weakSelf;
             if (!innerSelf) {
                 return;
@@ -229,9 +298,20 @@
                 alert.alertStyle = NSAlertStyleWarning;
                 [alert beginSheetModalForWindow:innerSelf.window completionHandler:nil];
             } else {
-                innerSelf.clearWebsiteDataStatusLabel.stringValue = @"已清除";
+                innerSelf.clearWebsiteDataStatusLabel.stringValue = okText;
             }
-        }];
+        };
+
+        if (clearAll) {
+            [BrowsingPreferences clearWebsiteDataWithCompletion:^(NSError * _Nullable error) {
+                finishUI(error, @"已清除全部");
+            }];
+        } else {
+            [BrowsingPreferences clearWebsiteDataForHost:currentHost completion:^(NSError * _Nullable error) {
+                NSString *ok = [NSString stringWithFormat:@"已清除 %@", currentHost];
+                finishUI(error, ok);
+            }];
+        }
     }];
 }
 

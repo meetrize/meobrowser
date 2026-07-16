@@ -314,3 +314,44 @@ SimpleBrowser/Favicon/
 ### 结论
 
 **IF-0～IF-3 已落地**；系统密码完整能力依赖正式签名 / web-browser entitlement。
+
+---
+
+## 反风控与会话稳定验收（AB-0～AB-4 · 2026-07-16）
+
+> 对照 [anti-bot-session-design.md](anti-bot-session-design.md) · [anti-bot-session-development-plan.md](anti-bot-session-development-plan.md)  
+> Cursor 计划：`.cursor/plans/anti-bot-session.plan.md`
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| 编译 | `make browser` | 通过 |
+| 校验 | `make verify` | 见本次验收 |
+| 新模块 | `BrowserUserAgent` / `BrowserRiskHostPolicy` | 已入 Makefile |
+| 无写死 UA | 源码无 `Version/18.0 Safari/605.1.15` | 已移除 |
+
+### 功能验收
+
+| 测试项 | 状态 | 说明 |
+|--------|------|------|
+| 动态 Safari 对齐 `customUserAgent` | 通过（逻辑） | `BrowserUserAgent` + `BrowserTab ensureWebView` |
+| 风险域空闲休眠跳过 | 通过（逻辑） | `BrowserTabController` + Policy |
+| 预算淘汰保护站末位 | 通过（逻辑） | 窗内 / 全局预算 |
+| Google 等域无登录助手注入 | 通过（逻辑） | Detector JS + Native 抑制 |
+| Runner 抑制域 Toast 拒绝 | 通过（逻辑） | `LoginAssistController` |
+| 设置清除全部 / 当前站点 | 通过（逻辑） | `BrowsingPreferences` + Settings |
+| 复制 User-Agent / VPN 提示文案 | 通过（逻辑） | 设置「隐私与数据」 |
+| `login-assist-test.html` 助手仍可用 | 待手测 | 非抑制域应正常 |
+
+### 手测
+
+1. 设置 →「复制 User-Agent」，粘贴应含 `Version/` 与 `Safari/`  
+2. 打开 Google 搜索：密码框旁无登录助手钥匙  
+3. Google 标签后台闲置 >10 分钟（标签未爆预算）：尽量不整页冷重载  
+4. 打开 `login-assist-test.html`：内联助手与一键登录正常  
+5. 设置 → 清除网站数据 →「清除当前站点」仅影响当前 host  
+
+### 结论
+
+**AB-0～AB-4 代码已落地**；Google `/sorry/` 是否减少依赖出口 IP，属环境因素，App 侧信号已加固。
