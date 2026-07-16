@@ -29,6 +29,7 @@
 | [minimal-browser/download-design.md](minimal-browser/download-design.md) | 下载管理 — 交互与实现方案（V1） |
 | [minimal-browser/auto-login-design.md](minimal-browser/auto-login-design.md) | 站点登录助手 — 一键/自动登录（账密、短信、二维码）设计方案 |
 | [minimal-browser/auto-login-development-plan.md](minimal-browser/auto-login-development-plan.md) | 站点登录助手 — 分阶段开发计划（LA-0～LA-7） |
+| [minimal-browser/companion-protocol.md](minimal-browser/companion-protocol.md) | 登录助手 Companion — Bonjour / OTP 消息协议 |
 | [minimal-browser/login-form-inline-design.md](minimal-browser/login-form-inline-design.md) | 登录表单内联助手 — 检测、系统密码、Recipe 与保存提示（V1.5） |
 | [minimal-browser/login-form-inline-development-plan.md](minimal-browser/login-form-inline-development-plan.md) | 登录表单内联助手 — 分阶段开发计划（IF-0～IF-3） |
 | [minimal-browser/insecure-https-design.md](minimal-browser/insecure-https-design.md) | 不安全 HTTPS（证书无效）继续访问 — 警告页与地址栏风险提示方案 |

@@ -50,10 +50,15 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
+                   $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadProgressRingView.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipe.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipeStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginCredentialStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRunner.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/OTPInbox.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPairingStore.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBonjourServer.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionChannel.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistScriptMessageProxy.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \
@@ -78,9 +83,9 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/Security -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/Security -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool
@@ -131,6 +136,10 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <dict>' >> $(1)/Contents/Info.plist
 	@echo '    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>' >> $(1)/Contents/Info.plist
 	@echo '  </dict>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSLocalNetworkUsageDescription</key>' >> $(1)/Contents/Info.plist
+	@echo '  <string>登录助手通过局域网与手机 Companion 配对，以自动填入短信验证码。</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSBonjourServices</key>' >> $(1)/Contents/Info.plist
+	@echo '  <array><string>_meologin._tcp</string></array>' >> $(1)/Contents/Info.plist
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 

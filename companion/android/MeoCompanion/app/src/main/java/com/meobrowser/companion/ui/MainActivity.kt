@@ -1,0 +1,368 @@
+package com.meobrowser.companion.ui
+
+import android.Manifest
+import android.graphics.Typeface
+import android.os.Bundle
+import android.view.View
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import com.meobrowser.companion.channel.CompanionConnectionService
+import com.meobrowser.companion.channel.CompanionSession
+import com.meobrowser.companion.databinding.ActivityMainBinding
+import com.meobrowser.companion.pairing.PairingPrefs
+import com.meobrowser.companion.setup.SetupCheckItem
+import com.meobrowser.companion.setup.SetupChecker
+import com.meobrowser.companion.setup.SetupItemId
+import com.meobrowser.companion.sms.OtpNotificationListener
+import com.meobrowser.companion.sms.OtpParser
+import com.meobrowser.companion.sms.RecentOtpSms
+import com.meobrowser.companion.sms.RecentSmsOtpReader
+import com.meobrowser.companion.sms.SmsListenCoordinator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var prefs: PairingPrefs
+    private var readingRecentOtp = false
+    private var showAllChecks = false
+
+    private val smsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        val ok = granted[Manifest.permission.READ_SMS] == true &&
+            granted[Manifest.permission.RECEIVE_SMS] == true
+        if (ok) {
+            SmsListenCoordinator.start(this)
+            readRecentOtpSms()
+        } else {
+            binding.recentOtpResultText.text = "未授予短信权限，无法读取收件箱"
+            Toast.makeText(this, "请授予短信权限后再试", Toast.LENGTH_LONG).show()
+        }
+        refreshChecks()
+    }
+
+    private val statusListener: (String, String) -> Unit = { status, _ ->
+        runOnUiThread {
+            if (!::binding.isInitialized) return@runOnUiThread
+            binding.statusText.text = "状态：$status"
+            refreshOtpDisplay()
+            refreshChecks()
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        prefs = PairingPrefs(this)
+        SmsListenCoordinator.start(this)
+        restoreConnectionForm()
+
+        binding.toggleChecksButton.setOnClickListener {
+            showAllChecks = !showAllChecks
+            binding.toggleChecksButton.text = if (showAllChecks) "只看未通过" else "展开全部"
+            refreshChecks()
+        }
+
+        binding.notifAccessButton.setOnClickListener {
+            OtpNotificationListener.openSettings(this)
+            Toast.makeText(
+                this,
+                "请找到 Meo Companion / Meo 验证码通知监听，打开开关后返回",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
+        binding.rescanNotifButton.setOnClickListener {
+            rescanNotifications()
+        }
+
+        // 设置显示已开但服务未连时，进页就尝试重绑
+        OtpNotificationListener.ensureBound(this)
+
+        binding.setupWizardButton.setOnClickListener {
+            SetupWizardActivity.start(this)
+        }
+
+        binding.connectButton.setOnClickListener {
+            val code = binding.pairingCodeInput.text?.toString()?.trim().orEmpty()
+            val host = binding.hostOverrideInput.text?.toString()?.trim().orEmpty()
+            // 保存表单，便于下次打开自动填入
+            if (code.isNotBlank()) prefs.lastPairingCode = code
+            if (host.isNotBlank()) {
+                prefs.lastHostOverride = host
+            }
+            CompanionSession.statusText = "正在连接…"
+            CompanionSession.notifyStatus()
+            CompanionConnectionService.startConnect(
+                this,
+                pairingCode = code.ifBlank { null },
+                hostOverride = host.ifBlank { null }
+            )
+        }
+
+        binding.disconnectButton.setOnClickListener {
+            CompanionConnectionService.disconnect(this)
+        }
+
+        binding.readRecentOtpButton.setOnClickListener {
+            if (!RecentSmsOtpReader.hasReadPermission(this)) {
+                smsPermissionLauncher.launch(
+                    arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+                )
+            } else {
+                readRecentOtpSms()
+            }
+        }
+
+        binding.manualOtpButton.setOnClickListener {
+            val input = android.widget.EditText(this).apply {
+                hint = "输入 4～8 位测试码"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            }
+            AlertDialog.Builder(this)
+                .setTitle("手动发送测试码")
+                .setView(input)
+                .setPositiveButton("发送") { _, _ ->
+                    val raw = input.text?.toString().orEmpty()
+                    val code = OtpParser.extract(raw) ?: raw.trim()
+                    if (code.isBlank()) {
+                        Toast.makeText(this, "无效验证码", Toast.LENGTH_SHORT).show()
+                    } else {
+                        CompanionSession.pushOtp(this, code)
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
+        refreshChecks()
+        refreshOtpDisplay()
+
+        if (SetupChecker.shouldAutoShowWizard(this)) {
+            SetupWizardActivity.start(this)
+        }
+    }
+
+    private fun restoreConnectionForm() {
+        val code = prefs.lastPairingCode
+        if (!code.isNullOrBlank()) {
+            binding.pairingCodeInput.setText(code)
+        }
+        val host = prefs.lastHostOverride?.takeIf { it.isNotBlank() }
+            ?: prefs.hostPortLabel()
+        if (!host.isNullOrBlank()) {
+            binding.hostOverrideInput.setText(host)
+        }
+    }
+
+    private fun rescanNotifications() {
+        if (!OtpNotificationListener.isEnabled(this)) {
+            Toast.makeText(this, "请先开启通知使用权", Toast.LENGTH_LONG).show()
+            OtpNotificationListener.openSettings(this)
+            return
+        }
+        binding.rescanNotifButton.isEnabled = false
+        binding.lastOtpMetaText.text = "正在扫描通知栏…"
+        OtpNotificationListener.rescanAndPushWithRetry(this) { hits ->
+            binding.rescanNotifButton.isEnabled = true
+            refreshOtpDisplay()
+            when {
+                hits > 0 -> {
+                    Toast.makeText(this, "已从通知读取并推送", Toast.LENGTH_SHORT).show()
+                    refreshOtpDisplay()
+                }
+                hits == 0 -> {
+                    Toast.makeText(this, "通知栏没有识别到验证码通知", Toast.LENGTH_LONG).show()
+                    binding.lastOtpMetaText.text = "未在通知栏找到验证码"
+                }
+                hits == -1 -> {
+                    Toast.makeText(this, "请先开启通知使用权", Toast.LENGTH_LONG).show()
+                    OtpNotificationListener.openSettings(this)
+                }
+                else -> {
+                    // 重连仍失败
+                    AlertDialog.Builder(this)
+                        .setTitle("通知监听未连接")
+                        .setMessage(
+                            "设置里虽显示已开启，但系统尚未把监听服务连上（重装 App 后很常见）。\n\n" +
+                                "请按下列步骤操作：\n" +
+                                "1. 点「去设置」\n" +
+                                "2. 关闭 Meo Companion / Meo 验证码通知监听\n" +
+                                "3. 再重新打开\n" +
+                                "4. 返回 App，看状态是否变为「已开启且已连接」\n" +
+                                "5. 再点「从通知栏重新读取并推送」"
+                        )
+                        .setPositiveButton("去设置") { _, _ ->
+                            OtpNotificationListener.openSettings(this)
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                    binding.lastOtpMetaText.text = OtpNotificationListener.enabledDetail(this)
+                }
+            }
+        }
+    }
+
+    private fun refreshOtpDisplay() {
+        val code = CompanionSession.lastOtpCode
+        if (code.isNotBlank()) {
+            binding.lastOtpCodeText.text = code
+            binding.lastOtpCodeText.setTypeface(null, Typeface.BOLD)
+            val src = CompanionSession.lastOtpSource
+            val event = CompanionSession.lastSmsEvent
+            binding.lastOtpMetaText.text = buildString {
+                if (src.isNotBlank()) append("来源：$src")
+                if (event.isNotBlank()) {
+                    if (isNotEmpty()) append(" · ")
+                    append(event)
+                }
+            }.ifBlank { "已解析" }
+        } else {
+            binding.lastOtpCodeText.text = "——"
+            binding.lastOtpMetaText.text = CompanionSession.lastSmsEvent.ifBlank {
+                CompanionSession.lastOtpHint.takeIf { it != "无" } ?: "等待短信 / 通知验证码"
+            }
+        }
+    }
+
+    private fun readRecentOtpSms() {
+        if (readingRecentOtp) return
+        readingRecentOtp = true
+        binding.readRecentOtpButton.isEnabled = false
+        binding.recentOtpResultText.text = "正在读取收件箱…"
+
+        lifecycleScope.launch {
+            var error: String? = null
+            val hit: RecentOtpSms? = withContext(Dispatchers.IO) {
+                RecentSmsOtpReader.findLatest(applicationContext) { error = it }
+            }
+            readingRecentOtp = false
+            binding.readRecentOtpButton.isEnabled = true
+
+            if (hit == null) {
+                val msg = error ?: "未知原因"
+                binding.recentOtpResultText.text = "未读到验证码：$msg"
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("未读到验证码")
+                    .setMessage(msg)
+                    .setPositiveButton("知道了", null)
+                    .show()
+                return@launch
+            }
+            val ageMs = System.currentTimeMillis() - hit.dateMs
+            if (ageMs > 30L * 24 * 3600 * 1000) {
+                binding.recentOtpResultText.text =
+                    "只扫到很旧的验证码（${hit.dateLabel()}）\n发件人：${hit.address}\n验证码：${hit.code}"
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("未读到今日验证码")
+                    .setMessage(
+                        "读到的是 ${hit.dateLabel()} 的旧短信。\n" +
+                            "请用「从通知栏重新读取并推送」，或保持前台等新短信。"
+                    )
+                    .setPositiveButton("知道了", null)
+                    .show()
+                return@launch
+            }
+            showRecentOtpResult(hit)
+        }
+    }
+
+    private fun showRecentOtpResult(hit: RecentOtpSms) {
+        val summary =
+            "解析成功 ✓\n" +
+                "验证码：${hit.code}\n" +
+                "发件人：${hit.address}\n" +
+                "时间：${hit.dateLabel()}\n" +
+                "摘要：${hit.bodyPreview()}"
+        binding.recentOtpResultText.text = summary
+
+        val connected = CompanionSession.client.isConnected
+        val builder = AlertDialog.Builder(this)
+            .setTitle("最近验证码短信")
+            .setMessage(
+                summary + "\n\n" +
+                    if (connected) "可推送到已连接的 MeoBrowser。"
+                    else "当前未连接 Mac，仅完成本地解析测试。"
+            )
+            .setNegativeButton("关闭", null)
+        if (connected) {
+            builder.setPositiveButton("推送到 Mac") { _, _ ->
+                CompanionSession.pushOtp(this, hit.code)
+                Toast.makeText(this, "已请求推送 ${hit.code}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        builder.show()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        CompanionSession.addStatusListener(statusListener)
+        refreshChecks()
+        refreshOtpDisplay()
+    }
+
+    override fun onStop() {
+        CompanionSession.removeStatusListener(statusListener)
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        binding.statusText.text = "状态：${CompanionSession.statusText}"
+        refreshOtpDisplay()
+        refreshChecks()
+        binding.notifAccessHint.text = OtpNotificationListener.enabledDetail(this)
+        binding.notifAccessButton.text = when {
+            !OtpNotificationListener.isEnabled(this) ->
+                "开启通知使用权（小米必开）"
+            OtpNotificationListener.isConnected() ->
+                "通知使用权已连接 ✓"
+            else ->
+                "通知使用权未连接（点此开关一次）"
+        }
+        OtpNotificationListener.ensureBound(this)
+    }
+
+    private fun refreshChecks() {
+        if (!::binding.isInitialized) return
+        val items = SetupChecker.allItems(this)
+        val failed = items.filter { !it.ok }
+        binding.readinessSummary.text = SetupChecker.readinessSummary(this)
+        binding.checklistContainer.removeAllViews()
+
+        val toShow = if (showAllChecks) items else failed
+        for (item in toShow) {
+            binding.checklistContainer.addView(makeCheckRow(item))
+        }
+        binding.checksEmptyHint.visibility =
+            if (!showAllChecks && failed.isEmpty()) View.VISIBLE else View.GONE
+        binding.toggleChecksButton.text = if (showAllChecks) "只看未通过" else "展开全部"
+        // 全部通过时向导按钮弱化，未通过时更明显
+        binding.setupWizardButton.visibility =
+            if (failed.isEmpty() && !showAllChecks) View.GONE else View.VISIBLE
+    }
+
+    private fun makeCheckRow(item: SetupCheckItem): TextView {
+        val mark = if (item.ok) "✓" else "✗"
+        val req = if (item.required) "必填" else "建议"
+        val tv = TextView(this)
+        tv.text = "$mark [${req}] ${item.title}\n   ${item.detail}"
+        tv.textSize = 13f
+        tv.setPadding(0, 10, 0, 10)
+        tv.setTypeface(null, if (item.ok) Typeface.NORMAL else Typeface.BOLD)
+        tv.setOnClickListener {
+            when (item.id) {
+                SetupItemId.NOTIF_ACCESS -> OtpNotificationListener.openSettings(this)
+                else -> SetupWizardActivity.start(this)
+            }
+        }
+        return tv
+    }
+}

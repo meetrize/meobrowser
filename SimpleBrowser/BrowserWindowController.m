@@ -16,6 +16,7 @@
 #import "BrowserAddressBarRowView.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
+#import "BrowserDownloadProgressRingView.h"
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
@@ -90,6 +91,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSButton *securityBadgeButton;
 @property (nonatomic, strong) NSButton *downloadButton;
 @property (nonatomic, strong) NSView *downloadBadgeView;
+@property (nonatomic, strong) BrowserDownloadProgressRingView *downloadProgressRingView;
 @property (nonatomic, strong) SBTextField *addressField;
 @property (nonatomic, strong) BrowserAddressBarActionGroup *addressBarActionGroup;
 @property (nonatomic, strong) BrowserAddressBarRowView *addressBarRow;
@@ -454,6 +456,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.downloadButton.target = self;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
     [self installDownloadBadgeOnButton:self.downloadButton];
+    [self installDownloadProgressRingOnButton:self.downloadButton];
     if (self.addressBarActionGroup.loginAssistButton) {
         [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
     }
@@ -610,6 +613,23 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.downloadBadgeView = badge;
 }
 
+- (void)installDownloadProgressRingOnButton:(NSButton *)button {
+    if (!button) {
+        return;
+    }
+    [self.downloadProgressRingView removeFromSuperview];
+    BrowserDownloadProgressRingView *ring = [[BrowserDownloadProgressRingView alloc] initWithFrame:NSZeroRect];
+    ring.translatesAutoresizingMaskIntoConstraints = NO;
+    [button addSubview:ring positioned:NSWindowBelow relativeTo:self.downloadBadgeView];
+    [NSLayoutConstraint activateConstraints:@[
+        [ring.leadingAnchor constraintEqualToAnchor:button.leadingAnchor],
+        [ring.trailingAnchor constraintEqualToAnchor:button.trailingAnchor],
+        [ring.topAnchor constraintEqualToAnchor:button.topAnchor],
+        [ring.bottomAnchor constraintEqualToAnchor:button.bottomAnchor],
+    ]];
+    self.downloadProgressRingView = ring;
+}
+
 #pragma mark - Downloads
 
 - (void)addressBarActionOrderDidChange:(NSNotification *)notification {
@@ -625,6 +645,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             [self.downloadBadgeView.topAnchor constraintEqualToAnchor:self.downloadButton.topAnchor constant:3],
             [self.downloadBadgeView.trailingAnchor constraintEqualToAnchor:self.downloadButton.trailingAnchor constant:-3],
         ]];
+    }
+    if (self.downloadButton && self.downloadProgressRingView.superview != self.downloadButton) {
+        [self installDownloadProgressRingOnButton:self.downloadButton];
     }
     self.downloadButton.target = self;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
@@ -655,7 +678,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSRect buttonRect = [self.downloadButton convertRect:self.downloadButton.bounds toView:nil];
     NSRect screenRect = [self.window convertRectToScreen:buttonRect];
     self.downloadPanel.dismissExclusionRectOnScreen = NSInsetRect(screenRect, -4, -4);
-    [self.downloadPanel presentAnchoredToRect:screenRect];
+    [self.downloadPanel presentAnchoredToRect:screenRect ofWindow:self.window];
     self.downloadPanelVisible = YES;
 }
 
@@ -677,7 +700,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSUInteger unread = self.downloadManager.unreadCompletedCount;
     BOOL busy = active > 0;
 
-    NSString *symbol = busy ? @"arrow.down.circle.fill" : @"arrow.down.circle";
+    // 下载中用纯箭头 + 外圈进度环；空闲保留 circle 图标。
+    NSString *symbol = busy ? @"arrow.down" : @"arrow.down.circle";
     NSImage *image = [self toolbarSymbolImageNamed:symbol];
     if (image) {
         self.downloadButton.image = image;
@@ -686,11 +710,23 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         self.downloadButton.contentTintColor = busy ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
     }
 
-    self.downloadBadgeView.hidden = (unread == 0);
+    self.downloadBadgeView.hidden = (unread == 0) || busy;
+
+    BrowserDownloadProgressRingView *ring = self.downloadProgressRingView;
+    ring.active = busy;
+    if (busy) {
+        BOOL determinate = self.downloadManager.aggregateProgressIsDeterminate;
+        ring.indeterminate = !determinate;
+        ring.progress = determinate ? self.downloadManager.aggregateProgress : 0;
+    }
 
     if (active > 0) {
-        NSInteger pct = (NSInteger)llround(self.downloadManager.aggregateProgress * 100.0);
-        self.downloadButton.toolTip = [NSString stringWithFormat:@"下载中（%lu 项 · %ld%%）", (unsigned long)active, (long)pct];
+        if (self.downloadManager.aggregateProgressIsDeterminate) {
+            NSInteger pct = (NSInteger)llround(self.downloadManager.aggregateProgress * 100.0);
+            self.downloadButton.toolTip = [NSString stringWithFormat:@"下载中（%lu 项 · %ld%%）", (unsigned long)active, (long)pct];
+        } else {
+            self.downloadButton.toolTip = [NSString stringWithFormat:@"下载中（%lu 项）", (unsigned long)active];
+        }
     } else if (unread > 0) {
         self.downloadButton.toolTip = [NSString stringWithFormat:@"下载（%lu 个新完成）", (unsigned long)unread];
     } else {

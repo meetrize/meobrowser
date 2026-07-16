@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Meo Companion</string>
+    <string name="pair_hint">在 MeoBrowser「登录助手」设置中查看配对码，输入后连接。</string>
+    <string name="privacy_note">仅上传验证码与时间戳，不上传短信全文。</string>
+    <style name="Theme.MeoCompanion" parent="Theme.MaterialComponents.DayNight.DarkActionBar"/>
+</resources>

@@ -1,5 +1,7 @@
 #import "LoginRunner.h"
 #import "LoginRecipe.h"
+#import "LoginCredentialStore.h"
+#import "OTPInbox.h"
 
 static NSInteger gLoginRunnerGeneration = 0;
 
@@ -7,6 +9,7 @@ static NSInteger gLoginRunnerGeneration = 0;
 
 + (void)cancelAll {
     gLoginRunnerGeneration += 1;
+    [[OTPInbox sharedInbox] cancelWait];
 }
 
 + (void)runRecipe:(LoginRecipe *)recipe
@@ -28,6 +31,21 @@ static NSInteger gLoginRunnerGeneration = 0;
          password:(NSString *)password
          fillOnly:(BOOL)fillOnly
        completion:(LoginRunnerCompletion)completion {
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
+    credentials.username = username ?: @"";
+    credentials.password = password ?: @"";
+    [self runRecipe:recipe
+          inWebView:webView
+        credentials:credentials
+           fillOnly:fillOnly
+         completion:completion];
+}
+
++ (void)runRecipe:(LoginRecipe *)recipe
+        inWebView:(WKWebView *)webView
+      credentials:(LoginCredentials *)credentials
+         fillOnly:(BOOL)fillOnly
+       completion:(LoginRunnerCompletion)completion {
     if (!recipe || !webView) {
         if (completion) {
             completion(NO, [NSError errorWithDomain:@"LoginRunner"
@@ -36,7 +54,11 @@ static NSInteger gLoginRunnerGeneration = 0;
         }
         return;
     }
-    if (recipe.usernameSelector.length == 0 || recipe.passwordSelector.length == 0) {
+
+    BOOL needsOTP = [recipe requiresOTPWait];
+    BOOL smsOnly = [recipe.mode isEqualToString:LoginRecipeModeSMSOTP];
+    BOOL hasUserPass = recipe.usernameSelector.length > 0 && recipe.passwordSelector.length > 0;
+    if (!needsOTP && !hasUserPass) {
         if (completion) {
             completion(NO, [NSError errorWithDomain:@"LoginRunner"
                                                code:2
@@ -44,6 +66,23 @@ static NSInteger gLoginRunnerGeneration = 0;
         }
         return;
     }
+    if (needsOTP && recipe.otpSelector.length == 0) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                               code:6
+                                           userInfo:@{NSLocalizedDescriptionKey: @"短信模式请配置验证码选择器"}]);
+        }
+        return;
+    }
+    if (smsOnly && recipe.phoneSelector.length == 0) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                               code:8
+                                           userInfo:@{NSLocalizedDescriptionKey: @"短信登录请配置手机号选择器"}]);
+        }
+        return;
+    }
+
     BOOL willSubmit = !fillOnly;
     if (willSubmit && !recipe.submitByEnter && recipe.submitSelector.length == 0) {
         if (completion) {
@@ -54,17 +93,71 @@ static NSInteger gLoginRunnerGeneration = 0;
         return;
     }
 
-    NSString *submitSel = willSubmit ? (recipe.submitSelector ?: @"") : @"";
-    BOOL submitByEnter = willSubmit && recipe.submitByEnter;
-    [self executeFillInWebView:webView
-              usernameSelector:recipe.usernameSelector
-              passwordSelector:recipe.passwordSelector
-                      username:username
-                      password:password
-                submitSelector:submitSel
-                 submitByEnter:submitByEnter
-                  waitTimeoutMs:recipe.waitTimeoutMs
-                    completion:completion];
+    NSInteger generation = ++gLoginRunnerGeneration;
+    NSInteger waitTimeout = recipe.waitTimeoutMs > 0 ? recipe.waitTimeoutMs : 8000;
+
+    void (^finish)(BOOL, NSError *) = ^(BOOL success, NSError *error) {
+        if (generation != gLoginRunnerGeneration) {
+            return;
+        }
+        if (completion) {
+            completion(success, error);
+        }
+    };
+
+    // Phase 1: fill username/password/phone + optional send-code click（不提交登录）
+    [self evaluateStepsInWebView:webView
+                           recipe:recipe
+                      credentials:credentials
+                        fillOTP:nil
+                       doSubmit:NO
+                   waitTimeoutMs:waitTimeout
+                      generation:generation
+                      completion:^(BOOL ok, NSError *error) {
+        if (generation != gLoginRunnerGeneration) {
+            return;
+        }
+        if (!ok) {
+            finish(NO, error);
+            return;
+        }
+        if (!needsOTP) {
+            if (!willSubmit) {
+                finish(YES, nil);
+                return;
+            }
+            [self evaluateStepsInWebView:webView
+                                   recipe:recipe
+                              credentials:credentials
+                                fillOTP:nil
+                               doSubmit:YES
+                           waitTimeoutMs:waitTimeout
+                              generation:generation
+                              completion:finish];
+            return;
+        }
+
+        NSTimeInterval otpTimeout = recipe.otpMaxWaitMs > 0 ? (recipe.otpMaxWaitMs / 1000.0) : 120.0;
+        [[OTPInbox sharedInbox] waitForCodeWithTimeout:otpTimeout completion:^(NSString *code, NSError *waitError) {
+            if (generation != gLoginRunnerGeneration) {
+                return;
+            }
+            if (!code) {
+                finish(NO, waitError ?: [NSError errorWithDomain:@"LoginRunner"
+                                                            code:7
+                                                        userInfo:@{NSLocalizedDescriptionKey: @"等待验证码超时"}]);
+                return;
+            }
+            [self evaluateStepsInWebView:webView
+                                   recipe:recipe
+                              credentials:credentials
+                                fillOTP:code
+                               doSubmit:willSubmit
+                           waitTimeoutMs:waitTimeout
+                              generation:generation
+                              completion:finish];
+        }];
+    }];
 }
 
 + (void)fillInWebView:(WKWebView *)webView
@@ -75,18 +168,26 @@ static NSInteger gLoginRunnerGeneration = 0;
        submitSelector:(NSString *)submitSelector
          shouldSubmit:(BOOL)shouldSubmit
            completion:(LoginRunnerCompletion)completion {
-    [self executeFillInWebView:webView
-              usernameSelector:usernameSelector
-              passwordSelector:passwordSelector
-                      username:username
-                      password:password
-                submitSelector:shouldSubmit ? (submitSelector ?: @"") : @""
-                 submitByEnter:NO
-                  waitTimeoutMs:8000
-                    completion:completion];
+    LoginRecipe *tmp = [LoginRecipe recipeWithHost:@"tmp" title:@"tmp"];
+    tmp.usernameSelector = usernameSelector;
+    tmp.passwordSelector = passwordSelector;
+    tmp.submitSelector = submitSelector;
+    tmp.submitByEnter = NO;
+    tmp.waitTimeoutMs = 8000;
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
+    credentials.username = username ?: @"";
+    credentials.password = password ?: @"";
+    NSInteger generation = ++gLoginRunnerGeneration;
+    [self evaluateStepsInWebView:webView
+                           recipe:tmp
+                      credentials:credentials
+                        fillOTP:nil
+                       doSubmit:shouldSubmit
+                   waitTimeoutMs:8000
+                      generation:generation
+                      completion:completion];
 }
 
-/// 提交后页面跳转 / Promise 桥接时，WK 常回报该错误，但填表已成功。
 + (BOOL)isBenignJavaScriptBridgeError:(NSError *)error {
     if (!error) {
         return NO;
@@ -114,18 +215,26 @@ static NSInteger gLoginRunnerGeneration = 0;
         || error.code == WKErrorJavaScriptResultTypeIsUnsupported;
 }
 
-+ (NSString *)asyncFillScript {
++ (NSString *)asyncStepsScript {
     return
         @"const timeoutMs = timeoutMsArg;\n"
          "const userSel = userSelArg;\n"
          "const passSel = passSelArg;\n"
+         "const phoneSel = phoneSelArg;\n"
+         "const otpSel = otpSelArg;\n"
+         "const sendSel = sendSelArg;\n"
          "const submitSel = submitSelArg;\n"
          "const submitByEnter = submitByEnterArg;\n"
          "const doSubmit = doSubmitArg;\n"
+         "const fillPhase = fillPhaseArg;\n"
+         "const skipUserPass = skipUserPassArg;\n"
          "const username = usernameArg;\n"
          "const password = passwordArg;\n"
+         "const phone = phoneArg;\n"
+         "const otp = otpArg;\n"
          "function qs(sel) { try { return document.querySelector(sel); } catch (e) { return null; } }\n"
          "async function waitFor(sel) {\n"
+         "  if (!sel) return null;\n"
          "  const start = Date.now();\n"
          "  while (Date.now() - start < timeoutMs) {\n"
          "    const el = qs(sel);\n"
@@ -135,6 +244,7 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  throw new Error('等待元素超时: ' + sel);\n"
          "}\n"
          "function setValue(el, value) {\n"
+         "  if (!el) return;\n"
          "  el.focus();\n"
          "  const proto = window.HTMLInputElement.prototype;\n"
          "  const setter = Object.getOwnPropertyDescriptor(proto, 'value');\n"
@@ -151,13 +261,36 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  el.dispatchEvent(new KeyboardEvent('keyup', opts));\n"
          "  if (el.form) { el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit(); }\n"
          "}\n"
-         "const userEl = await waitFor(userSel);\n"
-         "const passEl = await waitFor(passSel);\n"
-         "setValue(userEl, username);\n"
-         "setValue(passEl, password);\n"
+         "if (fillPhase === 'pre') {\n"
+         "  if (!skipUserPass) {\n"
+         "    if (userSel) { const userEl = await waitFor(userSel); setValue(userEl, username); }\n"
+         "    if (passSel) { const passEl = await waitFor(passSel); setValue(passEl, password); }\n"
+         "  }\n"
+         "  if (phoneSel) { const phoneEl = await waitFor(phoneSel); setValue(phoneEl, phone); }\n"
+         "  if (sendSel) { const sendBtn = await waitFor(sendSel); sendBtn.click(); }\n"
+         "  await new Promise(r => setTimeout(r, 80));\n"
+         "  return 'pre-ok';\n"
+         "}\n"
+         "if (fillPhase === 'otp') {\n"
+         "  const otpEl = await waitFor(otpSel);\n"
+         "  setValue(otpEl, otp);\n"
+         "  await new Promise(r => setTimeout(r, 80));\n"
+         "  if (doSubmit) {\n"
+         "    if (submitByEnter) { pressEnter(otpEl); }\n"
+         "    else {\n"
+         "      const btn = await waitFor(submitSel);\n"
+         "      btn.click();\n"
+         "    }\n"
+         "  }\n"
+         "  return 'otp-ok';\n"
+         "}\n"
+         "// password-only submit\n"
+         "let passEl = null;\n"
+         "if (userSel) { const userEl = await waitFor(userSel); setValue(userEl, username); }\n"
+         "if (passSel) { passEl = await waitFor(passSel); setValue(passEl, password); }\n"
          "await new Promise(r => setTimeout(r, 80));\n"
          "if (doSubmit) {\n"
-         "  if (submitByEnter) { pressEnter(passEl); }\n"
+         "  if (submitByEnter && passEl) { pressEnter(passEl); }\n"
          "  else {\n"
          "    const btn = await waitFor(submitSel);\n"
          "    btn.click();\n"
@@ -166,38 +299,27 @@ static NSInteger gLoginRunnerGeneration = 0;
          "return 'ok';\n";
 }
 
-+ (void)executeFillInWebView:(WKWebView *)webView
-            usernameSelector:(NSString *)userSel
-            passwordSelector:(NSString *)passSel
-                    username:(NSString *)username
-                    password:(NSString *)password
-              submitSelector:(NSString *)submitSel
-               submitByEnter:(BOOL)submitByEnter
-                waitTimeoutMs:(NSInteger)timeoutMs
-                  completion:(LoginRunnerCompletion)completion {
-    if (!webView || userSel.length == 0 || passSel.length == 0) {
-        if (completion) {
-            completion(NO, [NSError errorWithDomain:@"LoginRunner"
-                                               code:1
-                                           userInfo:@{NSLocalizedDescriptionKey: @"无法填充表单"}]);
-        }
-        return;
-    }
-    if (timeoutMs <= 0) {
-        timeoutMs = 8000;
++ (void)evaluateStepsInWebView:(WKWebView *)webView
+                         recipe:(LoginRecipe *)recipe
+                    credentials:(LoginCredentials *)credentials
+                        fillOTP:(NSString *)otp
+                       doSubmit:(BOOL)doSubmit
+                   waitTimeoutMs:(NSInteger)timeoutMs
+                      generation:(NSInteger)generation
+                      completion:(LoginRunnerCompletion)completion {
+    NSString *fillPhase = @"password";
+    if ([recipe requiresOTPWait]) {
+        fillPhase = (otp.length > 0) ? @"otp" : @"pre";
+    } else if (!doSubmit) {
+        // password fillOnly
+        fillPhase = @"password";
     }
 
-    NSInteger generation = ++gLoginRunnerGeneration;
-    BOOL doSubmit = (submitByEnter || submitSel.length > 0);
-
-    void (^finish)(BOOL, NSError *) = ^(BOOL success, NSError *error) {
-        if (generation != gLoginRunnerGeneration) {
-            return;
-        }
-        if (completion) {
-            completion(success, error);
-        }
-    };
+    BOOL submitByEnter = recipe.submitByEnter;
+    NSString *submitSel = doSubmit ? (recipe.submitSelector ?: @"") : @"";
+    BOOL skipUserPass = [recipe.mode isEqualToString:LoginRecipeModeSMSOTP];
+    NSString *userSel = skipUserPass ? @"" : (recipe.usernameSelector ?: @"");
+    NSString *passSel = skipUserPass ? @"" : (recipe.passwordSelector ?: @"");
 
     void (^handleResult)(id, NSError *) = ^(id result, NSError *evalError) {
         (void)result;
@@ -205,9 +327,10 @@ static NSInteger gLoginRunnerGeneration = 0;
             return;
         }
         if (evalError) {
-            // 提交触发导航，或 Promise/结果桥接失败时：填表已完成，视为成功。
             if ([self isBenignJavaScriptBridgeError:evalError]) {
-                finish(YES, nil);
+                if (completion) {
+                    completion(YES, nil);
+                }
                 return;
             }
             NSString *message = evalError.localizedDescription ?: @"执行失败";
@@ -215,26 +338,38 @@ static NSInteger gLoginRunnerGeneration = 0;
             if ([jsMessage isKindOfClass:[NSString class]] && jsMessage.length > 0) {
                 message = jsMessage;
             }
-            finish(NO, [NSError errorWithDomain:@"LoginRunner"
-                                           code:4
-                                       userInfo:@{NSLocalizedDescriptionKey: message}]);
+            if (completion) {
+                completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                                   code:4
+                                               userInfo:@{NSLocalizedDescriptionKey: message}]);
+            }
             return;
         }
-        finish(YES, nil);
+        if (completion) {
+            completion(YES, nil);
+        }
+    };
+
+    NSDictionary *args = @{
+        @"timeoutMsArg": @(timeoutMs),
+        @"userSelArg": userSel,
+        @"passSelArg": passSel,
+        @"phoneSelArg": recipe.phoneSelector ?: @"",
+        @"otpSelArg": recipe.otpSelector ?: @"",
+        @"sendSelArg": recipe.sendCodeSelector ?: @"",
+        @"submitSelArg": submitSel ?: @"",
+        @"submitByEnterArg": @(submitByEnter),
+        @"doSubmitArg": @(doSubmit),
+        @"fillPhaseArg": fillPhase,
+        @"skipUserPassArg": @(skipUserPass),
+        @"usernameArg": credentials.username ?: @"",
+        @"passwordArg": credentials.password ?: @"",
+        @"phoneArg": credentials.phone ?: @"",
+        @"otpArg": otp ?: @"",
     };
 
     if (@available(macOS 11.0, *)) {
-        NSDictionary *args = @{
-            @"timeoutMsArg": @(timeoutMs),
-            @"userSelArg": userSel ?: @"",
-            @"passSelArg": passSel ?: @"",
-            @"submitSelArg": submitSel ?: @"",
-            @"submitByEnterArg": @(submitByEnter),
-            @"doSubmitArg": @(doSubmit),
-            @"usernameArg": username ?: @"",
-            @"passwordArg": password ?: @"",
-        };
-        [webView callAsyncJavaScript:[self asyncFillScript]
+        [webView callAsyncJavaScript:[self asyncStepsScript]
                            arguments:args
                              inFrame:nil
                       inContentWorld:[WKContentWorld pageWorld]
@@ -242,43 +377,31 @@ static NSInteger gLoginRunnerGeneration = 0;
         return;
     }
 
-    // 旧系统回退：evaluateJavaScript + async IIFE
-    NSString *userJSON = [self jsonStringFromString:username ?: @""];
-    NSString *passJSON = [self jsonStringFromString:password ?: @""];
-    NSString *userSelJSON = [self jsonStringFromString:userSel];
-    NSString *passSelJSON = [self jsonStringFromString:passSel];
-    NSString *submitSelJSON = [self jsonStringFromString:submitSel ?: @""];
+    NSData *argsData = [NSJSONSerialization dataWithJSONObject:args options:0 error:nil];
+    NSString *argsJSON = [[NSString alloc] initWithData:argsData encoding:NSUTF8StringEncoding] ?: @"{}";
     NSString *script = [NSString stringWithFormat:
         @"(async function() {\n"
-         "  const timeoutMsArg = %ld;\n"
-         "  const userSelArg = %@;\n"
-         "  const passSelArg = %@;\n"
-         "  const submitSelArg = %@;\n"
-         "  const submitByEnterArg = %@;\n"
-         "  const doSubmitArg = %@;\n"
-         "  const usernameArg = %@;\n"
-         "  const passwordArg = %@;\n"
+         "  const a = %@;\n"
+         "  const timeoutMsArg = a.timeoutMsArg;\n"
+         "  const userSelArg = a.userSelArg;\n"
+         "  const passSelArg = a.passSelArg;\n"
+         "  const phoneSelArg = a.phoneSelArg;\n"
+         "  const otpSelArg = a.otpSelArg;\n"
+         "  const sendSelArg = a.sendSelArg;\n"
+         "  const submitSelArg = a.submitSelArg;\n"
+         "  const submitByEnterArg = a.submitByEnterArg;\n"
+         "  const doSubmitArg = a.doSubmitArg;\n"
+         "  const fillPhaseArg = a.fillPhaseArg;\n"
+         "  const skipUserPassArg = a.skipUserPassArg;\n"
+         "  const usernameArg = a.usernameArg;\n"
+         "  const passwordArg = a.passwordArg;\n"
+         "  const phoneArg = a.phoneArg;\n"
+         "  const otpArg = a.otpArg;\n"
          "  %@\n"
          "})()",
-        (long)timeoutMs,
-        userSelJSON,
-        passSelJSON,
-        submitSelJSON,
-        submitByEnter ? @"true" : @"false",
-        doSubmit ? @"true" : @"false",
-        userJSON,
-        passJSON,
-        [self asyncFillScript]];
+        argsJSON,
+        [self asyncStepsScript]];
     [webView evaluateJavaScript:script completionHandler:handleResult];
-}
-
-+ (NSString *)jsonStringFromString:(NSString *)string {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@[ string ?: @"" ] options:0 error:nil];
-    NSString *arrayJSON = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (arrayJSON.length < 2) {
-        return @"\"\"";
-    }
-    return [arrayJSON substringWithRange:NSMakeRange(1, arrayJSON.length - 2)];
 }
 
 @end

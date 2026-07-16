@@ -1,7 +1,7 @@
 # 站点登录助手（一键 / 自动登录）— 设计方案
 
 > 目标：为常用工作站点提供可控的一键登录与可选自动登录，覆盖账号密码、短信验证码、二维码三类流程；本地优先、按站点配置，不做全网密码管理器。  
-> 状态：**V1 已实现**（密码一键/自动登录 · 2026-07-15）；V2/V3 未实现  
+> 状态：**V1 已实现**；**V2 Mac 管线 + Android Companion 工程已落地**（端到端待手测 · 2026-07-15）；V3 未实现  
 > 后续：[login-form-inline-design.md](login-form-inline-design.md)（表单内联助手 V1.5 设计草案）  
 > 关联：[auto-login-development-plan.md](auto-login-development-plan.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [design.md](design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md)
 

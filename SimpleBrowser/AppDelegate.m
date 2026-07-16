@@ -8,6 +8,7 @@
 #import "BrowsingPreferences.h"
 #import "BrowserTab.h"
 #import "BrowserTabStripView.h"
+#import "CompanionChannel.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -30,6 +31,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    [[CompanionChannel sharedChannel] start];
     NSArray<NSDictionary *> *sessions = [BrowsingPreferences savedWindowSessions];
     if (sessions.count == 0) {
         [self createBrowserWindowWithSession:nil];

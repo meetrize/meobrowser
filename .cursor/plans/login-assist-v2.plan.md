@@ -4,22 +4,22 @@ overview: 以 Android Companion 短信自动推码为主路径打通 V2：协议
 todos:
   - id: v2-protocol
     content: 协议定稿：配对码/设备密钥、otp 消息格式、TTL；CompanionChannel + OTPInbox 单一出口
-    status: pending
+    status: completed
   - id: v2-mac-channel
     content: Mac：CompanionChannel 收码（先 Bonjour 局域网，或同仓最小本地 Relay Mock）+ 设置配对/连接状态/断连明示
-    status: pending
+    status: completed
   - id: v2-recipe-waitotp
     content: Mac：Recipe sms/hybrid 字段 + Runner waitOTP→填码→提交；测试页短信流
-    status: pending
+    status: completed
   - id: v2-android-app
     content: Android 最小 App：读短信/通知→解析 4～8 位码→加密推送到已配对 Mac（不上传全文）
-    status: pending
+    status: completed
   - id: v2-e2e-accept
     content: 端到端验收：真机/模拟短信→自动填入提交；过期/重放/断连；文档勾选
     status: pending
   - id: v2-paste-fallback
     content: 降级：Mac「粘贴验证码」/waitOTP 期间剪贴板（无 App 仍可完成）
-    status: pending
+    status: completed
   - id: v2-totp-optional
     content: LA-4（后续插入）：本地 TOTP Keychain + fillTotp，不阻塞短信闭环
     status: pending

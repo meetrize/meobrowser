@@ -26,4 +26,8 @@
   <dict>
     <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
   </dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>登录助手通过局域网与手机 Companion 配对，以自动填入短信验证码。</string>
+  <key>NSBonjourServices</key>
+  <array><string>_meologin._tcp</string></array>
 </dict></plist>

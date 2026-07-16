@@ -34,6 +34,9 @@ static const CGFloat kHeaderHeight = 36.0;
 @property (nonatomic, strong) NSButton *secondaryButton;
 @property (nonatomic, assign) NSPoint dragStart;
 @property (nonatomic, assign) BOOL didStartDrag;
+@property (nonatomic, assign) BOOL hasConfiguredButtons;
+@property (nonatomic, assign) BrowserDownloadState displayedState;
+@property (nonatomic, assign) BOOL displayedCanOpen;
 @end
 
 @implementation BrowserDownloadRowView
@@ -53,6 +56,7 @@ static const CGFloat kHeaderHeight = 36.0;
         _progressBar.indeterminate = NO;
         _progressBar.minValue = 0;
         _progressBar.maxValue = 1;
+        _progressBar.usesThreadedAnimation = YES;
         _progressBar.translatesAutoresizingMaskIntoConstraints = NO;
         [_progressBar setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -78,7 +82,7 @@ static const CGFloat kHeaderHeight = 36.0;
             [_progressBar.leadingAnchor constraintEqualToAnchor:_titleLabel.leadingAnchor],
             [_progressBar.trailingAnchor constraintEqualToAnchor:_primaryButton.leadingAnchor constant:-10],
             [_progressBar.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-6],
-            [_progressBar.heightAnchor constraintEqualToConstant:4],
+            [_progressBar.heightAnchor constraintEqualToConstant:6],
 
             [_secondaryButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-8],
             [_secondaryButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -145,39 +149,66 @@ static const CGFloat kHeaderHeight = 36.0;
     BOOL active = (item.state == BrowserDownloadStatePending || item.state == BrowserDownloadStateDownloading);
     self.progressBar.hidden = !active;
     if (active) {
-        if (item.hasKnownTotalUnitCount) {
-            self.progressBar.indeterminate = NO;
-            self.progressBar.doubleValue = item.progress;
+        // Always show a bar for in-flight downloads. Prefer determinate when size is known;
+        // otherwise keep a continuous indeterminate bar (large CDN files often omit Content-Length).
+        if (item.hasKnownTotalUnitCount && item.totalUnitCount > 0) {
+            if (self.progressBar.isIndeterminate) {
+                [self.progressBar stopAnimation:nil];
+                self.progressBar.indeterminate = NO;
+            }
+            self.progressBar.doubleValue = MAX(0.0, MIN(1.0, item.progress));
         } else {
-            self.progressBar.indeterminate = YES;
+            if (!self.progressBar.isIndeterminate) {
+                self.progressBar.indeterminate = YES;
+            }
             [self.progressBar startAnimation:nil];
         }
     } else {
-        [self.progressBar stopAnimation:nil];
+        if (self.progressBar.isIndeterminate) {
+            [self.progressBar stopAnimation:nil];
+        }
+        self.progressBar.indeterminate = NO;
+        self.progressBar.doubleValue = (item.state == BrowserDownloadStateCompleted) ? 1.0 : 0.0;
     }
 
-    self.primaryButton.target = self;
-    self.secondaryButton.target = self;
-    self.secondaryButton.hidden = NO;
+    BOOL canOpen = (item.destinationURL != nil);
+    BOOL buttonsNeedRefresh = !self.hasConfiguredButtons ||
+                              (self.displayedState != item.state) ||
+                              (self.displayedCanOpen != canOpen);
+    if (buttonsNeedRefresh) {
+        self.hasConfiguredButtons = YES;
+        self.displayedState = item.state;
+        self.displayedCanOpen = canOpen;
+        self.primaryButton.target = self;
+        self.secondaryButton.target = self;
+        self.secondaryButton.hidden = NO;
 
-    if (active) {
-        self.primaryButton.hidden = YES;
-        self.secondaryButton.image = [self symbolNamed:@"xmark.circle"];
-        self.secondaryButton.toolTip = @"取消";
-        self.secondaryButton.action = @selector(cancelClicked:);
-    } else if (item.state == BrowserDownloadStateCompleted && item.destinationURL) {
-        self.primaryButton.hidden = NO;
-        self.primaryButton.image = [self symbolNamed:@"folder"];
-        self.primaryButton.toolTip = @"在 Finder 中显示";
-        self.primaryButton.action = @selector(revealClicked:);
-        self.secondaryButton.image = [self symbolNamed:@"arrow.up.right.square"];
-        self.secondaryButton.toolTip = @"打开";
-        self.secondaryButton.action = @selector(openClicked:);
-    } else {
-        self.primaryButton.hidden = YES;
-        self.secondaryButton.image = [self symbolNamed:@"trash"];
-        self.secondaryButton.toolTip = @"清除";
-        self.secondaryButton.action = @selector(removeClicked:);
+        if (active) {
+            if (canOpen) {
+                self.primaryButton.hidden = NO;
+                self.primaryButton.image = [self symbolNamed:@"folder"];
+                self.primaryButton.toolTip = @"在 Finder 中显示";
+                self.primaryButton.action = @selector(revealClicked:);
+            } else {
+                self.primaryButton.hidden = YES;
+            }
+            self.secondaryButton.image = [self symbolNamed:@"xmark.circle"];
+            self.secondaryButton.toolTip = @"取消";
+            self.secondaryButton.action = @selector(cancelClicked:);
+        } else if (item.state == BrowserDownloadStateCompleted && canOpen) {
+            self.primaryButton.hidden = NO;
+            self.primaryButton.image = [self symbolNamed:@"folder"];
+            self.primaryButton.toolTip = @"在 Finder 中显示";
+            self.primaryButton.action = @selector(revealClicked:);
+            self.secondaryButton.image = [self symbolNamed:@"arrow.up.right.square"];
+            self.secondaryButton.toolTip = @"打开";
+            self.secondaryButton.action = @selector(openClicked:);
+        } else {
+            self.primaryButton.hidden = YES;
+            self.secondaryButton.image = [self symbolNamed:@"trash"];
+            self.secondaryButton.toolTip = @"清除";
+            self.secondaryButton.action = @selector(removeClicked:);
+        }
     }
 
     self.toolTip = item.destinationURL.path ?: item.sourceURL.absoluteString;
@@ -238,15 +269,13 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    if (!self.didStartDrag &&
-        self.item.state == BrowserDownloadStateCompleted &&
-        self.item.destinationURL &&
-        event.clickCount == 1) {
+    BOOL hasFile = (self.item.destinationURL != nil);
+    BOOL completed = (self.item.state == BrowserDownloadStateCompleted);
+    BOOL downloading = (self.item.state == BrowserDownloadStateDownloading);
+    if (!self.didStartDrag && hasFile && (completed || downloading) && event.clickCount == 1) {
         [self.panel rowDidClickReveal:self];
-    } else if (!self.didStartDrag &&
-               self.item.state == BrowserDownloadStateCompleted &&
-               self.item.destinationURL &&
-               event.clickCount == 2) {
+    } else if (!self.didStartDrag && hasFile && completed && event.clickCount == 2) {
+        // 仅完成后打开：未写完的 .dmg 等会被系统报「磁盘映像已损坏」
         [self.panel rowDidClickOpen:self];
     }
     [super mouseUp:event];
@@ -264,6 +293,9 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 @property (nonatomic, strong) NSMutableArray<BrowserDownloadRowView *> *rowViews;
 @property (nonatomic, strong, nullable) id localMouseMonitor;
 @property (nonatomic, strong, nullable) id localKeyMonitor;
+@property (nonatomic, strong, nullable) id resignActiveObserver;
+@property (nonatomic, strong, nullable) id resignKeyObserver;
+@property (nonatomic, weak, nullable) NSWindow *ownerWindow;
 @end
 
 @implementation BrowserDownloadPanel
@@ -284,6 +316,7 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
             self.appearance = NSApp.effectiveAppearance;
         }
         if (@available(macOS 10.12, *)) {
+            // Keep visible until we explicitly dismiss on resign (so monitors/delegate stay consistent).
             self.hidesOnDeactivate = NO;
         }
 
@@ -374,7 +407,8 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     return NO;
 }
 
-- (void)presentAnchoredToRect:(NSRect)anchorRectOnScreen {
+- (void)presentAnchoredToRect:(NSRect)anchorRectOnScreen ofWindow:(NSWindow *)ownerWindow {
+    self.ownerWindow = ownerWindow;
     [self reloadFromManager];
 
     CGFloat contentHeight = MAX((CGFloat)self.manager.items.count, 1.0) * kRowHeight;
@@ -387,7 +421,7 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
                                    kPanelWidth,
                                    panelHeight);
     // 夹在屏幕可见区内
-    NSScreen *screen = NSScreen.mainScreen;
+    NSScreen *screen = ownerWindow.screen ?: NSScreen.mainScreen;
     if (screen) {
         NSRect visible = screen.visibleFrame;
         if (NSMinX(panelFrame) < NSMinX(visible)) {
@@ -408,16 +442,12 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 
 - (void)dismissPanel {
     [self removeDismissalMonitors];
+    self.ownerWindow = nil;
     [self orderOut:nil];
     [self.panelDelegate downloadPanelDidRequestClose:self];
 }
 
 - (void)reloadFromManager {
-    for (NSView *row in self.rowViews) {
-        [row removeFromSuperview];
-    }
-    [self.rowViews removeAllObjects];
-
     NSArray<BrowserDownloadItem *> *items = self.manager.items ?: @[];
     BOOL empty = items.count == 0;
     self.emptyLabel.hidden = !empty;
@@ -428,13 +458,42 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     CGFloat contentHeight = MAX((CGFloat)items.count, 1.0) * kRowHeight;
     self.rowsContainer.frame = NSMakeRect(0, 0, width, contentHeight);
 
-    for (NSUInteger i = 0; i < items.count; i++) {
-        NSRect rowFrame = NSMakeRect(0, i * kRowHeight, width, kRowHeight);
-        BrowserDownloadRowView *row = [[BrowserDownloadRowView alloc] initWithFrame:rowFrame];
-        row.panel = self;
-        [row configureWithItem:items[i]];
-        [self.rowsContainer addSubview:row];
-        [self.rowViews addObject:row];
+    // Reuse existing rows when item identity/order match — avoids progress-bar flicker on large downloads.
+    BOOL canReuse = (self.rowViews.count == items.count);
+    if (canReuse) {
+        for (NSUInteger i = 0; i < items.count; i++) {
+            if (![self.rowViews[i].item.itemID isEqual:items[i].itemID]) {
+                canReuse = NO;
+                break;
+            }
+        }
+    }
+
+    if (canReuse) {
+        for (NSUInteger i = 0; i < items.count; i++) {
+            [self.rowViews[i] configureWithItem:items[i]];
+        }
+    } else {
+        NSClipView *clip = self.scrollView.contentView;
+        NSPoint savedOrigin = clip.bounds.origin;
+
+        for (NSView *row in self.rowViews) {
+            [row removeFromSuperview];
+        }
+        [self.rowViews removeAllObjects];
+
+        for (NSUInteger i = 0; i < items.count; i++) {
+            NSRect rowFrame = NSMakeRect(0, i * kRowHeight, width, kRowHeight);
+            BrowserDownloadRowView *row = [[BrowserDownloadRowView alloc] initWithFrame:rowFrame];
+            row.panel = self;
+            [row configureWithItem:items[i]];
+            [self.rowsContainer addSubview:row];
+            [self.rowViews addObject:row];
+        }
+
+        if (self.isVisible) {
+            [clip setBoundsOrigin:savedOrigin];
+        }
     }
 
     if (self.isVisible) {
@@ -486,7 +545,9 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
                 return event;
             }
             // 点击下载按钮本身由外部 toggle，这里只处理点在浏览器窗口其他区域
-            NSPoint screenPoint = [eventWindow convertPointToScreen:event.locationInWindow];
+            NSPoint screenPoint = eventWindow
+                ? [eventWindow convertPointToScreen:event.locationInWindow]
+                : [NSEvent mouseLocation];
             if (NSPointInRect(screenPoint, panel.dismissExclusionRectOnScreen)) {
                 return event;
             }
@@ -504,6 +565,40 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
             }
             return event;
         }];
+
+    // 应用失活（切到其他 App / Dock）时关闭，行为对齐系统 popover。
+    self.resignActiveObserver =
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSApplicationDidResignActiveNotification
+                        object:nil
+                         queue:NSOperationQueue.mainQueue
+                    usingBlock:^(__unused NSNotification *note) {
+            [weakSelf dismissPanel];
+        }];
+
+    // 主窗口失去 key（点到其他本机窗口等）时关闭。
+    NSWindow *owner = self.ownerWindow;
+    if (owner) {
+        __weak NSWindow *weakOwner = owner;
+        self.resignKeyObserver =
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:NSWindowDidResignKeyNotification
+                            object:owner
+                             queue:NSOperationQueue.mainQueue
+                        usingBlock:^(__unused NSNotification *note) {
+            BrowserDownloadPanel *panel = weakSelf;
+            NSWindow *stillOwner = weakOwner;
+            if (!panel || !panel.isVisible) {
+                return;
+            }
+            // 本面板永不成为 key；忽略短暂抖动，仅在父窗口真正失焦时关闭。
+            NSWindow *newKey = NSApp.keyWindow;
+            if (newKey == stillOwner || newKey == panel) {
+                return;
+            }
+            [panel dismissPanel];
+        }];
+    }
 }
 
 - (void)removeDismissalMonitors {
@@ -514,6 +609,14 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     if (self.localKeyMonitor) {
         [NSEvent removeMonitor:self.localKeyMonitor];
         self.localKeyMonitor = nil;
+    }
+    if (self.resignActiveObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.resignActiveObserver];
+        self.resignActiveObserver = nil;
+    }
+    if (self.resignKeyObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.resignKeyObserver];
+        self.resignKeyObserver = nil;
     }
 }
 

@@ -1,6 +1,8 @@
 #import "LoginRecipe.h"
 
 LoginRecipeMode const LoginRecipeModePassword = @"password";
+LoginRecipeMode const LoginRecipeModeSMSOTP = @"sms_otp";
+LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
 
 @implementation LoginRecipe
 
@@ -12,8 +14,9 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     recipe.mode = LoginRecipeModePassword;
     recipe.autoLogin = NO;
     recipe.isDefault = NO;
-    recipe.submitByEnter = YES; // 默认：密码框回车提交
+    recipe.submitByEnter = YES;
     recipe.waitTimeoutMs = 8000;
+    recipe.otpMaxWaitMs = 120000;
     recipe.updatedAt = [NSDate date].timeIntervalSince1970;
     return recipe;
 }
@@ -27,6 +30,7 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
         _mode = LoginRecipeModePassword;
         _submitByEnter = YES;
         _waitTimeoutMs = 8000;
+        _otpMaxWaitMs = 120000;
         _updatedAt = [NSDate date].timeIntervalSince1970;
     }
     return self;
@@ -44,19 +48,30 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     copy.isDefault = self.isDefault;
     copy.usernameSelector = self.usernameSelector;
     copy.passwordSelector = self.passwordSelector;
+    copy.phoneSelector = self.phoneSelector;
+    copy.otpSelector = self.otpSelector;
+    copy.sendCodeSelector = self.sendCodeSelector;
     copy.submitSelector = self.submitSelector;
     copy.submitByEnter = self.submitByEnter;
     copy.successJSPredicate = self.successJSPredicate;
     copy.waitTimeoutMs = self.waitTimeoutMs;
+    copy.otpMaxWaitMs = self.otpMaxWaitMs;
     copy.updatedAt = self.updatedAt;
     return copy;
+}
+
+- (BOOL)requiresOTPWait {
+    if (self.otpSelector.length == 0) {
+        return NO;
+    }
+    return [self.mode isEqualToString:LoginRecipeModeSMSOTP] ||
+           [self.mode isEqualToString:LoginRecipeModeHybrid];
 }
 
 - (BOOL)matchesURL:(NSURL *)url {
     if (!url || self.host.length == 0) {
         return NO;
     }
-    // file:// 测试页：host 配置为 file 即可匹配本地文件。
     if (url.isFileURL) {
         if (![self.host isEqualToString:@"file"] && ![self.host isEqualToString:@"localhost"]) {
             return NO;
@@ -75,7 +90,6 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
         return NO;
     }
     if (![host isEqualToString:self.host]) {
-        // 允许 www. 前缀互认
         NSString *strippedHost = [host hasPrefix:@"www."] ? [host substringFromIndex:4] : host;
         NSString *strippedSelf = [self.host hasPrefix:@"www."] ? [self.host substringFromIndex:4] : self.host;
         if (![strippedHost isEqualToString:strippedSelf]) {
@@ -101,6 +115,7 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
         @"isDefault": @(self.isDefault),
         @"submitByEnter": @(self.submitByEnter),
         @"waitTimeoutMs": @(self.waitTimeoutMs > 0 ? self.waitTimeoutMs : 8000),
+        @"otpMaxWaitMs": @(self.otpMaxWaitMs > 0 ? self.otpMaxWaitMs : 120000),
         @"updatedAt": @(self.updatedAt),
     } mutableCopy];
     if (self.pathPrefix.length > 0) {
@@ -111,6 +126,15 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     }
     if (self.passwordSelector.length > 0) {
         dict[@"passwordSelector"] = self.passwordSelector;
+    }
+    if (self.phoneSelector.length > 0) {
+        dict[@"phoneSelector"] = self.phoneSelector;
+    }
+    if (self.otpSelector.length > 0) {
+        dict[@"otpSelector"] = self.otpSelector;
+    }
+    if (self.sendCodeSelector.length > 0) {
+        dict[@"sendCodeSelector"] = self.sendCodeSelector;
     }
     if (self.submitSelector.length > 0) {
         dict[@"submitSelector"] = self.submitSelector;
@@ -143,9 +167,13 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     recipe.mode = [mode isKindOfClass:[NSString class]] && mode.length > 0 ? mode : LoginRecipeModePassword;
     recipe.autoLogin = [dictionary[@"autoLogin"] boolValue];
     recipe.isDefault = [dictionary[@"isDefault"] boolValue];
-    recipe.submitByEnter = [dictionary[@"submitByEnter"] boolValue];
+    if (dictionary[@"submitByEnter"] != nil) {
+        recipe.submitByEnter = [dictionary[@"submitByEnter"] boolValue];
+    }
     NSInteger timeout = [dictionary[@"waitTimeoutMs"] integerValue];
     recipe.waitTimeoutMs = timeout > 0 ? timeout : 8000;
+    NSInteger otpWait = [dictionary[@"otpMaxWaitMs"] integerValue];
+    recipe.otpMaxWaitMs = otpWait > 0 ? otpWait : 120000;
     recipe.updatedAt = [dictionary[@"updatedAt"] doubleValue];
     if (recipe.updatedAt <= 0) {
         recipe.updatedAt = [NSDate date].timeIntervalSince1970;
@@ -157,6 +185,12 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
     recipe.usernameSelector = [userSel isKindOfClass:[NSString class]] ? userSel : nil;
     NSString *passSel = dictionary[@"passwordSelector"];
     recipe.passwordSelector = [passSel isKindOfClass:[NSString class]] ? passSel : nil;
+    NSString *phoneSel = dictionary[@"phoneSelector"];
+    recipe.phoneSelector = [phoneSel isKindOfClass:[NSString class]] ? phoneSel : nil;
+    NSString *otpSel = dictionary[@"otpSelector"];
+    recipe.otpSelector = [otpSel isKindOfClass:[NSString class]] ? otpSel : nil;
+    NSString *sendSel = dictionary[@"sendCodeSelector"];
+    recipe.sendCodeSelector = [sendSel isKindOfClass:[NSString class]] ? sendSel : nil;
     NSString *submitSel = dictionary[@"submitSelector"];
     recipe.submitSelector = [submitSel isKindOfClass:[NSString class]] ? submitSel : nil;
     NSString *predicate = dictionary[@"successJSPredicate"];

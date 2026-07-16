@@ -18,7 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) NSRect dismissExclusionRectOnScreen;
 
 - (void)reloadFromManager;
-- (void)presentAnchoredToRect:(NSRect)anchorRectOnScreen;
+- (void)presentAnchoredToRect:(NSRect)anchorRectOnScreen ofWindow:(nullable NSWindow *)ownerWindow;
 - (void)dismissPanel;
 
 @end

@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 
 @class LoginRecipe;
+@class LoginCredentials;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -9,7 +10,13 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
 
 @interface LoginRunner : NSObject
 
-/// 在指定 WebView 上执行 recipe（需已加载页面）。fillOnly=YES 时只填帐密不提交。
+/// 执行 recipe。若 requiresOTPWait，会在填完前置字段后阻塞至 OTPInbox。
++ (void)runRecipe:(LoginRecipe *)recipe
+        inWebView:(WKWebView *)webView
+      credentials:(LoginCredentials *)credentials
+         fillOnly:(BOOL)fillOnly
+       completion:(LoginRunnerCompletion)completion;
+
 + (void)runRecipe:(LoginRecipe *)recipe
         inWebView:(WKWebView *)webView
          username:(NSString *)username
@@ -30,7 +37,7 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
              username:(NSString *)username
              password:(NSString *)password
        submitSelector:(nullable NSString *)submitSelector
-             shouldSubmit:(BOOL)shouldSubmit
+         shouldSubmit:(BOOL)shouldSubmit
            completion:(nullable LoginRunnerCompletion)completion;
 
 + (void)cancelAll;

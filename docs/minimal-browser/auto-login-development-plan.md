@@ -32,7 +32,7 @@
 | Phase LA-2 | 设置与点选拾取 | §2.2 | **完成** | 设置 UI + 选择器拾取 |
 | Phase LA-3 | 自动登录与 V1 验收 | §2.1 / §7 V1 | **完成** | 自动策略、防抖、构建验收 |
 | Phase LA-4 | TOTP（可选插入） | §8 建议 | 未开始 | 本地算码 step，无 Companion |
-| Phase LA-5 | 短信 OTP | §4.2 / §7 V2 | 未开始 | waitOTP + 通道 + Companion 最小闭环 |
+| Phase LA-5 | 短信 OTP | §4.2 / §7 V2 | **进行中（Mac+Android 工程落地）** | waitOTP + Bonjour + Companion |
 | Phase LA-6 | 二维码辅助 | §4.3 / §7 V3 | 未开始 | 检测 + 传图/深链 + 状态 HUD |
 | Phase LA-7 | 联调收尾 | — | 未开始 | 文档 / acceptance / 路线图勾选 |
 
@@ -181,26 +181,26 @@ make run-browser
 
 #### 5A — 协议 + Mac 收码 + waitOTP（与 App 同波）
 
-- [ ] **5.1** Recipe `mode` / steps 支持 `waitOTP` + 手机号 fill
-- [ ] **5.2** `CompanionChannel` 协议：配对、推送 OTP（码、时间戳、发件人 hash）
-- [ ] **5.3** `OTPInbox`：TTL（默认 120s）与一次性消费；超时失败提示
-- [ ] **5.4** Mac 通道落地：局域网 Bonjour（P0）；自建 WS 模板（P1）
-- [ ] **5.5** 设置页：配对码、连接状态、注销设备；断连明示
+- [x] **5.1** Recipe `mode` / steps 支持 `waitOTP` + 手机号 fill
+- [x] **5.2** `CompanionChannel` 协议：配对、推送 OTP（码、时间戳、发件人 hash）
+- [x] **5.3** `OTPInbox`：TTL（默认 120s）与一次性消费；超时失败提示
+- [x] **5.4** Mac 通道落地：局域网 Bonjour（P0）；自建 WS 模板（P1）
+- [x] **5.5** 设置页：配对码、连接状态、注销设备；断连明示
 
 #### 5B — Android Companion（V2 主交付）
 
-- [ ] **5.6** Android 最小 App（`companion/android/MeoCompanion`）：读通知/短信 → 解析 4～8 位码 → 加密发送
+- [x] **5.6** Android 最小 App（`companion/android/MeoCompanion`）：读通知/短信 → 解析 4～8 位码 → 加密发送
 - [ ] **5.7** 端到端：真机或模拟短信 → Mac 自动填入并提交
-- [ ] **5.8** Mac 降级：剪贴板 /「粘贴验证码」→ 同一 `OTPInbox`（不挡主验收）
-- [ ] **5.9** iOS：文档写明降级路径（分享到 App / 粘贴）；完整短信权限不做硬依赖
-- [ ] **5.10** 隐私：默认不上传短信全文；设置中明示
+- [x] **5.8** Mac 降级：剪贴板 /「粘贴验证码」→ 同一 `OTPInbox`（不挡主验收）
+- [x] **5.9** iOS：文档写明降级路径（分享到 App / 粘贴）；完整短信权限不做硬依赖
+- [x] **5.10** 隐私：默认不上传短信全文；设置中明示
 
 ### V2 验收清单
 
 - [ ] **主路径**：测试站填密 → 发码 → **Android 推码** → 自动填入并提交
-- [ ] 过期码不填；重复码不二次消费
-- [ ] 断连时 UI 明示，不无声失败
-- [ ] 无 Companion 时，手动粘贴仍可完成同流程（降级）
+- [x] 过期码不填；重复码不二次消费（逻辑）
+- [x] 断连时 UI 明示，不无声失败（逻辑）
+- [x] 无 Companion 时，手动粘贴仍可完成同流程（降级）
 
 ---
 

@@ -5,6 +5,8 @@
 #import "LoginCredentialStore.h"
 #import "LoginElementPicker.h"
 #import "LoginAssistPreferences.h"
+#import "CompanionChannel.h"
+#import "CompanionPairingStore.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 #import <WebKit/WebKit.h>
@@ -15,10 +17,15 @@
 @property (nonatomic, strong) SBTextField *titleField;
 @property (nonatomic, strong) SBTextField *hostField;
 @property (nonatomic, strong) SBTextField *pathPrefixField;
+@property (nonatomic, strong) NSPopUpButton *modePopup;
 @property (nonatomic, strong) SBTextField *usernameField;
 @property (nonatomic, strong) SBSecureTextField *passwordField;
+@property (nonatomic, strong) SBTextField *phoneField;
 @property (nonatomic, strong) SBTextField *usernameSelectorField;
 @property (nonatomic, strong) SBTextField *passwordSelectorField;
+@property (nonatomic, strong) SBTextField *phoneSelectorField;
+@property (nonatomic, strong) SBTextField *otpSelectorField;
+@property (nonatomic, strong) SBTextField *sendCodeSelectorField;
 @property (nonatomic, strong) SBTextField *submitSelectorField;
 @property (nonatomic, strong) NSButton *submitByEnterCheck;
 @property (nonatomic, strong) NSButton *autoLoginCheck;
@@ -26,6 +33,8 @@
 @property (nonatomic, strong) NSButton *inlineAssistCheck;
 @property (nonatomic, strong) NSButton *promptSaveCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
+@property (nonatomic, strong) NSTextField *pairingCodeLabel;
+@property (nonatomic, strong) NSTextField *companionStatusLabel;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @end
@@ -33,13 +42,13 @@
 @implementation BrowserLoginAssistSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 720, 580)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 780, 720)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"登录助手";
     window.releasedWhenClosed = NO;
-    window.minSize = NSMakeSize(640, 520);
+    window.minSize = NSMakeSize(700, 600);
     self = [super initWithWindow:window];
     if (self) {
         _recipes = @[];
@@ -47,6 +56,10 @@
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(companionStateDidChange:)
+                                                     name:CompanionChannelStateDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -150,13 +163,25 @@
     self.titleField = [self makeField];
     self.hostField = [self makeField];
     self.pathPrefixField = [self makeField];
+    self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.modePopup.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.modePopup removeAllItems];
+    [self.modePopup addItemWithTitle:@"密码"];
+    [self.modePopup addItemWithTitle:@"短信验证码"];
+    [self.modePopup addItemWithTitle:@"账密 + 短信"];
+    self.modePopup.target = self;
+    self.modePopup.action = @selector(modeChanged:);
     self.usernameField = [self makeField];
     self.passwordField = [self makeSecureField];
+    self.phoneField = [self makeField];
     self.usernameSelectorField = [self makeField];
     self.passwordSelectorField = [self makeField];
+    self.phoneSelectorField = [self makeField];
+    self.otpSelectorField = [self makeField];
+    self.sendCodeSelectorField = [self makeField];
     self.submitSelectorField = [self makeField];
 
-    self.submitByEnterCheck = [NSButton checkboxWithTitle:@"默认：密码框回车提交（不勾选则点击下方提交选择器）"
+    self.submitByEnterCheck = [NSButton checkboxWithTitle:@"默认：密码/验证码框回车提交（不勾选则点击下方提交选择器）"
                                                    target:self
                                                    action:@selector(submitModeChanged:)];
     self.autoLoginCheck = [NSButton checkboxWithTitle:@"自动登录（进入匹配页后自动执行）"
@@ -184,16 +209,59 @@
     self.statusLabel = [NSTextField wrappingLabelWithString:@"凭证保存在本地钥匙串；清除「网站数据」不会删除登录配置。"];
     self.statusLabel.font = [NSFont systemFontOfSize:11];
     self.statusLabel.textColor = [NSColor secondaryLabelColor];
-    self.statusLabel.preferredMaxLayoutWidth = 420;
+    self.statusLabel.preferredMaxLayoutWidth = 460;
+
+    // Companion 分区
+    NSTextField *companionTitle = [NSTextField labelWithString:@"手机 Companion（短信自动填入）"];
+    companionTitle.font = [NSFont boldSystemFontOfSize:13];
+    self.pairingCodeLabel = [NSTextField labelWithString:@"配对码：----"];
+    self.pairingCodeLabel.font = [NSFont monospacedDigitSystemFontOfSize:22 weight:NSFontWeightSemibold];
+    self.companionStatusLabel = [NSTextField wrappingLabelWithString:@"状态：…"];
+    self.companionStatusLabel.font = [NSFont systemFontOfSize:12];
+    self.companionStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.companionStatusLabel.preferredMaxLayoutWidth = 460;
+    NSButton *refreshPairing = [NSButton buttonWithTitle:@"刷新配对码"
+                                                  target:self
+                                                  action:@selector(refreshPairingCode:)];
+    refreshPairing.bezelStyle = NSBezelStyleRounded;
+    NSButton *revokeDevices = [NSButton buttonWithTitle:@"注销已配对设备"
+                                                 target:self
+                                                 action:@selector(revokeCompanionDevices:)];
+    revokeDevices.bezelStyle = NSBezelStyleRounded;
+    NSStackView *companionButtons = [NSStackView stackViewWithViews:@[refreshPairing, revokeDevices]];
+    companionButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    companionButtons.spacing = 8;
+    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。同 Wi‑Fi 使用 Bonjour（_meologin._tcp）。"];
+    privacyNote.font = [NSFont systemFontOfSize:11];
+    privacyNote.textColor = [NSColor secondaryLabelColor];
+    privacyNote.preferredMaxLayoutWidth = 460;
+
+    NSStackView *modeRow = [NSStackView stackViewWithViews:@[
+        ({
+            NSTextField *c = [self caption:@"登录方式"];
+            c.translatesAutoresizingMaskIntoConstraints = NO;
+            [c.widthAnchor constraintEqualToConstant:88].active = YES;
+            c;
+        }),
+        self.modePopup
+    ]];
+    modeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    modeRow.alignment = NSLayoutAttributeCenterY;
+    modeRow.spacing = 8;
 
     NSStackView *form = [NSStackView stackViewWithViews:@[
         [self labeledRow:@"名称" field:self.titleField pickAction:nil],
         [self labeledRow:@"主机" field:self.hostField pickAction:nil],
         [self labeledRow:@"路径前缀" field:self.pathPrefixField pickAction:nil],
+        modeRow,
         [self labeledRow:@"用户名" field:self.usernameField pickAction:nil],
         [self labeledRow:@"密码" field:self.passwordField pickAction:nil],
+        [self labeledRow:@"手机号" field:self.phoneField pickAction:nil],
         [self labeledRow:@"用户名选择器" field:self.usernameSelectorField pickAction:@selector(pickUsernameSelector:)],
         [self labeledRow:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPasswordSelector:)],
+        [self labeledRow:@"手机号选择器" field:self.phoneSelectorField pickAction:@selector(pickPhoneSelector:)],
+        [self labeledRow:@"验证码选择器" field:self.otpSelectorField pickAction:@selector(pickOTPSelector:)],
+        [self labeledRow:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSendCodeSelector:)],
         [self labeledRow:@"提交选择器" field:self.submitSelectorField pickAction:@selector(pickSubmitSelector:)],
         self.submitByEnterCheck,
         self.autoLoginCheck,
@@ -202,10 +270,15 @@
         self.inlineAssistCheck,
         self.promptSaveCheck,
         self.statusLabel,
+        companionTitle,
+        self.pairingCodeLabel,
+        self.companionStatusLabel,
+        companionButtons,
+        privacyNote,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
     form.alignment = NSLayoutAttributeLeading;
-    form.spacing = 10;
+    form.spacing = 8;
     form.translatesAutoresizingMaskIntoConstraints = NO;
 
     for (NSView *row in form.arrangedSubviews) {
@@ -214,7 +287,24 @@
         }
     }
 
-    NSStackView *root = [NSStackView stackViewWithViews:@[listColumn, form]];
+    NSScrollView *formScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    formScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    formScroll.hasVerticalScroller = YES;
+    formScroll.borderType = NSNoBorder;
+    formScroll.drawsBackground = NO;
+    NSView *formDocument = [[NSView alloc] initWithFrame:NSZeroRect];
+    formDocument.translatesAutoresizingMaskIntoConstraints = NO;
+    [formDocument addSubview:form];
+    [NSLayoutConstraint activateConstraints:@[
+        [form.topAnchor constraintEqualToAnchor:formDocument.topAnchor],
+        [form.leadingAnchor constraintEqualToAnchor:formDocument.leadingAnchor],
+        [form.trailingAnchor constraintEqualToAnchor:formDocument.trailingAnchor],
+        [form.bottomAnchor constraintEqualToAnchor:formDocument.bottomAnchor],
+        [form.widthAnchor constraintEqualToConstant:460],
+    ]];
+    formScroll.documentView = formDocument;
+
+    NSStackView *root = [NSStackView stackViewWithViews:@[listColumn, formScroll]];
     root.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     root.alignment = NSLayoutAttributeTop;
     root.spacing = 16;
@@ -229,11 +319,12 @@
         [root.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
         [root.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
         [listColumn.widthAnchor constraintEqualToConstant:220],
-        [form.widthAnchor constraintGreaterThanOrEqualToConstant:420],
+        [formScroll.widthAnchor constraintGreaterThanOrEqualToConstant:480],
     ]];
 
     [self reloadRecipes];
     [self clearForm];
+    [self refreshCompanionUI];
 }
 
 - (void)reloadRecipes {
@@ -257,16 +348,68 @@
     self.titleField.stringValue = @"";
     self.hostField.stringValue = @"";
     self.pathPrefixField.stringValue = @"";
+    [self.modePopup selectItemAtIndex:0];
     self.usernameField.stringValue = @"";
     self.passwordField.stringValue = @"";
+    self.phoneField.stringValue = @"";
     self.usernameSelectorField.stringValue = @"input[type=\"text\"], input[type=\"email\"], input[name=\"username\"]";
     self.passwordSelectorField.stringValue = @"input[type=\"password\"]";
+    self.phoneSelectorField.stringValue = @"input[type=\"tel\"], input[name*=\"phone\"], input[autocomplete=\"tel\"]";
+    self.otpSelectorField.stringValue = @"input[autocomplete=\"one-time-code\"], input[name*=\"otp\"], input[name*=\"code\"]";
+    self.sendCodeSelectorField.stringValue = @"";
     self.submitSelectorField.stringValue = @"button[type=\"submit\"], input[type=\"submit\"]";
     self.submitByEnterCheck.state = NSControlStateValueOn;
     self.autoLoginCheck.state = NSControlStateValueOff;
     self.defaultCheck.state = NSControlStateValueOff;
     self.submitSelectorField.enabled = NO;
     self.statusLabel.stringValue = @"凭证保存在本地钥匙串；清除「网站数据」不会删除登录配置。";
+    [self updateSMSFieldsEnabled];
+}
+
+- (LoginRecipeMode)selectedMode {
+    switch (self.modePopup.indexOfSelectedItem) {
+        case 1: return LoginRecipeModeSMSOTP;
+        case 2: return LoginRecipeModeHybrid;
+        default: return LoginRecipeModePassword;
+    }
+}
+
+- (void)selectMode:(LoginRecipeMode)mode {
+    if ([mode isEqualToString:LoginRecipeModeSMSOTP]) {
+        [self.modePopup selectItemAtIndex:1];
+    } else if ([mode isEqualToString:LoginRecipeModeHybrid]) {
+        [self.modePopup selectItemAtIndex:2];
+    } else {
+        [self.modePopup selectItemAtIndex:0];
+    }
+    [self updateSMSFieldsEnabled];
+}
+
+- (void)modeChanged:(id)sender {
+    (void)sender;
+    [self updateSMSFieldsEnabled];
+    // 纯短信登录页没有账密框：清空默认密码选择器，避免 waitFor 超时。
+    if ([[self selectedMode] isEqualToString:LoginRecipeModeSMSOTP]) {
+        self.usernameSelectorField.stringValue = @"";
+        self.passwordSelectorField.stringValue = @"";
+        self.usernameField.stringValue = @"";
+        self.passwordField.stringValue = @"";
+        if (self.phoneSelectorField.stringValue.length == 0) {
+            self.phoneSelectorField.stringValue = @"input[type=\"tel\"], input[name*=\"phone\"], input[autocomplete=\"tel\"]";
+        }
+        if (self.otpSelectorField.stringValue.length == 0) {
+            self.otpSelectorField.stringValue = @"input[autocomplete=\"one-time-code\"], input[name*=\"otp\"], input[name*=\"code\"], input[placeholder*=\"验证码\"]";
+        }
+        self.statusLabel.stringValue = @"已切换为「短信验证码」：请拾取手机号、验证码、发码按钮；可不填用户名密码。";
+    }
+}
+
+- (void)updateSMSFieldsEnabled {
+    BOOL sms = ![self.selectedMode isEqualToString:LoginRecipeModePassword];
+    self.phoneField.enabled = sms;
+    self.phoneSelectorField.enabled = sms;
+    self.otpSelectorField.enabled = sms;
+    self.sendCodeSelectorField.enabled = sms;
 }
 
 - (void)loadRecipeIntoForm:(LoginRecipe *)recipe {
@@ -274,19 +417,22 @@
     self.titleField.stringValue = recipe.title ?: @"";
     self.hostField.stringValue = recipe.host ?: @"";
     self.pathPrefixField.stringValue = recipe.pathPrefix ?: @"";
+    [self selectMode:recipe.mode ?: LoginRecipeModePassword];
     self.usernameSelectorField.stringValue = recipe.usernameSelector ?: @"";
     self.passwordSelectorField.stringValue = recipe.passwordSelector ?: @"";
+    self.phoneSelectorField.stringValue = recipe.phoneSelector ?: @"";
+    self.otpSelectorField.stringValue = recipe.otpSelector ?: @"";
+    self.sendCodeSelectorField.stringValue = recipe.sendCodeSelector ?: @"";
     self.submitSelectorField.stringValue = recipe.submitSelector ?: @"";
     self.submitByEnterCheck.state = recipe.submitByEnter ? NSControlStateValueOn : NSControlStateValueOff;
     self.autoLoginCheck.state = recipe.autoLogin ? NSControlStateValueOn : NSControlStateValueOff;
     self.defaultCheck.state = recipe.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
     self.submitSelectorField.enabled = !recipe.submitByEnter;
 
-    NSString *username = nil;
-    NSString *password = nil;
-    [[LoginCredentialStore sharedStore] loadUsername:&username password:&password forRecipeID:recipe.recipeID error:nil];
-    self.usernameField.stringValue = username ?: @"";
-    self.passwordField.stringValue = password ?: @"";
+    LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID error:nil];
+    self.usernameField.stringValue = credentials.username ?: @"";
+    self.passwordField.stringValue = credentials.password ?: @"";
+    self.phoneField.stringValue = credentials.phone ?: @"";
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
@@ -415,17 +561,40 @@
     recipe.submitByEnter = (self.submitByEnterCheck.state == NSControlStateValueOn);
     recipe.autoLogin = (self.autoLoginCheck.state == NSControlStateValueOn);
     recipe.isDefault = (self.defaultCheck.state == NSControlStateValueOn);
-    recipe.mode = LoginRecipeModePassword;
+    recipe.mode = [self selectedMode];
+    recipe.phoneSelector = self.phoneSelectorField.stringValue;
+    recipe.otpSelector = self.otpSelectorField.stringValue;
+    recipe.sendCodeSelector = self.sendCodeSelectorField.stringValue;
+    if ([recipe requiresOTPWait] && recipe.otpSelector.length == 0) {
+        self.statusLabel.stringValue = @"短信/混合模式请配置验证码选择器。";
+        return;
+    }
+    if ([recipe.mode isEqualToString:LoginRecipeModeSMSOTP]) {
+        if (recipe.phoneSelector.length == 0) {
+            self.statusLabel.stringValue = @"短信登录请配置手机号选择器，并填写手机号。";
+            return;
+        }
+        if (self.phoneField.stringValue.length == 0) {
+            self.statusLabel.stringValue = @"请填写要登录的手机号。";
+            return;
+        }
+        // 避免残留默认密码选择器拖垮执行
+        recipe.usernameSelector = @"";
+        recipe.passwordSelector = @"";
+    }
 
     NSError *error = nil;
     if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
         return;
     }
-    if (![[LoginCredentialStore sharedStore] saveUsername:self.usernameField.stringValue
-                                                 password:self.passwordField.stringValue
-                                              forRecipeID:recipe.recipeID
-                                                    error:&error]) {
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
+    credentials.username = self.usernameField.stringValue;
+    credentials.password = self.passwordField.stringValue;
+    credentials.phone = self.phoneField.stringValue;
+    if (![[LoginCredentialStore sharedStore] saveCredentials:credentials
+                                                 forRecipeID:recipe.recipeID
+                                                       error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"凭证保存失败";
         return;
     }
@@ -443,6 +612,21 @@
 - (void)pickPasswordSelector:(id)sender {
     (void)sender;
     [self beginPickForTarget:@"password"];
+}
+
+- (void)pickPhoneSelector:(id)sender {
+    (void)sender;
+    [self beginPickForTarget:@"phone"];
+}
+
+- (void)pickOTPSelector:(id)sender {
+    (void)sender;
+    [self beginPickForTarget:@"otp"];
+}
+
+- (void)pickSendCodeSelector:(id)sender {
+    (void)sender;
+    [self beginPickForTarget:@"send"];
 }
 
 - (void)pickSubmitSelector:(id)sender {
@@ -474,6 +658,12 @@
             strongSelf.usernameSelectorField.stringValue = cssSelector;
         } else if ([strongSelf.pickingTarget isEqualToString:@"password"]) {
             strongSelf.passwordSelectorField.stringValue = cssSelector;
+        } else if ([strongSelf.pickingTarget isEqualToString:@"phone"]) {
+            strongSelf.phoneSelectorField.stringValue = cssSelector;
+        } else if ([strongSelf.pickingTarget isEqualToString:@"otp"]) {
+            strongSelf.otpSelectorField.stringValue = cssSelector;
+        } else if ([strongSelf.pickingTarget isEqualToString:@"send"]) {
+            strongSelf.sendCodeSelectorField.stringValue = cssSelector;
         } else if ([strongSelf.pickingTarget isEqualToString:@"submit"]) {
             strongSelf.submitSelectorField.stringValue = cssSelector;
         }
@@ -484,7 +674,50 @@
 
 - (void)showWindow:(id)sender {
     [self reloadRecipes];
+    [self refreshCompanionUI];
     [super showWindow:sender];
+}
+
+- (void)companionStateDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshCompanionUI];
+}
+
+- (void)refreshCompanionUI {
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    if (channel.state == CompanionChannelStateStopped) {
+        [channel start];
+    }
+    NSString *code = [channel ensurePairingCode];
+    NSUInteger paired = [CompanionPairingStore sharedStore].pairedDevices.count;
+    if (paired > 0 && [code isEqualToString:@"------"]) {
+        self.pairingCodeLabel.stringValue = @"配对码：已配对（新设备请点「刷新配对码」）";
+    } else {
+        self.pairingCodeLabel.stringValue = [NSString stringWithFormat:@"配对码：%@", code ?: @"----"];
+    }
+    NSString *portInfo = channel.listeningPort > 0
+        ? [NSString stringWithFormat:@"端口 %ld · ", (long)channel.listeningPort]
+        : @"";
+    self.companionStatusLabel.stringValue = [NSString stringWithFormat:@"%@%@（已配对 %lu 台）",
+                                             portInfo,
+                                             channel.statusText ?: @"未知",
+                                             (unsigned long)paired];
+}
+
+- (void)refreshPairingCode:(id)sender {
+    (void)sender;
+    NSString *code = [[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
+    self.pairingCodeLabel.stringValue = [NSString stringWithFormat:@"配对码：%@", code];
+    self.statusLabel.stringValue = @"已刷新配对码（5 分钟内有效）。在 Android Companion 中输入此码。";
+    [self refreshCompanionUI];
+}
+
+- (void)revokeCompanionDevices:(id)sender {
+    (void)sender;
+    [[CompanionPairingStore sharedStore] revokeAllDevices];
+    (void)[[CompanionChannel sharedChannel] refreshPairingCodeForNewDevice];
+    self.statusLabel.stringValue = @"已注销全部配对设备，请用新配对码重新配对。";
+    [self refreshCompanionUI];
 }
 
 @end

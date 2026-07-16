@@ -13,11 +13,22 @@ static NSString *SanitizedFilename(NSString *raw);
 static NSURL *UniqueDestinationURLInDownloads(NSString *filename);
 static NSString *ExtensionForMIMEType(NSString *mime);
 
+static NSArray<NSString *> *ProgressKVOKeyPaths(void) {
+    static NSArray<NSString *> *keys;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // fractionCompleted alone does not fire when total size is unknown (chunked / no Content-Length).
+        keys = @[ @"fractionCompleted", @"completedUnitCount", @"totalUnitCount" ];
+    });
+    return keys;
+}
+
 @interface BrowserDownloadManager ()
 @property (nonatomic, strong) NSMutableArray<BrowserDownloadItem *> *mutableItems;
 @property (nonatomic, strong) NSHashTable<id<BrowserDownloadManagerObserver>> *observers;
 @property (nonatomic, strong) NSMapTable<WKDownload *, BrowserDownloadItem *> *itemByDownload;
-@property (nonatomic, strong) NSMutableDictionary<NSUUID *, NSString *> *progressObservationKeys;
+@property (nonatomic, strong) NSMutableSet<NSUUID *> *observedProgressItemIDs;
+@property (nonatomic, assign) BOOL progressNotifyCoalesceScheduled;
 @end
 
 @interface BrowserDownloadManager (Private)
@@ -41,7 +52,7 @@ static NSString *ExtensionForMIMEType(NSString *mime);
         _mutableItems = [[NSMutableArray alloc] init];
         _observers = [NSHashTable weakObjectsHashTable];
         _itemByDownload = [NSMapTable weakToStrongObjectsMapTable];
-        _progressObservationKeys = [[NSMutableDictionary alloc] init];
+        _observedProgressItemIDs = [[NSMutableSet alloc] init];
     }
     return self;
 }
@@ -89,6 +100,9 @@ static NSString *ExtensionForMIMEType(NSString *mime);
         if (item.state != BrowserDownloadStatePending && item.state != BrowserDownloadStateDownloading) {
             continue;
         }
+        if (!item.hasKnownTotalUnitCount || item.totalUnitCount <= 0) {
+            continue;
+        }
         sum += MAX(0.0, MIN(1.0, item.progress));
         n += 1;
     }
@@ -96,6 +110,18 @@ static NSString *ExtensionForMIMEType(NSString *mime);
         return 0;
     }
     return sum / (double)n;
+}
+
+- (BOOL)aggregateProgressIsDeterminate {
+    for (BrowserDownloadItem *item in self.mutableItems) {
+        if (item.state != BrowserDownloadStatePending && item.state != BrowserDownloadStateDownloading) {
+            continue;
+        }
+        if (item.hasKnownTotalUnitCount && item.totalUnitCount > 0) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (void)addObserver:(id<BrowserDownloadManagerObserver>)observer {
@@ -252,6 +278,11 @@ static NSString *ExtensionForMIMEType(NSString *mime);
     if (!item.destinationURL) {
         return;
     }
+    // 下载未完成时不要打开：部分文件（尤其 .dmg）会被系统判定损坏。
+    if (item.state != BrowserDownloadStateCompleted) {
+        [self revealItemInFinder:item];
+        return;
+    }
     [[NSWorkspace sharedWorkspace] openURL:item.destinationURL];
 }
 
@@ -363,6 +394,15 @@ decideDestinationUsingResponse:(NSURLResponse *)response
 
     item.destinationURL = destination;
     item.state = BrowserDownloadStateDownloading;
+    // Seed known size from HTTP Content-Length when WebKit progress has not yet published totalUnitCount.
+    long long expected = response.expectedContentLength;
+    if (expected > 0) {
+        item.totalUnitCount = expected;
+        item.hasKnownTotalUnitCount = YES;
+        if (item.completedUnitCount > 0 && item.totalUnitCount > 0) {
+            item.progress = MIN(1.0, (double)item.completedUnitCount / (double)item.totalUnitCount);
+        }
+    }
     [self startObservingProgressForItem:item download:download];
     completionHandler(destination);
     [self notifyChange];
@@ -433,58 +473,54 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredentia
     if (!progress) {
         return;
     }
-    NSString *keyPath = @"fractionCompleted";
-    [progress addObserver:self
-               forKeyPath:keyPath
-                  options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
-                  context:(__bridge void *)item.itemID];
-    self.progressObservationKeys[item.itemID] = keyPath;
+    void *ctx = (__bridge void *)item.itemID;
+    for (NSString *keyPath in ProgressKVOKeyPaths()) {
+        [progress addObserver:self
+                   forKeyPath:keyPath
+                      options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                      context:ctx];
+    }
+    [self.observedProgressItemIDs addObject:item.itemID];
 }
 
 - (void)stopObservingProgressForItem:(BrowserDownloadItem *)item {
-    if (!item) {
-        return;
-    }
-    NSString *keyPath = self.progressObservationKeys[item.itemID];
-    if (!keyPath) {
+    if (!item || ![self.observedProgressItemIDs containsObject:item.itemID]) {
         return;
     }
     WKDownload *download = item.download;
     NSProgress *progress = download.progress;
     if (progress) {
-        @try {
-            [progress removeObserver:self forKeyPath:keyPath context:(__bridge void *)item.itemID];
-        } @catch (__unused NSException *exception) {
+        void *ctx = (__bridge void *)item.itemID;
+        for (NSString *keyPath in ProgressKVOKeyPaths()) {
+            @try {
+                [progress removeObserver:self forKeyPath:keyPath context:ctx];
+            } @catch (__unused NSException *exception) {
+            }
         }
     }
-    [self.progressObservationKeys removeObjectForKey:item.itemID];
+    [self.observedProgressItemIDs removeObject:item.itemID];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                        context:(void *)context {
-    if (![keyPath isEqualToString:@"fractionCompleted"]) {
+    if (![ProgressKVOKeyPaths() containsObject:keyPath]) {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
         return;
     }
+    (void)change;
     NSUUID *itemID = (__bridge NSUUID *)context;
-    BrowserDownloadItem *item = nil;
-    for (BrowserDownloadItem *candidate in self.mutableItems) {
-        if ([candidate.itemID isEqual:itemID]) {
-            item = candidate;
-            break;
-        }
-    }
-    if (!item || ![object isKindOfClass:[NSProgress class]]) {
+    if (!itemID || ![object isKindOfClass:[NSProgress class]]) {
         return;
     }
     NSProgress *progress = (NSProgress *)object;
-    double fraction = progress.fractionCompleted;
     int64_t completed = progress.completedUnitCount;
     int64_t total = progress.totalUnitCount;
-    BOOL knownTotal = (progress.totalUnitCount > 0);
-    NSUUID *capturedID = item.itemID;
+    BOOL knownTotal = (total > 0);
+    double fraction = knownTotal
+        ? MIN(1.0, MAX(0.0, (double)completed / (double)total))
+        : progress.fractionCompleted;
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -494,7 +530,7 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredentia
         }
         BrowserDownloadItem *liveItem = nil;
         for (BrowserDownloadItem *candidate in strongSelf.mutableItems) {
-            if ([candidate.itemID isEqual:capturedID]) {
+            if ([candidate.itemID isEqual:itemID]) {
                 liveItem = candidate;
                 break;
             }
@@ -502,13 +538,56 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredentia
         if (!liveItem) {
             return;
         }
-        liveItem.progress = fraction;
-        liveItem.completedUnitCount = completed;
-        liveItem.totalUnitCount = total;
-        liveItem.hasKnownTotalUnitCount = knownTotal;
+
+        BOOL changed = NO;
+        if (liveItem.completedUnitCount != completed) {
+            liveItem.completedUnitCount = completed;
+            changed = YES;
+        }
+        if (knownTotal) {
+            if (liveItem.totalUnitCount != total || !liveItem.hasKnownTotalUnitCount) {
+                liveItem.totalUnitCount = total;
+                liveItem.hasKnownTotalUnitCount = YES;
+                changed = YES;
+            }
+        } else if (!liveItem.hasKnownTotalUnitCount && liveItem.totalUnitCount != total && total > 0) {
+            liveItem.totalUnitCount = total;
+            liveItem.hasKnownTotalUnitCount = YES;
+            changed = YES;
+        }
+        // Prefer our seeded/response total when NSProgress still reports unknown.
+        BOOL displayKnown = liveItem.hasKnownTotalUnitCount && liveItem.totalUnitCount > 0;
+        double nextProgress = displayKnown
+            ? MIN(1.0, MAX(0.0, (double)liveItem.completedUnitCount / (double)liveItem.totalUnitCount))
+            : fraction;
+        if (fabs(liveItem.progress - nextProgress) > 0.0001) {
+            liveItem.progress = nextProgress;
+            changed = YES;
+        }
         if (liveItem.state == BrowserDownloadStatePending) {
             liveItem.state = BrowserDownloadStateDownloading;
+            changed = YES;
         }
+        if (changed) {
+            [strongSelf scheduleCoalescedProgressNotify];
+        }
+    });
+}
+
+- (void)scheduleCoalescedProgressNotify {
+    if (self.progressNotifyCoalesceScheduled) {
+        return;
+    }
+    self.progressNotifyCoalesceScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    // ~15 fps: enough for smooth bars without rebuilding UI on every byte tick.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 / 15.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        BrowserDownloadManager *strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.progressNotifyCoalesceScheduled = NO;
         [strongSelf notifyChange];
     });
 }

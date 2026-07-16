@@ -239,7 +239,47 @@ SimpleBrowser/Favicon/
 
 ### 结论
 
-**LA-0～LA-3（V1）代码已落地**；短信 / 二维码 / Companion 属后续阶段。
+**LA-0～LA-3（V1）代码已落地**；V2 短信 / Companion 见下一节。
+
+---
+
+## 登录助手 V2 验收（短信 OTP + Android Companion · 2026-07-15）
+
+> 对照 [auto-login-design.md](auto-login-design.md) · [companion-protocol.md](companion-protocol.md) · [auto-login-development-plan.md](auto-login-development-plan.md)  
+> Cursor 计划：`.cursor/plans/login-assist-v2.plan.md`  
+> Android：`companion/android/MeoCompanion/`
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| Mac 编译 | `make clean && make browser` | 通过（含 Network / Companion / OTPInbox） |
+| 协议文档 | `docs/minimal-browser/companion-protocol.md` | 已写 |
+| Android 工程 | Kotlin 源码 + Manifest 短信/前台服务 | 已落地（需 Android Studio `assembleDebug`） |
+| 测试页短信区 | `login-assist-test.html` 含发码 + OTP | 已入包 |
+
+### 功能验收
+
+| 测试项 | 状态 | 说明 |
+|--------|------|------|
+| OTPInbox TTL / 一次性消费 | 通过（逻辑） | `OTPInbox` |
+| Bonjour 收码 + 配对 | 通过（逻辑） | `CompanionChannel` / 设置页配对码 |
+| Recipe waitOTP（hybrid/sms） | 通过（逻辑） | `LoginRunner` + 设置「账密+短信」 |
+| 粘贴 / 剪贴板降级 | 通过（逻辑） | waitOTP 期间轮询 + 菜单「粘贴验证码」 |
+| Android 读短信推码 | 待手测 | `SmsOtpReceiver` + `CompanionClient` |
+| 断连明示 | 通过（逻辑） | 设置状态 + 失败提示含配对说明 |
+| 端到端真机 | 待手测 | 同 Wi‑Fi 配对后推码填入测试页 |
+
+### 手测步骤（主路径）
+
+1. `make run-browser` → 打开 Resources 内 `login-assist-test.html`
+2. 登录助手设置：模式选「账密 + 短信」，账号 `demo`/`pass`，拾取短信区字段与「发送验证码」按钮，保存
+3. 记下设置页 **配对码** 与端口；Android 安装 Companion，输入配对码连接（或填 `MacIP:端口`）
+4. 一键登录 → 点发送验证码 → 手机推码（或「手动发送测试码」/粘贴页上显示的码）→ 应显示「短信登录成功」
+
+### 结论
+
+**Mac 侧 V2 管线与 Android 工程已落地**；真机 Bonjour/短信端到端待手测勾选。TOTP（LA-4）仍后置。
 
 ---
 

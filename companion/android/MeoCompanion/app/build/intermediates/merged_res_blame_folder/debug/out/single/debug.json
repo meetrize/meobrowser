@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.meobrowser.companion.app-merged_res-31:/layout_activity_main.xml.flat",
+        "source": "com.meobrowser.companion.app-main-33:/layout/activity_main.xml"
+    },
+    {
+        "merged": "/Users/meetrice/.gradle/daemon/8.2/com.meobrowser.companion.app-merged_res-31:/layout_activity_setup_wizard.xml.flat",
+        "source": "/Users/meetrice/.gradle/daemon/8.2/com.meobrowser.companion.app-main-33:/layout/activity_setup_wizard.xml"
+    },
+    {
+        "merged": "/Users/meetrice/.gradle/daemon/8.2/com.meobrowser.companion.app-merged_res-31:/layout_activity_main.xml.flat",
+        "source": "/Users/meetrice/.gradle/daemon/8.2/com.meobrowser.companion.app-main-33:/layout/activity_main.xml"
+    }
+]

@@ -3,6 +3,18 @@
 
 static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
 
+@implementation LoginCredentials
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _username = @"";
+        _password = @"";
+        _phone = @"";
+    }
+    return self;
+}
+@end
+
 @implementation LoginCredentialStore
 
 + (instancetype)sharedStore {
@@ -18,6 +30,19 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
             password:(NSString *)password
          forRecipeID:(NSString *)recipeID
                error:(NSError **)error {
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
+    credentials.username = username ?: @"";
+    credentials.password = password ?: @"";
+    LoginCredentials *existing = [self loadCredentialsForRecipeID:recipeID error:nil];
+    if (existing) {
+        credentials.phone = existing.phone ?: @"";
+    }
+    return [self saveCredentials:credentials forRecipeID:recipeID error:error];
+}
+
+- (BOOL)saveCredentials:(LoginCredentials *)credentials
+            forRecipeID:(NSString *)recipeID
+                  error:(NSError **)error {
     if (recipeID.length == 0) {
         if (error) {
             *error = [NSError errorWithDomain:@"LoginCredentialStore"
@@ -27,9 +52,22 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
         return NO;
     }
 
+    if (![NSThread isMainThread]) {
+        __block BOOL ok = NO;
+        __block NSError *localError = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            ok = [self saveCredentials:credentials forRecipeID:recipeID error:&localError];
+        });
+        if (error) {
+            *error = localError;
+        }
+        return ok;
+    }
+
     NSDictionary *payload = @{
-        @"username": username ?: @"",
-        @"password": password ?: @"",
+        @"username": credentials.username ?: @"",
+        @"password": credentials.password ?: @"",
+        @"phone": credentials.phone ?: @"",
     };
     NSError *jsonError = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&jsonError];
@@ -63,17 +101,27 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
     return YES;
 }
 
-- (BOOL)loadUsername:(NSString **)username
-            password:(NSString **)password
-         forRecipeID:(NSString *)recipeID
-               error:(NSError **)error {
+- (LoginCredentials *)loadCredentialsForRecipeID:(NSString *)recipeID error:(NSError **)error {
     if (recipeID.length == 0) {
         if (error) {
             *error = [NSError errorWithDomain:@"LoginCredentialStore"
                                          code:1
                                      userInfo:@{NSLocalizedDescriptionKey: @"缺少 Recipe ID"}];
         }
-        return NO;
+        return nil;
+    }
+
+    // 钥匙串访问必须在主线程，否则常见 errSecInteractionNotAllowed。
+    if (![NSThread isMainThread]) {
+        __block LoginCredentials *credentials = nil;
+        __block NSError *localError = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            credentials = [self loadCredentialsForRecipeID:recipeID error:&localError];
+        });
+        if (error) {
+            *error = localError;
+        }
+        return credentials;
     }
 
     NSDictionary *query = @{
@@ -85,22 +133,21 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
     };
     CFTypeRef result = NULL;
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    LoginCredentials *credentials = [[LoginCredentials alloc] init];
     if (status == errSecItemNotFound) {
-        if (username) {
-            *username = @"";
-        }
-        if (password) {
-            *password = @"";
-        }
-        return YES;
+        return credentials;
     }
     if (status != errSecSuccess || !result) {
         if (error) {
+            NSString *message = [NSString stringWithFormat:@"无法读取钥匙串（代码 %d）", (int)status];
+            if (status == errSecInteractionNotAllowed) {
+                message = @"无法读取钥匙串（当前不可访问，请解锁 Mac 后重试）";
+            }
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain
                                          code:status
-                                     userInfo:@{NSLocalizedDescriptionKey: @"无法读取钥匙串"}];
+                                     userInfo:@{NSLocalizedDescriptionKey: message}];
         }
-        return NO;
+        return nil;
     }
 
     NSData *data = CFBridgingRelease(result);
@@ -111,15 +158,30 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
                                          code:3
                                      userInfo:@{NSLocalizedDescriptionKey: @"凭证数据损坏"}];
         }
+        return nil;
+    }
+    id username = payload[@"username"];
+    id password = payload[@"password"];
+    id phone = payload[@"phone"];
+    credentials.username = [username isKindOfClass:[NSString class]] ? username : @"";
+    credentials.password = [password isKindOfClass:[NSString class]] ? password : @"";
+    credentials.phone = [phone isKindOfClass:[NSString class]] ? phone : @"";
+    return credentials;
+}
+
+- (BOOL)loadUsername:(NSString **)username
+            password:(NSString **)password
+         forRecipeID:(NSString *)recipeID
+               error:(NSError **)error {
+    LoginCredentials *credentials = [self loadCredentialsForRecipeID:recipeID error:error];
+    if (!credentials) {
         return NO;
     }
     if (username) {
-        id value = payload[@"username"];
-        *username = [value isKindOfClass:[NSString class]] ? value : @"";
+        *username = credentials.username ?: @"";
     }
     if (password) {
-        id value = payload[@"password"];
-        *password = [value isKindOfClass:[NSString class]] ? value : @"";
+        *password = credentials.password ?: @"";
     }
     return YES;
 }

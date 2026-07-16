@@ -11,7 +11,11 @@
 #import "SaveRecipePromptCoordinator.h"
 #import "BrowserLoginAssistSettingsWindowController.h"
 #import "BrowserTransientToast.h"
+#import "OTPInbox.h"
+#import "CompanionChannel.h"
+#import "SBTextField.h"
 #import <AuthenticationServices/AuthenticationServices.h>
+#import <AppKit/AppKit.h>
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
@@ -33,6 +37,8 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 @property (nonatomic, strong) SystemPasswordBridge *passwordBridge;
 @property (nonatomic, strong) SaveRecipePromptCoordinator *savePromptCoordinator;
 @property (nonatomic, strong, nullable) NSDictionary *lastIconContext;
+@property (nonatomic, strong, nullable) NSTimer *clipboardPollTimer;
+@property (nonatomic, copy, nullable) NSString *lastSeenPasteboardChangeCount;
 @end
 
 @implementation LoginAssistController
@@ -48,6 +54,10 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(otpInboxDidReceiveCode:)
+                                                     name:OTPInboxDidReceiveCodeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -55,6 +65,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self cancelPendingAutoLogin];
+    [self stopClipboardPolling];
 }
 
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
@@ -86,6 +97,30 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
 - (void)recipesDidChange:(NSNotification *)notification {
     (void)notification;
     [self updateForURL:self.windowController.webView.URL];
+}
+
+- (void)otpInboxDidReceiveCode:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo;
+    BOOL waiting = [info[@"waiting"] boolValue];
+    BOOL buffered = [info[@"buffered"] boolValue];
+    BOOL copied = [info[@"copiedToClipboard"] boolValue];
+    NSWindow *window = self.windowController.window;
+    if (!window) {
+        return;
+    }
+    NSString *message = nil;
+    if (waiting) {
+        message = copied
+            ? @"已收到手机验证码，正在填入…已复制到剪贴板，可 ⌘V 粘贴。"
+            : @"已收到手机验证码，正在填入…";
+    } else if (buffered) {
+        message = copied
+            ? @"已收到验证码并复制到剪贴板。可 ⌘V 粘贴，或点「一键登录」自动填入。"
+            : @"已收到验证码（暂存）。请在登录页点「一键登录」填入验证码栏。";
+    }
+    if (message.length > 0) {
+        [BrowserTransientToast showMessage:message inWindow:window duration:3.2];
+    }
 }
 
 - (void)updateForURL:(NSURL *)url {
@@ -189,6 +224,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         [NSEvent removeMonitor:self.autoLoginEscapeMonitor];
         self.autoLoginEscapeMonitor = nil;
     }
+    if (self.isRunning) {
+        [LoginRunner cancelAll];
+        [self stopClipboardPolling];
+        self.isRunning = NO;
+        [self refreshButtonAppearance];
+    }
 }
 
 - (IBAction)oneClickLogin:(id)sender {
@@ -196,7 +237,8 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     [self cancelPendingAutoLogin];
     LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
     if (recipe) {
-        BOOL fillOnly = self.detectedHasOTP;
+        // Recipe 自带 waitOTP 时走完整流程；仅启发式 OTP（无 Recipe 短信步）才 fillOnly。
+        BOOL fillOnly = self.detectedHasOTP && ![recipe requiresOTPWait];
         [self runRecipe:recipe fillOnly:fillOnly notifyOTP:fillOnly];
         return;
     }
@@ -237,7 +279,8 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     } else {
         for (LoginRecipe *recipe in recipes) {
             NSString *base = recipe.title.length > 0 ? recipe.title : recipe.host;
-            if (hasOTP) {
+            BOOL recipeHandlesOTP = [recipe requiresOTPWait];
+            if (hasOTP && !recipeHandlesOTP) {
                 NSString *title = [NSString stringWithFormat:@"填入帐密 · %@（请手动完成验证）", base];
                 NSMenuItem *fill = [[NSMenuItem alloc] initWithTitle:title
                                                               action:@selector(runRecipeFillOnlyFromMenu:)
@@ -246,7 +289,10 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
                 fill.representedObject = recipe.recipeID;
                 [menu addItem:fill];
             } else {
-                NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"一键登录 · %@", base]
+                NSString *loginTitle = recipeHandlesOTP
+                    ? [NSString stringWithFormat:@"一键登录（含验证码）· %@", base]
+                    : [NSString stringWithFormat:@"一键登录 · %@", base];
+                NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:loginTitle
                                                                action:@selector(runRecipeFromMenu:)
                                                         keyEquivalent:@""];
                 login.target = self;
@@ -281,6 +327,12 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
                                              keyEquivalent:@""];
     manage.target = self;
     [menu addItem:manage];
+
+    NSMenuItem *pasteOTP = [[NSMenuItem alloc] initWithTitle:@"粘贴验证码…"
+                                                      action:@selector(pasteOTPFromUser)
+                                               keyEquivalent:@""];
+    pasteOTP.target = self;
+    [menu addItem:pasteOTP];
 
     if (view) {
         NSPoint location = NSMakePoint(0, NSHeight(view.bounds));
@@ -382,40 +434,57 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
 
-    NSString *username = nil;
-    NSString *password = nil;
     NSError *loadError = nil;
-    if (![[LoginCredentialStore sharedStore] loadUsername:&username
-                                                 password:&password
-                                              forRecipeID:recipe.recipeID
-                                                    error:&loadError]) {
+    LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID
+                                                                                              error:&loadError];
+    if (!credentials) {
         [self showError:@"无法读取凭证" message:loadError.localizedDescription ?: @"钥匙串读取失败" recipeID:recipe.recipeID];
         return;
     }
-    if ((username.length == 0) && (password.length == 0)) {
+    BOOL needsOTP = [recipe requiresOTPWait];
+    BOOL hasUserPass = (credentials.username.length > 0) || (credentials.password.length > 0);
+    if (!needsOTP && !hasUserPass) {
         [self showError:@"缺少账号密码" message:@"请在登录助手设置中填写用户名与密码。" recipeID:recipe.recipeID];
+        return;
+    }
+    if (needsOTP && recipe.otpSelector.length == 0) {
+        [self showError:@"缺少验证码配置" message:@"请在登录助手设置中配置验证码选择器。" recipeID:recipe.recipeID];
         return;
     }
 
     self.isRunning = YES;
     [self refreshButtonAppearance];
+    if (needsOTP && !fillOnly) {
+        NSString *channelHint = [CompanionChannel sharedChannel].state == CompanionChannelStateConnected
+            ? @"等待手机推送验证码…"
+            : @"等待验证码…（手机未连接时可粘贴）";
+        [BrowserTransientToast showMessage:channelHint
+                                  inWindow:self.windowController.window
+                                  duration:2.5];
+        [self startClipboardPolling];
+    }
 
     __weak typeof(self) weakSelf = self;
     [LoginRunner runRecipe:recipe
                  inWebView:webView
-                  username:username ?: @""
-                  password:password ?: @""
+               credentials:credentials
                   fillOnly:fillOnly
                 completion:^(BOOL success, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
         }
+        [strongSelf stopClipboardPolling];
         strongSelf.isRunning = NO;
         [strongSelf refreshButtonAppearance];
         if (!success) {
+            NSString *message = error.localizedDescription ?: @"未知错误";
+            if ([CompanionChannel sharedChannel].state != CompanionChannelStateConnected &&
+                [recipe requiresOTPWait]) {
+                message = [message stringByAppendingString:@"\n提示：可打开登录助手设置查看配对状态，或粘贴验证码后重试。"];
+            }
             [strongSelf showError:@"登录助手执行失败"
-                          message:error.localizedDescription ?: @"未知错误"
+                          message:message
                          recipeID:recipe.recipeID];
             return;
         }
@@ -427,6 +496,67 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
                                       inWindow:strongSelf.windowController.window
                                       duration:2.0];
         }
+    }];
+}
+
+- (void)startClipboardPolling {
+    [self stopClipboardPolling];
+    self.lastSeenPasteboardChangeCount = [NSString stringWithFormat:@"%ld", (long)NSPasteboard.generalPasteboard.changeCount];
+    __weak typeof(self) weakSelf = self;
+    self.clipboardPollTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                              repeats:YES
+                                                                block:^(NSTimer *timer) {
+        (void)timer;
+        [weakSelf pollClipboardForOTP];
+    }];
+}
+
+- (void)stopClipboardPolling {
+    [self.clipboardPollTimer invalidate];
+    self.clipboardPollTimer = nil;
+}
+
+- (void)pollClipboardForOTP {
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    NSString *change = [NSString stringWithFormat:@"%ld", (long)pb.changeCount];
+    if ([change isEqualToString:self.lastSeenPasteboardChangeCount]) {
+        return;
+    }
+    self.lastSeenPasteboardChangeCount = change;
+    NSString *text = [pb stringForType:NSPasteboardTypeString];
+    NSString *code = [OTPInbox extractOTPFromText:text ?: @""];
+    if (code.length == 0) {
+        return;
+    }
+    [[OTPInbox sharedInbox] submitCode:code
+                                source:OTPInboxSourceClipboard
+                             timestamp:[NSDate date].timeIntervalSince1970
+                                 error:nil];
+}
+
+- (void)pasteOTPFromUser {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"粘贴验证码";
+    alert.informativeText = @"输入或粘贴 4～8 位验证码。";
+    SBTextField *input = [SBTextField standardField];
+    input.frame = NSMakeRect(0, 0, 240, 24);
+    NSString *clip = [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString];
+    NSString *guess = [OTPInbox extractOTPFromText:clip ?: @""];
+    input.stringValue = guess ?: @"";
+    alert.accessoryView = input;
+    [alert addButtonWithTitle:@"确定"];
+    [alert addButtonWithTitle:@"取消"];
+    NSWindow *window = self.windowController.window;
+    [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse code) {
+        if (code != NSAlertFirstButtonReturn) {
+            return;
+        }
+        NSString *value = input.stringValue;
+        NSString *otp = [OTPInbox extractOTPFromText:value] ?: value;
+        [[OTPInbox sharedInbox] submitCode:otp
+                                    source:OTPInboxSourcePaste
+                                 timestamp:[NSDate date].timeIntervalSince1970
+                                     error:nil];
     }];
 }
 

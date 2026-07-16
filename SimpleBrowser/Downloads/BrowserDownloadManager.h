@@ -20,6 +20,7 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 @property (nonatomic, assign, readonly) NSUInteger activeCount;
 @property (nonatomic, assign, readonly) NSUInteger unreadCompletedCount;
 @property (nonatomic, assign, readonly) double aggregateProgress; // 进行中聚合 0...1；无活动为 0
+@property (nonatomic, assign, readonly) BOOL aggregateProgressIsDeterminate; // 任一项已知总长则为 YES
 @property (nonatomic, assign, readonly) BOOL hasActiveDownloads;
 
 - (void)addObserver:(id<BrowserDownloadManagerObserver>)observer;
