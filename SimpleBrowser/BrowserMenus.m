@@ -67,6 +67,12 @@
                                                      keyEquivalent:@""];
             loginSettings.target = nil;
 
+            NSMenuItem *captchaAssist = [fileMenu addItemWithTitle:@"验证码助手"
+                                                            action:@selector(toggleCaptchaAssistPanel:)
+                                                     keyEquivalent:@"c"];
+            captchaAssist.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            captchaAssist.target = nil;
+
             fileMenuItem.submenu = fileMenu;
             NSInteger editIndex = [self indexOfMenuTitled:@"编辑"];
             if (editIndex == NSNotFound) {

@@ -20,6 +20,8 @@
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
+/// kVK_ANSI_V — 模拟 ⌘V 粘贴（多格验证码框等场景比 insertText / JS 赋值更可靠）
+static const unsigned short kOTPCommandVKeyCode = 0x09;
 
 @interface LoginAssistController ()
 @property (nonatomic, strong) NSArray<LoginRecipe *> *matchedRecipes;
@@ -185,13 +187,88 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
     [self insertOTPAtCaret:code copiedToClipboard:copied failureReason:nil];
 }
 
+/// 确保剪贴板为当前验证码（Companion 通常已写入，此处兜底）。
+- (void)ensureOTPCodeOnPasteboard:(NSString *)code {
+    if (code.length == 0) {
+        return;
+    }
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    NSString *current = [pb stringForType:NSPasteboardTypeString] ?: @"";
+    if ([current isEqualToString:code]) {
+        return;
+    }
+    [pb clearContents];
+    [pb setString:code forType:NSPasteboardTypeString];
+}
+
+/// 向当前窗口投递 ⌘V 键事件，走与用户手动粘贴相同的快捷键路径。
+- (BOOL)postCommandVPasteInWindow:(NSWindow *)window {
+    if (!window) {
+        return NO;
+    }
+    [window makeKeyAndOrderFront:nil];
+
+    NSTimeInterval timestamp = NSProcessInfo.processInfo.systemUptime;
+    NSUInteger windowNumber = window.windowNumber;
+    NSEvent *keyDown = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                        location:NSZeroPoint
+                                   modifierFlags:NSEventModifierFlagCommand
+                                       timestamp:timestamp
+                                    windowNumber:windowNumber
+                                         context:nil
+                                      characters:@"v"
+                     charactersIgnoringModifiers:@"v"
+                                       isARepeat:NO
+                                         keyCode:kOTPCommandVKeyCode];
+    if (!keyDown) {
+        return NO;
+    }
+
+    NSResponder *responder = window.firstResponder;
+    if (responder && [responder performKeyEquivalent:keyDown]) {
+        return YES;
+    }
+
+    NSEvent *keyUp = [NSEvent keyEventWithType:NSEventTypeKeyUp
+                                      location:NSZeroPoint
+                                 modifierFlags:NSEventModifierFlagCommand
+                                     timestamp:timestamp
+                                  windowNumber:windowNumber
+                                       context:nil
+                                    characters:@"v"
+               charactersIgnoringModifiers:@"v"
+                                     isARepeat:NO
+                                       keyCode:kOTPCommandVKeyCode];
+    [NSApp sendEvent:keyDown];
+    if (keyUp) {
+        [NSApp sendEvent:keyUp];
+    }
+    return YES;
+}
+
 - (void)insertOTPAtCaret:(NSString *)code
        copiedToClipboard:(BOOL)copied
            failureReason:(NSString *)failureReason {
     NSWindow *window = self.windowController.window;
     WKWebView *webView = self.windowController.webView;
 
-    // 1) AppKit 第一响应者可插入文本（地址栏等）
+    // 1) 优先 ⌘V：多格验证码（如豆包）等仅响应快捷键粘贴的表单
+    if (window && code.length > 0) {
+        [self ensureOTPCodeOnPasteboard:code];
+        if ([self postCommandVPasteInWindow:window]) {
+            [[OTPInbox sharedInbox] markCodeConsumed:code];
+            NSString *status = copied
+                ? @"已通过 ⌘V 粘贴（并已复制到剪贴板）"
+                : @"已通过 ⌘V 粘贴";
+            if (failureReason.length > 0) {
+                status = @"Recipe 填入失败，已改 ⌘V 粘贴";
+            }
+            [self showOTPFollowUpToastWithCode:code status:status];
+            return;
+        }
+    }
+
+    // 2) AppKit 第一响应者可插入文本（地址栏等）
     NSResponder *resp = window.firstResponder;
     if (resp && ![resp isKindOfClass:[WKWebView class]] &&
         [resp respondsToSelector:@selector(insertText:)]) {
@@ -210,7 +287,7 @@ static const NSTimeInterval kAutoLoginCooldown = 12.0;
         return;
     }
 
-    // 2) 网页 activeElement / 可编辑处插入
+    // 3) 网页 activeElement / 可编辑处插入
     if (!webView) {
         NSString *status = copied
             ? @"已复制到剪贴板，请 ⌘V 粘贴"

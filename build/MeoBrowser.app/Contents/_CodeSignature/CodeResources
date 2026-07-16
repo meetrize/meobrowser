@@ -8,6 +8,10 @@
 		<data>
 		27EfR9Y5vdqxhlTRgEdRFvkTsO4=
 		</data>
+		<key>Resources/captcha-assist-test.html</key>
+		<data>
+		pxmMzSnUNjTtQSFUZN6+2S1XY0w=
+		</data>
 		<key>Resources/login-assist-test.html</key>
 		<data>
 		esUUKqs3bTwp0NPiluqzTJxhsnc=
@@ -20,6 +24,13 @@
 			<key>hash2</key>
 			<data>
 			q4kXU9BxlLz8IyT6MGmw53bPXKHUmM1WHA7FHeGZRrE=
+			</data>
+		</dict>
+		<key>Resources/captcha-assist-test.html</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			rnNCGhEnxUzmfyD+0XKOcQxUV39Cm3WTLkMPkXnlq3c=
 			</data>
 		</dict>
 		<key>Resources/login-assist-test.html</key>

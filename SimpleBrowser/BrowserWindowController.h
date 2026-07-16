@@ -33,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openURLsFromExternalSource:(NSArray<NSURL *> *)urls;
 - (void)showLoginAssistSettings:(nullable id)sender;
 - (void)oneClickLogin:(nullable id)sender;
+- (void)toggleCaptchaAssistPanel:(nullable id)sender;
 @end
 
 NS_ASSUME_NONNULL_END

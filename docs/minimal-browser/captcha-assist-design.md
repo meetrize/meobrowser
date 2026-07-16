@@ -477,7 +477,7 @@ Login Assist 改动：
 | **CA-5 跨域强化** | CGEvent 注入 + 辅助功能引导 | reCAPTCHA v2 图片题基本可用 |
 | **CA-6 可选** | 用户自带 2Captcha、音频 ASR、旋转验证码 | 设置中可启用 |
 
-建议另附 [captcha-assist-development-plan.md](captcha-assist-development-plan.md)（CA-0～CA-6 任务拆解）。
+建议另附 [captcha-assist-development-plan.md](captcha-assist-development-plan.md)（CA-0～CA-6 任务拆解）。**CA-0 骨架已落地**（检测 + 截图 + 面板，2026-07-16）。
 
 ---
 

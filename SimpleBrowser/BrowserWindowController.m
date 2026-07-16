@@ -20,6 +20,7 @@
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
+#import "CaptchaAssistController.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserCertificateWarningView.h"
 #import <Security/Security.h>
@@ -102,6 +103,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserDownloadPanel *downloadPanel;
 @property (nonatomic, assign) BOOL downloadPanelVisible;
 @property (nonatomic, strong) LoginAssistController *loginAssistController;
+@property (nonatomic, strong) CaptchaAssistController *captchaAssistController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
@@ -160,6 +162,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         [[self class] configureSharedWebKitDefaultsIfNeeded];
         _webViewConfiguration = [[WKWebViewConfiguration alloc] init];
         _loginAssistController = [[LoginAssistController alloc] initWithWindowController:self];
+        _captchaAssistController = [[CaptchaAssistController alloc] initWithWindowController:self];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -181,6 +184,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     [self.loginAssistController configureWebViewConfiguration:configuration];
+    [self.captchaAssistController configureWebViewConfiguration:configuration];
 }
 
 - (void)configureChromeWindow {
@@ -459,6 +463,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.addressBarActionGroup.loginAssistButton) {
         [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
     }
+    if (self.addressBarActionGroup.captchaAssistButton) {
+        [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
+    }
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
@@ -653,6 +660,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self updateDownloadButtonAppearance];
     if (self.addressBarActionGroup.loginAssistButton) {
         [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
+    }
+    if (self.addressBarActionGroup.captchaAssistButton) {
+        [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
     }
 }
 
@@ -1620,6 +1630,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(oneClickLogin:)) {
         return self.loginAssistController.loginButton.enabled;
     }
+    if (action == @selector(toggleCaptchaAssistPanel:)) {
+        return YES;
+    }
     return YES;
 }
 
@@ -1630,6 +1643,10 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 - (void)showLoginAssistSettings:(id)sender {
     (void)sender;
     [self.loginAssistController presentSettingsEditingRecipeID:nil];
+}
+
+- (void)toggleCaptchaAssistPanel:(id)sender {
+    [self.captchaAssistController toggleCaptchaAssistPanel:sender];
 }
 
 - (void)loadAddressBarURL {
@@ -1728,6 +1745,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [self updateBookmarkButtonState];
         [self updateSecurityBadgeVisibility];
         [self.loginAssistController updateForURL:nil];
+        [self.captchaAssistController updateForURL:nil];
         return;
     }
 
@@ -1744,6 +1762,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self updateConnectionSecurityStateForTab:tab webView:webView];
     [self updateSecurityBadgeVisibility];
     [self.loginAssistController updateForURL:webView.URL];
+    [self.captchaAssistController updateForURL:webView.URL];
 }
 
 - (void)showErrorWithTitle:(NSString *)title message:(NSString *)message {
@@ -2171,6 +2190,7 @@ didBecomeDownload:(WKDownload *)download {
     [self syncFromWebView:webView];
     if (webView == self.webView) {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
+        [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
     }
 }
 

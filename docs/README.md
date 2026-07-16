@@ -30,6 +30,7 @@
 | [minimal-browser/auto-login-design.md](minimal-browser/auto-login-design.md) | 站点登录助手 — 一键/自动登录（账密、短信、二维码）设计方案 |
 | [minimal-browser/auto-login-development-plan.md](minimal-browser/auto-login-development-plan.md) | 站点登录助手 — 分阶段开发计划（LA-0～LA-7） |
 | [minimal-browser/captcha-assist-design.md](minimal-browser/captcha-assist-design.md) | 图形验证码智能助手 — AI 识别与交互（滑块、点选、OCR 等）设计方案 |
+| [minimal-browser/captcha-assist-development-plan.md](minimal-browser/captcha-assist-development-plan.md) | 图形验证码智能助手 — 分阶段开发计划（CA-0～CA-6） |
 | [minimal-browser/anti-bot-session-design.md](minimal-browser/anti-bot-session-design.md) | 反风控与会话稳定 — UA 对齐、休眠保护、登录助手抑制、按站清除 |
 | [minimal-browser/anti-bot-session-development-plan.md](minimal-browser/anti-bot-session-development-plan.md) | 反风控与会话稳定 — 分阶段开发计划（AB-0～AB-4） |
 | [minimal-browser/companion-protocol.md](minimal-browser/companion-protocol.md) | 登录助手 Companion — Bonjour / OTP 消息协议 |

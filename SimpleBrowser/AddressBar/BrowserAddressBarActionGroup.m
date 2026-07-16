@@ -98,6 +98,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, strong) NSMutableArray<NSButton *> *actionButtons;
 @property (nonatomic, strong, readwrite) NSButton *downloadButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *loginAssistButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *captchaAssistButton;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
 @property (nonatomic, assign) BOOL isResizingWidth;
@@ -175,6 +176,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     NSArray<NSDictionary<NSString *, NSString *> *> *specs = @[
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
+        @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
         @{@"id": @"share", @"symbol": @"square.and.arrow.up", @"tip": @"分享"},
         @{@"id": @"screenshot", @"symbol": @"camera", @"tip": @"截图"},
         @{@"id": @"comment", @"symbol": @"text.bubble", @"tip": @"评论"},
@@ -238,12 +240,15 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 - (void)refreshDownloadButtonReference {
     self.downloadButton = nil;
     self.loginAssistButton = nil;
+    self.captchaAssistButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
             self.downloadButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"loginAssist"]) {
             self.loginAssistButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"captchaAssist"]) {
+            self.captchaAssistButton = self.actionButtons[i];
         }
     }
 }
