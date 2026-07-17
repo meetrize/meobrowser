@@ -24,6 +24,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 验证码助手按钮；由窗口控制器设置 target/action 与点亮态。
 @property (nonatomic, strong, readonly, nullable) NSButton *captchaAssistButton;
 
+/// RSS Feed 按钮；由窗口控制器设置 target/action 与点亮态。
+@property (nonatomic, strong, readonly, nullable) NSButton *feedButton;
+
 /// 根据拖拽增量调整按钮组宽度（正值为变宽）。
 - (void)applyWidthDelta:(CGFloat)deltaX;
 

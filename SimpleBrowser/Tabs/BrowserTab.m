@@ -2,6 +2,7 @@
 #import "BrowserWebView.h"
 #import "BrowserUserAgent.h"
 #import "BrowsingPreferences.h"
+#import "BrowserFeedReader.h"
 
 @interface BrowserTab ()
 @property (nonatomic, strong) WKWebViewConfiguration *configuration;
@@ -31,7 +32,7 @@
     if (self.isNewTabPage) {
         return nil;
     }
-    NSURL *liveURL = self.webView.URL;
+    NSURL *liveURL = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
     if ([BrowsingPreferences isPersistableURL:liveURL]) {
         return liveURL;
     }
@@ -82,7 +83,7 @@
     if (self.isNewTabPage || self.webView == nil) {
         return;
     }
-    NSURL *url = self.webView.URL;
+    NSURL *url = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
     if ([BrowsingPreferences isPersistableURL:url]) {
         self.restorableURL = url;
         if (self.title.length == 0 || [self.title isEqualToString:@"新标签页"]) {

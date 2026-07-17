@@ -99,6 +99,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, strong, readwrite) NSButton *downloadButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *loginAssistButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *captchaAssistButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
 @property (nonatomic, assign) BOOL isResizingWidth;
@@ -177,6 +178,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
+        @{@"id": @"rssFeed", @"symbol": @"dot.radiowaves.up.forward", @"tip": @"RSS"},
         @{@"id": @"share", @"symbol": @"square.and.arrow.up", @"tip": @"分享"},
         @{@"id": @"screenshot", @"symbol": @"camera", @"tip": @"截图"},
         @{@"id": @"comment", @"symbol": @"text.bubble", @"tip": @"评论"},
@@ -241,6 +243,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     self.downloadButton = nil;
     self.loginAssistButton = nil;
     self.captchaAssistButton = nil;
+    self.feedButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
@@ -249,6 +252,8 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
             self.loginAssistButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"captchaAssist"]) {
             self.captchaAssistButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"rssFeed"]) {
+            self.feedButton = self.actionButtons[i];
         }
     }
 }

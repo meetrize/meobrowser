@@ -21,6 +21,7 @@
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
 #import "CaptchaAssistController.h"
+#import "BrowserFeedAssistController.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserCertificateWarningView.h"
 #import "BrowserHTTPAuthPrompt.h"
@@ -105,6 +106,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, assign) BOOL downloadPanelVisible;
 @property (nonatomic, strong) LoginAssistController *loginAssistController;
 @property (nonatomic, strong) CaptchaAssistController *captchaAssistController;
+@property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
@@ -165,6 +167,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _webViewConfiguration = [[WKWebViewConfiguration alloc] init];
         _loginAssistController = [[LoginAssistController alloc] initWithWindowController:self];
         _captchaAssistController = [[CaptchaAssistController alloc] initWithWindowController:self];
+        _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -188,6 +191,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
+    [self.feedAssistController configureWebViewConfiguration:configuration];
 }
 
 - (void)configureChromeWindow {
@@ -469,6 +473,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.addressBarActionGroup.captchaAssistButton) {
         [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
     }
+    if (self.addressBarActionGroup.feedButton) {
+        [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
+    }
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
@@ -666,6 +673,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if (self.addressBarActionGroup.captchaAssistButton) {
         [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
+    }
+    if (self.addressBarActionGroup.feedButton) {
+        [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
 }
 
@@ -1749,6 +1759,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [self updateSecurityBadgeVisibility];
         [self.loginAssistController updateForURL:nil];
         [self.captchaAssistController updateForURL:nil];
+        [self.feedAssistController updateForURL:nil];
         return;
     }
 
@@ -1766,6 +1777,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self updateSecurityBadgeVisibility];
     [self.loginAssistController updateForURL:webView.URL];
     [self.captchaAssistController updateForURL:webView.URL];
+    [self.feedAssistController updateForURL:webView.URL];
 }
 
 - (void)showErrorWithTitle:(NSString *)title message:(NSString *)message {
@@ -2191,7 +2203,11 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 - (void)webView:(WKWebView *)webView
 decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
 decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
-    (void)webView;
+    if ([self.feedAssistController handleNavigationResponseIfFeed:navigationResponse
+                                                          webView:webView
+                                                  decisionHandler:decisionHandler]) {
+        return;
+    }
     if (@available(macOS 11.3, *)) {
         if ([BrowserDownloadManager shouldDownloadNavigationResponse:navigationResponse]) {
             decisionHandler(WKNavigationResponsePolicyDownload);
@@ -2233,6 +2249,7 @@ didBecomeDownload:(WKDownload *)download {
         return;
     }
 
+    [self.feedAssistController noteNavigationStartedInWebView:webView];
     tab.isLoading = YES;
     if (webView == self.webView) {
         [self.loadingProgressView beginLoading];
@@ -2265,6 +2282,7 @@ didBecomeDownload:(WKDownload *)download {
     }
     [tab endMainFrameNavigation:navigation];
     [self syncFromWebView:webView];
+    [self.feedAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
     if (webView == self.webView) {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];

@@ -1,6 +1,7 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadItem.h"
 #import "BrowserSSLExceptionStore.h"
+#import "BrowserFeedReader.h"
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
 
@@ -336,6 +337,10 @@ static NSArray<NSString *> *ProgressKVOKeyPaths(void) {
 
 + (BOOL)shouldDownloadNavigationResponse:(WKNavigationResponse *)navigationResponse {
     if (!navigationResponse) {
+        return NO;
+    }
+    // Feed MIME 由浏览器内可读视图处理，不走下载。
+    if ([BrowserFeedReader shouldHandleNavigationResponse:navigationResponse]) {
         return NO;
     }
     if (!navigationResponse.canShowMIMEType) {
