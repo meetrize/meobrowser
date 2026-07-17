@@ -24,6 +24,7 @@
     NSMenuItem *openImageItem = nil;
     NSMenuItem *openMediaItem = nil;
     NSMenuItem *openLinkInNewWindowItem = nil;
+    NSMenuItem *searchWebItem = nil;
 
     NSString *engineName = [BrowsingPreferences displayNameForSearchEngineID:[BrowsingPreferences defaultSearchEngineID]];
     NSString *searchTitle = [NSString stringWithFormat:@"使用「%@」搜索", engineName];
@@ -33,6 +34,7 @@
             item.title = searchTitle;
             item.target = self;
             item.action = @selector(meo_searchSelectionWithDefaultEngine:);
+            searchWebItem = item;
             continue;
         }
 
@@ -63,6 +65,11 @@
             openInWindow.representedObject = openLinkInNewWindowItem;
             [menu insertItem:openInWindow atIndex:index + 1];
         }
+    }
+
+    // 选中文本含 http(s):// 时，提供「在新标签中打开」（已有链接菜单时不必重复）。
+    if (!openLinkInNewWindowItem) {
+        [self meo_insertOpenSelectionURLItemInMenu:menu nearItem:searchWebItem];
     }
 
     if (downloadItem) {
@@ -129,6 +136,154 @@
     }
 
     return NO;
+}
+
+- (void)meo_insertOpenSelectionURLItemInMenu:(NSMenu *)menu nearItem:(NSMenuItem *)nearItem {
+    NSMenuItem *openSelectionURLItem = [[NSMenuItem alloc] initWithTitle:@"在新标签中打开"
+                                                                  action:@selector(meo_openSelectionURLInNewTab:)
+                                                           keyEquivalent:@""];
+    openSelectionURLItem.target = self;
+    openSelectionURLItem.hidden = YES;
+
+    if (nearItem) {
+        NSInteger index = [menu indexOfItem:nearItem];
+        if (index != NSNotFound) {
+            [menu insertItem:openSelectionURLItem atIndex:index];
+        } else {
+            [menu insertItem:openSelectionURLItem atIndex:0];
+        }
+    } else {
+        [menu insertItem:openSelectionURLItem atIndex:0];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    __weak NSMenu *weakMenu = menu;
+    __weak NSMenuItem *weakItem = openSelectionURLItem;
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        NSMenu *strongMenu = weakMenu;
+        NSMenuItem *strongItem = weakItem;
+        if (!strongSelf || !strongMenu || !strongItem) {
+            return;
+        }
+        if (error || ![result isKindOfClass:[NSString class]]) {
+            if ([strongMenu.itemArray containsObject:strongItem]) {
+                [strongMenu removeItem:strongItem];
+            }
+            return;
+        }
+
+        NSString *urlString = [strongSelf meo_HTTPURLStringFromSelectedText:(NSString *)result];
+        if (urlString.length == 0) {
+            if ([strongMenu.itemArray containsObject:strongItem]) {
+                [strongMenu removeItem:strongItem];
+            }
+            return;
+        }
+
+        strongItem.representedObject = urlString;
+        strongItem.hidden = NO;
+    }];
+}
+
+- (nullable NSString *)meo_HTTPURLStringFromSelectedText:(NSString *)text {
+    if (text.length == 0) {
+        return nil;
+    }
+
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return nil;
+    }
+
+    NSRange httpsRange = [trimmed rangeOfString:@"https://" options:NSCaseInsensitiveSearch];
+    NSRange httpRange = [trimmed rangeOfString:@"http://" options:NSCaseInsensitiveSearch];
+
+    NSUInteger start = NSNotFound;
+    if (httpsRange.location != NSNotFound && httpRange.location != NSNotFound) {
+        start = MIN(httpsRange.location, httpRange.location);
+    } else if (httpsRange.location != NSNotFound) {
+        start = httpsRange.location;
+    } else if (httpRange.location != NSNotFound) {
+        start = httpRange.location;
+    }
+    if (start == NSNotFound) {
+        return nil;
+    }
+
+    NSString *fromURL = [trimmed substringFromIndex:start];
+    NSRange whitespace = [fromURL rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (whitespace.location != NSNotFound) {
+        fromURL = [fromURL substringToIndex:whitespace.location];
+    }
+
+    static NSCharacterSet *trailingPunctuation;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        trailingPunctuation = [NSCharacterSet characterSetWithCharactersInString:@". ,;:)]}\"'" ];
+    });
+    while (fromURL.length > 0) {
+        unichar last = [fromURL characterAtIndex:fromURL.length - 1];
+        if (![trailingPunctuation characterIsMember:last]) {
+            break;
+        }
+        fromURL = [fromURL substringToIndex:fromURL.length - 1];
+    }
+
+    NSURL *url = [NSURL URLWithString:fromURL];
+    if (!url.scheme.length || !url.host.length) {
+        return nil;
+    }
+
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        return nil;
+    }
+
+    return fromURL;
+}
+
+- (void)meo_openSelectionURLInNewTab:(id)sender {
+    NSString *urlString = nil;
+    if ([sender isKindOfClass:[NSMenuItem class]]) {
+        id represented = [(NSMenuItem *)sender representedObject];
+        if ([represented isKindOfClass:[NSString class]]) {
+            urlString = (NSString *)represented;
+        }
+    }
+
+    __weak typeof(self) weakSelf = self;
+    void (^openURL)(NSString *) = ^(NSString *candidate) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || candidate.length == 0) {
+            return;
+        }
+        NSURL *url = [NSURL URLWithString:candidate];
+        if (!url) {
+            return;
+        }
+        if (strongSelf.openURLHandler) {
+            strongSelf.openURLHandler(url);
+        } else {
+            [strongSelf loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+    };
+
+    if (urlString.length > 0) {
+        openURL(urlString);
+        return;
+    }
+
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        NSString *extracted = [strongSelf meo_HTTPURLStringFromSelectedText:(NSString *)result];
+        openURL(extracted);
+    }];
 }
 
 - (void)meo_searchSelectionWithDefaultEngine:(id)sender {
