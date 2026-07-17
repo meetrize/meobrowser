@@ -10,6 +10,7 @@
 @interface BrowserFeedAssistController ()
 @property (nonatomic, copy) NSArray<BrowserFeedItem *> *currentFeeds;
 @property (nonatomic, strong) NSMapTable<WKWebView *, NSArray<BrowserFeedItem *> *> *feedsByWebView;
+@property (nonatomic, strong) NSMapTable<WKWebView *, NSNumber *> *probeGenerationByWebView;
 @property (nonatomic, strong) BrowserFeedURLSchemeHandler *feedURLSchemeHandler;
 @end
 
@@ -21,6 +22,7 @@
         _windowController = windowController;
         _currentFeeds = @[];
         _feedsByWebView = [NSMapTable weakToStrongObjectsMapTable];
+        _probeGenerationByWebView = [NSMapTable weakToStrongObjectsMapTable];
         _feedURLSchemeHandler = [[BrowserFeedURLSchemeHandler alloc] init];
     }
     return self;
@@ -59,6 +61,8 @@
     if (!webView) {
         return;
     }
+    NSUInteger next = [[self.probeGenerationByWebView objectForKey:webView] unsignedIntegerValue] + 1;
+    [self.probeGenerationByWebView setObject:@(next) forKey:webView];
     [self.feedsByWebView setObject:@[] forKey:webView];
     if (webView == self.windowController.webView) {
         self.currentFeeds = @[];
@@ -67,7 +71,6 @@
 }
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(NSURL *)url {
-    (void)url;
     if (!webView) {
         return;
     }
@@ -75,71 +78,84 @@
     if ([BrowserFeedReader isFeedReaderURL:webView.URL]) {
         return;
     }
+    NSURL *pageURL = url ?: webView.URL;
+    NSUInteger generation = [[self.probeGenerationByWebView objectForKey:webView] unsignedIntegerValue];
+
     // 文档结束脚本可能早于 didFinish；主动再扫一次避免被清空后漏报。
-    [webView evaluateJavaScript:
-     @"(function(){"
-     @"  try {"
-     @"    var nodes = document.querySelectorAll('link[rel]');"
-     @"    var seen = {}; var feeds = [];"
-     @"    function isFeedType(type) {"
-     @"      if (!type) return false; var t = String(type).toLowerCase();"
-     @"      return t.indexOf('application/rss+xml') !== -1"
-     @"          || t.indexOf('application/atom+xml') !== -1"
-     @"          || t.indexOf('application/feed+json') !== -1"
-     @"          || t.indexOf('application/rdf+xml') !== -1;"
-     @"    }"
-     @"    function hasFeedRel(rel) {"
-     @"      if (!rel) return false;"
-     @"      return String(rel).toLowerCase().split(/\\s+/).some(function(p){return p==='alternate'||p==='feed';});"
-     @"    }"
-     @"    for (var i = 0; i < nodes.length; i++) {"
-     @"      var el = nodes[i]; var href = el.getAttribute('href');"
-     @"      if (!href || !hasFeedRel(el.getAttribute('rel')) || !isFeedType(el.getAttribute('type')||'')) continue;"
-     @"      var url = new URL(href, document.baseURI || location.href).href;"
-     @"      if (seen[url]) continue; seen[url] = true;"
-     @"      feeds.push({ title: (el.getAttribute('title')||'').trim(), url: url, type: el.getAttribute('type')||'' });"
-     @"    }"
-     @"    return feeds;"
-     @"  } catch (e) { return []; }"
-     @"})()"
-                     completionHandler:^(id result, NSError *error) {
+    [webView evaluateJavaScript:[BrowserFeedDetector scanFeedsJavaScript]
+              completionHandler:^(id result, NSError *error) {
         (void)error;
-        if (![result isKindOfClass:[NSArray class]]) {
+        if ([[self.probeGenerationByWebView objectForKey:webView] unsignedIntegerValue] != generation) {
             return;
         }
-        NSMutableArray<BrowserFeedItem *> *parsed = [NSMutableArray array];
-        NSMutableSet<NSString *> *seen = [NSMutableSet set];
-        for (id item in (NSArray *)result) {
-            if (![item isKindOfClass:[NSDictionary class]]) {
-                continue;
-            }
-            NSDictionary *feedDict = (NSDictionary *)item;
-            NSString *urlString = feedDict[@"url"];
-            if (![urlString isKindOfClass:[NSString class]] || urlString.length == 0) {
-                continue;
-            }
-            NSURL *feedURL = [NSURL URLWithString:urlString];
-            if (!feedURL || [seen containsObject:feedURL.absoluteString]) {
-                continue;
-            }
-            [seen addObject:feedURL.absoluteString];
-            BrowserFeedItem *feed = [[BrowserFeedItem alloc] init];
-            NSString *title = feedDict[@"title"];
-            feed.title = [title isKindOfClass:[NSString class]] && title.length > 0
-                ? title
-                : (feedURL.host ?: urlString);
-            feed.url = feedURL;
-            NSString *type = feedDict[@"type"];
-            feed.mimeType = [type isKindOfClass:[NSString class]] ? type : nil;
-            [parsed addObject:feed];
+        NSArray<BrowserFeedItem *> *parsed = [BrowserFeedDetector feedItemsFromDictionaries:
+                                              [result isKindOfClass:[NSArray class]] ? result : @[]];
+        if (parsed.count > 0) {
+            [self applyFeeds:parsed forWebView:webView merge:NO];
+            return;
         }
-        NSArray<BrowserFeedItem *> *feeds = [parsed copy];
-        [self.feedsByWebView setObject:feeds forKey:webView];
-        if (webView == self.windowController.webView) {
-            self.currentFeeds = feeds;
-            [self refreshButtonAppearance];
-        }
+        // 页面未声明 Feed（如 36kr）：探测 /feed、/rss、atom.xml 等常见路径。
+        [self probeConventionalFeedsForWebView:webView pageURL:pageURL generation:generation];
     }];
+}
+
+- (void)probeConventionalFeedsForWebView:(WKWebView *)webView
+                                pageURL:(NSURL *)pageURL
+                             generation:(NSUInteger)generation {
+    if (!webView || !pageURL) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [BrowserFeedDetector probeConventionalFeedsForPageURL:pageURL
+                                        completionHandler:^(NSArray<BrowserFeedItem *> *feeds) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if ([[strongSelf.probeGenerationByWebView objectForKey:webView] unsignedIntegerValue] != generation) {
+            return;
+        }
+        if (feeds.count == 0) {
+            return;
+        }
+        // 若期间 HTML 扫描已发现 Feed，则合并去重。
+        [strongSelf applyFeeds:feeds forWebView:webView merge:YES];
+    }];
+}
+
+- (void)applyFeeds:(NSArray<BrowserFeedItem *> *)feeds
+        forWebView:(WKWebView *)webView
+             merge:(BOOL)merge {
+    if (!webView) {
+        return;
+    }
+    NSArray<BrowserFeedItem *> *finalFeeds = feeds ?: @[];
+    if (merge) {
+        NSArray<BrowserFeedItem *> *existing = [self.feedsByWebView objectForKey:webView] ?: @[];
+        if (existing.count > 0) {
+            NSMutableArray<BrowserFeedItem *> *merged = [existing mutableCopy];
+            NSMutableSet<NSString *> *seen = [NSMutableSet set];
+            for (BrowserFeedItem *item in existing) {
+                if (item.url.absoluteString.length > 0) {
+                    [seen addObject:item.url.absoluteString];
+                }
+            }
+            for (BrowserFeedItem *item in feeds) {
+                NSString *key = item.url.absoluteString;
+                if (key.length == 0 || [seen containsObject:key]) {
+                    continue;
+                }
+                [seen addObject:key];
+                [merged addObject:item];
+            }
+            finalFeeds = [merged copy];
+        }
+    }
+    [self.feedsByWebView setObject:finalFeeds forKey:webView];
+    if (webView == self.windowController.webView) {
+        self.currentFeeds = finalFeeds;
+        [self refreshButtonAppearance];
+    }
 }
 
 #pragma mark - Feed reader intercept
@@ -187,44 +203,19 @@
         return;
     }
     NSArray *raw = dict[@"feeds"];
-    if (![raw isKindOfClass:[NSArray class]]) {
+    NSArray<BrowserFeedItem *> *parsed = [BrowserFeedDetector feedItemsFromDictionaries:
+                                          [raw isKindOfClass:[NSArray class]] ? raw : @[]];
+
+    // 空结果不覆盖已探测到的常规路径 Feed（避免 MutationObserver 晚到的空扫描清掉按钮）。
+    if (parsed.count == 0) {
+        NSArray<BrowserFeedItem *> *existing = [self.feedsByWebView objectForKey:webView];
+        if (existing.count > 0) {
+            return;
+        }
+        [self applyFeeds:@[] forWebView:webView merge:NO];
         return;
     }
-
-    NSMutableArray<BrowserFeedItem *> *parsed = [NSMutableArray array];
-    NSMutableSet<NSString *> *seen = [NSMutableSet set];
-    for (id item in raw) {
-        if (![item isKindOfClass:[NSDictionary class]]) {
-            continue;
-        }
-        NSDictionary *feedDict = (NSDictionary *)item;
-        NSString *urlString = feedDict[@"url"];
-        if (![urlString isKindOfClass:[NSString class]] || urlString.length == 0) {
-            continue;
-        }
-        NSURL *url = [NSURL URLWithString:urlString];
-        if (!url || [seen containsObject:url.absoluteString]) {
-            continue;
-        }
-        [seen addObject:url.absoluteString];
-
-        BrowserFeedItem *feed = [[BrowserFeedItem alloc] init];
-        NSString *title = feedDict[@"title"];
-        feed.title = [title isKindOfClass:[NSString class]] && title.length > 0
-            ? title
-            : (url.host ?: urlString);
-        feed.url = url;
-        NSString *type = feedDict[@"type"];
-        feed.mimeType = [type isKindOfClass:[NSString class]] ? type : nil;
-        [parsed addObject:feed];
-    }
-
-    NSArray<BrowserFeedItem *> *feeds = [parsed copy];
-    [self.feedsByWebView setObject:feeds forKey:webView];
-    if (webView == self.windowController.webView) {
-        self.currentFeeds = feeds;
-        [self refreshButtonAppearance];
-    }
+    [self applyFeeds:parsed forWebView:webView merge:YES];
 }
 
 #pragma mark - UI
