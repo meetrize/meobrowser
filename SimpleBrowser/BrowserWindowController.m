@@ -23,6 +23,7 @@
 #import "CaptchaAssistController.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserCertificateWarningView.h"
+#import "BrowserHTTPAuthPrompt.h"
 #import <Security/Security.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
@@ -108,6 +109,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
 @property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingSSLAuth *> *pendingSSLAuthByWebView;
+@property (nonatomic, strong) NSHashTable<WKWebView *> *webViewsWithHTTPAuthPrompt;
 @property (nonatomic, assign) BOOL addressFieldIsEditing;
 @end
 
@@ -169,6 +171,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _downloadManager = [BrowserDownloadManager sharedManager];
         [_downloadManager addObserver:self];
         _pendingSSLAuthByWebView = [NSMapTable weakToStrongObjectsMapTable];
+        _webViewsWithHTTPAuthPrompt = [NSHashTable weakObjectsHashTable];
         [self setupUI];
         if (loadTabs) {
             [self applySessionDictionary:session];
@@ -2050,10 +2053,84 @@ doCommandBySelector:(SEL)commandSelector {
 
 #pragma mark - WKNavigationDelegate
 
+- (BOOL)isHTTPAuthMethod:(NSString *)authMethod {
+    return [authMethod isEqualToString:NSURLAuthenticationMethodDefault]
+        || [authMethod isEqualToString:NSURLAuthenticationMethodHTTPBasic]
+        || [authMethod isEqualToString:NSURLAuthenticationMethodHTTPDigest];
+}
+
+- (void)presentHTTPAuthPromptForWebView:(WKWebView *)webView
+                              challenge:(NSURLAuthenticationChallenge *)challenge
+                      completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler {
+    NSWindow *window = self.window;
+    if (!window || !webView) {
+        completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+        return;
+    }
+
+    // 同一 WebView 已有登录框时，取消重复挑战，避免叠多个 sheet。
+    if ([self.webViewsWithHTTPAuthPrompt containsObject:webView]) {
+        completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+        return;
+    }
+
+    NSURLProtectionSpace *space = challenge.protectionSpace;
+    if (challenge.previousFailureCount == 0) {
+        NSURLCredential *stored =
+            [[NSURLCredentialStorage sharedCredentialStorage] defaultCredentialForProtectionSpace:space];
+        if (stored.user.length > 0 && stored.hasPassword) {
+            completionHandler(NSURLSessionAuthChallengeUseCredential, stored);
+            return;
+        }
+    }
+
+    [self.webViewsWithHTTPAuthPrompt addObject:webView];
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    [BrowserHTTPAuthPrompt presentForChallenge:challenge
+                                      inWindow:window
+                             completionHandler:^(BrowserHTTPAuthPromptResult * _Nullable result) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        if (strongSelf && strongWebView) {
+            [strongSelf.webViewsWithHTTPAuthPrompt removeObject:strongWebView];
+        }
+        if (!result) {
+            completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+            return;
+        }
+
+        NSURLCredentialPersistence persistence = result.rememberPassword
+            ? NSURLCredentialPersistencePermanent
+            : NSURLCredentialPersistenceForSession;
+        NSURLCredential *credential = [NSURLCredential credentialWithUser:result.username ?: @""
+                                                                 password:result.password ?: @""
+                                                              persistence:persistence];
+        NSURLCredentialStorage *storage = [NSURLCredentialStorage sharedCredentialStorage];
+        if (result.rememberPassword) {
+            [storage setDefaultCredential:credential forProtectionSpace:space];
+        } else {
+            NSURLCredential *existing = [storage defaultCredentialForProtectionSpace:space];
+            if (existing) {
+                [storage removeCredential:existing forProtectionSpace:space];
+            }
+        }
+        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+    }];
+}
+
 - (void)webView:(WKWebView *)webView
 didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
 completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler {
     NSString *authMethod = challenge.protectionSpace.authenticationMethod;
+
+    if ([self isHTTPAuthMethod:authMethod]) {
+        [self presentHTTPAuthPromptForWebView:webView
+                                    challenge:challenge
+                            completionHandler:completionHandler];
+        return;
+    }
+
     if (![authMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
         completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
         return;

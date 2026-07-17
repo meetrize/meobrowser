@@ -49,6 +49,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
+                   $(BROWSER_SRC_DIR)/Security/BrowserHTTPAuthPrompt.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
