@@ -2518,4 +2518,150 @@ completionHandler:(void (^)(NSArray<NSURL *> * _Nullable URLs))completionHandler
     }
 }
 
+// 若不实现下列面板回调，网页调用 alert/confirm/prompt 或 beforeunload 时会卡住，页面无法继续交互。
+
+- (void)presentJavaScriptPanel:(NSAlert *)alert
+             completionHandler:(void (^)(NSModalResponse returnCode))completionHandler {
+    NSWindow *hostWindow = self.window;
+    if (hostWindow != nil) {
+        [alert beginSheetModalForWindow:hostWindow completionHandler:completionHandler];
+    } else {
+        completionHandler([alert runModal]);
+    }
+}
+
+- (void)webView:(WKWebView *)webView
+runJavaScriptAlertPanelWithMessage:(NSString *)message
+      initiatedByFrame:(WKFrameInfo *)frame
+       completionHandler:(void (^)(void))completionHandler {
+    (void)webView;
+    (void)frame;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = message.length > 0 ? message : @" ";
+    [alert addButtonWithTitle:@"好"];
+    [self presentJavaScriptPanel:alert completionHandler:^(NSModalResponse returnCode) {
+        (void)returnCode;
+        completionHandler();
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+runJavaScriptConfirmPanelWithMessage:(NSString *)message
+        initiatedByFrame:(WKFrameInfo *)frame
+         completionHandler:(void (^)(BOOL result))completionHandler {
+    (void)webView;
+    (void)frame;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = message.length > 0 ? message : @" ";
+    [alert addButtonWithTitle:@"好"];
+    [alert addButtonWithTitle:@"取消"];
+    [self presentJavaScriptPanel:alert completionHandler:^(NSModalResponse returnCode) {
+        completionHandler(returnCode == NSAlertFirstButtonReturn);
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt
+                          defaultText:(NSString *)defaultText
+                     initiatedByFrame:(WKFrameInfo *)frame
+                      completionHandler:(void (^)(NSString * _Nullable result))completionHandler {
+    (void)webView;
+    (void)frame;
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = prompt.length > 0 ? prompt : @" ";
+    SBTextField *input = [SBTextField standardField];
+    input.frame = NSMakeRect(0, 0, 280, 24);
+    input.stringValue = defaultText ?: @"";
+    alert.accessoryView = input;
+    [alert addButtonWithTitle:@"好"];
+    [alert addButtonWithTitle:@"取消"];
+    [alert layout];
+
+    NSWindow *hostWindow = self.window;
+    if (hostWindow != nil) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [hostWindow makeFirstResponder:input];
+        });
+    }
+
+    [self presentJavaScriptPanel:alert completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode == NSAlertFirstButtonReturn) {
+            completionHandler(input.stringValue ?: @"");
+        } else {
+            completionHandler(nil);
+        }
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+runBeforeUnloadConfirmPanelWithMessage:(NSString *)message
+                      initiatedByFrame:(WKFrameInfo *)frame
+                       completionHandler:(void (^)(BOOL result))completionHandler {
+    (void)webView;
+    (void)frame;
+
+    // 非公开 WKUIDelegate SPI：部分 WebKit 版本在 beforeunload 时会调用；未实现则可能直接离开或静默取消。
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"离开此网站？";
+    // 现代浏览器会忽略页面自定义 beforeunload 文案；有文案时作补充说明。
+    if (message.length > 0) {
+        alert.informativeText = message;
+    } else {
+        alert.informativeText = @"你所做的更改可能不会被保存。";
+    }
+    alert.alertStyle = NSAlertStyleWarning;
+    [alert addButtonWithTitle:@"离开"];
+    [alert addButtonWithTitle:@"取消"];
+    [self presentJavaScriptPanel:alert completionHandler:^(NSModalResponse returnCode) {
+        completionHandler(returnCode == NSAlertFirstButtonReturn);
+    }];
+}
+
+- (void)webViewDidClose:(WKWebView *)webView {
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (tab != nil) {
+        [self.tabController closeTab:tab];
+    }
+}
+
+- (void)webView:(WKWebView *)webView
+requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
+                     initiatedByFrame:(WKFrameInfo *)frame
+                                 type:(WKMediaCaptureType)type
+                      decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler API_AVAILABLE(macos(12.0)) {
+    (void)webView;
+    (void)frame;
+
+    NSString *host = origin.host.length > 0 ? origin.host : @"此网站";
+    NSString *deviceText;
+    switch (type) {
+        case WKMediaCaptureTypeCamera:
+            deviceText = @"摄像头";
+            break;
+        case WKMediaCaptureTypeMicrophone:
+            deviceText = @"麦克风";
+            break;
+        case WKMediaCaptureTypeCameraAndMicrophone:
+            deviceText = @"摄像头和麦克风";
+            break;
+        default:
+            deviceText = @"媒体设备";
+            break;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"允许“%@”使用%@？", host, deviceText];
+    alert.informativeText = @"网站请求访问设备以进行音视频通话或录制。";
+    [alert addButtonWithTitle:@"允许"];
+    [alert addButtonWithTitle:@"拒绝"];
+    [self presentJavaScriptPanel:alert completionHandler:^(NSModalResponse returnCode) {
+        decisionHandler(returnCode == NSAlertFirstButtonReturn
+                            ? WKPermissionDecisionGrant
+                            : WKPermissionDecisionDeny);
+    }];
+}
+
 @end

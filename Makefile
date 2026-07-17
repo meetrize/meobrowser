@@ -160,6 +160,12 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <string>登录助手通过局域网与手机 Companion 配对，以自动填入短信验证码。</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSBonjourServices</key>' >> $(1)/Contents/Info.plist
 	@echo '  <array><string>_meologin._tcp</string></array>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSCameraUsageDescription</key>' >> $(1)/Contents/Info.plist
+	@echo '  <string>网页可请求使用摄像头进行视频通话或拍照。</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSMicrophoneUsageDescription</key>' >> $(1)/Contents/Info.plist
+	@echo '  <string>网页可请求使用麦克风进行语音通话或录音。</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSLocationWhenInUseUsageDescription</key>' >> $(1)/Contents/Info.plist
+	@echo '  <string>网页可请求在使用期间访问你的位置。</string>' >> $(1)/Contents/Info.plist
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 
