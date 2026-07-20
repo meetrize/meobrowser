@@ -13,6 +13,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 为右侧内嵌控件（如收藏按钮）预留的文字区域宽度。
 @property (nonatomic) CGFloat trailingContentInset;
 
+/// 收紧文字上下绘制区（矮输入框内默认 bezel inset 过大时底部易被裁切）。默认 NO。
+@property (nonatomic) BOOL usesCompactVerticalTextInsets;
+
 /// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
 - (void)syncFieldEditorFrameWithContentInsets;
 

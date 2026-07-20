@@ -102,6 +102,29 @@
                                                   keyEquivalent:@"0"];
             actualSize.target = nil;
 
+            [viewMenu addItem:[NSMenuItem separatorItem]];
+
+            NSMenuItem *findInPage = [viewMenu addItemWithTitle:@"在页面中查找"
+                                                         action:@selector(showFindBar:)
+                                                  keyEquivalent:@"f"];
+            findInPage.target = nil;
+
+            NSMenuItem *findNext = [viewMenu addItemWithTitle:@"查找下一个"
+                                                       action:@selector(findNext:)
+                                                keyEquivalent:@"g"];
+            findNext.target = nil;
+
+            NSMenuItem *findPrevious = [viewMenu addItemWithTitle:@"查找上一个"
+                                                           action:@selector(findPrevious:)
+                                                    keyEquivalent:@"g"];
+            findPrevious.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            findPrevious.target = nil;
+
+            NSMenuItem *useSelection = [viewMenu addItemWithTitle:@"使用所选内容来查找"
+                                                           action:@selector(useSelectionForFind:)
+                                                    keyEquivalent:@"e"];
+            useSelection.target = nil;
+
             viewMenuItem.submenu = viewMenu;
             NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
             if (windowIndex == NSNotFound) {

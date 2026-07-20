@@ -85,11 +85,24 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
 }
 
 - (NSRect)drawingRectForBounds:(NSRect)theRect {
-    return [super drawingRectForBounds:[self textAreaRectForBounds:theRect]];
+    NSRect area = [self textAreaRectForBounds:theRect];
+    NSView *controlView = self.controlView;
+    if ([controlView isKindOfClass:[SBTextField class]] &&
+        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        // 水平保留少量 bezel 边距；垂直留 2pt，避免 24pt 高输入框裁切下行。
+        return NSInsetRect(area, 3.0, 2.0);
+    }
+    return [super drawingRectForBounds:area];
 }
 
 - (NSRect)titleRectForBounds:(NSRect)theRect {
-    return [super titleRectForBounds:[self textAreaRectForBounds:theRect]];
+    NSRect area = [self textAreaRectForBounds:theRect];
+    NSView *controlView = self.controlView;
+    if ([controlView isKindOfClass:[SBTextField class]] &&
+        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        return NSInsetRect(area, 3.0, 2.0);
+    }
+    return [super titleRectForBounds:area];
 }
 
 - (void)editWithFrame:(NSRect)rect
@@ -152,6 +165,15 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return;
     }
     _trailingContentInset = trailingContentInset;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setUsesCompactVerticalTextInsets:(BOOL)usesCompactVerticalTextInsets {
+    if (_usesCompactVerticalTextInsets == usesCompactVerticalTextInsets) {
+        return;
+    }
+    _usesCompactVerticalTextInsets = usesCompactVerticalTextInsets;
     [self setNeedsDisplay:YES];
     [self syncFieldEditorFrameWithContentInsets];
 }

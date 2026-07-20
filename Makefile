@@ -59,6 +59,10 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadProgressRingView.m \
+                   $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
+                   $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
+                   $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarView.m \
+                   $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarController.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipe.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipeStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginCredentialStore.m \
@@ -103,7 +107,7 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network
 
@@ -187,6 +191,7 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
 	cp "$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html" "$(BROWSER_RES_DIR)/login-assist-test.html"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/captcha-assist-test.html" "$(BROWSER_RES_DIR)/captcha-assist-test.html"
+	cp "$(BROWSER_SRC_DIR)/FindInPage/Resources/find-in-page.js" "$(BROWSER_RES_DIR)/find-in-page.js"
 	mkdir -p "$(BROWSER_RES_DIR)/CaptchaAssist/helpers"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py" "$(BROWSER_RES_DIR)/CaptchaAssist/helpers/captcha_helper.py"
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \

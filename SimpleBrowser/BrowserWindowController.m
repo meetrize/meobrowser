@@ -17,6 +17,8 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserDownloadProgressRingView.h"
+#import "BrowserFindBarController.h"
+#import "BrowserFindBarView.h"
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
@@ -107,6 +109,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) LoginAssistController *loginAssistController;
 @property (nonatomic, strong) CaptchaAssistController *captchaAssistController;
 @property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
+@property (nonatomic, strong) BrowserFindBarController *findBarController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
@@ -168,6 +171,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _loginAssistController = [[LoginAssistController alloc] initWithWindowController:self];
         _captchaAssistController = [[CaptchaAssistController alloc] initWithWindowController:self];
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
+        _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -192,6 +196,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
+    [self.findBarController configureWebViewConfiguration:configuration];
 }
 
 - (void)configureChromeWindow {
@@ -476,6 +481,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.addressBarActionGroup.feedButton) {
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
+    [self wireFindInPageButton];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
@@ -574,6 +580,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
         [rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
     ]];
+
+    [self.findBarController installInContentContainer:self.contentContainer];
 }
 
 - (NSImage *)toolbarSymbolImageNamed:(NSString *)symbolName {
@@ -648,6 +656,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 #pragma mark - Downloads
 
+- (void)wireFindInPageButton {
+    NSButton *button = self.addressBarActionGroup.findInPageButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(toggleFindBar:);
+}
+
 - (void)addressBarActionOrderDidChange:(NSNotification *)notification {
     (void)notification;
     // 重排后 downloadButton 可能仍是同一实例；角标在该按钮上。刷新引用与外观即可。
@@ -677,6 +694,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.addressBarActionGroup.feedButton) {
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
+    [self wireFindInPageButton];
 }
 
 - (void)toggleDownloadsPanel:(id)sender {
@@ -1064,6 +1082,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
     [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
+    if (self.findBarController.isVisible) {
+        [self.contentContainer addSubview:self.findBarController.findBarView positioned:NSWindowAbove relativeTo:nil];
+    }
+    [self.findBarController syncWithSelectedTab];
     [self observeLoadingProgressForSelectedTab];
 
     // 切换标签时结束地址栏编辑，避免不安全徽章的 leading inset 留在 field editor 里带到新标签。
@@ -1637,6 +1659,13 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         action == @selector(actualSize:)) {
         return [self canZoomCurrentPage];
     }
+    if (action == @selector(showFindBar:) ||
+        action == @selector(toggleFindBar:) ||
+        action == @selector(findNext:) ||
+        action == @selector(findPrevious:) ||
+        action == @selector(useSelectionForFind:)) {
+        return [self.findBarController canFindInCurrentPage];
+    }
     if (action == @selector(restoreRecentlyClosedBrowserTab:)) {
         return self.tabController.canRestoreRecentlyClosedTab;
     }
@@ -1647,6 +1676,26 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         return YES;
     }
     return YES;
+}
+
+- (void)showFindBar:(id)sender {
+    [self.findBarController showFindBar:sender];
+}
+
+- (void)toggleFindBar:(id)sender {
+    [self.findBarController toggleFindBar:sender];
+}
+
+- (void)findNext:(id)sender {
+    [self.findBarController findNext:sender];
+}
+
+- (void)findPrevious:(id)sender {
+    [self.findBarController findPrevious:sender];
+}
+
+- (void)useSelectionForFind:(id)sender {
+    [self.findBarController useSelectionForFind:sender];
 }
 
 - (void)oneClickLogin:(id)sender {
@@ -2261,6 +2310,7 @@ didBecomeDownload:(WKDownload *)download {
     if (![tab isMainFrameNavigation:navigation]) {
         return;
     }
+    [self.findBarController noteNavigationCommittedInWebView:webView];
     // URL 在 commit 时已可用；尽早刷新星标，避免等 didFinish。
     if (webView == self.webView) {
         if (tab.addressBarDraft == nil) {
@@ -2286,6 +2336,7 @@ didBecomeDownload:(WKDownload *)download {
     if (webView == self.webView) {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
+        [self.findBarController noteNavigationFinishedInWebView:webView];
     }
 }
 

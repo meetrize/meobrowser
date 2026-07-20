@@ -1,6 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 
+@class BrowserFindSession;
+
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
@@ -28,6 +30,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, assign) NSTimeInterval lastActiveTimestamp;
 /// 当前主文档连接安全态（用于地址栏「连接不安全」指示）。
 @property (nonatomic, assign) BrowserConnectionSecurityState connectionSecurityState;
+/// 页面内查找会话（查询词 / 模式 / 计数）；高亮在 WebView 文档侧。
+@property (nonatomic, strong, nullable) BrowserFindSession *findSession;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 

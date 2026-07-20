@@ -27,6 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// RSS Feed 按钮；由窗口控制器设置 target/action 与点亮态。
 @property (nonatomic, strong, readonly, nullable) NSButton *feedButton;
 
+/// 页面内查找按钮；由窗口控制器设置 target/action。
+@property (nonatomic, strong, readonly, nullable) NSButton *findInPageButton;
+
 /// 根据拖拽增量调整按钮组宽度（正值为变宽）。
 - (void)applyWidthDelta:(CGFloat)deltaX;
 

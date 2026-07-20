@@ -16,6 +16,10 @@
 		<data>
 		9MpcS1w7hR0L56VF+DFyZZdArA8=
 		</data>
+		<key>Resources/find-in-page.js</key>
+		<data>
+		NbdRXLGuDo6iP7T5E4CKx35fUDI=
+		</data>
 		<key>Resources/login-assist-test.html</key>
 		<data>
 		esUUKqs3bTwp0NPiluqzTJxhsnc=
@@ -42,6 +46,13 @@
 			<key>hash2</key>
 			<data>
 			jJlWfDGzkYZCK8W6/iYWTWfqxObi0ipAYKfs+jhfgfw=
+			</data>
+		</dict>
+		<key>Resources/find-in-page.js</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			cS3R6kfGS+06xTXHfpUcJI5o2DdMW5dTf9fMpS/4jtM=
 			</data>
 		</dict>
 		<key>Resources/login-assist-test.html</key>

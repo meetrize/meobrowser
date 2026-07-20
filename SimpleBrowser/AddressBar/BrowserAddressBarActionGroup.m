@@ -100,6 +100,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, strong, readwrite, nullable) NSButton *loginAssistButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *captchaAssistButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
 @property (nonatomic, assign) BOOL isResizingWidth;
@@ -175,6 +176,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 
 - (NSArray<BrowserAddressBarActionItem *> *)defaultActionItems {
     NSArray<NSDictionary<NSString *, NSString *> *> *specs = @[
+        @{@"id": @"findInPage", @"symbol": @"magnifyingglass", @"tip": @"查找（再点关闭）"},
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
@@ -244,6 +246,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     self.loginAssistButton = nil;
     self.captchaAssistButton = nil;
     self.feedButton = nil;
+    self.findInPageButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
@@ -254,6 +257,8 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
             self.captchaAssistButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"rssFeed"]) {
             self.feedButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"findInPage"]) {
+            self.findInPageButton = self.actionButtons[i];
         }
     }
 }
@@ -400,12 +405,9 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     button.highlighted = NO;
     button.alphaValue = 1.0;
     if (!didReorder) {
-        // 短按：触发原按钮动作
-        if (button.target && button.action && [button.target respondsToSelector:button.action]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            [button.target performSelector:button.action withObject:button];
-#pragma clang diagnostic pop
+        // 短按：触发原按钮动作（用 sendAction，与菜单/快捷键路径一致）
+        if (button.action) {
+            [NSApp sendAction:button.action to:button.target from:button];
         }
     } else {
         if (@available(macOS 10.14, *)) {
