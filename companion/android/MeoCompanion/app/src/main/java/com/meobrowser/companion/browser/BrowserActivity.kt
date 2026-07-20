@@ -7,10 +7,14 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -26,6 +30,7 @@ import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -56,6 +61,7 @@ import com.meobrowser.companion.sms.SmsListenCoordinator
 import com.meobrowser.companion.sync.SyncEngine
 import com.meobrowser.companion.sync.SyncPrefs
 import com.meobrowser.companion.ui.MainActivity
+import kotlin.math.abs
 
 class BrowserActivity : AppCompatActivity() {
     private lateinit var binding: ActivityBrowserBinding
@@ -70,6 +76,12 @@ class BrowserActivity : AppCompatActivity() {
     private var findQuery: String? = null
     private var toolsSheet: BottomSheetDialog? = null
     private var tabsSheet: BottomSheetDialog? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val hideExitFullscreenRunnable = Runnable { hideExitFullscreenChip() }
+    private var fullscreenTapTracking = false
+    private var fullscreenDownX = 0f
+    private var fullscreenDownY = 0f
+    private var touchSlop = 0
     private val shortcutSyncListener: () -> Unit = {
         runOnUiThread { refreshShortcutGrid() }
     }
@@ -91,6 +103,30 @@ class BrowserActivity : AppCompatActivity() {
 
         applyOrientationMode()
         applyFullscreenMode()
+        touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        binding.exitFullscreenButton.setOnClickListener {
+            if (browserPrefs.fullscreen) toggleFullscreen()
+        }
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (browserPrefs.fullscreen) {
+                        toggleFullscreen()
+                        return
+                    }
+                    val wv = tabManager.active?.webView
+                    if (wv != null && wv.canGoBack()) {
+                        wv.goBack()
+                        updateNavChrome()
+                        return
+                    }
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        )
 
         val (session, active) = browserPrefs.loadSession()
         if (session.isNotEmpty()) {
@@ -148,11 +184,73 @@ class BrowserActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onDestroy() {
+        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
+        super.onDestroy()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && browserPrefs.fullscreen) {
             applyFullscreenMode()
         }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (browserPrefs.fullscreen) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    fullscreenDownX = ev.rawX
+                    fullscreenDownY = ev.rawY
+                    fullscreenTapTracking = true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (fullscreenTapTracking) {
+                        if (abs(ev.rawX - fullscreenDownX) > touchSlop ||
+                            abs(ev.rawY - fullscreenDownY) > touchSlop
+                        ) {
+                            fullscreenTapTracking = false
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (fullscreenTapTracking &&
+                        abs(ev.rawX - fullscreenDownX) <= touchSlop &&
+                        abs(ev.rawY - fullscreenDownY) <= touchSlop &&
+                        !isTouchOnExitFullscreenButton(ev)
+                    ) {
+                        showExitFullscreenChip()
+                    }
+                    fullscreenTapTracking = false
+                }
+                MotionEvent.ACTION_CANCEL -> fullscreenTapTracking = false
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun isTouchOnExitFullscreenButton(ev: MotionEvent): Boolean {
+        val btn = binding.exitFullscreenButton
+        if (btn.visibility != View.VISIBLE) return false
+        val loc = IntArray(2)
+        btn.getLocationOnScreen(loc)
+        val x = ev.rawX
+        val y = ev.rawY
+        return x >= loc[0] && x <= loc[0] + btn.width &&
+            y >= loc[1] && y <= loc[1] + btn.height
+    }
+
+    private fun showExitFullscreenChip() {
+        if (!browserPrefs.fullscreen) return
+        binding.exitFullscreenButton.visibility = View.VISIBLE
+        binding.exitFullscreenButton.bringToFront()
+        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
+        mainHandler.postDelayed(hideExitFullscreenRunnable, EXIT_FULLSCREEN_CHIP_MS)
+    }
+
+    private fun hideExitFullscreenChip() {
+        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
+        binding.exitFullscreenButton.visibility = View.GONE
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
@@ -463,7 +561,11 @@ class BrowserActivity : AppCompatActivity() {
         applyFullscreenMode()
         Toast.makeText(
             this,
-            if (browserPrefs.fullscreen) "已进入全屏" else "已退出全屏",
+            if (browserPrefs.fullscreen) {
+                getString(R.string.fullscreen_entered_hint)
+            } else {
+                getString(R.string.fullscreen_exited)
+            },
             Toast.LENGTH_SHORT
         ).show()
     }
@@ -485,13 +587,15 @@ class BrowserActivity : AppCompatActivity() {
     private fun applyFullscreenMode() {
         WindowCompat.setDecorFitsSystemWindows(window, !browserPrefs.fullscreen)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val controller = window.insetsController ?: return
-            if (browserPrefs.fullscreen) {
-                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                controller.systemBarsBehavior =
-                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            } else {
-                controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            val controller = window.insetsController
+            if (controller != null) {
+                if (browserPrefs.fullscreen) {
+                    controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                    controller.systemBarsBehavior =
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                }
             }
         } else {
             @Suppress("DEPRECATION")
@@ -508,6 +612,9 @@ class BrowserActivity : AppCompatActivity() {
         }
         binding.topBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
         binding.bottomBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
+        if (!browserPrefs.fullscreen) {
+            hideExitFullscreenChip()
+        }
     }
 
     private fun applyTextZoomToAll() {
@@ -875,5 +982,6 @@ class BrowserActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MeoBrowser"
+        private const val EXIT_FULLSCREEN_CHIP_MS = 3000L
     }
 }

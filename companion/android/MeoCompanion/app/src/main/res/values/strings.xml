@@ -26,6 +26,9 @@
     <string name="tools_desktop_mode">桌面模式</string>
     <string name="tools_reload">刷新</string>
     <string name="tools_fullscreen">全屏</string>
+    <string name="exit_fullscreen">退出全屏</string>
+    <string name="fullscreen_entered_hint">已进入全屏，点一下屏幕可退出</string>
+    <string name="fullscreen_exited">已退出全屏</string>
     <string name="tools_rotate">屏幕旋转</string>
     <string name="tools_font_size">字体大小</string>
     <string name="tools_collapse">收起</string>

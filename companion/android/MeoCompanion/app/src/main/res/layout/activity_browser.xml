@@ -94,6 +94,23 @@
                 android:paddingBottom="24dp"
                 android:overScrollMode="never" />
         </FrameLayout>
+
+        <TextView
+            android:id="@+id/exitFullscreenButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_exit_fullscreen"
+            android:clickable="true"
+            android:elevation="8dp"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingHorizontal="18dp"
+            android:text="@string/exit_fullscreen"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:visibility="gone" />
     </FrameLayout>
 
     <!-- 底栏五键 -->
