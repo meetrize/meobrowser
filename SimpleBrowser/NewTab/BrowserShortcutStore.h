@@ -5,6 +5,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSString * const BrowserShortcutAddItemID;
+/// 快捷方式列表写入后广播（含 Companion 同步合并），Launchpad 应 reload。
+extern NSNotificationName const BrowserShortcutStoreDidChangeNotification;
 
 @interface BrowserShortcutStore : NSObject
 

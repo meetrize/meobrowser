@@ -1,7 +1,9 @@
 # Meo Android 浏览器改造 — 可行性报告与详细方案
 
 > 目标：将现有 **Meo Companion** 改造为 **极简 Android 浏览器（MeoBrowser for Android）**，把配对 / 验证码 / 通知镜像等能力下沉为「设置中的互联功能」；突出与 macOS MeoBrowser 的局域网互联互通。  
-> 状态：方案稿（2026-07-20）  
+> 状态：**AB-0～AB-5 代码已落地**（2026-07-20）；真机手测见 [android-browser-acceptance.md](android-browser-acceptance.md)  
+> 开发计划（任务级）：[android-browser-development-plan.md](android-browser-development-plan.md)  
+> 同步设计：[companion-sync-design.md](companion-sync-design.md)  
 > 关联：[companion-protocol.md](companion-protocol.md) · [companion-notification-mirror-design.md](companion-notification-mirror-design.md) · [design.md](design.md) · [multi-tab-design.md](multi-tab-design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [companion/android/MeoCompanion/README.md](../../companion/android/MeoCompanion/README.md)
 
 ---
@@ -524,9 +526,9 @@ com.meobrowser.companion/          # 或逐步改为 com.meobrowser.app
 
 ### 9.2 建议后续产出的专项文档
 
-1. `companion-sync-design.md` — 同步数据模型、冲突、分片、Mac/Android API  
-2. `android-browser-development-plan.md` — 按 AB-0～AB-5 拆任务与文件清单  
-3. `android-browser-acceptance.md` — 真机与指标勾选表  
+1. `companion-sync-design.md` — 同步数据模型、冲突、分片、Mac/Android API（AB-0 起草）  
+2. ~~`android-browser-development-plan.md`~~ — **已产出**：[android-browser-development-plan.md](android-browser-development-plan.md)  
+3. `android-browser-acceptance.md` — 真机与指标勾选表（AB-0 起草）  
 
 ### 9.3 架构示意（目标态）
 

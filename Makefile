@@ -73,6 +73,9 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionChannel.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationSettings.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationPresenter.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionSyncSettings.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionShortcutSync.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBrowseSyncStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistScriptMessageProxy.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \

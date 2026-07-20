@@ -1,6 +1,9 @@
 #import "CompanionChannel.h"
 #import "CompanionBonjourServer.h"
 #import "CompanionPairingStore.h"
+#import "CompanionShortcutSync.h"
+#import "CompanionSyncSettings.h"
+#import "CompanionBrowseSyncStore.h"
 #import "OTPInbox.h"
 #import "PhoneNotificationPresenter.h"
 #import <ifaddrs.h>
@@ -256,7 +259,156 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self handlePhoneNotification:json connectionID:connectionID server:server];
         return;
     }
+    if ([type hasPrefix:@"sync_"]) {
+        [self handleSyncMessage:json connectionID:connectionID server:server];
+        return;
+    }
     // 未知 type：安全忽略（向前兼容）。
+}
+
+- (void)handleSyncMessage:(NSDictionary *)json
+             connectionID:(NSString *)connectionID
+                   server:(CompanionBonjourServer *)server {
+    NSString *deviceToken = json[@"deviceToken"];
+    if (![deviceToken isKindOfClass:[NSString class]] ||
+        ![[CompanionPairingStore sharedStore] validateDeviceToken:deviceToken deviceId:nil]) {
+        [server sendJSON:@{@"v": @1, @"type": @"sync_error", @"message": @"unauthorized"}
+          toConnectionID:connectionID];
+        return;
+    }
+    CompanionSyncSettings *settings = [CompanionSyncSettings sharedSettings];
+    if (!settings.syncEnabled) {
+        [server sendJSON:@{
+            @"v": @1,
+            @"type": @"sync_error",
+            @"message": @"sync disabled on Mac — enable in 登录助手",
+        } toConnectionID:connectionID];
+        return;
+    }
+
+    NSString *type = json[@"type"];
+    if ([type isEqualToString:@"sync_hello"]) {
+        [server sendJSON:@{
+            @"v": @1,
+            @"type": @"sync_hello",
+            @"deviceToken": deviceToken,
+            @"deviceId": [NSString stringWithFormat:@"mac-%@", NSHost.currentHost.localizedName ?: @"host"],
+            @"supportedKinds": @[@"shortcut", @"history", @"bookmark"],
+            @"epoch": @(settings.epoch),
+        } toConnectionID:connectionID];
+        return;
+    }
+
+    if ([type isEqualToString:@"sync_pull"]) {
+        NSString *kind = json[@"kind"];
+        long long epoch = [settings bumpEpoch];
+        NSArray *records = nil;
+        BOOL ok = NO;
+        if ([kind isEqualToString:@"shortcut"] && settings.syncShortcuts) {
+            records = [[CompanionShortcutSync sharedSync] exportShortcutRecords];
+            ok = YES;
+        } else if ([kind isEqualToString:@"history"] && settings.syncHistory) {
+            records = [[CompanionBrowseSyncStore sharedStore] exportRecordsForKind:@"history"];
+            ok = YES;
+        } else if ([kind isEqualToString:@"bookmark"] && settings.syncBookmarks) {
+            records = [[CompanionBrowseSyncStore sharedStore] exportRecordsForKind:@"bookmark"];
+            ok = YES;
+        }
+        if (ok) {
+            // 单帧上限 64KiB：分批推送，避免整包被 sendJSON 静默丢弃
+            NSArray *all = records ?: @[];
+            NSUInteger batchSize = 15;
+            if (all.count == 0) {
+                [server sendJSON:@{
+                    @"v": @1,
+                    @"type": @"sync_push",
+                    @"deviceToken": deviceToken,
+                    @"kind": kind ?: @"",
+                    @"epoch": @(epoch),
+                    @"records": @[],
+                } toConnectionID:connectionID];
+            } else {
+                for (NSUInteger i = 0; i < all.count; i += batchSize) {
+                    NSUInteger len = MIN(batchSize, all.count - i);
+                    NSArray *slice = [all subarrayWithRange:NSMakeRange(i, len)];
+                    NSDictionary *frame = @{
+                        @"v": @1,
+                        @"type": @"sync_push",
+                        @"deviceToken": deviceToken,
+                        @"kind": kind ?: @"",
+                        @"epoch": @(epoch),
+                        @"records": slice,
+                    };
+                    NSData *probe = [NSJSONSerialization dataWithJSONObject:frame options:0 error:nil];
+                    if (probe.length > 60 * 1024 && slice.count > 1) {
+                        // 单批仍过大：再拆成 1 条一条发
+                        for (NSDictionary *one in slice) {
+                            [server sendJSON:@{
+                                @"v": @1,
+                                @"type": @"sync_push",
+                                @"deviceToken": deviceToken,
+                                @"kind": kind ?: @"",
+                                @"epoch": @(epoch),
+                                @"records": @[one],
+                            } toConnectionID:connectionID];
+                        }
+                    } else {
+                        [server sendJSON:frame toConnectionID:connectionID];
+                    }
+                }
+            }
+        } else {
+            [server sendJSON:@{
+                @"v": @1,
+                @"type": @"sync_error",
+                @"message": [NSString stringWithFormat:@"kind %@ not enabled on Mac", kind ?: @"?"],
+            } toConnectionID:connectionID];
+        }
+        return;
+    }
+
+    if ([type isEqualToString:@"sync_push"] || [type isEqualToString:@"sync_chunk"]) {
+        NSString *kind = nil;
+        NSArray *records = nil;
+        if ([type isEqualToString:@"sync_chunk"]) {
+            NSString *payloadStr = json[@"payload"];
+            if (![payloadStr isKindOfClass:[NSString class]]) return;
+            NSData *data = [payloadStr dataUsingEncoding:NSUTF8StringEncoding];
+            NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (![payload isKindOfClass:[NSDictionary class]]) return;
+            kind = payload[@"kind"];
+            records = payload[@"records"];
+        } else {
+            kind = json[@"kind"];
+            records = json[@"records"];
+        }
+        BOOL applied = NO;
+        if ([kind isEqualToString:@"shortcut"] && settings.syncShortcuts && [records isKindOfClass:[NSArray class]]) {
+            [[CompanionShortcutSync sharedSync] mergeShortcutRecords:records];
+            applied = YES;
+        } else if ([kind isEqualToString:@"history"] && settings.syncHistory && [records isKindOfClass:[NSArray class]]) {
+            [[CompanionBrowseSyncStore sharedStore] mergeRecords:records kind:@"history"];
+            applied = YES;
+        } else if ([kind isEqualToString:@"bookmark"] && settings.syncBookmarks && [records isKindOfClass:[NSArray class]]) {
+            [[CompanionBrowseSyncStore sharedStore] mergeRecords:records kind:@"bookmark"];
+            applied = YES;
+        }
+        if (applied) {
+            settings.lastSyncAt = [NSDate date].timeIntervalSince1970;
+            long long epoch = [json[@"epoch"] respondsToSelector:@selector(longLongValue)] ? [json[@"epoch"] longLongValue] : settings.epoch;
+            [server sendJSON:@{
+                @"v": @1,
+                @"type": @"sync_ack",
+                @"kind": kind ?: @"",
+                @"appliedEpoch": @(epoch),
+            } toConnectionID:connectionID];
+        }
+        return;
+    }
+
+    if ([type isEqualToString:@"sync_ack"] || [type isEqualToString:@"sync_error"]) {
+        return;
+    }
 }
 
 - (void)handlePhoneNotification:(NSDictionary *)json

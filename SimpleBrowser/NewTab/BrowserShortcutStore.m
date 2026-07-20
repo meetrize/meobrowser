@@ -16,6 +16,7 @@ static NSString * const kShortcutKindFolderValue = @"folder";
 static const NSInteger kShortcutPayloadVersion = 2;
 
 NSString * const BrowserShortcutAddItemID = @"__launchpad_add__";
+NSNotificationName const BrowserShortcutStoreDidChangeNotification = @"BrowserShortcutStoreDidChangeNotification";
 
 @implementation BrowserShortcutStore
 
@@ -119,6 +120,9 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
         NSMutableArray *mutable = (NSMutableArray *)shortcuts;
         [mutable setArray:mutableCopy];
     }
+
+    [[NSNotificationCenter defaultCenter] postNotificationName:BrowserShortcutStoreDidChangeNotification
+                                                        object:self];
 }
 
 + (NSArray<BrowserShortcutItem *> *)topLevelShortcuts:(NSArray<BrowserShortcutItem *> *)shortcuts {

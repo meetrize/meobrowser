@@ -65,6 +65,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        title = getString(R.string.settings_section_link)
         prefs = PairingPrefs(this)
         SmsListenCoordinator.start(this)
         restoreConnectionForm()

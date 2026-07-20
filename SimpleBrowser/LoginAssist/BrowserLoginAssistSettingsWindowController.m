@@ -8,6 +8,7 @@
 #import "CompanionChannel.h"
 #import "CompanionPairingStore.h"
 #import "PhoneNotificationSettings.h"
+#import "CompanionSyncSettings.h"
 #import "PhoneNotificationPresenter.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
@@ -54,6 +55,10 @@
 @property (nonatomic, strong) NSButton *otpBannerEnabledCheck;
 @property (nonatomic, strong) NSButton *openNotificationSettingsButton;
 @property (nonatomic, strong) NSTextField *mirrorHintLabel;
+@property (nonatomic, strong) NSButton *syncEnabledCheck;
+@property (nonatomic, strong) NSButton *syncShortcutsCheck;
+@property (nonatomic, strong) NSButton *syncHistoryCheck;
+@property (nonatomic, strong) NSButton *syncBookmarksCheck;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @property (nonatomic, copy, nullable) NSString *displayedPairingCode;
@@ -369,7 +374,25 @@
     self.mirrorHintLabel.textColor = [NSColor secondaryLabelColor];
     self.mirrorHintLabel.preferredMaxLayoutWidth = 460;
 
-    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"默认：Android 仅上传验证码与时间戳。手机开启「全部通知」后会上传通知标题与正文（同局域网明文）。端口默认固定，仅手动确认后才会更换。"];
+    CompanionSyncSettings *syncSettings = [CompanionSyncSettings sharedSettings];
+    self.syncEnabledCheck = [NSButton checkboxWithTitle:@"启用与 Android 的自动同步（局域网）"
+                                                 target:self
+                                                 action:@selector(syncSettingsChanged:)];
+    self.syncEnabledCheck.state = syncSettings.syncEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncShortcutsCheck = [NSButton checkboxWithTitle:@"同步新标签页快捷方式"
+                                                   target:self
+                                                   action:@selector(syncSettingsChanged:)];
+    self.syncShortcutsCheck.state = syncSettings.syncShortcuts ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncHistoryCheck = [NSButton checkboxWithTitle:@"同步历史（明文 LAN）"
+                                                 target:self
+                                                 action:@selector(syncSettingsChanged:)];
+    self.syncHistoryCheck.state = syncSettings.syncHistory ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncBookmarksCheck = [NSButton checkboxWithTitle:@"同步书签"
+                                                   target:self
+                                                   action:@selector(syncSettingsChanged:)];
+    self.syncBookmarksCheck.state = syncSettings.syncBookmarks ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"默认：Android 仅上传验证码与时间戳。手机开启「全部通知」后会上传通知标题与正文（同局域网明文）。同步开启后会交换快捷方式等数据。端口默认固定，仅手动确认后才会更换。"];
     privacyNote.font = [NSFont systemFontOfSize:11];
     privacyNote.textColor = [NSColor secondaryLabelColor];
     privacyNote.preferredMaxLayoutWidth = 460;
@@ -420,6 +443,10 @@
         self.otpBannerEnabledCheck,
         self.openNotificationSettingsButton,
         self.mirrorHintLabel,
+        self.syncEnabledCheck,
+        self.syncShortcutsCheck,
+        self.syncHistoryCheck,
+        self.syncBookmarksCheck,
         privacyNote,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -921,6 +948,11 @@
     PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
     self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    CompanionSyncSettings *syncSettings = [CompanionSyncSettings sharedSettings];
+    self.syncEnabledCheck.state = syncSettings.syncEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncShortcutsCheck.state = syncSettings.syncShortcuts ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncHistoryCheck.state = syncSettings.syncHistory ? NSControlStateValueOn : NSControlStateValueOff;
+    self.syncBookmarksCheck.state = syncSettings.syncBookmarks ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshNotificationPermissionHint];
 }
 
@@ -931,6 +963,15 @@
     settings.otpBannerEnabled = (self.otpBannerEnabledCheck.state == NSControlStateValueOn);
     [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
     [self refreshNotificationPermissionHint];
+}
+
+- (void)syncSettingsChanged:(id)sender {
+    (void)sender;
+    CompanionSyncSettings *settings = [CompanionSyncSettings sharedSettings];
+    settings.syncEnabled = (self.syncEnabledCheck.state == NSControlStateValueOn);
+    settings.syncShortcuts = (self.syncShortcutsCheck.state == NSControlStateValueOn);
+    settings.syncHistory = (self.syncHistoryCheck.state == NSControlStateValueOn);
+    settings.syncBookmarks = (self.syncBookmarksCheck.state == NSControlStateValueOn);
 }
 
 - (void)refreshNotificationPermissionHint {

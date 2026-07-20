@@ -70,6 +70,11 @@ class PairingPrefs(context: Context) {
         get() = NotificationMirrorMode.fromStorage(prefs.getString(KEY_NOTIF_MIRROR_MODE, null))
         set(value) = prefs.edit().putString(KEY_NOTIF_MIRROR_MODE, value.name).apply()
 
+    /** 启动浏览器时是否自动用安全码连接（默认开） */
+    var autoConnectOnLaunch: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CONNECT, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CONNECT, value).apply()
+
     /** 上次在表单里填写的手动主机，如 192.168.1.10:12345 */
     var lastHostOverride: String?
         get() = prefs.getString(KEY_LAST_HOST_OVERRIDE, null)
@@ -108,5 +113,6 @@ class PairingPrefs(context: Context) {
         private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_SECURITY_CODE = "security_code"
         private const val KEY_NOTIF_MIRROR_MODE = "notification_mirror_mode"
+        private const val KEY_AUTO_CONNECT = "auto_connect_on_launch"
     }
 }

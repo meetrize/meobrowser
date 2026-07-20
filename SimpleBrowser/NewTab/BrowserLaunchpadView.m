@@ -340,6 +340,10 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
                                                  selector:@selector(wallpaperDidChange:)
                                                      name:BrowserWallpaperDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(shortcutStoreDidChange:)
+                                                     name:BrowserShortcutStoreDidChangeNotification
+                                                   object:nil];
         [self refreshWallpaperPresentation];
     }
     return self;
@@ -537,6 +541,13 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
         [self acquireWallpaperIfNeeded];
     }
     [self refreshWallpaperPresentation];
+}
+
+- (void)shortcutStoreDidChange:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self reloadShortcuts];
+    });
 }
 
 - (void)refreshWallpaperPresentation {

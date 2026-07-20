@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Meo Companion</string>
+    <string name="app_name">MeoBrowser</string>
     <string name="pair_hint">在 MeoBrowser「登录助手」中查看配对码或设定安全码，选择相同连接方式后连接。</string>
     <string name="pair_hint_pairing">临时配对码：在 Mac「登录助手」复制 6 位码（5 分钟有效），输入后连接。</string>
     <string name="pair_hint_security">固定安全码：与 Mac 设定的安全码一致；保存主机地址后，打开 App 会自动连接。</string>
@@ -11,4 +11,23 @@
     <string name="mirror_all_confirm_message">将把通知的标题与正文发送到已配对的 MeoBrowser（同 Wi‑Fi，当前为明文）。请勿在不可信网络开启。可随时切回「仅验证码」。</string>
     <string name="mirror_summary_otp">当前：仅验证码</string>
     <string name="mirror_summary_all">当前：全部通知（已过滤噪音）</string>
+    <string name="nav_back">后退</string>
+    <string name="nav_forward">前进</string>
+    <string name="nav_reload">刷新</string>
+    <string name="address_hint">搜索或输入网址</string>
+    <string name="link_status">互联状态</string>
+    <string name="menu">菜单</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_section_general">通用</string>
+    <string name="settings_general_hint">默认搜索引擎：Google。主页为新标签页。下载保存到系统「下载」目录。</string>
+    <string name="settings_section_link">互联与配对</string>
+    <string name="settings_section_notification">通知与验证码</string>
+    <string name="settings_section_sync">自动同步</string>
+    <string name="settings_section_downloads">下载</string>
+    <string name="settings_section_history">历史</string>
+    <string name="settings_section_bookmarks">书签</string>
+    <string name="settings_section_about">关于与隐私</string>
+    <string name="settings_about_body">MeoBrowser（Android）与 Mac MeoBrowser 通过同 Wi‑Fi 配对。默认不上传短信全文。同步与通知镜像经局域网明文通道，请在可信网络使用。</string>
+    <string name="sync_privacy_hint">同步总开关默认关闭。开启后，所选数据经已配对的局域网通道与 Mac 交换（当前为明文）。</string>
+    <string name="fgs_channel_name">Meo 互联</string>
 </resources>

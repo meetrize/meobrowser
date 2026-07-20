@@ -12,10 +12,11 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.meobrowser.companion.R
+import com.meobrowser.companion.browser.BrowserActivity
 import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.sms.PhoneNotificationPayload
-import com.meobrowser.companion.ui.MainActivity
+import com.meobrowser.companion.sync.SyncEngine
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
@@ -179,6 +180,7 @@ class CompanionConnectionService : Service() {
                 CompanionSession.statusText = "已配对 · $hostName（连接保持中）"
                 updateNotification(CompanionSession.statusText)
                 CompanionSession.notifyStatus()
+                SyncEngine.onConnected(applicationContext)
             }
             "otp_ok" -> {
                 CompanionSession.notifyStatus()
@@ -188,6 +190,9 @@ class CompanionConnectionService : Service() {
                 CompanionSession.lastSmsEvent =
                     if (id.isNotBlank()) "通知镜像已确认" else "通知镜像已确认"
                 CompanionSession.notifyStatus()
+            }
+            "sync_hello", "sync_pull", "sync_push", "sync_chunk", "sync_ack", "sync_error" -> {
+                SyncEngine.handleMessage(applicationContext, json)
             }
             "error" -> {
                 val message = json.optString("message")
@@ -256,7 +261,7 @@ class CompanionConnectionService : Service() {
         val open = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, BrowserActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -276,7 +281,11 @@ class CompanionConnectionService : Service() {
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(CHANNEL_ID, "Companion", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.fgs_channel_name),
+            NotificationManager.IMPORTANCE_LOW
+        )
         nm.createNotificationChannel(channel)
     }
 
