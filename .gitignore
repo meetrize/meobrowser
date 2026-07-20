@@ -1,3 +1,25 @@
-build/MeoBrowser.app/Contents/MacOS/MeoBrowser
+# macOS
 .DS_Store
 
+# MeoBrowser / AppKit 构建产物
+/build/
+
+# Android Companion — Gradle 缓存与本地 SDK 路径
+companion/android/**/.gradle/
+companion/android/**/local.properties
+companion/android/**/local.properties~
+
+# Android Companion — 模块构建输出
+companion/android/**/build/
+
+# Android Studio / IntelliJ
+companion/android/**/.idea/
+companion/android/**/*.iml
+companion/android/**/captures/
+companion/android/**/.cxx/
+companion/android/**/.externalNativeBuild/
+
+# 散落的 Android 安装包（一般在 app/build 内，双重保险）
+*.apk
+*.aab
+*.ap_

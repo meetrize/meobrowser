@@ -283,6 +283,50 @@ SimpleBrowser/Favicon/
 
 ---
 
+## Companion 手机通知镜像验收（NM-0～NM-2 · 2026-07-20）
+
+> 对照 [companion-notification-mirror-design.md](companion-notification-mirror-design.md) · [companion-notification-mirror-development-plan.md](companion-notification-mirror-development-plan.md) · [companion-protocol.md](companion-protocol.md) V2.1
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| Mac 编译 | `make browser`（含 UserNotifications） | 通过 |
+| Android 编译 | `companion/android/MeoCompanion` → `./gradlew assembleDebug` | 通过 |
+| 协议 V2.1 | `phone_notification` / `_ok` | 已文档化 |
+
+### 功能验收（逻辑 / 代码）
+
+| 测试项 | 状态 | 说明 |
+|--------|------|------|
+| 默认仅验证码 | 通过（逻辑） | `NotificationMirrorMode.OTP_ONLY` |
+| 全部模式需确认 | 通过（逻辑） | MainActivity 对话框 |
+| 噪音过滤 ongoing / 空内容 / 自身 | 通过（逻辑） | `NotificationNoiseFilter` |
+| 去重 60s + 限流 ~5/s | 通过（逻辑） | `NotificationMirrorGate` |
+| Mac 鉴权 + 一律 ack | 通过（逻辑） | `CompanionChannel` |
+| 标题前缀展示 | 通过（逻辑） | `PhoneNotificationPresenter` |
+| 关闭镜像仍 ack、不展示 | 通过（逻辑） | `mirrorEnabled` |
+| OTP 双弹抑制（3s） | 通过（逻辑） | 镜像后抑制验证码横幅 |
+| 前台也弹横幅 | 通过（逻辑） | `willPresentNotification` |
+| 未知 type 安全忽略 | 通过（逻辑） | 向前兼容 |
+
+### 手测清单（真机 · 待勾选）
+
+- [ ] 默认「仅验证码」：微信普通消息不出现在 Mac
+- [ ] 仅验证码：验证码仍可填入登录助手
+- [ ] 「全部通知」：普通通知 Mac 标题含 App 名
+- [ ] 全部 + 验证码通知：可填码且系统通知不双弹
+- [ ] 播放音乐等 ongoing 不推送
+- [ ] Mac 关「接收镜像」后不再弹（填码仍可用）
+- [ ] Mac 拒绝系统通知权限后填码仍可用
+- [ ] 断线后 Android 有节流后的「跳过」提示；重连后恢复
+
+### 结论
+
+**NM-0～NM-2 代码已落地**；上表手测项需同 Wi‑Fi 真机勾选（NM-3）。
+
+---
+
 ## 登录表单内联助手 V1.5 验收（IF-0～IF-3 · 2026-07-15）
 
 > 对照 [login-form-inline-design.md](login-form-inline-design.md) · [login-form-inline-development-plan.md](login-form-inline-development-plan.md)  

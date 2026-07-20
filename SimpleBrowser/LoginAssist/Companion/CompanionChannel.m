@@ -2,6 +2,7 @@
 #import "CompanionBonjourServer.h"
 #import "CompanionPairingStore.h"
 #import "OTPInbox.h"
+#import "PhoneNotificationPresenter.h"
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import <net/if.h>
@@ -251,6 +252,41 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self handleOTP:json connectionID:connectionID server:server];
         return;
     }
+    if ([type isEqualToString:@"phone_notification"]) {
+        [self handlePhoneNotification:json connectionID:connectionID server:server];
+        return;
+    }
+    // 未知 type：安全忽略（向前兼容）。
+}
+
+- (void)handlePhoneNotification:(NSDictionary *)json
+                   connectionID:(NSString *)connectionID
+                         server:(CompanionBonjourServer *)server {
+    NSString *deviceToken = json[@"deviceToken"];
+    NSString *payloadId = json[@"id"];
+    NSString *packageName = json[@"packageName"];
+    if (![deviceToken isKindOfClass:[NSString class]] ||
+        ![payloadId isKindOfClass:[NSString class]] || payloadId.length == 0 ||
+        ![packageName isKindOfClass:[NSString class]] || packageName.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"invalid phone_notification"}
+          toConnectionID:connectionID];
+        return;
+    }
+    if (![[CompanionPairingStore sharedStore] validateDeviceToken:deviceToken deviceId:nil]) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"unauthorized"}
+          toConnectionID:connectionID];
+        return;
+    }
+
+    [self.activeConnectionIDs addObject:connectionID];
+    // 无论是否展示，一律 ack，避免 Android 重试风暴
+    [[PhoneNotificationPresenter sharedPresenter] presentFromPayload:json];
+    [server sendJSON:@{
+        @"v": @1,
+        @"type": @"phone_notification_ok",
+        @"id": payloadId,
+    } toConnectionID:connectionID];
+    [self refreshConnectedState];
 }
 
 - (void)handleHello:(NSDictionary *)json
@@ -273,6 +309,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
                 @"deviceToken": deviceToken,
                 @"hostName": NSHost.currentHost.localizedName ?: @"MeoBrowser",
             } toConnectionID:connectionID];
+            [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
             [self refreshConnectedState];
             return;
         }
@@ -307,6 +344,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         @"deviceToken": issued,
         @"hostName": NSHost.currentHost.localizedName ?: @"MeoBrowser",
     } toConnectionID:connectionID];
+    [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
     [self refreshConnectedState];
 }
 
@@ -343,6 +381,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     }
     [self.activeConnectionIDs addObject:connectionID];
     [server sendJSON:@{@"v": @1, @"type": @"otp_ok"} toConnectionID:connectionID];
+    [[PhoneNotificationPresenter sharedPresenter] presentOTPBannerIfNeededWithCode:code];
     [self refreshConnectedState];
 }
 

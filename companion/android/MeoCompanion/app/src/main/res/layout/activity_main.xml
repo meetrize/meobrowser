@@ -172,6 +172,57 @@
             android:layout_marginBottom="12dp"
             android:background="#33000000" />
 
+        <!-- 通知镜像 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="通知镜像"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/mirrorModeHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/mirror_mode_hint_otp"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/mirrorModeGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/mirrorModeOtpOnly"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="16dp"
+                android:text="仅验证码" />
+
+            <RadioButton
+                android:id="@+id/mirrorModeAll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="全部通知" />
+        </RadioGroup>
+
+        <TextView
+            android:id="@+id/mirrorModeSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textSize="12sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="12dp"
+            android:background="#33000000" />
+
         <!-- 最近验证码：醒目 -->
         <TextView
             android:layout_width="match_parent"

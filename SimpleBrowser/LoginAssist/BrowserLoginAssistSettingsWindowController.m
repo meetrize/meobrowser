@@ -7,10 +7,13 @@
 #import "LoginAssistPreferences.h"
 #import "CompanionChannel.h"
 #import "CompanionPairingStore.h"
+#import "PhoneNotificationSettings.h"
+#import "PhoneNotificationPresenter.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#import <UserNotifications/UserNotifications.h>
 
 @interface BrowserLoginAssistSettingsWindowController () <NSTableViewDataSource, NSTableViewDelegate>
 @property (nonatomic, strong) NSTableView *tableView;
@@ -47,6 +50,10 @@
 @property (nonatomic, strong) NSButton *saveSecurityCodeButton;
 @property (nonatomic, strong) NSButton *changePortButton;
 @property (nonatomic, strong) NSTextField *companionHintLabel;
+@property (nonatomic, strong) NSButton *mirrorEnabledCheck;
+@property (nonatomic, strong) NSButton *otpBannerEnabledCheck;
+@property (nonatomic, strong) NSButton *openNotificationSettingsButton;
+@property (nonatomic, strong) NSTextField *mirrorHintLabel;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @property (nonatomic, copy, nullable) NSString *displayedPairingCode;
@@ -341,7 +348,28 @@
     self.companionHintLabel.textColor = [NSColor secondaryLabelColor];
     self.companionHintLabel.preferredMaxLayoutWidth = 460;
 
-    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"Android 仅上传验证码与时间戳，不上传短信全文。手机可填上方主机地址，或同 Wi‑Fi 用 Bonjour 发现。端口默认固定，仅手动确认后才会更换。"];
+    PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
+    self.mirrorEnabledCheck = [NSButton checkboxWithTitle:@"接收手机通知镜像（全部通知模式）"
+                                                   target:self
+                                                   action:@selector(mirrorSettingsChanged:)];
+    self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+
+    self.otpBannerEnabledCheck = [NSButton checkboxWithTitle:@"收到验证码时显示系统通知"
+                                                      target:self
+                                                      action:@selector(mirrorSettingsChanged:)];
+    self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+
+    self.openNotificationSettingsButton = [NSButton buttonWithTitle:@"打开系统通知设置…"
+                                                             target:self
+                                                             action:@selector(openSystemNotificationSettings:)];
+    self.openNotificationSettingsButton.bezelStyle = NSBezelStyleRounded;
+
+    self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀（如「微信 · …」）。手机端需在 Companion 选择「全部通知」。"];
+    self.mirrorHintLabel.font = [NSFont systemFontOfSize:11];
+    self.mirrorHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.mirrorHintLabel.preferredMaxLayoutWidth = 460;
+
+    NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"默认：Android 仅上传验证码与时间戳。手机开启「全部通知」后会上传通知标题与正文（同局域网明文）。端口默认固定，仅手动确认后才会更换。"];
     privacyNote.font = [NSFont systemFontOfSize:11];
     privacyNote.textColor = [NSColor secondaryLabelColor];
     privacyNote.preferredMaxLayoutWidth = 460;
@@ -388,6 +416,10 @@
         self.securityModeStack,
         revokeDevices,
         self.companionHintLabel,
+        self.mirrorEnabledCheck,
+        self.otpBannerEnabledCheck,
+        self.openNotificationSettingsButton,
+        self.mirrorHintLabel,
         privacyNote,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -885,6 +917,57 @@
         }
         self.refreshPairingButton.hidden = NO;
     }
+
+    PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
+    self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [self refreshNotificationPermissionHint];
+}
+
+- (void)mirrorSettingsChanged:(id)sender {
+    (void)sender;
+    PhoneNotificationSettings *settings = [PhoneNotificationSettings sharedSettings];
+    settings.mirrorEnabled = (self.mirrorEnabledCheck.state == NSControlStateValueOn);
+    settings.otpBannerEnabled = (self.otpBannerEnabledCheck.state == NSControlStateValueOn);
+    [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
+    [self refreshNotificationPermissionHint];
+}
+
+- (void)refreshNotificationPermissionHint {
+    if (@available(macOS 10.14, *)) {
+        UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+        [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings * _Nonnull settings) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                switch (settings.authorizationStatus) {
+                    case UNAuthorizationStatusAuthorized:
+                    case UNAuthorizationStatusProvisional:
+                        self.mirrorHintLabel.stringValue =
+                            @"系统通知已授权。左侧图标为本应用；来源看标题前缀。手机端需选择「全部通知」。";
+                        break;
+                    case UNAuthorizationStatusDenied:
+                        self.mirrorHintLabel.stringValue =
+                            @"系统通知权限已关闭：镜像不会弹出，验证码填入仍可用。请点「打开系统通知设置…」开启。";
+                        break;
+                    default:
+                        self.mirrorHintLabel.stringValue =
+                            @"尚未授权系统通知。勾选上方选项或点「打开系统通知设置…」后，首次镜像时会弹出授权。";
+                        break;
+                }
+            });
+        }];
+    }
+}
+
+- (void)openSystemNotificationSettings:(id)sender {
+    (void)sender;
+    NSURL *url = nil;
+    if (@available(macOS 13.0, *)) {
+        url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.Notifications-Settings.extension"];
+    }
+    if (!url) {
+        url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.notifications"];
+    }
+    [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 - (void)companionAuthModeChanged:(id)sender {

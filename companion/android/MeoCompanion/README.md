@@ -57,3 +57,16 @@ cd companion/android/MeoCompanion
 ## 隐私
 
 默认**不上传短信全文**，只传验证码、时间戳与设备 token。
+
+## 手机通知镜像（MVP）
+
+Companion 可选择「仅验证码 / 全部通知」；全部模式下过滤噪音后推送到 MeoBrowser，在 Mac 系统通知栏以标题前缀展示来源（图标仍为 MeoBrowser）。
+
+1. 手机与 Mac 已配对且连接保持中  
+2. Companion 首页切到「全部通知」并确认隐私提示  
+3. Mac「登录助手」确认已勾选「接收手机通知镜像」，并允许系统通知  
+4. 手机收到普通通知后，Mac 通知中心应出现「App名 · 标题」横幅  
+
+- 设计：[companion-notification-mirror-design.md](../../../docs/minimal-browser/companion-notification-mirror-design.md)
+- 开发计划：[companion-notification-mirror-development-plan.md](../../../docs/minimal-browser/companion-notification-mirror-development-plan.md)
+- 协议 V2.1：[companion-protocol.md](../../../docs/minimal-browser/companion-protocol.md)

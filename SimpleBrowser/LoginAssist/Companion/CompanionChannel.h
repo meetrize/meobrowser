@@ -10,7 +10,7 @@ typedef NS_ENUM(NSInteger, CompanionChannelState) {
 
 extern NSNotificationName const CompanionChannelStateDidChangeNotification;
 
-/// Bonjour 收码通道：hello 配对 → otp → OTPInbox。
+/// Bonjour 收码通道：hello 配对 → otp / phone_notification → OTPInbox / 系统通知。
 @interface CompanionChannel : NSObject
 
 @property (nonatomic, assign, readonly) CompanionChannelState state;

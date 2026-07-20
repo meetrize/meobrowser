@@ -71,6 +71,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPairingStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBonjourServer.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionChannel.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationSettings.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationPresenter.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistScriptMessageProxy.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \
@@ -109,7 +111,7 @@ CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
 BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool

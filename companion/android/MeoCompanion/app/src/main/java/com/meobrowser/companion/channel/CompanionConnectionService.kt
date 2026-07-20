@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import com.meobrowser.companion.R
 import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
+import com.meobrowser.companion.sms.PhoneNotificationPayload
 import com.meobrowser.companion.ui.MainActivity
 import org.json.JSONObject
 import java.util.concurrent.Executors
@@ -180,6 +181,12 @@ class CompanionConnectionService : Service() {
                 CompanionSession.notifyStatus()
             }
             "otp_ok" -> {
+                CompanionSession.notifyStatus()
+            }
+            "phone_notification_ok" -> {
+                val id = json.optString("id")
+                CompanionSession.lastSmsEvent =
+                    if (id.isNotBlank()) "通知镜像已确认" else "通知镜像已确认"
                 CompanionSession.notifyStatus()
             }
             "error" -> {
@@ -502,5 +509,87 @@ object CompanionSession {
         } else {
             CompanionConnectionService.sendOtp(context.applicationContext, code)
         }
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun pushPhoneNotification(context: Context, payload: PhoneNotificationPayload) {
+        executor.execute {
+            pushPhoneNotificationOnWorker(payload)
+        }
+    }
+
+    private fun pushPhoneNotificationOnWorker(payload: PhoneNotificationPayload) {
+        val svc = service
+        val prefs = if (svc != null) {
+            PairingPrefs(svc)
+        } else {
+            noteMirrorSkip("服务未就绪，已跳过通知镜像")
+            return
+        }
+        val token = prefs.deviceToken
+        if (token.isNullOrBlank()) {
+            noteMirrorSkip("尚未配对，已跳过通知镜像")
+            return
+        }
+        if (!client.isConnected) {
+            statusText = "连接已断，正在重连…"
+            notifyStatus()
+            try {
+                val host = prefs.lastHost
+                val port = prefs.lastPort
+                if (host.isNullOrBlank() || port <= 0) {
+                    noteMirrorSkip("未连接，已跳过通知镜像")
+                    return
+                }
+                client.connect(host, port)
+                val hello = JSONObject()
+                hello.put("v", 1)
+                hello.put("type", "hello")
+                hello.put("deviceId", prefs.deviceId)
+                hello.put("deviceToken", token)
+                client.send(hello)
+                Thread.sleep(350)
+            } catch (e: Exception) {
+                Log.e("MeoCompanion", "auto-reconnect for mirror failed", e)
+                noteMirrorSkip("重连失败，已跳过通知镜像")
+                return
+            }
+        }
+        if (!client.isConnected) {
+            noteMirrorSkip("未连接，已跳过通知镜像")
+            return
+        }
+        try {
+            client.send(payload.toJson(token))
+            lastSmsEvent = "已镜像通知 · ${payload.appLabel.ifBlank { payload.packageName }}"
+            if (!statusText.contains("连接保持中")) {
+                statusText = statusText
+                    .substringBefore("（")
+                    .trim()
+                    .ifEmpty { "已配对" } + "（连接保持中）"
+            }
+            notifyStatus()
+            Log.i(
+                "MeoCompanion",
+                "phone_notification pushed pkg=${payload.packageName} idLen=${payload.id.length} bodyLen=${payload.body.length}"
+            )
+        } catch (e: Exception) {
+            Log.e("MeoCompanion", "send phone_notification failed", e)
+            statusText = "通知镜像失败：${e.message}"
+            notifyStatus()
+        }
+    }
+
+    @Volatile
+    private var lastMirrorSkipAt: Long = 0L
+
+    private fun noteMirrorSkip(message: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastMirrorSkipAt < 8_000L) {
+            Log.i("MeoCompanion", "mirror skip (throttled): $message")
+            return
+        }
+        lastMirrorSkipAt = now
+        noteSmsEvent(message)
     }
 }

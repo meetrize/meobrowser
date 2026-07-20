@@ -15,6 +15,7 @@ import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
 import com.meobrowser.companion.databinding.ActivityMainBinding
 import com.meobrowser.companion.pairing.CompanionAuthMode
+import com.meobrowser.companion.pairing.NotificationMirrorMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.setup.SetupCheckItem
 import com.meobrowser.companion.setup.SetupChecker
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     private var readingRecentOtp = false
     private var showAllChecks = false
     private var didAutoConnect = false
+    private var suppressMirrorModeCallback = false
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -67,6 +69,7 @@ class MainActivity : AppCompatActivity() {
         SmsListenCoordinator.start(this)
         restoreConnectionForm()
         applyAuthModeUi()
+        applyMirrorModeUi(fromUser = false)
 
         binding.authModeGroup.setOnCheckedChangeListener { _, checkedId ->
             prefs.authMode = when (checkedId) {
@@ -75,6 +78,17 @@ class MainActivity : AppCompatActivity() {
             }
             applyAuthModeUi()
             persistCodeFromInput()
+        }
+
+        binding.mirrorModeGroup.setOnCheckedChangeListener { _, checkedId ->
+            if (suppressMirrorModeCallback) return@setOnCheckedChangeListener
+            when (checkedId) {
+                binding.mirrorModeAll.id -> confirmEnableAllMirror()
+                else -> {
+                    prefs.notificationMirrorMode = NotificationMirrorMode.OTP_ONLY
+                    applyMirrorModeUi(fromUser = true)
+                }
+            }
         }
 
         binding.toggleChecksButton.setOnClickListener {
@@ -87,7 +101,7 @@ class MainActivity : AppCompatActivity() {
             OtpNotificationListener.openSettings(this)
             Toast.makeText(
                 this,
-                "请找到 Meo Companion / Meo 验证码通知监听，打开开关后返回",
+                "请找到 Meo Companion / Meo 通知监听，打开开关后返回",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -177,6 +191,48 @@ class MainActivity : AppCompatActivity() {
             binding.pairingCodeInput.setText(code)
         } else if (!security) {
             binding.pairingCodeInput.text = null
+        }
+    }
+
+    private fun confirmEnableAllMirror() {
+        if (prefs.notificationMirrorMode == NotificationMirrorMode.ALL) {
+            applyMirrorModeUi(fromUser = false)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.mirror_all_confirm_title)
+            .setMessage(R.string.mirror_all_confirm_message)
+            .setPositiveButton("开启") { _, _ ->
+                prefs.notificationMirrorMode = NotificationMirrorMode.ALL
+                applyMirrorModeUi(fromUser = true)
+                Toast.makeText(this, "已开启全部通知镜像", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消") { _, _ ->
+                applyMirrorModeUi(fromUser = false)
+            }
+            .setOnCancelListener {
+                applyMirrorModeUi(fromUser = false)
+            }
+            .show()
+    }
+
+    private fun applyMirrorModeUi(fromUser: Boolean) {
+        val all = prefs.notificationMirrorMode == NotificationMirrorMode.ALL
+        suppressMirrorModeCallback = true
+        binding.mirrorModeAll.isChecked = all
+        binding.mirrorModeOtpOnly.isChecked = !all
+        suppressMirrorModeCallback = false
+        binding.mirrorModeHint.setText(
+            if (all) R.string.mirror_mode_hint_all else R.string.mirror_mode_hint_otp
+        )
+        val access = OtpNotificationListener.enabledDetail(this)
+        binding.mirrorModeSummary.text = if (all) {
+            getString(R.string.mirror_summary_all) + " · " + access
+        } else {
+            getString(R.string.mirror_summary_otp) + " · " + access
+        }
+        if (fromUser) {
+            // no-op; prefs already saved
         }
     }
 
@@ -278,7 +334,7 @@ class MainActivity : AppCompatActivity() {
                             "设置里虽显示已开启，但系统尚未把监听服务连上（重装 App 后很常见）。\n\n" +
                                 "请按下列步骤操作：\n" +
                                 "1. 点「去设置」\n" +
-                                "2. 关闭 Meo Companion / Meo 验证码通知监听\n" +
+                                "2. 关闭 Meo Companion / Meo 通知监听\n" +
                                 "3. 再重新打开\n" +
                                 "4. 返回 App，看状态是否变为「已开启且已连接」\n" +
                                 "5. 再点「从通知栏重新读取并推送」"
@@ -411,6 +467,7 @@ class MainActivity : AppCompatActivity() {
             else ->
                 "通知使用权未连接（点此开关一次）"
         }
+        applyMirrorModeUi(fromUser = false)
         OtpNotificationListener.ensureBound(this)
         // 从向导返回或再次进入前台时，安全码模式补一次自动连接
         if (!SetupChecker.shouldAutoShowWizard(this)) {

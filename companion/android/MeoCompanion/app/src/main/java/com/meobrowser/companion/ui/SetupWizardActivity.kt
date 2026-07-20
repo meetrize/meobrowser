@@ -126,7 +126,7 @@ class SetupWizardActivity : AppCompatActivity() {
                 binding.wizardHeadline.text = "② 通知使用权（小米必开）"
                 binding.wizardBody.text =
                     "小米会把服务号短信放进「智能短信」，第三方读不到短信库，也收不到短信广播。\n\n" +
-                        "请开启「通知使用权 / 通知读取」：系统会列出「Meo Companion」或「Meo 验证码通知监听」，打开开关。\n\n" +
+                        "请开启「通知使用权 / 通知读取」：系统会列出「Meo Companion」或「Meo 通知监听」，打开开关。\n\n" +
                         "开启后，通知栏出现验证码时会自动解析并推送到 Mac。"
                 binding.wizardStatus.text = if (ok) "状态：已开启 ✓" else "状态：未开启 ✗"
                 binding.wizardActionButton.text = if (ok) "已完成，可下一步" else "打开通知使用权设置"

@@ -14,6 +14,18 @@ enum class CompanionAuthMode {
     }
 }
 
+/** 通知镜像模式：默认仅验证码。 */
+enum class NotificationMirrorMode {
+    OTP_ONLY,
+    ALL;
+
+    companion object {
+        fun fromStorage(value: String?): NotificationMirrorMode {
+            return if (value == ALL.name) ALL else OTP_ONLY
+        }
+    }
+}
+
 class PairingPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("meo_companion", Context.MODE_PRIVATE)
 
@@ -53,6 +65,11 @@ class PairingPrefs(context: Context) {
         get() = CompanionAuthMode.fromStorage(prefs.getString(KEY_AUTH_MODE, null))
         set(value) = prefs.edit().putString(KEY_AUTH_MODE, value.name).apply()
 
+    /** 通知镜像：仅验证码（默认）/ 全部通知 */
+    var notificationMirrorMode: NotificationMirrorMode
+        get() = NotificationMirrorMode.fromStorage(prefs.getString(KEY_NOTIF_MIRROR_MODE, null))
+        set(value) = prefs.edit().putString(KEY_NOTIF_MIRROR_MODE, value.name).apply()
+
     /** 上次在表单里填写的手动主机，如 192.168.1.10:12345 */
     var lastHostOverride: String?
         get() = prefs.getString(KEY_LAST_HOST_OVERRIDE, null)
@@ -90,5 +107,6 @@ class PairingPrefs(context: Context) {
         private const val KEY_LAST_HOST_OVERRIDE = "last_host_override"
         private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_SECURITY_CODE = "security_code"
+        private const val KEY_NOTIF_MIRROR_MODE = "notification_mirror_mode"
     }
 }

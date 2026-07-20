@@ -4,5 +4,11 @@
     <string name="pair_hint">在 MeoBrowser「登录助手」中查看配对码或设定安全码，选择相同连接方式后连接。</string>
     <string name="pair_hint_pairing">临时配对码：在 Mac「登录助手」复制 6 位码（5 分钟有效），输入后连接。</string>
     <string name="pair_hint_security">固定安全码：与 Mac 设定的安全码一致；保存主机地址后，打开 App 会自动连接。</string>
-    <string name="privacy_note">仅上传验证码与时间戳，不上传短信全文。</string>
+    <string name="privacy_note">默认仅上传验证码与时间戳。开启「全部通知」后会上传通知标题与正文到已配对的 Mac（同局域网明文通道）。</string>
+    <string name="mirror_mode_hint_otp">仅把验证码推到 Mac，用于登录自动填入。</string>
+    <string name="mirror_mode_hint_all">将过滤后的手机通知镜像到 Mac 系统通知栏（标题带 App 名前缀）。</string>
+    <string name="mirror_all_confirm_title">开启全部通知镜像？</string>
+    <string name="mirror_all_confirm_message">将把通知的标题与正文发送到已配对的 MeoBrowser（同 Wi‑Fi，当前为明文）。请勿在不可信网络开启。可随时切回「仅验证码」。</string>
+    <string name="mirror_summary_otp">当前：仅验证码</string>
+    <string name="mirror_summary_all">当前：全部通知（已过滤噪音）</string>
 </resources>

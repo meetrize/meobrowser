@@ -12,13 +12,15 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.meobrowser.companion.channel.CompanionSession
+import com.meobrowser.companion.pairing.NotificationMirrorMode
+import com.meobrowser.companion.pairing.PairingPrefs
 
 /**
- * 小米等机型上，服务号/智能短信往往不进 content://sms、也不投递 SMS_RECEIVED，
- * 但会在通知栏展示全文。通过通知使用权抓取验证码。
+ * 通知使用权监听：
+ * - 仅验证码：筛 OTP 相关通知并推码（小米服务号等）
+ * - 全部通知：过滤噪音后镜像到 Mac，若像验证码再推 otp
  *
- * 注意：设置里「已开启」≠ 服务已连接。重装 App 后常需 requestRebind，
- * 或用户开关一次通知使用权。
+ * 注意：设置里「已开启」≠ 服务已连接。重装 App 后常需 requestRebind。
  */
 class OtpNotificationListener : NotificationListenerService() {
 
@@ -46,7 +48,6 @@ class OtpNotificationListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         Log.w(TAG, "notification listener disconnected")
         if (instance === this) instance = null
-        // 系统断开后主动请求重绑（小米重装/杀进程后很常见）
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 requestRebind(ComponentName(this, OtpNotificationListener::class.java))
@@ -67,7 +68,7 @@ class OtpNotificationListener : NotificationListenerService() {
         handleSbn(sbn, force = false)
     }
 
-    /** 手动扫描当前通知栏，返回命中并推送的条数 */
+    /** 手动扫描当前通知栏，返回命中并推送的条数（验证码兴趣） */
     fun scanActiveNotifications(force: Boolean = true): Int {
         val list = try {
             activeNotifications ?: emptyArray()
@@ -78,7 +79,7 @@ class OtpNotificationListener : NotificationListenerService() {
         var hits = 0
         val sorted = list.sortedByDescending { it.postTime }
         for (sbn in sorted) {
-            if (handleSbn(sbn, force = force)) {
+            if (handleSbn(sbn, force = force, otpScanOnly = true)) {
                 hits++
                 if (force) break
             }
@@ -86,29 +87,52 @@ class OtpNotificationListener : NotificationListenerService() {
         return hits
     }
 
-    private fun handleSbn(sbn: StatusBarNotification, force: Boolean): Boolean {
+    /**
+     * @param otpScanOnly 手动「重新读取」时只走验证码路径，不刷全部镜像
+     * @return 是否作为验证码候选处理成功（镜像推送不计入）
+     */
+    private fun handleSbn(
+        sbn: StatusBarNotification,
+        force: Boolean,
+        otpScanOnly: Boolean = false,
+    ): Boolean {
         if (sbn.packageName == packageName) return false
-        val n = sbn.notification ?: return false
-        val extras = n.extras ?: return false
-        val title = extras.charSeq(Notification.EXTRA_TITLE)
-        val text = extras.charSeq(Notification.EXTRA_TEXT)
-        val big = extras.charSeq(Notification.EXTRA_BIG_TEXT)
-        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-            ?.joinToString("\n") { it?.toString().orEmpty() }
-            .orEmpty()
-        val sub = extras.charSeq(Notification.EXTRA_SUB_TEXT)
-        val body = listOf(title, text, big, lines, sub)
-            .filter { it.isNotBlank() }
-            .joinToString("\n")
-        if (body.isBlank()) return false
 
-        val interesting =
-            OtpParser.looksLikeOtpSms(body) ||
-                body.contains("深度求索") ||
-                body.contains("验证码") ||
-                body.contains("驗證碼") ||
-                body.contains("106866")
-        if (!interesting) return false
+        val mode = PairingPrefs(applicationContext).notificationMirrorMode
+        val mirrorAll = !otpScanOnly && mode == NotificationMirrorMode.ALL
+
+        if (mirrorAll) {
+            if (NotificationNoiseFilter.shouldSkip(sbn, packageName)) {
+                return false
+            }
+            val payload = NotificationPayloadBuilder.build(applicationContext, sbn)
+            if (payload != null) {
+                if (NotificationMirrorGate.tryAdmit(payload.id)) {
+                    CompanionSession.pushPhoneNotification(applicationContext, payload)
+                } else {
+                    Log.i(TAG, "mirror gated id=${payload.id}")
+                }
+            }
+            // 全部模式：仍尝试 OTP
+            val body = combinedBody(sbn)
+            if (body.isNotBlank() && looksInterestingForOtp(body)) {
+                Log.i(TAG, "notif otp candidate pkg=${sbn.packageName} len=${body.length} force=$force")
+                SmsOtpHandler.onIncomingSms(
+                    applicationContext,
+                    address = sbn.packageName,
+                    body = body,
+                    source = if (force) "notification-rescan" else "notification",
+                    force = force
+                )
+                return true
+            }
+            return false
+        }
+
+        // 仅验证码
+        val body = combinedBody(sbn)
+        if (body.isBlank()) return false
+        if (!looksInterestingForOtp(body)) return false
 
         Log.i(TAG, "notif otp candidate pkg=${sbn.packageName} len=${body.length} force=$force")
         SmsOtpHandler.onIncomingSms(
@@ -119,6 +143,29 @@ class OtpNotificationListener : NotificationListenerService() {
             force = force
         )
         return true
+    }
+
+    private fun combinedBody(sbn: StatusBarNotification): String {
+        val n = sbn.notification ?: return ""
+        val extras = n.extras ?: return ""
+        val title = extras.charSeq(Notification.EXTRA_TITLE)
+        val text = extras.charSeq(Notification.EXTRA_TEXT)
+        val big = extras.charSeq(Notification.EXTRA_BIG_TEXT)
+        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.joinToString("\n") { it?.toString().orEmpty() }
+            .orEmpty()
+        val sub = extras.charSeq(Notification.EXTRA_SUB_TEXT)
+        return listOf(title, text, big, lines, sub)
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+    }
+
+    private fun looksInterestingForOtp(body: String): Boolean {
+        return OtpParser.looksLikeOtpSms(body) ||
+            body.contains("深度求索") ||
+            body.contains("验证码") ||
+            body.contains("驗證碼") ||
+            body.contains("106866")
     }
 
     private fun android.os.Bundle.charSeq(key: String): String {
@@ -155,7 +202,6 @@ class OtpNotificationListener : NotificationListenerService() {
             return ComponentName(context, OtpNotificationListener::class.java)
         }
 
-        /** 设置已开但服务未连时，请求系统重新绑定 */
         fun ensureBound(context: Context) {
             if (instance != null) return
             if (!isEnabled(context)) return
@@ -230,17 +276,12 @@ class OtpNotificationListener : NotificationListenerService() {
                     -3
                 }
             }
-            // 设置开着但服务没连上：排队 + 重绑
             pendingRescan = true
             ensureBound(context)
             CompanionSession.noteSmsEvent("通知服务未连接，已请求重连并排队扫描…")
             return -2
         }
 
-        /**
-         * 带重试的扫描：若正在重连，轮询等待连接后再扫。
-         * [onResult] 在主线程回调。
-         */
         fun rescanAndPushWithRetry(
             context: Context,
             attempts: Int = 8,
@@ -260,7 +301,6 @@ class OtpNotificationListener : NotificationListenerService() {
                     onResult(-1)
                     return
                 }
-                // -2 / -3：再等等
                 if (left <= 0) {
                     onResult(hits)
                     return
