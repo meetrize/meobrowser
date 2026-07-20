@@ -13,7 +13,12 @@ class BrowserPrefs(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_LOW_MEM, value).apply()
 
     var maxTabs: Int
-        get() = prefs.getInt(KEY_MAX_TABS, TabManager.DEFAULT_MAX).coerceIn(2, TabManager.HARD_MAX)
+        get() {
+            // 旧版默认 8、硬顶 12；升级后统一抬到新默认，避免仍卡在旧上限
+            val stored = prefs.getInt(KEY_MAX_TABS, TabManager.DEFAULT_MAX)
+            val effective = if (stored < TabManager.DEFAULT_MAX) TabManager.DEFAULT_MAX else stored
+            return effective.coerceIn(2, TabManager.HARD_MAX)
+        }
         set(value) = prefs.edit().putInt(KEY_MAX_TABS, value.coerceIn(2, TabManager.HARD_MAX)).apply()
 
     var desktopUa: Boolean

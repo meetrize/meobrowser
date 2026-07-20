@@ -31,30 +31,12 @@
             android:background="#33000000" />
 
         <TextView
-            android:id="@+id/openLinkSettings"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="?attr/selectableItemBackground"
-            android:paddingVertical="12dp"
-            android:text="@string/settings_section_link"
-            android:textSize="16sp" />
-
-        <TextView
             android:id="@+id/openNotificationSettings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="?attr/selectableItemBackground"
             android:paddingVertical="12dp"
             android:text="@string/settings_section_notification"
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/openSyncSettings"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="?attr/selectableItemBackground"
-            android:paddingVertical="12dp"
-            android:text="@string/settings_section_sync"
             android:textSize="16sp" />
 
         <TextView

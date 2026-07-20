@@ -70,7 +70,7 @@ class PairingPrefs(context: Context) {
         get() = NotificationMirrorMode.fromStorage(prefs.getString(KEY_NOTIF_MIRROR_MODE, null))
         set(value) = prefs.edit().putString(KEY_NOTIF_MIRROR_MODE, value.name).apply()
 
-    /** 启动浏览器时是否自动用安全码连接（默认开） */
+    /** 启动浏览器时是否自动连接（默认开） */
     var autoConnectOnLaunch: Boolean
         get() = prefs.getBoolean(KEY_AUTO_CONNECT, true)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_CONNECT, value).apply()
@@ -87,12 +87,25 @@ class PairingPrefs(context: Context) {
         return lastHostOverride
     }
 
-    /** 是否具备安全码模式下自动连接的条件 */
+    fun hasSavedHost(): Boolean =
+        (!lastHost.isNullOrBlank() && lastPort > 0) || !lastHostOverride.isNullOrBlank()
+
+    /** 安全码模式下是否具备自动连接条件（兼容旧调用） */
     fun canAutoConnectSecurityMode(): Boolean {
         if (authMode != CompanionAuthMode.SECURITY_CODE) return false
         val hasCred = !deviceToken.isNullOrBlank() || !securityCode.isNullOrBlank()
-        val hasHost = (!lastHost.isNullOrBlank() && lastPort > 0) || !lastHostOverride.isNullOrBlank()
-        return hasCred && hasHost
+        return hasCred && hasSavedHost()
+    }
+
+    /**
+     * 是否应自动连接：开关默认开；已保存主机，且有 deviceToken 或（安全码模式+安全码）。
+     * 配对码模式成功后也会靠 token 自动重连。
+     */
+    fun canAutoConnect(): Boolean {
+        if (!autoConnectOnLaunch) return false
+        if (!hasSavedHost()) return false
+        if (!deviceToken.isNullOrBlank()) return true
+        return authMode == CompanionAuthMode.SECURITY_CODE && !securityCode.isNullOrBlank()
     }
 
     fun clearSession() {

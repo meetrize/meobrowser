@@ -278,10 +278,9 @@ class MainActivity : AppCompatActivity() {
     private fun maybeAutoConnect() {
         if (didAutoConnect) return
         if (CompanionSession.client.isConnected) return
-        if (prefs.authMode != CompanionAuthMode.SECURITY_CODE) return
-        if (!prefs.canAutoConnectSecurityMode()) return
+        if (!prefs.canAutoConnect()) return
         didAutoConnect = true
-        CompanionSession.statusText = "安全码模式：自动连接中…"
+        CompanionSession.statusText = "自动连接中…"
         CompanionSession.notifyStatus()
         binding.statusText.text = "状态：${CompanionSession.statusText}"
         connectFromForm(manual = false)

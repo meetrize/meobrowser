@@ -40,6 +40,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.meobrowser.companion.R
 import com.meobrowser.companion.browser.download.DownloadHub
 import com.meobrowser.companion.browser.newtab.ShortcutGridAdapter
+import com.meobrowser.companion.browser.newtab.ShortcutIconHelper
 import com.meobrowser.companion.browser.newtab.ShortcutItem
 import com.meobrowser.companion.browser.newtab.ShortcutStore
 import com.meobrowser.companion.browser.store.BookmarkStore
@@ -53,6 +54,8 @@ import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.settings.SettingsActivity
 import com.meobrowser.companion.sms.SmsListenCoordinator
 import com.meobrowser.companion.sync.SyncEngine
+import com.meobrowser.companion.sync.SyncPrefs
+import com.meobrowser.companion.ui.MainActivity
 
 class BrowserActivity : AppCompatActivity() {
     private lateinit var binding: ActivityBrowserBinding
@@ -82,6 +85,7 @@ class BrowserActivity : AppCompatActivity() {
         historyStore = HistoryStore(this)
         bookmarkStore = BookmarkStore(this)
         downloadHub = DownloadHub(this)
+        ShortcutIconHelper.init(this)
         tabManager = TabManager(browserPrefs.maxTabs)
         SmsListenCoordinator.start(this)
 
@@ -160,15 +164,15 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun maybeAutoConnect() {
         if (didAutoConnect) return
-        if (!pairingPrefs.autoConnectOnLaunch) return
         if (CompanionSession.client.isConnected) return
-        if (!pairingPrefs.canAutoConnectSecurityMode()) return
+        if (!pairingPrefs.canAutoConnect()) return
         didAutoConnect = true
-        CompanionSession.statusText = "安全码模式：自动连接中…"
+        CompanionSession.statusText = "自动连接中…"
         CompanionSession.notifyStatus()
+        val useToken = !pairingPrefs.deviceToken.isNullOrBlank()
         CompanionConnectionService.startConnect(
             this,
-            pairingCode = if (pairingPrefs.deviceToken.isNullOrBlank()) pairingPrefs.securityCode else null,
+            pairingCode = if (useToken) null else pairingPrefs.securityCode,
             hostOverride = pairingPrefs.lastHostOverride,
             forceSecurityCode = pairingPrefs.securityCode
         )
@@ -181,23 +185,55 @@ class BrowserActivity : AppCompatActivity() {
     private fun showOverflowMenu() {
         val popup = PopupMenu(this, binding.overflowButton)
         popup.menu.add(0, 1, 0, getString(R.string.menu_bookmark))
-        popup.menu.add(0, 2, 0, getString(R.string.menu_settings))
-        popup.menu.add(0, 3, 0, getString(R.string.menu_find))
-        popup.menu.add(0, 4, 0, getString(R.string.menu_add_to_home))
-        popup.menu.add(0, 5, 0, getString(R.string.menu_share))
-        popup.menu.add(0, 6, 0, getString(R.string.menu_send_to_mac))
+        popup.menu.add(0, 2, 0, getString(R.string.menu_link))
+        popup.menu.add(0, 3, 0, getString(R.string.menu_sync))
+        popup.menu.add(0, 4, 0, getString(R.string.menu_sync_now))
+        popup.menu.add(0, 5, 0, getString(R.string.menu_settings))
+        popup.menu.add(0, 6, 0, getString(R.string.menu_find))
+        popup.menu.add(0, 7, 0, getString(R.string.menu_add_to_home))
+        popup.menu.add(0, 8, 0, getString(R.string.menu_share))
+        popup.menu.add(0, 9, 0, getString(R.string.menu_send_to_mac))
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> addBookmark()
-                2 -> startActivity(Intent(this, SettingsActivity::class.java))
-                3 -> findInPage()
-                4 -> addToHomeScreen()
-                5 -> shareCurrent()
-                6 -> sendToMac()
+                2 -> startActivity(Intent(this, MainActivity::class.java))
+                3 -> startActivity(
+                    Intent(this, SettingsActivity::class.java)
+                        .putExtra(SettingsActivity.EXTRA_SECTION, SettingsActivity.SECTION_SYNC)
+                )
+                4 -> syncNowFromMenu()
+                5 -> startActivity(Intent(this, SettingsActivity::class.java))
+                6 -> findInPage()
+                7 -> addToHomeScreen()
+                8 -> shareCurrent()
+                9 -> sendToMac()
             }
             true
         }
         popup.show()
+    }
+
+    private fun syncNowFromMenu() {
+        val syncPrefs = SyncPrefs(this)
+        if (!syncPrefs.enabled) {
+            Toast.makeText(this, "请先在「自动同步」中打开同步开关", Toast.LENGTH_SHORT).show()
+            startActivity(
+                Intent(this, SettingsActivity::class.java)
+                    .putExtra(SettingsActivity.EXTRA_SECTION, SettingsActivity.SECTION_SYNC)
+            )
+            return
+        }
+        if (!syncPrefs.syncShortcuts && !syncPrefs.syncHistory && !syncPrefs.syncBookmarks) {
+            syncPrefs.syncShortcuts = true
+        }
+        Toast.makeText(this, "正在同步…", Toast.LENGTH_SHORT).show()
+        Thread {
+            val result = SyncEngine.syncNow(this)
+            runOnUiThread {
+                Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+                if (result.ok) refreshShortcutGrid()
+            }
+        }.start()
     }
 
     private fun showToolsSheet() {
@@ -646,6 +682,8 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun refreshShortcutGrid() {
         val items = shortcutStore.loadActive()
+        // 后台预热磁盘/网络图标，网格滚动时更快命中内存
+        ShortcutIconHelper.prefetch(items)
         binding.newTabGrid.adapter = ShortcutGridAdapter(items, onOpen = { item ->
             navigate(item.url)
         }, onLong = { item ->
@@ -666,42 +704,139 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun editShortcut(existing: ShortcutItem?) {
-        val titleInput = EditText(this).apply {
-            hint = "标题"
-            setText(existing?.title.orEmpty())
+        val view = layoutInflater.inflate(R.layout.dialog_edit_shortcut, null)
+        val titleInput = view.findViewById<EditText>(R.id.shortcutTitleInput)
+        val urlInput = view.findViewById<EditText>(R.id.shortcutUrlInput)
+        val iconUrlInput = view.findViewById<EditText>(R.id.shortcutIconUrlInput)
+        val preview = view.findViewById<android.widget.ImageView>(R.id.shortcutIconPreview)
+        val letter = view.findViewById<TextView>(R.id.shortcutIconLetter)
+        val fetchBtn = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.shortcutFetchIconButton)
+        val errorView = view.findViewById<TextView>(R.id.shortcutEditError)
+
+        titleInput.setText(existing?.title.orEmpty())
+        urlInput.setText(existing?.url.orEmpty())
+        iconUrlInput.setText(existing?.iconURL.orEmpty())
+
+        fun showError(msg: String?) {
+            if (msg.isNullOrBlank()) {
+                errorView.visibility = View.GONE
+                errorView.text = ""
+            } else {
+                errorView.visibility = View.VISIBLE
+                errorView.text = msg
+            }
         }
-        val urlInput = EditText(this).apply {
-            hint = "URL"
-            setText(existing?.url.orEmpty())
+
+        fun applyPreview(cached: ShortcutIconHelper.CachedIcon?) {
+            if (cached == null) {
+                preview.setImageDrawable(null)
+                letter.visibility = View.VISIBLE
+                letter.text = ShortcutIconHelper.letter(
+                    titleInput.text?.toString().orEmpty(),
+                    urlInput.text?.toString().orEmpty()
+                )
+            } else {
+                letter.visibility = View.GONE
+                val pad = if (cached.fit == ShortcutIconHelper.FitStyle.INSET) {
+                    (6 * resources.displayMetrics.density).toInt()
+                } else 0
+                preview.setPadding(pad, pad, pad, pad)
+                preview.scaleType = if (cached.fit == ShortcutIconHelper.FitStyle.INSET) {
+                    android.widget.ImageView.ScaleType.FIT_CENTER
+                } else {
+                    android.widget.ImageView.ScaleType.CENTER_CROP
+                }
+                preview.setImageBitmap(cached.bitmap)
+            }
         }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 20, 40, 0)
-            addView(titleInput)
-            addView(urlInput)
+
+        fun refreshPreview() {
+            letter.visibility = View.VISIBLE
+            letter.text = ShortcutIconHelper.letter(
+                titleInput.text?.toString().orEmpty(),
+                urlInput.text?.toString().orEmpty()
+            )
+            preview.setImageDrawable(null)
+            ShortcutIconHelper.loadPreview(
+                urlInput.text?.toString().orEmpty(),
+                iconUrlInput.text?.toString().orEmpty()
+            ) { cached ->
+                applyPreview(cached)
+            }
         }
-        AlertDialog.Builder(this)
+
+        refreshPreview()
+
+        fetchBtn.setOnClickListener {
+            val pageUrl = UrlNavigator.normalize(urlInput.text?.toString().orEmpty())
+            if (UrlNavigator.isNewTabUrl(pageUrl) || pageUrl.isBlank()) {
+                showError("请先输入有效的网址，再自动获取图标")
+                return@setOnClickListener
+            }
+            showError(null)
+            fetchBtn.isEnabled = false
+            fetchBtn.text = getString(R.string.shortcut_fetch_icon_busy)
+            ShortcutIconHelper.fetchForEditor(
+                pageUrl,
+                iconUrlInput.text?.toString()
+            ) { ok, iconUrl, cached, message ->
+                fetchBtn.isEnabled = true
+                fetchBtn.text = getString(R.string.shortcut_fetch_icon)
+                if (!ok || iconUrl == null || cached == null) {
+                    showError(message)
+                    return@fetchForEditor
+                }
+                iconUrlInput.setText(iconUrl)
+                applyPreview(cached)
+                showError(null)
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val dialog = AlertDialog.Builder(this)
             .setTitle(if (existing == null) "添加快捷方式" else "编辑快捷方式")
-            .setView(box)
-            .setPositiveButton("保存") { _, _ ->
+            .setView(view)
+            .setPositiveButton("保存", null)
+            .setNegativeButton("取消", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val title = titleInput.text?.toString()?.trim().orEmpty()
                 val url = UrlNavigator.normalize(urlInput.text?.toString().orEmpty())
-                if (title.isBlank() || UrlNavigator.isNewTabUrl(url)) {
-                    Toast.makeText(this, "请填写标题与有效 URL", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
+                val iconRaw = iconUrlInput.text?.toString()?.trim().orEmpty()
+                if (title.isBlank()) {
+                    showError("请输入名称")
+                    return@setOnClickListener
+                }
+                if (UrlNavigator.isNewTabUrl(url) || url.isBlank()) {
+                    showError("请输入有效的网址")
+                    return@setOnClickListener
+                }
+                val iconURL = when {
+                    iconRaw.isBlank() -> ""
+                    iconRaw.startsWith("http://") || iconRaw.startsWith("https://") -> iconRaw
+                    else -> {
+                        showError("请输入有效的图标链接（http/https）")
+                        return@setOnClickListener
+                    }
                 }
                 val order = existing?.order ?: shortcutStore.loadActive().size
                 val item = (existing ?: ShortcutItem(title = title, url = url, order = order)).copy(
                     title = title,
                     url = url,
-                    order = order
+                    iconURL = iconURL,
+                    order = order,
+                    updatedAt = System.currentTimeMillis() / 1000,
+                    deviceId = shortcutStore.deviceId()
                 )
                 shortcutStore.upsert(item)
                 refreshShortcutGrid()
                 SyncEngine.schedulePush(this)
+                dialog.dismiss()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
+        dialog.show()
     }
 
     private class TabsSheetAdapter(

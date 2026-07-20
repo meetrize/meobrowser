@@ -74,7 +74,7 @@ class TabManager(
     }
 
     companion object {
-        const val DEFAULT_MAX = 8
-        const val HARD_MAX = 12
+        const val DEFAULT_MAX = 50
+        const val HARD_MAX = 50
     }
 }

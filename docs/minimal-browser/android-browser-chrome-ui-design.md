@@ -35,6 +35,9 @@
 | 项 | 行为 |
 |----|------|
 | 存为书签 | 当前页写入 `BookmarkStore` |
+| 互联与配对 | 打开 Companion 配对页（`MainActivity`） |
+| 自动同步 | 打开同步设置（开关 / 快捷方式·历史·书签） |
+| 立即同步 | 按已启用项立即与 Mac 同步 |
 | 设置 | 打开 `SettingsActivity` |
 | 查找 | 页内查找对话框 |
 | 添加到桌面 | `ShortcutManager` 固定快捷方式 |

@@ -11,24 +11,27 @@
     android:focusable="true"
     android:background="?attr/selectableItemBackgroundBorderless">
 
+    <!-- elevation 需要不透明背景；阴影落在圆角矩形上 -->
     <FrameLayout
+        android:id="@+id/shortcutIconFrame"
         android:layout_width="56dp"
-        android:layout_height="56dp">
+        android:layout_height="56dp"
+        android:background="@drawable/bg_shortcut_icon_white"
+        android:elevation="5dp"
+        android:outlineProvider="background"
+        android:clipToOutline="true">
 
         <ImageView
             android:id="@+id/shortcutIcon"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:background="@drawable/bg_shortcut_icon"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:contentDescription="@null"
-            android:padding="12dp"
             android:scaleType="centerCrop" />
 
         <TextView
             android:id="@+id/shortcutLetter"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:background="@drawable/bg_shortcut_icon"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:gravity="center"
             android:textColor="#FFFFFFFF"
             android:textSize="22sp"

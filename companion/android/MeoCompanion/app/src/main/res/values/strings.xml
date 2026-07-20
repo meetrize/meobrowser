@@ -31,6 +31,9 @@
     <string name="tools_collapse">收起</string>
     <string name="menu_bookmark">存为书签</string>
     <string name="menu_settings">设置</string>
+    <string name="menu_link">互联与配对</string>
+    <string name="menu_sync">自动同步</string>
+    <string name="menu_sync_now">立即同步</string>
     <string name="menu_find">查找</string>
     <string name="menu_add_to_home">添加到桌面</string>
     <string name="menu_share">分享</string>
@@ -48,4 +51,12 @@
     <string name="settings_about_body">MeoBrowser（Android）与 Mac MeoBrowser 通过同 Wi‑Fi 配对。默认不上传短信全文。同步与通知镜像经局域网明文通道，请在可信网络使用。</string>
     <string name="sync_privacy_hint">同步总开关默认关闭。开启后，所选数据经已配对的局域网通道与 Mac 交换（当前为明文）。</string>
     <string name="fgs_channel_name">Meo 互联</string>
+    <string name="shortcut_field_title">名称</string>
+    <string name="shortcut_field_url">网址</string>
+    <string name="shortcut_field_icon">图标链接</string>
+    <string name="shortcut_hint_title">标题</string>
+    <string name="shortcut_hint_url">https://example.com</string>
+    <string name="shortcut_hint_icon">https://example.com/favicon.ico（可选）</string>
+    <string name="shortcut_fetch_icon">自动获取</string>
+    <string name="shortcut_fetch_icon_busy">获取中…</string>
 </resources>

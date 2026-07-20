@@ -72,9 +72,7 @@ class SettingsHomeFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val binding = FragmentSettingsHomeBinding.inflate(inflater, container, false)
         val act = activity as SettingsActivity
-        binding.openLinkSettings.setOnClickListener { act.openCompanion() }
         binding.openNotificationSettings.setOnClickListener { act.openCompanion() }
-        binding.openSyncSettings.setOnClickListener { act.showFragment(SyncSettingsFragment()) }
         binding.openDownloadSettings.setOnClickListener { act.showFragment(DownloadsFragment()) }
         binding.openHistory.setOnClickListener { act.showFragment(HistoryFragment()) }
         binding.openBookmarks.setOnClickListener { act.showFragment(BookmarksFragment()) }
@@ -84,7 +82,7 @@ class SettingsHomeFragment : Fragment() {
         binding.generalSummary.text = buildString {
             append(getString(R.string.settings_general_hint))
             append("\n\n")
-            append("省内存模式：${if (browserPrefs.lowMemoryMode) "开" else "关"}（见同步页下方）\n")
+            append("省内存模式：${if (browserPrefs.lowMemoryMode) "开" else "关"}（⋮ → 自动同步）\n")
             append("标签上限：${browserPrefs.maxTabs}\n")
             append("启动自动连接：${if (pairingPrefs.autoConnectOnLaunch) "开" else "关"}")
         }
@@ -123,6 +121,7 @@ class SyncSettingsFragment : Fragment() {
         root.addSwitch("启动时自动连接 Mac", pairingPrefs.autoConnectOnLaunch) {
             pairingPrefs.autoConnectOnLaunch = it
         }
+        root.addBody("默认开启。已配对或已存安全码、且保存过主机地址时，打开浏览器会自动连接。")
         root.addSwitch("省内存模式", browserPrefs.lowMemoryMode) { browserPrefs.lowMemoryMode = it }
 
         val connected = CompanionSession.client.isConnected
@@ -131,12 +130,14 @@ class SyncSettingsFragment : Fragment() {
         } else "尚未同步"
         root.addBody("Mac 连接：${if (connected) "已连接" else "未连接（请先到「互联与配对」连接）"}\n最近同步：$last")
 
-        root.addButton("立即同步快捷方式") {
+        root.addButton("立即同步") {
             if (!syncPrefs.enabled) {
                 Toast.makeText(ctx, "请先打开同步总开关", Toast.LENGTH_SHORT).show()
                 return@addButton
             }
-            syncPrefs.syncShortcuts = true
+            if (!syncPrefs.syncShortcuts && !syncPrefs.syncHistory && !syncPrefs.syncBookmarks) {
+                syncPrefs.syncShortcuts = true
+            }
             Toast.makeText(ctx, "正在同步…", Toast.LENGTH_SHORT).show()
             Thread {
                 val result = SyncEngine.syncNow(ctx)
