@@ -1,7 +1,8 @@
 # Meo Android 浏览器 — 验收清单
 
 > 对应：[android-browser-feasibility-and-plan.md](android-browser-feasibility-and-plan.md) §7 · [android-browser-development-plan.md](android-browser-development-plan.md)  
-> 状态：AB-0～AB-5 代码完成（2026-07-20）；下列手测项待真机勾选
+> 状态：AB-0～AB-5 代码完成；Chrome UI（UI-0～UI-3）代码完成（2026-07-20）；下列手测项待真机勾选  
+> Chrome UI：[android-browser-chrome-ui-design.md](android-browser-chrome-ui-design.md)
 
 ---
 
@@ -11,6 +12,7 @@
 |----|-----|------|
 | debug APK（改造前） | 5.6 MB | 2026-07-20 |
 | debug APK（AB-5 后） | **6.6 MB**（6014665 bytes） | 2026-07-20 |
+| debug APK（Chrome UI 后） | **~5.8 MB**（6044755 bytes） | 2026-07-20 |
 | release APK（R8） | 已开启 minify/shrink；需本机签名配置后复测，目标 ≤ 8 MB | — |
 | minSdk / targetSdk | 26 / 34 | — |
 | 依赖 | appcompat, material, constraintlayout, recyclerview, fragment, coroutines | 无 Firebase/Play Services |
@@ -37,6 +39,17 @@ ls -la app/build/outputs/apk/debug/app-debug.apk
 - [ ] 下载文件可完成并打开
 - [ ] 页内查找 / 桌面 UA / 分享可用
 - [ ] 省内存模式可开关
+
+## Chrome UI（顶栏 + 底栏）
+
+- [ ] 顶栏仅地址栏 + ⋮；无顶栏标签条 / 前进后退刷新 / 互联点
+- [ ] 底栏五键：后退 · 前进 · 功能 · 标签[N] · 新标签；不可用时半透明
+- [ ] ⋮：存为书签 / 设置 / 查找 / 添加到桌面 / 分享 / 发送到 Mac
+- [ ] 功能面板：下载、新建书签、桌面模式、刷新、全屏、旋转、字号 + 收起
+- [ ] 标签面板：数字角标、点标题切换、叉关闭、左滑关闭；至少保留 1 个
+- [ ] 新标签进入 `about:newtab` 快捷方式网格
+- [ ] 全屏 / 旋转 / 字号重启后仍生效（`BrowserPrefs`）
+- [ ] 已连接时「发送到 Mac」在 Mac 打开新标签；未连接有提示
 
 ## 互联
 

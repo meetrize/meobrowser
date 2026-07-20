@@ -20,6 +20,44 @@ class BrowserPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_DESKTOP_UA, false)
         set(value) = prefs.edit().putBoolean(KEY_DESKTOP_UA, value).apply()
 
+    /** 沉浸式全屏（隐藏系统栏） */
+    var fullscreen: Boolean
+        get() = prefs.getBoolean(KEY_FULLSCREEN, false)
+        set(value) = prefs.edit().putBoolean(KEY_FULLSCREEN, value).apply()
+
+    /**
+     * 0 = 跟随系统（SENSOR）
+     * 1 = 锁定竖屏
+     * 2 = 锁定横屏
+     */
+    var orientationMode: Int
+        get() = prefs.getInt(KEY_ORIENTATION, 0).coerceIn(0, 2)
+        set(value) = prefs.edit().putInt(KEY_ORIENTATION, value.coerceIn(0, 2)).apply()
+
+    /** WebSettings.textZoom：85 / 100 / 125 / 150 */
+    var textZoom: Int
+        get() {
+            val v = prefs.getInt(KEY_TEXT_ZOOM, 100)
+            return if (v in TEXT_ZOOM_STEPS) v else 100
+        }
+        set(value) {
+            val next = TEXT_ZOOM_STEPS.minByOrNull { kotlin.math.abs(it - value) } ?: 100
+            prefs.edit().putInt(KEY_TEXT_ZOOM, next).apply()
+        }
+
+    fun cycleTextZoom(): Int {
+        val idx = TEXT_ZOOM_STEPS.indexOf(textZoom).let { if (it < 0) 1 else it }
+        val next = TEXT_ZOOM_STEPS[(idx + 1) % TEXT_ZOOM_STEPS.size]
+        textZoom = next
+        return next
+    }
+
+    fun cycleOrientationMode(): Int {
+        val next = (orientationMode + 1) % 3
+        orientationMode = next
+        return next
+    }
+
     fun saveSession(entries: List<Pair<String, String>>, activeIndex: Int) {
         val arr = JSONArray()
         entries.forEach { (url, title) ->
@@ -50,7 +88,11 @@ class BrowserPrefs(context: Context) {
         private const val KEY_LOW_MEM = "low_memory_mode"
         private const val KEY_MAX_TABS = "max_tabs"
         private const val KEY_DESKTOP_UA = "desktop_ua"
+        private const val KEY_FULLSCREEN = "fullscreen"
+        private const val KEY_ORIENTATION = "orientation_mode"
+        private const val KEY_TEXT_ZOOM = "text_zoom"
         private const val KEY_SESSION = "session_tabs"
         private const val KEY_ACTIVE = "session_active"
+        val TEXT_ZOOM_STEPS = listOf(85, 100, 125, 150)
     }
 }

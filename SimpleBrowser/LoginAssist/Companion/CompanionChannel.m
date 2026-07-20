@@ -6,6 +6,9 @@
 #import "CompanionBrowseSyncStore.h"
 #import "OTPInbox.h"
 #import "PhoneNotificationPresenter.h"
+#import "AppDelegate.h"
+#import "BrowserWindowController.h"
+#import <AppKit/AppKit.h>
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import <net/if.h>
@@ -257,6 +260,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     }
     if ([type isEqualToString:@"phone_notification"]) {
         [self handlePhoneNotification:json connectionID:connectionID server:server];
+        return;
+    }
+    if ([type isEqualToString:@"open_url"]) {
+        [self handleOpenURL:json connectionID:connectionID server:server];
         return;
     }
     if ([type hasPrefix:@"sync_"]) {
@@ -535,6 +542,48 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     [server sendJSON:@{@"v": @1, @"type": @"otp_ok"} toConnectionID:connectionID];
     [[PhoneNotificationPresenter sharedPresenter] presentOTPBannerIfNeededWithCode:code];
     [self refreshConnectedState];
+}
+
+- (void)handleOpenURL:(NSDictionary *)json
+         connectionID:(NSString *)connectionID
+               server:(CompanionBonjourServer *)server {
+    NSString *deviceToken = json[@"deviceToken"];
+    NSString *urlString = json[@"url"];
+    if (![deviceToken isKindOfClass:[NSString class]] ||
+        ![urlString isKindOfClass:[NSString class]] ||
+        urlString.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"invalid open_url"}
+          toConnectionID:connectionID];
+        return;
+    }
+    if (![[CompanionPairingStore sharedStore] validateDeviceToken:deviceToken deviceId:nil]) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"unauthorized"}
+          toConnectionID:connectionID];
+        return;
+    }
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url || url.scheme.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"bad url"}
+          toConnectionID:connectionID];
+        return;
+    }
+    [self.activeConnectionIDs addObject:connectionID];
+    [server sendJSON:@{@"v": @1, @"type": @"open_url_ok"} toConnectionID:connectionID];
+    [self refreshConnectedState];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id delegate = NSApp.delegate;
+        if (![delegate isKindOfClass:[AppDelegate class]]) {
+            return;
+        }
+        AppDelegate *app = (AppDelegate *)delegate;
+        BrowserWindowController *target = [app keyBrowserWindowController];
+        if (target) {
+            [target openURLsFromExternalSource:@[url]];
+            [target.window makeKeyAndOrderFront:nil];
+        } else {
+            [app openURLInNewBrowserWindow:url];
+        }
+    });
 }
 
 @end

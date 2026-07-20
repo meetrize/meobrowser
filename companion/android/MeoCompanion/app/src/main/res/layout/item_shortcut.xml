@@ -43,6 +43,10 @@
         android:ellipsize="end"
         android:gravity="center_horizontal"
         android:maxLines="2"
-        android:textColor="#FF2C2C2E"
+        android:shadowColor="#99000000"
+        android:shadowDx="0"
+        android:shadowDy="1"
+        android:shadowRadius="2.5"
+        android:textColor="#FFFFFFFF"
         android:textSize="12sp" />
 </LinearLayout>

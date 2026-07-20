@@ -2,84 +2,43 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:background="#FFFFFFFF">
 
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="40dp"
-        android:fillViewport="true"
-        android:scrollbars="none">
-
-        <LinearLayout
-            android:id="@+id/tabStrip"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp" />
-    </HorizontalScrollView>
-
+    <!-- 顶栏：地址栏左起 + ⋮ -->
     <LinearLayout
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
+        android:layout_height="52dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="4dp">
-
-        <ImageButton
-            android:id="@+id/backButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/nav_back"
-            android:src="@android:drawable/ic_media_previous" />
-
-        <ImageButton
-            android:id="@+id/forwardButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/nav_forward"
-            android:src="@android:drawable/ic_media_next" />
-
-        <ImageButton
-            android:id="@+id/reloadButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/nav_reload"
-            android:src="@android:drawable/ic_popup_sync" />
+        android:paddingStart="10dp"
+        android:paddingEnd="4dp"
+        android:background="#FFF7F8FA">
 
         <EditText
             android:id="@+id/addressBar"
             android:layout_width="0dp"
             android:layout_height="40dp"
-            android:layout_marginHorizontal="4dp"
             android:layout_weight="1"
-            android:background="@android:drawable/edit_text"
+            android:background="@drawable/bg_address_bar"
             android:hint="@string/address_hint"
             android:imeOptions="actionGo"
             android:inputType="textUri"
             android:maxLines="1"
-            android:paddingHorizontal="10dp"
-            android:textSize="14sp" />
+            android:paddingHorizontal="14dp"
+            android:textSize="14sp"
+            android:importantForAutofill="no" />
 
         <ImageButton
-            android:id="@+id/linkStatusButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/link_status"
-            android:src="@android:drawable/ic_menu_share" />
-
-        <ImageButton
-            android:id="@+id/menuButton"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:id="@+id/overflowButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="2dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/menu"
-            android:src="@android:drawable/ic_menu_more" />
+            android:src="@drawable/ic_more_vert"
+            android:scaleType="centerInside" />
     </LinearLayout>
 
     <ProgressBar
@@ -102,16 +61,113 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/newTabGrid"
+        <!-- 新标签页：竖屏壁纸 + 轻遮罩 + 快捷方式网格 -->
+        <FrameLayout
+            android:id="@+id/newTabContainer"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@drawable/bg_new_tab"
-            android:clipToPadding="false"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="28dp"
-            android:paddingBottom="24dp"
-            android:visibility="gone" />
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/newTabWallpaper"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop"
+                android:src="@drawable/bg_new_tab_wallpaper" />
+
+            <View
+                android:id="@+id/newTabScrim"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#4D000000" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/newTabGrid"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent"
+                android:clipToPadding="false"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="28dp"
+                android:paddingBottom="24dp"
+                android:overScrollMode="never" />
+        </FrameLayout>
     </FrameLayout>
+
+    <!-- 底栏五键 -->
+    <LinearLayout
+        android:id="@+id/bottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:background="#FFF7F8FA"
+        android:elevation="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp">
+
+        <ImageButton
+            android:id="@+id/backButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/nav_back"
+            android:src="@drawable/ic_nav_back"
+            android:scaleType="centerInside" />
+
+        <ImageButton
+            android:id="@+id/forwardButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/nav_forward"
+            android:src="@drawable/ic_nav_forward"
+            android:scaleType="centerInside" />
+
+        <ImageButton
+            android:id="@+id/toolsButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/tools_panel"
+            android:src="@drawable/ic_tools_grid"
+            android:scaleType="centerInside" />
+
+        <FrameLayout
+            android:id="@+id/tabsButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="@string/tabs_panel">
+
+            <TextView
+                android:id="@+id/tabsCountBadge"
+                android:layout_width="28dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:background="@drawable/bg_tab_count"
+                android:gravity="center"
+                android:text="1"
+                android:textColor="#FF1C1C1E"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <ImageButton
+            android:id="@+id/newTabButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/new_tab"
+            android:src="@drawable/ic_new_tab"
+            android:scaleType="centerInside" />
+    </LinearLayout>
 </LinearLayout>

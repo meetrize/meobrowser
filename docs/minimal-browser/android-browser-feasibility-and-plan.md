@@ -3,6 +3,7 @@
 > 目标：将现有 **Meo Companion** 改造为 **极简 Android 浏览器（MeoBrowser for Android）**，把配对 / 验证码 / 通知镜像等能力下沉为「设置中的互联功能」；突出与 macOS MeoBrowser 的局域网互联互通。  
 > 状态：**AB-0～AB-5 代码已落地**（2026-07-20）；真机手测见 [android-browser-acceptance.md](android-browser-acceptance.md)  
 > 开发计划（任务级）：[android-browser-development-plan.md](android-browser-development-plan.md)  
+> Chrome UI 改造：[android-browser-chrome-ui-design.md](android-browser-chrome-ui-design.md) · [android-browser-chrome-ui-development-plan.md](android-browser-chrome-ui-development-plan.md)  
 > 同步设计：[companion-sync-design.md](companion-sync-design.md)  
 > 关联：[companion-protocol.md](companion-protocol.md) · [companion-notification-mirror-design.md](companion-notification-mirror-design.md) · [design.md](design.md) · [multi-tab-design.md](multi-tab-design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [download-design.md](download-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [companion/android/MeoCompanion/README.md](../../companion/android/MeoCompanion/README.md)
 

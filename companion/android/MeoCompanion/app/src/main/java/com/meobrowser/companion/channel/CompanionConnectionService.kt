@@ -185,6 +185,10 @@ class CompanionConnectionService : Service() {
             "otp_ok" -> {
                 CompanionSession.notifyStatus()
             }
+            "open_url_ok" -> {
+                CompanionSession.lastSmsEvent = "已发送到 Mac"
+                CompanionSession.notifyStatus()
+            }
             "phone_notification_ok" -> {
                 val id = json.optString("id")
                 CompanionSession.lastSmsEvent =
@@ -517,6 +521,35 @@ object CompanionSession {
             sendOtp(code)
         } else {
             CompanionConnectionService.sendOtp(context.applicationContext, code)
+        }
+    }
+
+    /** 将 URL 发到已配对的 Mac，在 Mac 端打开新标签。 */
+    fun sendOpenUrl(context: Context, url: String, onResult: (Boolean, String) -> Unit) {
+        executor.execute {
+            val prefs = PairingPrefs(context.applicationContext)
+            val token = prefs.deviceToken
+            if (token.isNullOrBlank()) {
+                onResult(false, "尚未配对")
+                return@execute
+            }
+            if (!client.isConnected) {
+                onResult(false, "未连接 Mac")
+                return@execute
+            }
+            try {
+                val json = JSONObject()
+                json.put("v", 1)
+                json.put("type", "open_url")
+                json.put("url", url)
+                json.put("ts", System.currentTimeMillis() / 1000L)
+                json.put("deviceToken", token)
+                client.send(json)
+                onResult(true, "已发送到 Mac")
+            } catch (e: Exception) {
+                Log.e("MeoCompanion", "send open_url failed", e)
+                onResult(false, e.message ?: "发送失败")
+            }
         }
     }
 

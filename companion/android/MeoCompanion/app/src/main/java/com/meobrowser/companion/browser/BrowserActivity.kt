@@ -2,12 +2,18 @@ package com.meobrowser.companion.browser
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.Gravity
 import android.view.KeyEvent
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -15,14 +21,22 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.meobrowser.companion.R
 import com.meobrowser.companion.browser.download.DownloadHub
 import com.meobrowser.companion.browser.newtab.ShortcutGridAdapter
@@ -51,12 +65,10 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var downloadHub: DownloadHub
     private var didAutoConnect = false
     private var findQuery: String? = null
+    private var toolsSheet: BottomSheetDialog? = null
+    private var tabsSheet: BottomSheetDialog? = null
     private val shortcutSyncListener: () -> Unit = {
         runOnUiThread { refreshShortcutGrid() }
-    }
-
-    private val statusListener: (String, String) -> Unit = { status, _ ->
-        runOnUiThread { updateLinkStatusUi(status) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,6 +85,9 @@ class BrowserActivity : AppCompatActivity() {
         tabManager = TabManager(browserPrefs.maxTabs)
         SmsListenCoordinator.start(this)
 
+        applyOrientationMode()
+        applyFullscreenMode()
+
         val (session, active) = browserPrefs.loadSession()
         if (session.isNotEmpty()) {
             tabManager.restore(session)
@@ -83,11 +98,10 @@ class BrowserActivity : AppCompatActivity() {
 
         binding.backButton.setOnClickListener { goBack() }
         binding.forwardButton.setOnClickListener { goForward() }
-        binding.reloadButton.setOnClickListener { reload() }
-        binding.menuButton.setOnClickListener { showMenu() }
-        binding.linkStatusButton.setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_SECTION, SettingsActivity.SECTION_LINK))
-        }
+        binding.toolsButton.setOnClickListener { showToolsSheet() }
+        binding.tabsButton.setOnClickListener { showTabsSheet() }
+        binding.newTabButton.setOnClickListener { newTab() }
+        binding.overflowButton.setOnClickListener { showOverflowMenu() }
         binding.addressBar.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -102,26 +116,46 @@ class BrowserActivity : AppCompatActivity() {
         refreshShortcutGrid()
 
         binding.root.post {
+            handleLaunchIntent(intent)
             showActiveTab()
             Log.i(TAG, "MeoBrowserColdStart ms=${System.currentTimeMillis() - coldStart}")
         }
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
+        showActiveTab()
+    }
+
     override fun onStart() {
         super.onStart()
-        CompanionSession.addStatusListener(statusListener)
         SyncEngine.addShortcutChangeListener(shortcutSyncListener)
-        updateLinkStatusUi(CompanionSession.statusText)
         maybeAutoConnect()
         SyncEngine.onAppForeground(this)
         refreshShortcutGrid()
+        updateNavChrome()
     }
 
     override fun onStop() {
-        CompanionSession.removeStatusListener(statusListener)
         SyncEngine.removeShortcutChangeListener(shortcutSyncListener)
         persistSession()
         super.onStop()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && browserPrefs.fullscreen) {
+            applyFullscreenMode()
+        }
+    }
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        val data = intent?.dataString ?: return
+        if (data.isBlank()) return
+        navigate(data)
+        intent.data = null
     }
 
     private fun maybeAutoConnect() {
@@ -140,39 +174,135 @@ class BrowserActivity : AppCompatActivity() {
         )
     }
 
-    private fun updateLinkStatusUi(status: String) {
-        val connected = CompanionSession.client.isConnected || status.contains("连接保持") || status.contains("已连接")
-        binding.linkStatusButton.alpha = if (connected) 1f else 0.35f
-    }
-
     private fun persistSession() {
         browserPrefs.saveSession(tabManager.snapshot(), tabManager.activeIndex)
     }
 
-    private fun showMenu() {
-        val popup = PopupMenu(this, binding.menuButton)
-        popup.menu.add(0, 1, 0, "新标签页")
-        popup.menu.add(0, 2, 0, "关闭标签")
-        popup.menu.add(0, 3, 0, "添加书签")
-        popup.menu.add(0, 4, 0, "分享")
-        popup.menu.add(0, 5, 0, "页内查找")
-        popup.menu.add(0, 6, 0, "桌面版网站")
-        popup.menu.add(0, 7, 0, "发送到 Mac（即将推出）")
-        popup.menu.add(0, 8, 0, "设置")
+    private fun showOverflowMenu() {
+        val popup = PopupMenu(this, binding.overflowButton)
+        popup.menu.add(0, 1, 0, getString(R.string.menu_bookmark))
+        popup.menu.add(0, 2, 0, getString(R.string.menu_settings))
+        popup.menu.add(0, 3, 0, getString(R.string.menu_find))
+        popup.menu.add(0, 4, 0, getString(R.string.menu_add_to_home))
+        popup.menu.add(0, 5, 0, getString(R.string.menu_share))
+        popup.menu.add(0, 6, 0, getString(R.string.menu_send_to_mac))
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                1 -> newTab()
-                2 -> closeCurrentTab()
-                3 -> addBookmark()
-                4 -> shareCurrent()
-                5 -> findInPage()
-                6 -> toggleDesktopUa()
-                7 -> Toast.makeText(this, "Send Tab 将在后续版本提供", Toast.LENGTH_SHORT).show()
-                8 -> startActivity(Intent(this, SettingsActivity::class.java))
+                1 -> addBookmark()
+                2 -> startActivity(Intent(this, SettingsActivity::class.java))
+                3 -> findInPage()
+                4 -> addToHomeScreen()
+                5 -> shareCurrent()
+                6 -> sendToMac()
             }
             true
         }
         popup.show()
+    }
+
+    private fun showToolsSheet() {
+        toolsSheet?.dismiss()
+        val dialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_tools, null)
+        dialog.setContentView(view)
+        view.findViewById<TextView>(R.id.toolsDownloads).setOnClickListener {
+            dialog.dismiss()
+            startActivity(
+                Intent(this, SettingsActivity::class.java)
+                    .putExtra(SettingsActivity.EXTRA_SECTION, SettingsActivity.SECTION_DOWNLOADS)
+            )
+        }
+        view.findViewById<TextView>(R.id.toolsNewBookmark).setOnClickListener {
+            dialog.dismiss()
+            addBookmark()
+        }
+        view.findViewById<TextView>(R.id.toolsDesktopMode).apply {
+            text = if (browserPrefs.desktopUa) "桌面模式 ✓" else getString(R.string.tools_desktop_mode)
+            setOnClickListener {
+                dialog.dismiss()
+                toggleDesktopUa()
+            }
+        }
+        view.findViewById<TextView>(R.id.toolsReload).setOnClickListener {
+            dialog.dismiss()
+            reload()
+        }
+        view.findViewById<TextView>(R.id.toolsFullscreen).apply {
+            text = if (browserPrefs.fullscreen) "全屏 ✓" else getString(R.string.tools_fullscreen)
+            setOnClickListener {
+                dialog.dismiss()
+                toggleFullscreen()
+            }
+        }
+        view.findViewById<TextView>(R.id.toolsRotate).apply {
+            text = "屏幕旋转（${orientationLabel()}）"
+            setOnClickListener {
+                browserPrefs.cycleOrientationMode()
+                applyOrientationMode()
+                text = "屏幕旋转（${orientationLabel()}）"
+                Toast.makeText(this@BrowserActivity, "已切换：${orientationLabel()}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        view.findViewById<TextView>(R.id.toolsFontSize).apply {
+            text = "字体大小 ${browserPrefs.textZoom}%"
+            setOnClickListener {
+                val zoom = browserPrefs.cycleTextZoom()
+                applyTextZoomToAll()
+                text = "字体大小 $zoom%"
+                Toast.makeText(this@BrowserActivity, "字号 $zoom%", Toast.LENGTH_SHORT).show()
+            }
+        }
+        view.findViewById<TextView>(R.id.toolsCollapse).setOnClickListener { dialog.dismiss() }
+        toolsSheet = dialog
+        dialog.show()
+    }
+
+    private fun showTabsSheet() {
+        tabsSheet?.dismiss()
+        val dialog = BottomSheetDialog(this)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_tabs, null)
+        dialog.setContentView(view)
+        val list = view.findViewById<RecyclerView>(R.id.tabsList)
+        list.layoutManager = LinearLayoutManager(this)
+        val adapter = TabsSheetAdapter(
+            tabs = tabManager.all.toMutableList(),
+            activeIndex = tabManager.activeIndex,
+            onSelect = { index ->
+                tabManager.select(index)
+                dialog.dismiss()
+                showActiveTab()
+            },
+            onClose = { index ->
+                if (!tabManager.closeTab(index)) {
+                    Toast.makeText(this, "至少保留一个标签", Toast.LENGTH_SHORT).show()
+                    return@TabsSheetAdapter
+                }
+                dialog.dismiss()
+                showActiveTab()
+            }
+        )
+        list.adapter = adapter
+        ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+            override fun onMove(
+                recyclerView: RecyclerView,
+                viewHolder: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
+
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val index = viewHolder.bindingAdapterPosition
+                if (index == RecyclerView.NO_POSITION) return
+                if (!tabManager.closeTab(index)) {
+                    adapter.notifyItemChanged(index)
+                    Toast.makeText(this@BrowserActivity, "至少保留一个标签", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                dialog.dismiss()
+                showActiveTab()
+            }
+        }).attachToRecyclerView(list)
+        tabsSheet = dialog
+        dialog.show()
     }
 
     private fun newTab() {
@@ -205,6 +335,10 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun shareCurrent() {
         val tab = tabManager.active ?: return
+        if (tab.isNewTabPage) {
+            Toast.makeText(this, "当前是新标签页", Toast.LENGTH_SHORT).show()
+            return
+        }
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, tab.url)
@@ -213,9 +347,55 @@ class BrowserActivity : AppCompatActivity() {
         startActivity(Intent.createChooser(send, "分享链接"))
     }
 
+    private fun sendToMac() {
+        val tab = tabManager.active ?: return
+        if (tab.isNewTabPage || tab.url.isBlank()) {
+            Toast.makeText(this, "当前是新标签页", Toast.LENGTH_SHORT).show()
+            return
+        }
+        CompanionSession.sendOpenUrl(this, tab.url) { ok, message ->
+            runOnUiThread {
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
+            if (ok) {
+                Log.i(TAG, "open_url sent")
+            }
+        }
+    }
+
+    private fun addToHomeScreen() {
+        val tab = tabManager.active ?: return
+        if (tab.isNewTabPage) {
+            Toast.makeText(this, "当前是新标签页", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
+            Toast.makeText(this, "系统不支持固定快捷方式", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val label = tab.title.ifBlank { tab.url }.take(24)
+        val launch = Intent(Intent.ACTION_VIEW, Uri.parse(tab.url)).apply {
+            setPackage(packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val info = ShortcutInfoCompat.Builder(this, "meo-pin-${tab.url.hashCode()}")
+            .setShortLabel(label)
+            .setLongLabel(label)
+            .setIcon(IconCompat.createWithResource(this, android.R.drawable.ic_menu_compass))
+            .setIntent(launch)
+            .build()
+        val ok = ShortcutManagerCompat.requestPinShortcut(this, info, null)
+        Toast.makeText(
+            this,
+            if (ok) "请确认添加到桌面" else "无法添加快捷方式",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
     private fun findInPage() {
         val wv = tabManager.active?.webView ?: return
         val input = EditText(this)
+        findQuery?.let { input.setText(it) }
         AlertDialog.Builder(this)
             .setTitle("页内查找")
             .setView(input)
@@ -242,6 +422,63 @@ class BrowserActivity : AppCompatActivity() {
         reload()
     }
 
+    private fun toggleFullscreen() {
+        browserPrefs.fullscreen = !browserPrefs.fullscreen
+        applyFullscreenMode()
+        Toast.makeText(
+            this,
+            if (browserPrefs.fullscreen) "已进入全屏" else "已退出全屏",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    private fun orientationLabel(): String = when (browserPrefs.orientationMode) {
+        1 -> "竖屏"
+        2 -> "横屏"
+        else -> "跟随"
+    }
+
+    private fun applyOrientationMode() {
+        requestedOrientation = when (browserPrefs.orientationMode) {
+            1 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            2 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun applyFullscreenMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, !browserPrefs.fullscreen)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val controller = window.insetsController ?: return
+            if (browserPrefs.fullscreen) {
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = if (browserPrefs.fullscreen) {
+                (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+            } else {
+                View.SYSTEM_UI_FLAG_VISIBLE
+            }
+        }
+        binding.topBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
+        binding.bottomBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
+    }
+
+    private fun applyTextZoomToAll() {
+        val zoom = browserPrefs.textZoom
+        tabManager.all.forEach { it.webView?.settings?.textZoom = zoom }
+    }
+
     private fun navigate(raw: String) {
         val url = UrlNavigator.normalize(raw)
         val tab = tabManager.active ?: return
@@ -259,12 +496,18 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun goBack() {
         val wv = tabManager.active?.webView
-        if (wv != null && wv.canGoBack()) wv.goBack()
+        if (wv != null && wv.canGoBack()) {
+            wv.goBack()
+            updateNavChrome()
+        }
     }
 
     private fun goForward() {
         val wv = tabManager.active?.webView
-        if (wv != null && wv.canGoForward()) wv.goForward()
+        if (wv != null && wv.canGoForward()) {
+            wv.goForward()
+            updateNavChrome()
+        }
     }
 
     private fun reload() {
@@ -276,25 +519,39 @@ class BrowserActivity : AppCompatActivity() {
         tab.webView?.reload()
     }
 
+    private fun updateNavChrome() {
+        val tab = tabManager.active
+        val wv = tab?.webView
+        val canBack = wv?.canGoBack() == true
+        val canForward = wv?.canGoForward() == true
+        binding.backButton.isEnabled = canBack
+        binding.forwardButton.isEnabled = canForward
+        binding.backButton.alpha = if (canBack) 1f else 0.35f
+        binding.forwardButton.alpha = if (canForward) 1f else 0.35f
+        binding.tabsCountBadge.text = tabManager.size.coerceAtMost(99).toString()
+    }
+
     private fun showActiveTab() {
-        renderTabStrip()
+        updateNavChrome()
         val tab = tabManager.active ?: return
         if (tab.isNewTabPage) {
-            binding.newTabGrid.visibility = View.VISIBLE
+            binding.newTabContainer.visibility = View.VISIBLE
             binding.webContainer.visibility = View.GONE
             binding.addressBar.setText("")
             binding.addressBar.hint = getString(R.string.address_hint)
             binding.backButton.isEnabled = false
             binding.forwardButton.isEnabled = false
+            binding.backButton.alpha = 0.35f
+            binding.forwardButton.alpha = 0.35f
             refreshShortcutGrid()
             applyLowMemoryToInactive()
             return
         }
-        binding.newTabGrid.visibility = View.GONE
+        binding.newTabContainer.visibility = View.GONE
         binding.webContainer.visibility = View.VISIBLE
         val wv = ensureWebView(tab)
         binding.webContainer.removeAllViews()
-        (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+        (wv.parent as? ViewGroup)?.removeView(wv)
         binding.webContainer.addView(
             wv,
             LinearLayout.LayoutParams(
@@ -303,8 +560,7 @@ class BrowserActivity : AppCompatActivity() {
             )
         )
         binding.addressBar.setText(tab.url)
-        binding.backButton.isEnabled = wv.canGoBack()
-        binding.forwardButton.isEnabled = wv.canGoForward()
+        updateNavChrome()
         applyLowMemoryToInactive()
     }
 
@@ -327,7 +583,7 @@ class BrowserActivity : AppCompatActivity() {
     private fun destroyWebViewIfNeeded(tab: BrowserTab) {
         tab.webView?.apply {
             stopLoading()
-            (parent as? android.view.ViewGroup)?.removeView(this)
+            (parent as? ViewGroup)?.removeView(this)
             destroy()
         }
         tab.webView = null
@@ -340,6 +596,7 @@ class BrowserActivity : AppCompatActivity() {
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
         wv.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        wv.settings.textZoom = browserPrefs.textZoom
         if (browserPrefs.desktopUa) {
             wv.settings.userAgentString =
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
@@ -354,10 +611,8 @@ class BrowserActivity : AppCompatActivity() {
                 t.isLoading = false
                 if (t === tabManager.active) {
                     binding.addressBar.setText(t.url)
-                    binding.backButton.isEnabled = view?.canGoBack() == true
-                    binding.forwardButton.isEnabled = view?.canGoForward() == true
+                    updateNavChrome()
                     binding.loadProgress.visibility = View.GONE
-                    renderTabStrip()
                 }
                 historyStore.record(t.url, t.title, shortcutStore.deviceId())
                 SyncEngine.schedulePush(this@BrowserActivity)
@@ -374,7 +629,7 @@ class BrowserActivity : AppCompatActivity() {
                 val t = tabManager.all.find { it.webView === view } ?: return
                 if (!title.isNullOrBlank()) {
                     t.title = title
-                    renderTabStrip()
+                    updateNavChrome()
                 }
             }
         }
@@ -387,42 +642,6 @@ class BrowserActivity : AppCompatActivity() {
             wv.loadUrl(tab.url)
         }
         return wv
-    }
-
-    private fun renderTabStrip() {
-        binding.tabStrip.removeAllViews()
-        tabManager.all.forEachIndexed { index, tab ->
-            val chip = TextView(this).apply {
-                text = tab.title.take(12).ifBlank { "标签" }
-                setPadding(24, 12, 24, 12)
-                textSize = 13f
-                setTextColor(if (index == tabManager.activeIndex) Color.WHITE else Color.BLACK)
-                setBackgroundColor(if (index == tabManager.activeIndex) 0xFF3D7EFF.toInt() else 0xFFE8E8E8.toInt())
-                setOnClickListener {
-                    tabManager.select(index)
-                    showActiveTab()
-                }
-                setOnLongClickListener {
-                    tabManager.select(index)
-                    closeCurrentTab()
-                    true
-                }
-            }
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-            lp.marginEnd = 6
-            binding.tabStrip.addView(chip, lp)
-        }
-        val add = TextView(this).apply {
-            text = "+"
-            gravity = Gravity.CENTER
-            setPadding(28, 12, 28, 12)
-            textSize = 18f
-            setOnClickListener { newTab() }
-        }
-        binding.tabStrip.addView(add)
     }
 
     private fun refreshShortcutGrid() {
@@ -483,6 +702,40 @@ class BrowserActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    private class TabsSheetAdapter(
+        private val tabs: MutableList<BrowserTab>,
+        private val activeIndex: Int,
+        private val onSelect: (Int) -> Unit,
+        private val onClose: (Int) -> Unit
+    ) : RecyclerView.Adapter<TabsSheetAdapter.VH>() {
+
+        class VH(view: View) : RecyclerView.ViewHolder(view) {
+            val title: TextView = view.findViewById(R.id.tabTitle)
+            val close: ImageButton = view.findViewById(R.id.tabClose)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_tab_row, parent, false)
+            return VH(v)
+        }
+
+        override fun getItemCount(): Int = tabs.size
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val tab = tabs[position]
+            holder.title.text = tab.title.ifBlank { tab.url.ifBlank { "标签" } }
+            holder.title.setTextColor(if (position == activeIndex) 0xFF007AFF.toInt() else Color.BLACK)
+            holder.itemView.setOnClickListener {
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) onSelect(pos)
+            }
+            holder.close.setOnClickListener {
+                val pos = holder.bindingAdapterPosition
+                if (pos != RecyclerView.NO_POSITION) onClose(pos)
+            }
+        }
     }
 
     companion object {
