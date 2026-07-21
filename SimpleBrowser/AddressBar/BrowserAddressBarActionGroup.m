@@ -116,6 +116,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
 @property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *companionLinkButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *phonePolicyButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *notificationInboxButton;
 @property (nonatomic, strong, nullable) NSView *companionLinkStatusDot;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
@@ -206,6 +207,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
+        @{@"id": @"notificationInbox", @"symbol": @"bell", @"tip": @"手机通知"},
         @{@"id": @"phonePolicy", @"symbol": @"phone.badge.waveform", @"tip": @"号码策略"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
         @{@"id": @"rssFeed", @"symbol": @"dot.radiowaves.up.forward", @"tip": @"RSS"},
@@ -266,6 +268,19 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             }
             if (loginIdx != NSNotFound) {
                 [ordered insertObject:item atIndex:loginIdx + 1];
+            } else {
+                [ordered addObject:item];
+            }
+        } else if ([item.itemID isEqualToString:@"notificationInbox"]) {
+            NSUInteger linkIdx = NSNotFound;
+            for (NSUInteger i = 0; i < ordered.count; i++) {
+                if ([ordered[i].itemID isEqualToString:@"companionLink"]) {
+                    linkIdx = i;
+                    break;
+                }
+            }
+            if (linkIdx != NSNotFound) {
+                [ordered insertObject:item atIndex:linkIdx + 1];
             } else {
                 [ordered addObject:item];
             }
@@ -339,6 +354,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
     self.findInPageButton = nil;
     self.companionLinkButton = nil;
     self.phonePolicyButton = nil;
+    self.notificationInboxButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
@@ -355,6 +371,8 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             self.companionLinkButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"phonePolicy"]) {
             self.phonePolicyButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"notificationInbox"]) {
+            self.notificationInboxButton = self.actionButtons[i];
         }
     }
     [self ensureCompanionLinkStatusDot];

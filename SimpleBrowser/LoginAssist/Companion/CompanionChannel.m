@@ -6,6 +6,7 @@
 #import "CompanionBrowseSyncStore.h"
 #import "OTPInbox.h"
 #import "PhoneNotificationPresenter.h"
+#import "PhoneNotificationInboxStore.h"
 #import "CallAlertSettings.h"
 #import "CallAlertPresenter.h"
 #import "CallAlertBannerController.h"
@@ -447,7 +448,8 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     }
 
     [self.activeConnectionIDs addObject:connectionID];
-    // 无论是否展示，一律 ack，避免 Android 重试风暴
+    // 先入库再横幅，保证关横幅仍有收件箱历史；无论是否展示一律 ack
+    [[PhoneNotificationInboxStore sharedStore] upsertMirrorPayload:json];
     [[PhoneNotificationPresenter sharedPresenter] presentFromPayload:json];
     [server sendJSON:@{
         @"v": @1,
@@ -608,6 +610,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     }
     [self.activeConnectionIDs addObject:connectionID];
     [server sendJSON:@{@"v": @1, @"type": @"otp_ok"} toConnectionID:connectionID];
+    [[PhoneNotificationInboxStore sharedStore] upsertOTPCode:code];
     [[PhoneNotificationPresenter sharedPresenter] presentOTPBannerIfNeededWithCode:code];
     [self refreshConnectedState];
 }

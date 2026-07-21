@@ -130,6 +130,14 @@
                                                     keyEquivalent:@"e"];
             useSelection.target = nil;
 
+            [viewMenu addItem:[NSMenuItem separatorItem]];
+
+            NSMenuItem *notificationInbox = [viewMenu addItemWithTitle:@"手机通知"
+                                                                 action:@selector(toggleNotificationInboxSidebar:)
+                                                          keyEquivalent:@"i"];
+            notificationInbox.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            notificationInbox.target = nil;
+
             viewMenuItem.submenu = viewMenu;
             NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
             if (windowIndex == NSNotFound) {

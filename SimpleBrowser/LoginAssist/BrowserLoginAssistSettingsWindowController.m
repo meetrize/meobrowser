@@ -9,6 +9,8 @@
 #import "CompanionPairingStore.h"
 #import "CompanionLinkUI.h"
 #import "PhoneNotificationSettings.h"
+#import "PhoneNotificationInboxSettings.h"
+#import "PhoneNotificationInboxStore.h"
 #import "CallAlertSettings.h"
 #import "CallAlertPresenter.h"
 #import "CompanionSyncSettings.h"
@@ -59,6 +61,11 @@
 @property (nonatomic, strong) NSTextField *companionHintLabel;
 @property (nonatomic, strong) NSButton *mirrorEnabledCheck;
 @property (nonatomic, strong) NSButton *otpBannerEnabledCheck;
+@property (nonatomic, strong) NSButton *inboxEnabledCheck;
+@property (nonatomic, strong) NSButton *otpToInboxCheck;
+@property (nonatomic, strong) NSButton *autoMarkReadCheck;
+@property (nonatomic, strong) NSPopUpButton *inboxRetentionPopup;
+@property (nonatomic, strong) NSButton *purgeInboxButton;
 @property (nonatomic, strong) NSButton *openNotificationSettingsButton;
 @property (nonatomic, strong) NSTextField *mirrorHintLabel;
 @property (nonatomic, strong) NSButton *callAlertEnabledCheck;
@@ -411,7 +418,7 @@
                                       ]];
 
     PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
-    self.mirrorEnabledCheck = [NSButton checkboxWithTitle:@"接收手机通知镜像（全部通知模式）"
+    self.mirrorEnabledCheck = [NSButton checkboxWithTitle:@"系统通知栏显示手机通知（横幅）"
                                                    target:self
                                                    action:@selector(mirrorSettingsChanged:)];
     self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
@@ -421,20 +428,64 @@
                                                       action:@selector(mirrorSettingsChanged:)];
     self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
 
+    PhoneNotificationInboxSettings *inboxSettings = [PhoneNotificationInboxSettings sharedSettings];
+    self.inboxEnabledCheck = [NSButton checkboxWithTitle:@"将手机通知保存到收件箱侧栏"
+                                                  target:self
+                                                  action:@selector(inboxSettingsChanged:)];
+    self.inboxEnabledCheck.state = inboxSettings.inboxEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+
+    self.otpToInboxCheck = [NSButton checkboxWithTitle:@"验证码写入收件箱"
+                                                target:self
+                                                action:@selector(inboxSettingsChanged:)];
+    self.otpToInboxCheck.state = inboxSettings.otpToInbox ? NSControlStateValueOn : NSControlStateValueOff;
+
+    self.autoMarkReadCheck = [NSButton checkboxWithTitle:@"打开侧栏时自动标为已读"
+                                                  target:self
+                                                  action:@selector(inboxSettingsChanged:)];
+    self.autoMarkReadCheck.state = inboxSettings.autoMarkReadOnVisible ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSTextField *retentionLabel = [NSTextField labelWithString:@"保留期限"];
+    retentionLabel.font = [NSFont systemFontOfSize:12];
+    self.inboxRetentionPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [self.inboxRetentionPopup addItemsWithTitles:@[@"1 天", @"7 天", @"30 天", @"永久"]];
+    NSInteger days = inboxSettings.retentionDays;
+    NSInteger retentionIndex = 1;
+    if (days == 1) retentionIndex = 0;
+    else if (days == 7) retentionIndex = 1;
+    else if (days == 30) retentionIndex = 2;
+    else if (days == 0) retentionIndex = 3;
+    [self.inboxRetentionPopup selectItemAtIndex:retentionIndex];
+    self.inboxRetentionPopup.target = self;
+    self.inboxRetentionPopup.action = @selector(inboxSettingsChanged:);
+    NSStackView *retentionRow = [NSStackView stackViewWithViews:@[retentionLabel, self.inboxRetentionPopup]];
+    retentionRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    retentionRow.spacing = 8;
+    retentionRow.alignment = NSLayoutAttributeCenterY;
+
+    self.purgeInboxButton = [NSButton buttonWithTitle:@"清空收件箱…"
+                                               target:self
+                                               action:@selector(purgeInboxClicked:)];
+    self.purgeInboxButton.bezelStyle = NSBezelStyleRounded;
+
     self.openNotificationSettingsButton = [NSButton buttonWithTitle:@"打开系统通知设置…"
                                                              target:self
                                                              action:@selector(openSystemNotificationSettings:)];
     self.openNotificationSettingsButton.bezelStyle = NSBezelStyleRounded;
 
-    self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀（如「微信 · …」）。手机端需在 Companion 选择「全部通知」。"];
+    self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀。收件箱内容仅存本机，可随时清空。手机端需在 Companion 选择「全部通知」才会有普通通知。"];
     self.mirrorHintLabel.font = [NSFont systemFontOfSize:11];
     self.mirrorHintLabel.textColor = [NSColor secondaryLabelColor];
     self.mirrorHintLabel.preferredMaxLayoutWidth = 420;
 
-    NSView *mirrorCard = [self makeSettingsCardWithTitle:@"通知镜像"
+    NSView *mirrorCard = [self makeSettingsCardWithTitle:@"通知镜像与收件箱"
                                         arrangedSubviews:@[
                                             self.mirrorEnabledCheck,
                                             self.otpBannerEnabledCheck,
+                                            self.inboxEnabledCheck,
+                                            self.otpToInboxCheck,
+                                            self.autoMarkReadCheck,
+                                            retentionRow,
+                                            self.purgeInboxButton,
                                             self.openNotificationSettingsButton,
                                             self.mirrorHintLabel,
                                         ]];
@@ -1122,6 +1173,17 @@
     PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
     self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    PhoneNotificationInboxSettings *inboxSettings = [PhoneNotificationInboxSettings sharedSettings];
+    self.inboxEnabledCheck.state = inboxSettings.inboxEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.otpToInboxCheck.state = inboxSettings.otpToInbox ? NSControlStateValueOn : NSControlStateValueOff;
+    self.autoMarkReadCheck.state = inboxSettings.autoMarkReadOnVisible ? NSControlStateValueOn : NSControlStateValueOff;
+    NSInteger days = inboxSettings.retentionDays;
+    NSInteger retentionIndex = 1;
+    if (days == 1) retentionIndex = 0;
+    else if (days == 7) retentionIndex = 1;
+    else if (days == 30) retentionIndex = 2;
+    else if (days == 0) retentionIndex = 3;
+    [self.inboxRetentionPopup selectItemAtIndex:retentionIndex];
     CallAlertSettings *callSettings = [CallAlertSettings sharedSettings];
     self.callAlertEnabledCheck.state = callSettings.alertEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.callAlertBannerCheck.state = callSettings.bannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1141,6 +1203,32 @@
     settings.otpBannerEnabled = (self.otpBannerEnabledCheck.state == NSControlStateValueOn);
     [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
     [self refreshNotificationPermissionHint];
+}
+
+- (void)inboxSettingsChanged:(id)sender {
+    (void)sender;
+    PhoneNotificationInboxSettings *settings = [PhoneNotificationInboxSettings sharedSettings];
+    settings.inboxEnabled = (self.inboxEnabledCheck.state == NSControlStateValueOn);
+    settings.otpToInbox = (self.otpToInboxCheck.state == NSControlStateValueOn);
+    settings.autoMarkReadOnVisible = (self.autoMarkReadCheck.state == NSControlStateValueOn);
+    switch (self.inboxRetentionPopup.indexOfSelectedItem) {
+        case 0: settings.retentionDays = 1; break;
+        case 2: settings.retentionDays = 30; break;
+        case 3: settings.retentionDays = 0; break;
+        default: settings.retentionDays = 7; break;
+    }
+}
+
+- (void)purgeInboxClicked:(id)sender {
+    (void)sender;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"清空全部收件箱通知？";
+    alert.informativeText = @"包括未读与已钉选条目。此操作不可撤销。";
+    [alert addButtonWithTitle:@"清空"];
+    [alert addButtonWithTitle:@"取消"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [[PhoneNotificationInboxStore sharedStore] purgeAll];
+    }
 }
 
 - (void)callAlertSettingsChanged:(id)sender {

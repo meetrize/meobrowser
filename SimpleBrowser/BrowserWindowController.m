@@ -31,6 +31,10 @@
 #import "BrowserCertificateWarningView.h"
 #import "BrowserHTTPAuthPrompt.h"
 #import "CompanionChannel.h"
+#import "PhoneNotificationSidebarController.h"
+#import "PhoneNotificationInboxSettings.h"
+#import "PhoneNotificationInboxStore.h"
+#import "PhoneNotificationPresenter.h"
 #import <Security/Security.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
@@ -84,12 +88,15 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 }
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, PhoneNotificationSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
 @property (nonatomic, strong) NSView *contentContainer;
+@property (nonatomic, strong) NSStackView *contentRowStack;
+@property (nonatomic, strong) PhoneNotificationSidebarController *notificationSidebarController;
+@property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
 @property (nonatomic, weak) WKWebView *observedProgressWebView;
@@ -360,6 +367,17 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+- (void)windowDidResize:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    // 极窄窗口自动收起侧栏，避免网页区不可用
+    if (self.notificationSidebarController.visible && NSWidth(self.window.frame) < 720) {
+        [self.notificationSidebarController setVisible:NO animated:YES];
+        [self updateNotificationInboxButtonAppearance];
+    }
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
     if (notification.object != self.window) {
         return;
@@ -493,6 +511,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self wireFindInPageButton];
     [self wireCompanionLinkButton];
+    [self wirePhonePolicyButton];
+    [self wireNotificationInboxButton];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
@@ -500,6 +520,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(companionChannelStateDidChange:)
                                                  name:CompanionChannelStateDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(phoneNotificationInboxDidChange:)
+                                                 name:PhoneNotificationInboxDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(phoneNotificationInboxRevealItem:)
+                                                 name:PhoneNotificationInboxRevealItemNotification
                                                object:nil];
     [self.addressBarActionGroup updateCompanionLinkAppearance];
 
@@ -524,6 +552,25 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.contentContainer.clipsToBounds = YES;
     [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                     forOrientation:NSLayoutConstraintOrientationVertical];
+    [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.notificationSidebarController = [[PhoneNotificationSidebarController alloc] init];
+    self.notificationSidebarController.delegate = self;
+    self.notificationSidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.notificationSidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.notificationSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.contentRowStack = [NSStackView stackViewWithViews:@[
+        self.contentContainer, self.notificationSidebarController.view
+    ]];
+    self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.contentRowStack.spacing = 0;
+    self.contentRowStack.distribution = NSStackViewDistributionFill;
+    [self.contentRowStack setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationVertical];
 
     self.launchpadView = [[BrowserLaunchpadView alloc] initWithFrame:NSZeroRect];
     self.launchpadView.delegate = self;
@@ -578,7 +625,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self collapseSystemTitlebarDecoration];
 
     NSStackView *rootStack = [NSStackView stackViewWithViews:@[
-        toolbar, self.contentContainer
+        toolbar, self.contentRowStack
     ]];
     rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     rootStack.spacing = 0;
@@ -600,6 +647,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.findBarController installInContentContainer:self.contentContainer];
     [[CallAlertBannerController sharedController] installInContentContainer:self.contentContainer
                                                          forWindowController:self];
+    [self updateNotificationInboxButtonAppearance];
 }
 
 - (NSImage *)toolbarSymbolImageNamed:(NSString *)symbolName {
@@ -715,7 +763,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireFindInPageButton];
     [self wireCompanionLinkButton];
     [self wirePhonePolicyButton];
+    [self wireNotificationInboxButton];
     [self.addressBarActionGroup updateCompanionLinkAppearance];
+    [self updateNotificationInboxButtonAppearance];
 }
 
 - (void)wireCompanionLinkButton {
@@ -734,6 +784,110 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     button.target = self;
     button.action = @selector(showPhonePolicyPanel:);
+}
+
+- (void)wireNotificationInboxButton {
+    NSButton *button = self.addressBarActionGroup.notificationInboxButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(toggleNotificationInboxSidebar:);
+    [self installNotificationInboxBadgeOnButton:button];
+}
+
+- (void)installNotificationInboxBadgeOnButton:(NSButton *)button {
+    if (!button) {
+        return;
+    }
+    if (self.notificationInboxBadgeView.superview == button) {
+        return;
+    }
+    [self.notificationInboxBadgeView removeFromSuperview];
+    NSView *badge = [[NSView alloc] initWithFrame:NSZeroRect];
+    badge.wantsLayer = YES;
+    badge.layer.backgroundColor = [NSColor systemRedColor].CGColor;
+    badge.layer.cornerRadius = 3.5;
+    badge.hidden = YES;
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    [button addSubview:badge];
+    [NSLayoutConstraint activateConstraints:@[
+        [badge.widthAnchor constraintEqualToConstant:7],
+        [badge.heightAnchor constraintEqualToConstant:7],
+        [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:3],
+        [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-3],
+    ]];
+    self.notificationInboxBadgeView = badge;
+}
+
+- (void)toggleNotificationInboxSidebar:(id)sender {
+    (void)sender;
+    BOOL open = !self.notificationSidebarController.visible;
+    [self.notificationSidebarController setVisible:open animated:YES];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)updateNotificationInboxButtonAppearance {
+    NSButton *button = self.addressBarActionGroup.notificationInboxButton;
+    if (!button) {
+        return;
+    }
+    if (self.notificationInboxBadgeView.superview != button) {
+        [self installNotificationInboxBadgeOnButton:button];
+    }
+    BOOL open = self.notificationSidebarController.visible;
+    NSUInteger unread = [[PhoneNotificationInboxStore sharedStore] unreadCount];
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = open ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+    self.notificationInboxBadgeView.hidden = (unread == 0);
+    if (unread > 0) {
+        button.toolTip = [NSString stringWithFormat:@"手机通知 · %lu 条未读", (unsigned long)MIN(unread, 99)];
+    } else {
+        button.toolTip = open ? @"手机通知（已打开）" : @"手机通知";
+    }
+}
+
+- (void)phoneNotificationInboxDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)phoneNotificationInboxRevealItem:(NSNotification *)notification {
+    // 仅 key 窗口处理，避免多窗同时弹开
+    if (self.window != NSApp.keyWindow && NSApp.keyWindow != nil) {
+        // 若当前没有 key 浏览器窗，第一个响应的也可处理；key 是本窗时继续
+        BrowserWindowController *keyBrowser = nil;
+        for (NSWindow *window in NSApp.windows) {
+            if (window.isKeyWindow && [window.windowController isKindOfClass:[BrowserWindowController class]]) {
+                keyBrowser = (BrowserWindowController *)window.windowController;
+                break;
+            }
+        }
+        if (keyBrowser && keyBrowser != self) {
+            return;
+        }
+    }
+    NSString *itemID = notification.userInfo[PhoneNotificationInboxRevealItemIDKey];
+    [self.window makeKeyAndOrderFront:nil];
+    [self.notificationSidebarController revealItemID:itemID];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)notificationSidebarDidRequestClose:(PhoneNotificationSidebarController *)controller {
+    (void)controller;
+    [self.notificationSidebarController setVisible:NO animated:YES];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)notificationSidebarDidRequestCompanionSettings:(PhoneNotificationSidebarController *)controller {
+    (void)controller;
+    [self showCompanionLinkSettings:nil];
+}
+
+- (void)notificationSidebar:(PhoneNotificationSidebarController *)controller didChangeWidth:(CGFloat)width {
+    (void)controller;
+    [PhoneNotificationInboxSettings sharedSettings].sidebarWidth = width;
 }
 
 - (void)showPhonePolicyPanel:(id)sender {
@@ -1727,6 +1881,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         return self.loginAssistController.loginButton.enabled;
     }
     if (action == @selector(toggleCaptchaAssistPanel:)) {
+        return YES;
+    }
+    if (action == @selector(toggleNotificationInboxSidebar:)) {
         return YES;
     }
     return YES;

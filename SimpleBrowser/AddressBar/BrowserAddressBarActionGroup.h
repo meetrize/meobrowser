@@ -42,6 +42,9 @@ extern NSNotificationName const BrowserAddressBarActionVisibilityDidChangeNotifi
 /// 号码策略按钮；由窗口控制器设置 target/action。
 @property (nonatomic, strong, readonly, nullable) NSButton *phonePolicyButton;
 
+/// 手机通知收件箱按钮；由窗口控制器设置 target/action 与角标。
+@property (nonatomic, strong, readonly, nullable) NSButton *notificationInboxButton;
+
 /// 按 CompanionChannel 当前状态刷新互联按钮圆点与 tooltip。
 - (void)updateCompanionLinkAppearance;
 

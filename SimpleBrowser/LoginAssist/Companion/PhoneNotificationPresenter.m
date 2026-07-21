@@ -4,7 +4,11 @@
 #import <AppKit/AppKit.h>
 #import <os/log.h>
 
+NSNotificationName const PhoneNotificationInboxRevealItemNotification = @"PhoneNotificationInboxRevealItemNotification";
+NSString * const PhoneNotificationInboxRevealItemIDKey = @"id";
+
 static NSString * const kPhoneNotifCategory = @"MEO_PHONE_NOTIFICATION";
+static NSString * const kPhoneNotifUserInfoItemID = @"meoInboxItemID";
 static const NSTimeInterval kRecentMirrorSuppressOTPSeconds = 3.0;
 
 @interface PhoneNotificationPresenter () <UNUserNotificationCenterDelegate>
@@ -127,6 +131,9 @@ static const NSTimeInterval kRecentMirrorSuppressOTPSeconds = 3.0;
         if (packageName.length > 0) {
             content.threadIdentifier = packageName;
         }
+        if (payloadId.length > 0) {
+            content.userInfo = @{kPhoneNotifUserInfoItemID: payloadId};
+        }
 
         NSString *identifier = payloadId.length > 0
             ? [NSString stringWithFormat:@"phone-notif-%@", payloadId]
@@ -177,6 +184,8 @@ static const NSTimeInterval kRecentMirrorSuppressOTPSeconds = 3.0;
         content.sound = [UNNotificationSound defaultSound];
         content.categoryIdentifier = kPhoneNotifCategory;
         content.threadIdentifier = @"otp";
+        // OTP 收件箱 id 含时间桶，点击时用 code 键让侧栏尽力匹配
+        content.userInfo = @{kPhoneNotifUserInfoItemID: [NSString stringWithFormat:@"otp-code:%@", code]};
 
         NSString *identifier = [NSString stringWithFormat:@"otp-banner-%@-%.0f", code, now];
         UNNotificationRequest *request =
@@ -228,8 +237,28 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
          withCompletionHandler:(void (^)(void))completionHandler
 API_AVAILABLE(macos(10.14)) {
     (void)center;
-    (void)response;
     [NSApp activateIgnoringOtherApps:YES];
+
+    NSString *itemID = nil;
+    NSDictionary *userInfo = response.notification.request.content.userInfo;
+    id raw = userInfo[kPhoneNotifUserInfoItemID];
+    if ([raw isKindOfClass:[NSString class]] && [(NSString *)raw length] > 0) {
+        itemID = (NSString *)raw;
+    } else {
+        NSString *reqID = response.notification.request.identifier;
+        if ([reqID hasPrefix:@"phone-notif-"]) {
+            itemID = [reqID substringFromIndex:@"phone-notif-".length];
+        }
+    }
+
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    if (itemID.length > 0) {
+        info[PhoneNotificationInboxRevealItemIDKey] = itemID;
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:PhoneNotificationInboxRevealItemNotification
+                                                        object:self
+                                                      userInfo:info];
+
     if (completionHandler) {
         completionHandler();
     }
