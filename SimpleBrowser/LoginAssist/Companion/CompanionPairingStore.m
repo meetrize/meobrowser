@@ -8,6 +8,8 @@ static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt"
 static NSString * const kAuthModeKey = @"CompanionAuthMode";
 static NSString * const kSecurityCodeKey = @"CompanionSecurityCode";
 static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
+/// 启动态文案用；避免为「已配对 N 台」在冷启动就读钥匙串。
+static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
 
 @implementation CompanionPairedDevice
 @end
@@ -16,7 +18,8 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
 @property (nonatomic, copy, readwrite, nullable) NSString *pendingPairingCode;
 @property (nonatomic, assign, readwrite) NSTimeInterval pendingPairingExpiresAt;
 @property (nonatomic, copy, readwrite, nullable) NSString *securityCode;
-@property (nonatomic, copy, readwrite) NSArray<CompanionPairedDevice *> *pairedDevices;
+@property (nonatomic, copy) NSArray<CompanionPairedDevice *> *pairedDevicesStorage;
+@property (nonatomic, assign) BOOL keychainLoaded;
 @end
 
 @implementation CompanionPairingStore
@@ -33,8 +36,9 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _pairedDevices = @[];
-        [self reloadFromKeychain];
+        // 冷启动不读钥匙串：端口 / 安全码等在 UserDefaults；配对 token 延后到校验或设置页再取。
+        _pairedDevicesStorage = @[];
+        _keychainLoaded = NO;
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         _pendingPairingCode = [defaults stringForKey:kPendingCodeKey];
         _pendingPairingExpiresAt = [defaults doubleForKey:kPendingExpiresKey];
@@ -46,6 +50,33 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
         _stickyListeningPort = [defaults integerForKey:kStickyPortKey];
     }
     return self;
+}
+
+- (NSUInteger)pairedDeviceCountHint {
+    if (self.keychainLoaded) {
+        return self.pairedDevicesStorage.count;
+    }
+    NSInteger stored = [NSUserDefaults.standardUserDefaults integerForKey:kPairedDeviceCountKey];
+    return stored > 0 ? (NSUInteger)stored : 0;
+}
+
+- (void)syncPairedDeviceCountHint {
+    [NSUserDefaults.standardUserDefaults setInteger:(NSInteger)self.pairedDevicesStorage.count
+                                             forKey:kPairedDeviceCountKey];
+}
+
+- (void)ensureKeychainLoaded {
+    if (self.keychainLoaded) {
+        return;
+    }
+    self.keychainLoaded = YES;
+    [self reloadFromKeychain];
+    [self syncPairedDeviceCountHint];
+}
+
+- (NSArray<CompanionPairedDevice *> *)pairedDevices {
+    [self ensureKeychainLoaded];
+    return self.pairedDevicesStorage ?: @[];
 }
 
 - (void)setAuthMode:(CompanionAuthMode)authMode {
@@ -80,13 +111,13 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
     CFTypeRef result = NULL;
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
     if (status != errSecSuccess || !result) {
-        self.pairedDevices = @[];
+        self.pairedDevicesStorage = @[];
         return;
     }
     NSData *data = CFBridgingRelease(result);
     NSArray *list = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![list isKindOfClass:[NSArray class]]) {
-        self.pairedDevices = @[];
+        self.pairedDevicesStorage = @[];
         return;
     }
     NSMutableArray<CompanionPairedDevice *> *devices = [NSMutableArray array];
@@ -107,12 +138,13 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
         device.pairedAt = [dict[@"pairedAt"] doubleValue];
         [devices addObject:device];
     }
-    self.pairedDevices = devices;
+    self.pairedDevicesStorage = devices;
 }
 
 - (BOOL)persistDevices:(NSError **)error {
+    [self ensureKeychainLoaded];
     NSMutableArray *list = [NSMutableArray array];
-    for (CompanionPairedDevice *device in self.pairedDevices) {
+    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         NSMutableDictionary *dict = [@{
             @"deviceId": device.deviceId ?: @"",
             @"deviceToken": device.deviceToken ?: @"",
@@ -149,6 +181,7 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
         }
         return NO;
     }
+    [self syncPairedDeviceCountHint];
     return YES;
 }
 
@@ -240,7 +273,8 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
     }
 
     NSString *token = [[NSUUID UUID] UUIDString];
-    NSMutableArray<CompanionPairedDevice *> *devices = [self.pairedDevices mutableCopy] ?: [NSMutableArray array];
+    [self ensureKeychainLoaded];
+    NSMutableArray<CompanionPairedDevice *> *devices = [self.pairedDevicesStorage mutableCopy] ?: [NSMutableArray array];
     CompanionPairedDevice *existing = nil;
     for (CompanionPairedDevice *device in devices) {
         if ([device.deviceId isEqualToString:deviceId]) {
@@ -255,7 +289,7 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
     }
     existing.deviceToken = token;
     existing.pairedAt = [NSDate date].timeIntervalSince1970;
-    self.pairedDevices = devices;
+    self.pairedDevicesStorage = devices;
     if (![self persistDevices:error]) {
         return nil;
     }
@@ -274,7 +308,8 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
     if (deviceToken.length == 0) {
         return NO;
     }
-    for (CompanionPairedDevice *device in self.pairedDevices) {
+    [self ensureKeychainLoaded];
+    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         if (![device.deviceToken isEqualToString:deviceToken]) {
             continue;
         }
@@ -287,7 +322,8 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
 }
 
 - (void)revokeAllDevices {
-    self.pairedDevices = @[];
+    [self ensureKeychainLoaded];
+    self.pairedDevicesStorage = @[];
     [self persistDevices:nil];
 }
 
@@ -295,13 +331,14 @@ static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
     if (deviceToken.length == 0) {
         return;
     }
+    [self ensureKeychainLoaded];
     NSMutableArray *devices = [NSMutableArray array];
-    for (CompanionPairedDevice *device in self.pairedDevices) {
+    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         if (![device.deviceToken isEqualToString:deviceToken]) {
             [devices addObject:device];
         }
     }
-    self.pairedDevices = devices;
+    self.pairedDevicesStorage = devices;
     [self persistDevices:nil];
 }
 

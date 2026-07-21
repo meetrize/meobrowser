@@ -62,7 +62,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self postStateChange];
         return;
     }
-    (void)[self ensurePairingCode];
+    // 不在此 ensurePairingCode：会间接触发钥匙串；配对码在设置页 / 手机来连时再准备。
     self.state = CompanionChannelStateAdvertising;
     if (store.authMode == CompanionAuthModeSecurityCode) {
         self.statusText = store.securityCode.length > 0
@@ -103,8 +103,8 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     if ([store isPendingPairingCodeValid:store.pendingPairingCode]) {
         return store.pendingPairingCode;
     }
-    // 已有配对设备时不要自动刷码（否则设置页状态刷新会让配对码乱跳；重配请显式「刷新配对码」）。
-    if (store.pairedDevices.count > 0) {
+    // 用 hint，避免仅刷新设置文案就读钥匙串。
+    if (store.pairedDeviceCountHint > 0) {
         return store.pendingPairingCode.length > 0 ? store.pendingPairingCode : @"------";
     }
     return [store refreshPendingPairingCode];
@@ -189,7 +189,7 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         self.statusText = [NSString stringWithFormat:@"已连接 · %@", device];
     } else if (self.server.isRunning) {
         self.state = CompanionChannelStateAdvertising;
-        NSUInteger paired = store.pairedDevices.count;
+        NSUInteger paired = store.pairedDeviceCountHint;
         if (self.usingTemporaryPort) {
             self.statusText = [NSString stringWithFormat:@"临时端口 %ld（固定端口被占用，请确认更换）",
                                (long)self.listeningPort];

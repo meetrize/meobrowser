@@ -28,6 +28,9 @@ typedef NS_ENUM(NSInteger, CompanionAuthMode) {
 @property (nonatomic, assign) NSInteger stickyListeningPort;
 @property (nonatomic, copy, readonly) NSArray<CompanionPairedDevice *> *pairedDevices;
 
+/// 已配对数量提示（仅 UserDefaults，不触发钥匙串读取；供启动态文案使用）。
+@property (nonatomic, assign, readonly) NSUInteger pairedDeviceCountHint;
+
 /// 生成或刷新 6 位配对码（默认 5 分钟有效）。
 - (NSString *)refreshPendingPairingCode;
 

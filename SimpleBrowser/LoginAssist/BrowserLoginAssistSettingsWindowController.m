@@ -1008,7 +1008,7 @@
     }
 
     BOOL connected = (channel.state == CompanionChannelStateConnected);
-    NSUInteger paired = store.pairedDevices.count;
+    NSUInteger paired = store.pairedDeviceCountHint;
     CompanionLinkUIState uiState = [CompanionLinkUI stateFromChannel:channel];
     self.companionConnectionLabel.stringValue = [CompanionLinkUI titleForState:uiState];
     self.companionConnectionLabel.textColor = [NSColor labelColor];
