@@ -127,6 +127,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingSSLAuth *> *pendingSSLAuthByWebView;
 @property (nonatomic, strong) NSHashTable<WKWebView *> *webViewsWithHTTPAuthPrompt;
 @property (nonatomic, assign) BOOL addressFieldIsEditing;
+/// 上次 refreshTabsUI 时的选中标签，用于判断是否切到新标签页后再聚焦地址栏。
+@property (nonatomic, strong, nullable) NSUUID *lastSelectedTabIDForAddressFocus;
 @end
 
 @implementation BrowserWindowController
@@ -1304,6 +1306,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
     [self syncCertificateWarningVisibilityForSelectedTab];
+
+    NSUUID *selectedID = selectedTab.tabID;
+    BOOL selectionChanged = selectedID != nil
+        && ![selectedID isEqual:self.lastSelectedTabIDForAddressFocus];
+    self.lastSelectedTabIDForAddressFocus = selectedID;
+    if (selectionChanged && selectedTab.isNewTabPage) {
+        [self focusAddressBarForNewTabPage];
+    }
 }
 
 #pragma mark - Loading Progress
@@ -2210,6 +2220,23 @@ doCommandBySelector:(SEL)commandSelector {
         [window makeFirstResponder:nil];
     }
     self.addressFieldIsEditing = NO;
+}
+
+/// 切换到新标签页（含新建）时聚焦地址栏。
+/// 延后到下一轮 runloop，避免标签栏点击链路结束后仍占住第一响应者。
+- (void)focusAddressBarForNewTabPage {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        BrowserTab *tab = strongSelf.tabController.selectedTab;
+        if (!tab.isNewTabPage) {
+            return;
+        }
+        [strongSelf.window makeFirstResponder:strongSelf.addressField];
+    });
 }
 
 - (void)updateSecurityBadgeVisibility {
