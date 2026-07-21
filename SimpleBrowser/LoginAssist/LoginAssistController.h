@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)cancelPendingAutoLogin;
 - (void)showRecipeMenuFromButton:(NSButton *)button;
 
+/// 将登录助手相关项追加到工具栏右键菜单（固定/隐藏之后）。
+- (void)appendItemsToToolbarContextMenu:(NSMenu *)menu;
+
 - (void)presentSettingsEditingRecipeID:(nullable NSString *)recipeID;
 /// 打开设置并滚到互联状态卡片（工具栏「互联」入口）。
 - (void)presentCompanionSettings;

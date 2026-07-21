@@ -2,8 +2,11 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// 地址栏动作可见性（固定/隐藏）变更；object 为发起变更的 ActionGroup，其它窗口应同步。
+extern NSNotificationName const BrowserAddressBarActionVisibilityDidChangeNotification;
+
 /// 地址栏右侧可拖拽宽度的按钮工具组；宽度不足时自动显示溢出菜单。
-/// 组内按钮支持按住拖动调整顺序，顺序会持久化。
+/// 组内按钮支持按住拖动调整顺序，顺序会持久化；右键可固定/隐藏。
 @interface BrowserAddressBarActionGroup : NSView
 
 /// 控制整组宽度的约束，由本视图创建并激活。
@@ -14,6 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 用于计算按钮组最大宽度的容器（通常为 BrowserAddressBarRowView）。
 @property (nonatomic, weak, nullable) NSView *layoutContainer;
+
+/// 右键菜单追加项（如登录助手 Recipe）；itemID 为动作 id。
+@property (nonatomic, copy, nullable) void (^augmentContextMenu)(NSString *itemID, NSMenu *menu);
 
 /// 下载按钮（组内首项，优先保持可见）；由窗口控制器设置 target/action 与角标。
 @property (nonatomic, strong, readonly) NSButton *downloadButton;

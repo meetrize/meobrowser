@@ -84,19 +84,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     self.loginButton = button;
     button.target = self;
     button.action = @selector(oneClickLogin:);
-    BOOL hasRightClick = NO;
-    for (NSGestureRecognizer *gr in button.gestureRecognizers) {
+    // 右键「固定/隐藏」由 ActionGroup 统一处理；登录项经 appendItemsToToolbarContextMenu: 合并。
+    for (NSGestureRecognizer *gr in [button.gestureRecognizers copy]) {
         if ([gr isKindOfClass:[NSClickGestureRecognizer class]] &&
             ((NSClickGestureRecognizer *)gr).buttonMask == 0x2) {
-            hasRightClick = YES;
-            break;
+            [button removeGestureRecognizer:gr];
         }
-    }
-    if (!hasRightClick) {
-        NSClickGestureRecognizer *rightClick = [[NSClickGestureRecognizer alloc] initWithTarget:self
-                                                                                         action:@selector(loginButtonRightClicked:)];
-        rightClick.buttonMask = 0x2;
-        [button addGestureRecognizer:rightClick];
     }
     [self refreshButtonAppearance];
 }
@@ -601,7 +594,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     } else if (self.hasDetectedLoginForm) {
         button.toolTip = @"检测到登录表单（单击打开登录助手）";
     } else {
-        button.toolTip = @"当前页无可登录配置（拖动可调整顺序）";
+        button.toolTip = @"登录助手";
     }
 }
 
@@ -694,21 +687,36 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self presentAssistMenuFromView:self.loginButton context:nil];
 }
 
-- (void)loginButtonRightClicked:(NSClickGestureRecognizer *)gesture {
-    if (gesture.state != NSGestureRecognizerStateEnded) {
-        return;
-    }
-    [self presentAssistMenuFromView:self.loginButton context:nil];
-}
-
 - (void)showRecipeMenuFromButton:(NSButton *)button {
     [self presentAssistMenuFromView:button context:nil];
 }
 
+- (void)appendItemsToToolbarContextMenu:(NSMenu *)menu {
+    if (!menu) {
+        return;
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
+    [self addAssistMenuItemsToMenu:menu context:nil];
+}
+
 - (void)presentAssistMenuFromView:(NSView *)view context:(NSDictionary *)context {
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"登录助手"];
+    [self addAssistMenuItemsToMenu:menu context:context];
+
+    if (view) {
+        NSPoint location = NSMakePoint(0, NSHeight(view.bounds));
+        [menu popUpMenuPositioningItem:nil atLocation:location inView:view];
+    } else {
+        NSWindow *window = self.windowController.window;
+        NSPoint screen = [NSEvent mouseLocation];
+        NSPoint windowPoint = [window convertPointFromScreen:screen];
+        [menu popUpMenuPositioningItem:nil atLocation:windowPoint inView:window.contentView];
+    }
+}
+
+- (void)addAssistMenuItemsToMenu:(NSMenu *)menu context:(NSDictionary *)context {
     NSDictionary *ctx = context ?: self.lastIconContext;
     BOOL hasOTP = context ? [context[@"hasOTP"] boolValue] : self.detectedHasOTP;
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"登录助手"];
 
     NSMenuItem *systemItem = [[NSMenuItem alloc] initWithTitle:@"用系统密码填充…"
                                                         action:@selector(fillWithSystemPassword:)
@@ -760,10 +768,6 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
-    BOOL canSave = [ctx[@"hasUsername"] boolValue] && [ctx[@"hasPassword"] boolValue];
-    if (!canSave) {
-        canSave = YES; // 尝试读草稿
-    }
     NSMenuItem *save = [[NSMenuItem alloc] initWithTitle:@"将当前输入保存为配置…"
                                                   action:@selector(saveCurrentInputAsRecipe:)
                                            keyEquivalent:@""];
@@ -782,16 +786,6 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
                                                keyEquivalent:@""];
     pasteOTP.target = self;
     [menu addItem:pasteOTP];
-
-    if (view) {
-        NSPoint location = NSMakePoint(0, NSHeight(view.bounds));
-        [menu popUpMenuPositioningItem:nil atLocation:location inView:view];
-    } else {
-        NSWindow *window = self.windowController.window;
-        NSPoint screen = [NSEvent mouseLocation];
-        NSPoint windowPoint = [window convertPointFromScreen:screen];
-        [menu popUpMenuPositioningItem:nil atLocation:windowPoint inView:window.contentView];
-    }
 }
 
 - (void)runRecipeFromMenu:(NSMenuItem *)item {

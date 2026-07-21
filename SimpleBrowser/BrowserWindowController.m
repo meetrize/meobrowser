@@ -474,6 +474,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.downloadButton.action = @selector(toggleDownloadsPanel:);
     [self installDownloadBadgeOnButton:self.downloadButton];
     [self installDownloadProgressRingOnButton:self.downloadButton];
+    __weak typeof(self) weakSelf = self;
+    self.addressBarActionGroup.augmentContextMenu = ^(NSString *itemID, NSMenu *menu) {
+        if ([itemID isEqualToString:@"loginAssist"]) {
+            [weakSelf.loginAssistController appendItemsToToolbarContextMenu:menu];
+        }
+    };
     if (self.addressBarActionGroup.loginAssistButton) {
         [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
     }

@@ -2,6 +2,9 @@
 #import "CompanionLinkUI.h"
 #import "CompanionChannel.h"
 
+NSNotificationName const BrowserAddressBarActionVisibilityDidChangeNotification =
+    @"BrowserAddressBarActionVisibilityDidChangeNotification";
+
 static const CGFloat kActionButtonSize = 28.0;
 static const CGFloat kActionButtonSpacing = 2.0;
 static const CGFloat kDefaultGroupWidth = 184.0;
@@ -9,6 +12,7 @@ static const CGFloat kMinimumGroupWidth = 36.0;
 static const CGFloat kOverflowHysteresis = 8.0;
 static const CGFloat kReorderDragThreshold = 4.0;
 static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder";
+static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidden";
 
 #pragma mark - Edge Resize
 
@@ -63,6 +67,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, copy) NSString *itemID;
 @property (nonatomic, copy) NSString *symbolName;
 @property (nonatomic, copy) NSString *toolTip;
+@property (nonatomic, assign) BOOL userHidden;
 @property (nonatomic, weak, nullable) id target;
 @property (nonatomic, assign) SEL action;
 @end
@@ -80,12 +85,18 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 
 @interface BrowserAddressBarActionGroup (Reorder)
 - (void)handleMouseDownOnActionButton:(BrowserAddressBarActionButton *)button event:(NSEvent *)event;
+- (NSMenu *)contextMenuForActionButton:(BrowserAddressBarActionButton *)button;
 @end
 
 @implementation BrowserAddressBarActionButton
 
 - (void)mouseDown:(NSEvent *)event {
     [self.actionGroup handleMouseDownOnActionButton:self event:event];
+}
+
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    (void)event;
+    return [self.actionGroup contextMenuForActionButton:self];
 }
 
 @end
@@ -115,6 +126,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, strong) NSLayoutConstraint *overflowLeadingSpacingConstraint;
 @property (nonatomic, assign) NSInteger lastMenuStartIndex;
 @property (nonatomic, assign) NSInteger lastVisibleButtonCount;
+@property (nonatomic, assign) BOOL suppressVisibilityBroadcast;
 @end
 
 @implementation BrowserAddressBarActionGroup
@@ -134,6 +146,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         _items = [[self orderedActionItems] mutableCopy];
+        [self applyHiddenStateFromDefaults];
         _actionButtons = [[self makeActionButtonsForItems:_items] mutableCopy];
         [self refreshDownloadButtonReference];
 
@@ -171,6 +184,11 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 
         [self ensureCompanionLinkStatusDot];
         [self updateCompanionLinkAppearance];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(actionVisibilityDidChange:)
+                                                     name:BrowserAddressBarActionVisibilityDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -183,7 +201,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 
 - (NSArray<BrowserAddressBarActionItem *> *)defaultActionItems {
     NSArray<NSDictionary<NSString *, NSString *> *> *specs = @[
-        @{@"id": @"findInPage", @"symbol": @"magnifyingglass", @"tip": @"查找（再点关闭）"},
+        @{@"id": @"findInPage", @"symbol": @"magnifyingglass", @"tip": @"查找"},
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
@@ -257,6 +275,16 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     return ordered;
 }
 
+- (void)applyHiddenStateFromDefaults {
+    NSArray *hidden = [[NSUserDefaults standardUserDefaults] arrayForKey:kActionHiddenDefaultsKey];
+    NSSet<NSString *> *hiddenIDs = [hidden isKindOfClass:[NSArray class]]
+        ? [NSSet setWithArray:hidden]
+        : [NSSet set];
+    for (BrowserAddressBarActionItem *item in self.items) {
+        item.userHidden = [hiddenIDs containsObject:item.itemID];
+    }
+}
+
 - (void)persistActionOrder {
     NSMutableArray<NSString *> *ids = [NSMutableArray arrayWithCapacity:self.items.count];
     for (BrowserAddressBarActionItem *item in self.items) {
@@ -265,6 +293,40 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         }
     }
     [[NSUserDefaults standardUserDefaults] setObject:ids forKey:kActionOrderDefaultsKey];
+}
+
+- (void)persistHiddenState {
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (BrowserAddressBarActionItem *item in self.items) {
+        if (item.userHidden && item.itemID.length > 0) {
+            [ids addObject:item.itemID];
+        }
+    }
+    [[NSUserDefaults standardUserDefaults] setObject:ids forKey:kActionHiddenDefaultsKey];
+}
+
+- (void)broadcastVisibilityChange {
+    if (self.suppressVisibilityBroadcast) {
+        return;
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:BrowserAddressBarActionVisibilityDidChangeNotification
+                                                        object:self];
+}
+
+- (void)actionVisibilityDidChange:(NSNotification *)notification {
+    if (notification.object == self) {
+        return;
+    }
+    NSInteger oldToolbarCount = [self toolbarItemCount];
+    self.suppressVisibilityBroadcast = YES;
+    [self applyHiddenStateFromDefaults];
+    NSInteger newToolbarCount = [self toolbarItemCount];
+    self.lastVisibleButtonCount = -1;
+    self.lastMenuStartIndex = -1;
+    [self compactPreferredWidthToContentAllowingExpand:(newToolbarCount > oldToolbarCount)];
+    self.suppressVisibilityBroadcast = NO;
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"BrowserAddressBarActionOrderDidChangeNotification"
+                                                        object:self];
 }
 
 - (void)refreshDownloadButtonReference {
@@ -334,7 +396,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     }
     button.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
     NSString *title = [CompanionLinkUI titleForState:state];
-    button.toolTip = [NSString stringWithFormat:@"互联 · %@（拖动可调整顺序）", title];
+    button.toolTip = [NSString stringWithFormat:@"互联 · %@", title];
     button.accessibilityLabel = [NSString stringWithFormat:@"互联 · %@", title];
 }
 
@@ -361,7 +423,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     button.bordered = NO;
     button.imagePosition = NSImageOnly;
     button.imageScaling = NSImageScaleProportionallyDown;
-    button.toolTip = [NSString stringWithFormat:@"%@（拖动可调整顺序）", toolTip];
+    button.toolTip = toolTip;
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.actionGroup = self;
     if (image) {
@@ -426,6 +488,141 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     [self.overflowMenu popUpMenuPositioningItem:nil atLocation:location inView:sender];
 }
 
+#pragma mark - Pin / Hide
+
+- (NSInteger)indexOfActionButton:(NSButton *)button {
+    return [self.actionButtons indexOfObject:button];
+}
+
+- (NSMenu *)contextMenuForActionButton:(BrowserAddressBarActionButton *)button {
+    NSInteger index = [self indexOfActionButton:button];
+    if (index == NSNotFound || index >= (NSInteger)self.items.count) {
+        return nil;
+    }
+    BrowserAddressBarActionItem *item = self.items[index];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:item.toolTip ?: @"工具"];
+
+    NSMenuItem *pinItem = [[NSMenuItem alloc] initWithTitle:@"固定"
+                                                     action:@selector(pinActionItem:)
+                                              keyEquivalent:@""];
+    pinItem.target = self;
+    pinItem.representedObject = item.itemID;
+    pinItem.state = item.userHidden ? NSControlStateValueOff : NSControlStateValueOn;
+    [menu addItem:pinItem];
+
+    NSMenuItem *hideItem = [[NSMenuItem alloc] initWithTitle:@"隐藏"
+                                                      action:@selector(hideActionItem:)
+                                               keyEquivalent:@""];
+    hideItem.target = self;
+    hideItem.representedObject = item.itemID;
+    hideItem.state = item.userHidden ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:hideItem];
+
+    if (self.augmentContextMenu) {
+        self.augmentContextMenu(item.itemID, menu);
+    }
+    return menu;
+}
+
+- (BrowserAddressBarActionItem *)itemWithID:(NSString *)itemID {
+    if (itemID.length == 0) {
+        return nil;
+    }
+    for (BrowserAddressBarActionItem *item in self.items) {
+        if ([item.itemID isEqualToString:itemID]) {
+            return item;
+        }
+    }
+    return nil;
+}
+
+- (void)pinActionItem:(NSMenuItem *)sender {
+    NSString *itemID = sender.representedObject;
+    BrowserAddressBarActionItem *item = [self itemWithID:itemID];
+    if (!item || !item.userHidden) {
+        return;
+    }
+    item.userHidden = NO;
+    [self persistHiddenState];
+    self.lastVisibleButtonCount = -1;
+    self.lastMenuStartIndex = -1;
+    [self compactPreferredWidthToContentAllowingExpand:YES];
+    [self broadcastVisibilityChange];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"BrowserAddressBarActionOrderDidChangeNotification"
+                                                        object:self];
+}
+
+- (void)hideActionItem:(NSMenuItem *)sender {
+    NSString *itemID = sender.representedObject;
+    BrowserAddressBarActionItem *item = [self itemWithID:itemID];
+    if (!item || item.userHidden) {
+        return;
+    }
+    item.userHidden = YES;
+    [self persistHiddenState];
+    self.lastVisibleButtonCount = -1;
+    self.lastMenuStartIndex = -1;
+    [self compactPreferredWidthToContentAllowingExpand:NO];
+    [self broadcastVisibilityChange];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"BrowserAddressBarActionOrderDidChangeNotification"
+                                                        object:self];
+}
+
+- (NSInteger)toolbarItemCount {
+    NSInteger count = 0;
+    for (BrowserAddressBarActionItem *item in self.items) {
+        if (!item.userHidden) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+- (NSInteger)userHiddenItemCount {
+    NSInteger count = 0;
+    for (BrowserAddressBarActionItem *item in self.items) {
+        if (item.userHidden) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// 将工具组宽度对齐到当前应显示的按钮（+ 溢出箭头），去掉尾部空白。
+/// allowExpand：固定回工具栏时允许变宽以容纳新按钮。
+- (void)compactPreferredWidthToContentAllowingExpand:(BOOL)allowExpand {
+    NSInteger toolbar = [self toolbarItemCount];
+    BOOL hasUserHidden = [self userHiddenItemCount] > 0;
+
+    CGFloat footprint = self.preferredWidth;
+    if (allowExpand) {
+        footprint = [self clampedPreferredWidth:footprint + kActionButtonSize + kActionButtonSpacing];
+    }
+
+    BOOL needsWidthOverflow = [self widthForButtonCount:toolbar includeOverflow:NO] > footprint + 0.5;
+    BOOL showOverflow = hasUserHidden || needsWidthOverflow;
+    NSInteger visible = toolbar;
+    if (showOverflow) {
+        CGFloat available = footprint - (kActionButtonSpacing + kActionButtonSize);
+        visible = [self visibleToolbarButtonCountForAvailableWidth:MAX(0, available) total:toolbar];
+        if (hasUserHidden) {
+            visible = MAX(0, MIN(visible, toolbar));
+        } else {
+            visible = MAX(0, MIN(visible, MAX(0, toolbar - 1)));
+        }
+    }
+    if (toolbar == 0 && hasUserHidden) {
+        visible = 0;
+        showOverflow = YES;
+    }
+
+    CGFloat exact = [self widthForButtonCount:visible includeOverflow:showOverflow];
+    exact = [self clampedPreferredWidth:exact];
+    self.preferredWidth = exact;
+    self.widthConstraint.constant = exact;
+    [self updateOverflowLayoutForWidth:exact];
+}
+
 #pragma mark - Reorder / click
 
 - (void)handleMouseDownOnActionButton:(BrowserAddressBarActionButton *)button event:(NSEvent *)event {
@@ -487,18 +684,13 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     } else {
         if (@available(macOS 10.14, *)) {
             // 下载按钮忙碌高亮由窗口控制器维护；此处恢复为默认次要色
-            if (button != self.downloadButton) {
-                button.contentTintColor = [NSColor secondaryLabelColor];
-            } else {
-                button.contentTintColor = [NSColor secondaryLabelColor];
-            }
+            button.contentTintColor = [NSColor secondaryLabelColor];
         }
         [self persistActionOrder];
         self.isReordering = NO;
         self.lastVisibleButtonCount = -1;
         self.lastMenuStartIndex = -1;
         [self updateOverflowLayout];
-        // 通知外部：下载按钮引用未变，但若角标依赖布局可稍后刷新
         [[NSNotificationCenter defaultCenter] postNotificationName:@"BrowserAddressBarActionOrderDidChangeNotification"
                                                             object:self];
     }
@@ -512,7 +704,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     CGFloat bestDistance = CGFLOAT_MAX;
     for (NSUInteger i = 0; i < self.actionButtons.count; i++) {
         NSButton *candidate = self.actionButtons[i];
-        if (candidate.hidden) {
+        if (candidate.hidden || self.items[i].userHidden) {
             continue;
         }
         CGFloat midX = NSMidX(candidate.frame);
@@ -532,7 +724,8 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         indexB >= (NSInteger)self.actionButtons.count) {
         return;
     }
-    if (self.actionButtons[indexA].hidden || self.actionButtons[indexB].hidden) {
+    if (self.actionButtons[indexA].hidden || self.actionButtons[indexB].hidden ||
+        self.items[indexA].userHidden || self.items[indexB].userHidden) {
         return;
     }
 
@@ -562,6 +755,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 - (void)applyWidthDelta:(CGFloat)deltaX {
     CGFloat next = [self clampedPreferredWidth:round(self.preferredWidth + deltaX)];
     if (fabs(next - self.preferredWidth) < 0.5) {
+        [self updateOverflowLayoutForWidth:self.preferredWidth];
         return;
     }
     self.preferredWidth = next;
@@ -580,14 +774,6 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 
 #pragma mark - Overflow
 
-- (CGFloat)totalButtonsWidth {
-    NSInteger count = (NSInteger)self.actionButtons.count;
-    if (count == 0) {
-        return 0;
-    }
-    return [self widthForButtonCount:count includeOverflow:NO];
-}
-
 - (CGFloat)widthForButtonCount:(NSInteger)count includeOverflow:(BOOL)includeOverflow {
     if (count <= 0) {
         return includeOverflow ? kActionButtonSize : 0;
@@ -599,7 +785,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     return width;
 }
 
-- (NSInteger)visibleButtonCountForAvailableWidth:(CGFloat)available total:(NSInteger)total {
+- (NSInteger)visibleToolbarButtonCountForAvailableWidth:(CGFloat)available total:(NSInteger)total {
     NSInteger visibleCount = 0;
     for (NSInteger i = 1; i <= total; i++) {
         if ([self widthForButtonCount:i includeOverflow:NO] <= available + 0.5) {
@@ -611,18 +797,14 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     return visibleCount;
 }
 
-- (void)applyVisibleButtonCount:(NSInteger)visibleCount total:(NSInteger)total {
-    if (visibleCount == self.lastVisibleButtonCount) {
-        return;
-    }
-    self.lastVisibleButtonCount = visibleCount;
-    for (NSInteger i = 0; i < total; i++) {
-        BOOL shouldHide = (i >= visibleCount);
-        NSButton *button = self.actionButtons[i];
-        if (button.hidden != shouldHide) {
-            button.hidden = shouldHide;
+- (NSArray<NSNumber *> *)toolbarIndexes {
+    NSMutableArray<NSNumber *> *indexes = [NSMutableArray array];
+    for (NSUInteger i = 0; i < self.items.count; i++) {
+        if (!self.items[i].userHidden) {
+            [indexes addObject:@(i)];
         }
     }
+    return indexes;
 }
 
 - (void)updateOverflowLayout {
@@ -642,31 +824,57 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     }
 
     groupWidth = floor(MAX(0, groupWidth));
-    CGFloat allButtonsWidth = [self totalButtonsWidth];
-    BOOL shouldShowOverflow = NO;
+    NSArray<NSNumber *> *toolbarIndexes = [self toolbarIndexes];
+    NSInteger toolbarTotal = (NSInteger)toolbarIndexes.count;
+    NSInteger hiddenCount = [self userHiddenItemCount];
 
+    CGFloat allToolbarWidth = [self widthForButtonCount:toolbarTotal includeOverflow:NO];
+    BOOL widthOverflow = NO;
     if (self.showsOverflowButton) {
-        shouldShowOverflow = (groupWidth + kOverflowHysteresis) < allButtonsWidth;
+        widthOverflow = (groupWidth + kOverflowHysteresis) < allToolbarWidth;
     } else {
-        shouldShowOverflow = groupWidth < allButtonsWidth;
+        widthOverflow = groupWidth < allToolbarWidth;
     }
+    BOOL shouldShowOverflow = widthOverflow || hiddenCount > 0;
 
     if (self.showsOverflowButton != shouldShowOverflow) {
         self.showsOverflowButton = shouldShowOverflow;
         [self applyOverflowPresentation];
     }
 
-    NSInteger visibleCount = total;
-    NSInteger menuStartIndex = total;
-    if (shouldShowOverflow) {
+    NSInteger visibleToolbarCount = toolbarTotal;
+    if (shouldShowOverflow && widthOverflow) {
         CGFloat available = groupWidth - (kActionButtonSpacing + kActionButtonSize);
-        visibleCount = [self visibleButtonCountForAvailableWidth:available total:total];
-        visibleCount = MAX(0, MIN(visibleCount, total - 1));
-        menuStartIndex = visibleCount;
+        visibleToolbarCount = [self visibleToolbarButtonCountForAvailableWidth:available total:toolbarTotal];
+        visibleToolbarCount = MAX(0, MIN(visibleToolbarCount, MAX(0, toolbarTotal - (hiddenCount > 0 ? 0 : 1))));
+        if (hiddenCount == 0) {
+            visibleToolbarCount = MAX(0, MIN(visibleToolbarCount, toolbarTotal - 1));
+        }
+    } else if (shouldShowOverflow && !widthOverflow) {
+        // 仅有用户隐藏项：工具栏项全部可见
+        visibleToolbarCount = toolbarTotal;
     }
 
-    [self applyVisibleButtonCount:visibleCount total:total];
-    [self rebuildOverflowMenuStartingAtIndex:menuStartIndex];
+    // 标记每个按钮是否显示
+    NSMutableSet<NSNumber *> *visibleIndexSet = [NSMutableSet set];
+    for (NSInteger i = 0; i < visibleToolbarCount && i < (NSInteger)toolbarIndexes.count; i++) {
+        [visibleIndexSet addObject:toolbarIndexes[i]];
+    }
+
+    NSInteger signature = visibleToolbarCount + toolbarTotal * 1000 + hiddenCount * 100000;
+    if (signature != self.lastVisibleButtonCount) {
+        self.lastVisibleButtonCount = signature;
+        for (NSInteger i = 0; i < total; i++) {
+            BOOL shouldHide = self.items[i].userHidden || ![visibleIndexSet containsObject:@(i)];
+            NSButton *button = self.actionButtons[i];
+            if (button.hidden != shouldHide) {
+                button.hidden = shouldHide;
+            }
+        }
+    }
+
+    [self rebuildOverflowMenuWithVisibleToolbarCount:visibleToolbarCount
+                                      toolbarIndexes:toolbarIndexes];
 }
 
 - (void)applyOverflowPresentation {
@@ -681,34 +889,78 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     }
 }
 
-- (void)rebuildOverflowMenuStartingAtIndex:(NSInteger)startIndex {
+- (void)rebuildOverflowMenuWithVisibleToolbarCount:(NSInteger)visibleToolbarCount
+                                    toolbarIndexes:(NSArray<NSNumber *> *)toolbarIndexes {
+    NSInteger menuKey = visibleToolbarCount + (NSInteger)toolbarIndexes.count * 100 + [self userHiddenItemCount] * 10000;
     if (self.overflowMenu.numberOfItems > 0 &&
-        self.lastMenuStartIndex == startIndex &&
+        self.lastMenuStartIndex == menuKey &&
         !self.isResizingWidth) {
         return;
     }
-    self.lastMenuStartIndex = startIndex;
+    self.lastMenuStartIndex = menuKey;
 
     [self.overflowMenu removeAllItems];
-    NSInteger total = (NSInteger)self.items.count;
-    for (NSInteger i = startIndex; i < total; i++) {
-        BrowserAddressBarActionItem *item = self.items[i];
-        SEL action = @selector(demoButtonClicked:);
-        id target = self;
-        if (i < (NSInteger)self.actionButtons.count) {
-            NSButton *button = self.actionButtons[i];
-            if (button.target && button.action) {
-                target = button.target;
-                action = button.action;
-            }
-        }
-        NSMenuItem *menuItem = [[NSMenuItem alloc] initWithTitle:item.toolTip
-                                                          action:action
-                                                   keyEquivalent:@""];
-        menuItem.target = target;
-        menuItem.image = [self symbolImageNamed:item.symbolName];
-        [self.overflowMenu addItem:menuItem];
+
+    // 1) 因宽度溢出而未显示的工具栏项
+    for (NSInteger i = visibleToolbarCount; i < (NSInteger)toolbarIndexes.count; i++) {
+        NSInteger index = toolbarIndexes[i].integerValue;
+        [self addOverflowMenuItemForIndex:index];
     }
+
+    // 2) 用户主动隐藏的项
+    BOOL addedHiddenHeader = NO;
+    for (NSUInteger i = 0; i < self.items.count; i++) {
+        if (!self.items[i].userHidden) {
+            continue;
+        }
+        if (!addedHiddenHeader && self.overflowMenu.numberOfItems > 0) {
+            [self.overflowMenu addItem:[NSMenuItem separatorItem]];
+            addedHiddenHeader = YES;
+        }
+        [self addOverflowMenuItemForIndex:(NSInteger)i];
+    }
+
+    // 3) 将隐藏项「固定」回工具栏
+    NSMutableArray<BrowserAddressBarActionItem *> *hiddenItems = [NSMutableArray array];
+    for (BrowserAddressBarActionItem *item in self.items) {
+        if (item.userHidden) {
+            [hiddenItems addObject:item];
+        }
+    }
+    if (hiddenItems.count > 0) {
+        [self.overflowMenu addItem:[NSMenuItem separatorItem]];
+        for (BrowserAddressBarActionItem *item in hiddenItems) {
+            NSString *title = [NSString stringWithFormat:@"固定「%@」", item.toolTip ?: item.itemID];
+            NSMenuItem *pinItem = [[NSMenuItem alloc] initWithTitle:title
+                                                             action:@selector(pinActionItem:)
+                                                      keyEquivalent:@""];
+            pinItem.target = self;
+            pinItem.representedObject = item.itemID;
+            [self.overflowMenu addItem:pinItem];
+        }
+    }
+}
+
+- (void)addOverflowMenuItemForIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.items.count) {
+        return;
+    }
+    BrowserAddressBarActionItem *item = self.items[index];
+    SEL action = @selector(demoButtonClicked:);
+    id target = self;
+    if (index < (NSInteger)self.actionButtons.count) {
+        NSButton *button = self.actionButtons[index];
+        if (button.target && button.action) {
+            target = button.target;
+            action = button.action;
+        }
+    }
+    NSMenuItem *menuItem = [[NSMenuItem alloc] initWithTitle:item.toolTip
+                                                      action:action
+                                               keyEquivalent:@""];
+    menuItem.target = target;
+    menuItem.image = [self symbolImageNamed:item.symbolName];
+    [self.overflowMenu addItem:menuItem];
 }
 
 #pragma mark - Layout

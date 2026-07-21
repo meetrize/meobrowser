@@ -22,6 +22,8 @@
 
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    // 地址栏等工具按钮悬停时立刻显示功能名 Tooltip（单位：毫秒）
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"NSInitialToolTipDelay": @1}];
     _browserWindows = [NSMutableArray array];
     _pendingExternalURLs = [NSMutableArray array];
     [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
