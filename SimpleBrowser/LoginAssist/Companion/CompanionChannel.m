@@ -6,6 +6,11 @@
 #import "CompanionBrowseSyncStore.h"
 #import "OTPInbox.h"
 #import "PhoneNotificationPresenter.h"
+#import "CallAlertSettings.h"
+#import "CallAlertPresenter.h"
+#import "CallAlertBannerController.h"
+#import "PhoneRuleClassifier.h"
+#import "PhonePolicyStore.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import <AppKit/AppKit.h>
@@ -262,6 +267,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self handlePhoneNotification:json connectionID:connectionID server:server];
         return;
     }
+    if ([type isEqualToString:@"call_event"]) {
+        [self handleCallEvent:json connectionID:connectionID server:server];
+        return;
+    }
     if ([type isEqualToString:@"open_url"]) {
         [self handleOpenURL:json connectionID:connectionID server:server];
         return;
@@ -443,6 +452,65 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     [server sendJSON:@{
         @"v": @1,
         @"type": @"phone_notification_ok",
+        @"id": payloadId,
+    } toConnectionID:connectionID];
+    [self refreshConnectedState];
+}
+
+- (void)handleCallEvent:(NSDictionary *)json
+           connectionID:(NSString *)connectionID
+                 server:(CompanionBonjourServer *)server {
+    NSString *deviceToken = json[@"deviceToken"];
+    NSString *payloadId = json[@"id"];
+    NSString *state = json[@"state"];
+    if (![deviceToken isKindOfClass:[NSString class]] ||
+        ![payloadId isKindOfClass:[NSString class]] || payloadId.length == 0 ||
+        ![state isKindOfClass:[NSString class]] || state.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"invalid call_event"}
+          toConnectionID:connectionID];
+        return;
+    }
+    if (![[CompanionPairingStore sharedStore] validateDeviceToken:deviceToken deviceId:nil]) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"unauthorized"}
+          toConnectionID:connectionID];
+        return;
+    }
+
+    [self.activeConnectionIDs addObject:connectionID];
+
+    CallAlertSettings *settings = [CallAlertSettings sharedSettings];
+    if (settings.alertEnabled) {
+        NSString *number = [json[@"number"] isKindOfClass:[NSString class]] ? json[@"number"] : @"";
+        if (number.length == 0 && [json[@"numberRaw"] isKindOfClass:[NSString class]]) {
+            number = json[@"numberRaw"];
+        }
+        NSString *presentation = [json[@"presentation"] isKindOfClass:[NSString class]]
+            ? json[@"presentation"] : @"";
+        NSString *contactName = [json[@"contactName"] isKindOfClass:[NSString class]]
+            ? json[@"contactName"] : @"";
+
+        PhonePolicyEntry *policy = [[PhonePolicyStore sharedStore] entryForNumber:number];
+        PhoneRuleClassifyResult *rule =
+            [[PhoneRuleClassifier sharedClassifier] classifyNumber:number presentation:presentation];
+
+        NSString *displayName = policy.displayName.length > 0 ? policy.displayName
+            : (contactName.length > 0 ? contactName : nil);
+        NSString *typeLabel = rule.label;
+        if (policy.displayName.length > 0) {
+            typeLabel = policy.category.length > 0 ? policy.category : rule.label;
+        }
+
+        [[CallAlertPresenter sharedPresenter] presentFromPayload:json
+                                                     displayName:displayName
+                                                       typeLabel:typeLabel];
+        [[CallAlertBannerController sharedController] updateFromPayload:json
+                                                            displayName:displayName
+                                                              typeLabel:typeLabel];
+    }
+
+    [server sendJSON:@{
+        @"v": @1,
+        @"type": @"call_event_ok",
         @"id": payloadId,
     } toConnectionID:connectionID];
     [self refreshConnectedState];

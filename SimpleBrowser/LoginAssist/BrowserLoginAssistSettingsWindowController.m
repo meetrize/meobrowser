@@ -9,6 +9,8 @@
 #import "CompanionPairingStore.h"
 #import "CompanionLinkUI.h"
 #import "PhoneNotificationSettings.h"
+#import "CallAlertSettings.h"
+#import "CallAlertPresenter.h"
 #import "CompanionSyncSettings.h"
 #import "PhoneNotificationPresenter.h"
 #import "SBTextField.h"
@@ -59,6 +61,10 @@
 @property (nonatomic, strong) NSButton *otpBannerEnabledCheck;
 @property (nonatomic, strong) NSButton *openNotificationSettingsButton;
 @property (nonatomic, strong) NSTextField *mirrorHintLabel;
+@property (nonatomic, strong) NSButton *callAlertEnabledCheck;
+@property (nonatomic, strong) NSButton *callAlertBannerCheck;
+@property (nonatomic, strong) NSButton *callAlertSystemNotifCheck;
+@property (nonatomic, strong) NSTextField *callAlertHintLabel;
 @property (nonatomic, strong) NSButton *syncEnabledCheck;
 @property (nonatomic, strong) NSButton *syncShortcutsCheck;
 @property (nonatomic, strong) NSButton *syncHistoryCheck;
@@ -433,6 +439,32 @@
                                             self.mirrorHintLabel,
                                         ]];
 
+    CallAlertSettings *callSettings = [CallAlertSettings sharedSettings];
+    self.callAlertEnabledCheck = [NSButton checkboxWithTitle:@"接收手机来电提醒"
+                                                      target:self
+                                                      action:@selector(callAlertSettingsChanged:)];
+    self.callAlertEnabledCheck.state = callSettings.alertEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.callAlertBannerCheck = [NSButton checkboxWithTitle:@"浏览器内显示跨标签来电条"
+                                                     target:self
+                                                     action:@selector(callAlertSettingsChanged:)];
+    self.callAlertBannerCheck.state = callSettings.bannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.callAlertSystemNotifCheck = [NSButton checkboxWithTitle:@"系统通知栏显示来电"
+                                                          target:self
+                                                          action:@selector(callAlertSettingsChanged:)];
+    self.callAlertSystemNotifCheck.state = callSettings.systemNotificationEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.callAlertHintLabel = [NSTextField wrappingLabelWithString:@"手机 Companion 需开启来电提醒，并授予电话权限与「来电筛选」角色以获取号码。号码类型用轻量规则判断；备注在工具栏「号码策略」管理。本期无黑名单。"];
+    self.callAlertHintLabel.font = [NSFont systemFontOfSize:11];
+    self.callAlertHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.callAlertHintLabel.preferredMaxLayoutWidth = 420;
+
+    NSView *callAlertCard = [self makeSettingsCardWithTitle:@"来电提醒"
+                                           arrangedSubviews:@[
+                                               self.callAlertEnabledCheck,
+                                               self.callAlertBannerCheck,
+                                               self.callAlertSystemNotifCheck,
+                                               self.callAlertHintLabel,
+                                           ]];
+
     CompanionSyncSettings *syncSettings = [CompanionSyncSettings sharedSettings];
     self.syncEnabledCheck = [NSButton checkboxWithTitle:@"启用与 Android 的自动同步（局域网）"
                                                  target:self
@@ -509,6 +541,7 @@
         self.companionStatusCard,
         authCard,
         mirrorCard,
+        callAlertCard,
         syncCard,
         recipeSectionTitle,
         recipeCard,
@@ -1089,6 +1122,10 @@
     PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
     self.mirrorEnabledCheck.state = mirrorSettings.mirrorEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.otpBannerEnabledCheck.state = mirrorSettings.otpBannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    CallAlertSettings *callSettings = [CallAlertSettings sharedSettings];
+    self.callAlertEnabledCheck.state = callSettings.alertEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.callAlertBannerCheck.state = callSettings.bannerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.callAlertSystemNotifCheck.state = callSettings.systemNotificationEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     CompanionSyncSettings *syncSettings = [CompanionSyncSettings sharedSettings];
     self.syncEnabledCheck.state = syncSettings.syncEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.syncShortcutsCheck.state = syncSettings.syncShortcuts ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1104,6 +1141,17 @@
     settings.otpBannerEnabled = (self.otpBannerEnabledCheck.state == NSControlStateValueOn);
     [[PhoneNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
     [self refreshNotificationPermissionHint];
+}
+
+- (void)callAlertSettingsChanged:(id)sender {
+    (void)sender;
+    CallAlertSettings *settings = [CallAlertSettings sharedSettings];
+    settings.alertEnabled = (self.callAlertEnabledCheck.state == NSControlStateValueOn);
+    settings.bannerEnabled = (self.callAlertBannerCheck.state == NSControlStateValueOn);
+    settings.systemNotificationEnabled = (self.callAlertSystemNotifCheck.state == NSControlStateValueOn);
+    if (settings.alertEnabled) {
+        [[CallAlertPresenter sharedPresenter] requestAuthorizationIfNeeded];
+    }
 }
 
 - (void)syncSettingsChanged:(id)sender {

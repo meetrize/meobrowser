@@ -115,6 +115,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
 @property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *companionLinkButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *phonePolicyButton;
 @property (nonatomic, strong, nullable) NSView *companionLinkStatusDot;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
@@ -205,6 +206,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
+        @{@"id": @"phonePolicy", @"symbol": @"phone.badge.waveform", @"tip": @"号码策略"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
         @{@"id": @"rssFeed", @"symbol": @"dot.radiowaves.up.forward", @"tip": @"RSS"},
         @{@"id": @"share", @"symbol": @"square.and.arrow.up", @"tip": @"分享"},
@@ -336,6 +338,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
     self.feedButton = nil;
     self.findInPageButton = nil;
     self.companionLinkButton = nil;
+    self.phonePolicyButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
@@ -350,6 +353,8 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             self.findInPageButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"companionLink"]) {
             self.companionLinkButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"phonePolicy"]) {
+            self.phonePolicyButton = self.actionButtons[i];
         }
     }
     [self ensureCompanionLinkStatusDot];

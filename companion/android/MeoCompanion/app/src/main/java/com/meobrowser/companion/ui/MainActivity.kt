@@ -1,8 +1,12 @@
 package com.meobrowser.companion.ui
 
 import android.Manifest
+import android.app.Activity
+import android.app.role.RoleManager
+import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -10,9 +14,12 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.lifecycleScope
 import com.meobrowser.companion.R
+import com.meobrowser.companion.call.CallAlertPrefs
+import com.meobrowser.companion.call.CallStateMonitor
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
 import com.meobrowser.companion.channel.LinkConnectionState
@@ -35,10 +42,12 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: PairingPrefs
+    private lateinit var callAlertPrefs: CallAlertPrefs
     private var readingRecentOtp = false
     private var showAllChecks = false
     private var didAutoConnect = false
     private var suppressMirrorModeCallback = false
+    private var suppressCallAlertCallback = false
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -55,12 +64,38 @@ class MainActivity : AppCompatActivity() {
         refreshChecks()
     }
 
+    private val phonePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            CallStateMonitor.start(this)
+            Toast.makeText(this, "已授予电话权限", Toast.LENGTH_SHORT).show()
+        } else {
+            callAlertPrefs.callAlertEnabled = false
+            applyCallAlertUi()
+            Toast.makeText(this, "未授予电话权限，来电提醒已关闭", Toast.LENGTH_LONG).show()
+        }
+        refreshCallAlertSummary()
+    }
+
+    private val callScreeningRoleLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(this, "已授予来电筛选", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "未授予来电筛选，可能无法获取来电号码", Toast.LENGTH_LONG).show()
+        }
+        refreshCallAlertSummary()
+    }
+
     private val statusListener: (String, String) -> Unit = { status, _ ->
         runOnUiThread {
             if (!::binding.isInitialized) return@runOnUiThread
             updateLinkStatusUi(status)
             refreshOtpDisplay()
             refreshChecks()
+            refreshCallAlertSummary()
         }
     }
 
@@ -69,11 +104,13 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         prefs = PairingPrefs(this)
+        callAlertPrefs = CallAlertPrefs(this)
         setupToolbar()
         SmsListenCoordinator.start(this)
         restoreConnectionForm()
         applyAuthModeUi()
         applyMirrorModeUi(fromUser = false)
+        applyCallAlertUi()
         updateLinkStatusUi(CompanionSession.statusText)
 
         binding.authModeGroup.setOnCheckedChangeListener { _, checkedId ->
@@ -94,6 +131,20 @@ class MainActivity : AppCompatActivity() {
                     applyMirrorModeUi(fromUser = true)
                 }
             }
+        }
+
+        binding.callAlertSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressCallAlertCallback) return@setOnCheckedChangeListener
+            if (isChecked) {
+                confirmEnableCallAlert()
+            } else {
+                callAlertPrefs.callAlertEnabled = false
+                refreshCallAlertSummary()
+            }
+        }
+
+        binding.callScreeningButton.setOnClickListener {
+            requestCallScreeningRole()
         }
 
         binding.toggleChecksButton.setOnClickListener {
@@ -239,6 +290,89 @@ class MainActivity : AppCompatActivity() {
         if (fromUser) {
             // no-op; prefs already saved
         }
+    }
+
+    private fun confirmEnableCallAlert() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.call_alert_confirm_title)
+            .setMessage(R.string.call_alert_confirm_message)
+            .setPositiveButton("开启") { _, _ ->
+                callAlertPrefs.callAlertEnabled = true
+                applyCallAlertUi()
+                ensureCallAlertPermissions()
+                Toast.makeText(this, "已开启来电提醒", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消") { _, _ ->
+                callAlertPrefs.callAlertEnabled = false
+                applyCallAlertUi()
+            }
+            .setOnCancelListener {
+                callAlertPrefs.callAlertEnabled = false
+                applyCallAlertUi()
+            }
+            .show()
+    }
+
+    private fun applyCallAlertUi() {
+        suppressCallAlertCallback = true
+        binding.callAlertSwitch.isChecked = callAlertPrefs.callAlertEnabled
+        suppressCallAlertCallback = false
+        refreshCallAlertSummary()
+        if (callAlertPrefs.callAlertEnabled &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            CallStateMonitor.start(this)
+        }
+    }
+
+    private fun refreshCallAlertSummary() {
+        if (!::binding.isInitialized) return
+        val phoneOk = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) ==
+            PackageManager.PERMISSION_GRANTED
+        val screeningOk = hasCallScreeningRole()
+        val parts = mutableListOf<String>()
+        parts += if (callAlertPrefs.callAlertEnabled) "已开启" else "已关闭"
+        parts += if (phoneOk) "电话权限✓" else "电话权限✗"
+        parts += if (screeningOk) "来电筛选✓" else "来电筛选✗"
+        binding.callAlertSummary.text = parts.joinToString(" · ")
+    }
+
+    private fun ensureCallAlertPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            phonePermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+        } else {
+            CallStateMonitor.start(this)
+        }
+        if (!hasCallScreeningRole()) {
+            requestCallScreeningRole()
+        }
+    }
+
+    private fun hasCallScreeningRole(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val rm = getSystemService(RoleManager::class.java) ?: return false
+        return rm.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)
+    }
+
+    private fun requestCallScreeningRole() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Toast.makeText(this, "当前系统版本不支持来电筛选角色", Toast.LENGTH_LONG).show()
+            return
+        }
+        val rm = getSystemService(RoleManager::class.java)
+        if (rm == null || !rm.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING)) {
+            Toast.makeText(this, "系统不支持来电筛选", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (rm.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
+            Toast.makeText(this, "已是来电筛选应用", Toast.LENGTH_SHORT).show()
+            refreshCallAlertSummary()
+            return
+        }
+        callScreeningRoleLauncher.launch(rm.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
     }
 
     private fun connectFromForm(manual: Boolean) {
@@ -472,6 +606,7 @@ class MainActivity : AppCompatActivity() {
                 "通知使用权未连接（点此开关一次）"
         }
         applyMirrorModeUi(fromUser = false)
+        applyCallAlertUi()
         OtpNotificationListener.ensureBound(this)
         // 从向导返回或再次进入前台时，安全码模式补一次自动连接
         if (!SetupChecker.shouldAutoShowWizard(this)) {

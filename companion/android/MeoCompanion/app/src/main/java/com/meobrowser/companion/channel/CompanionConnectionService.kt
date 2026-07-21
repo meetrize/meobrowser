@@ -15,6 +15,8 @@ import com.meobrowser.companion.R
 import com.meobrowser.companion.browser.BrowserActivity
 import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
+import com.meobrowser.companion.call.CallEventPayload
+import com.meobrowser.companion.call.CallStateMonitor
 import com.meobrowser.companion.sms.PhoneNotificationPayload
 import com.meobrowser.companion.sync.SyncEngine
 import org.json.JSONObject
@@ -34,6 +36,7 @@ class CompanionConnectionService : Service() {
         CompanionSession.service = this
         CompanionSession.attachHandlers(this)
         com.meobrowser.companion.sms.SmsListenCoordinator.start(this)
+        CallStateMonitor.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -193,6 +196,10 @@ class CompanionConnectionService : Service() {
                 val id = json.optString("id")
                 CompanionSession.lastSmsEvent =
                     if (id.isNotBlank()) "通知镜像已确认" else "通知镜像已确认"
+                CompanionSession.notifyStatus()
+            }
+            "call_event_ok" -> {
+                CompanionSession.lastSmsEvent = "来电提醒已确认"
                 CompanionSession.notifyStatus()
             }
             "sync_hello", "sync_pull", "sync_push", "sync_chunk", "sync_ack", "sync_error" -> {
@@ -557,6 +564,70 @@ object CompanionSession {
     fun pushPhoneNotification(context: Context, payload: PhoneNotificationPayload) {
         executor.execute {
             pushPhoneNotificationOnWorker(payload)
+        }
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    fun pushCallEvent(context: Context, payload: CallEventPayload) {
+        executor.execute {
+            pushCallEventOnWorker(payload)
+        }
+    }
+
+    private fun pushCallEventOnWorker(payload: CallEventPayload) {
+        val svc = service
+        val prefs = if (svc != null) {
+            PairingPrefs(svc)
+        } else {
+            noteMirrorSkip("服务未就绪，已跳过来电提醒")
+            return
+        }
+        val token = prefs.deviceToken
+        if (token.isNullOrBlank()) {
+            noteMirrorSkip("尚未配对，已跳过来电提醒")
+            return
+        }
+        if (!client.isConnected) {
+            statusText = "连接已断，正在重连…"
+            notifyStatus()
+            try {
+                val host = prefs.lastHost
+                val port = prefs.lastPort
+                if (host.isNullOrBlank() || port <= 0) {
+                    noteMirrorSkip("未连接，已跳过来电提醒")
+                    return
+                }
+                client.connect(host, port)
+                val hello = JSONObject()
+                hello.put("v", 1)
+                hello.put("type", "hello")
+                hello.put("deviceId", prefs.deviceId)
+                hello.put("deviceToken", token)
+                client.send(hello)
+                Thread.sleep(350)
+            } catch (e: Exception) {
+                Log.e("MeoCompanion", "auto-reconnect for call_event failed", e)
+                noteMirrorSkip("重连失败，已跳过来电提醒")
+                return
+            }
+        }
+        if (!client.isConnected) {
+            noteMirrorSkip("未连接，已跳过来电提醒")
+            return
+        }
+        try {
+            client.send(payload.toJson(token))
+            val suffix = payload.numberRaw.takeLast(4).ifBlank { "****" }
+            lastSmsEvent = "已推送来电 · …$suffix · ${payload.state}"
+            notifyStatus()
+            Log.i(
+                "MeoCompanion",
+                "call_event pushed state=${payload.state} idLen=${payload.id.length} numberLen=${payload.number.length}"
+            )
+        } catch (e: Exception) {
+            Log.e("MeoCompanion", "send call_event failed", e)
+            statusText = "来电提醒失败：${e.message}"
+            notifyStatus()
         }
     }
 

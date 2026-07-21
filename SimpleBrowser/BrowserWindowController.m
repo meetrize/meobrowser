@@ -20,6 +20,8 @@
 #import "BrowserDownloadProgressRingView.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
+#import "CallAlertBannerController.h"
+#import "PhonePolicyPanelController.h"
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
 #import "LoginAssistController.h"
@@ -596,6 +598,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     ]];
 
     [self.findBarController installInContentContainer:self.contentContainer];
+    [[CallAlertBannerController sharedController] installInContentContainer:self.contentContainer
+                                                         forWindowController:self];
 }
 
 - (NSImage *)toolbarSymbolImageNamed:(NSString *)symbolName {
@@ -710,6 +714,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self wireFindInPageButton];
     [self wireCompanionLinkButton];
+    [self wirePhonePolicyButton];
     [self.addressBarActionGroup updateCompanionLinkAppearance];
 }
 
@@ -720,6 +725,20 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     button.target = self;
     button.action = @selector(showCompanionLinkSettings:);
+}
+
+- (void)wirePhonePolicyButton {
+    NSButton *button = self.addressBarActionGroup.phonePolicyButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(showPhonePolicyPanel:);
+}
+
+- (void)showPhonePolicyPanel:(id)sender {
+    (void)sender;
+    [[PhonePolicyPanelController sharedController] showPanel];
 }
 
 - (void)showCompanionLinkSettings:(id)sender {

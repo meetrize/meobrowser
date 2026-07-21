@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "rules": [
+    { "id": "private", "when": "empty_or_restricted", "category": "private", "label": "私人号码" },
+    { "id": "400", "when": "prefix", "prefix": ["400", "800"], "category": "institution", "label": "可能是企业热线" },
+    { "id": "95", "when": "prefix", "prefix": ["95"], "minLen": 5, "maxLen": 10, "category": "institution", "label": "可能是机构/客服" },
+    { "id": "short", "when": "length_in", "minLen": 3, "maxLen": 6, "category": "hotline", "label": "可能是服务短号" },
+    { "id": "mobile", "when": "regex", "pattern": "^1[3-9]\\d{9}$", "category": "mobile", "label": "手机号码" },
+    { "id": "landline", "when": "regex", "pattern": "^0\\d{9,11}$", "category": "landline", "label": "可能是固话" }
+  ],
+  "fallback": { "category": "unknown", "label": "未知类型" }
+}

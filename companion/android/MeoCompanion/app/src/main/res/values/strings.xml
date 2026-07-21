@@ -11,6 +11,9 @@
     <string name="mirror_all_confirm_message">将把通知的标题与正文发送到已配对的 MeoBrowser（同 Wi‑Fi，当前为明文）。请勿在不可信网络开启。可随时切回「仅验证码」。</string>
     <string name="mirror_summary_otp">当前：仅验证码</string>
     <string name="mirror_summary_all">当前：全部通知（已过滤噪音）</string>
+    <string name="call_alert_hint">开启后，来电状态与号码会推到已配对的 Mac（需电话权限与「来电筛选」角色）。可能替换系统里其它骚扰拦截 App。本期不做拒接/黑名单。</string>
+    <string name="call_alert_confirm_title">开启来电提醒？</string>
+    <string name="call_alert_confirm_message">将把来电号码与状态发送到已配对的 MeoBrowser（同 Wi‑Fi，当前为明文）。需授予电话权限，并设置为来电筛选应用以获取号码。</string>
     <string name="nav_back">后退</string>
     <string name="nav_forward">前进</string>
     <string name="nav_reload">刷新</string>

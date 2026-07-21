@@ -42,3 +42,14 @@ cd companion/android/MeoCompanion
 ## 手机通知镜像
 
 设置 → 通知中切换模式。设计见 [companion-notification-mirror-design.md](../../../docs/minimal-browser/companion-notification-mirror-design.md)。
+
+## 来电提醒
+
+互联页「来电提醒」开关（默认关）。需：
+
+1. 授予**电话**权限（`READ_PHONE_STATE`）
+2. 授予**来电筛选**角色（`ROLE_CALL_SCREENING`）以获取号码
+3. Mac 登录助手中开启「接收手机来电提醒」
+
+号码类型用轻量规则表判断；备注在 Mac 工具栏「号码策略」管理。本期**无黑名单/拒接**。  
+设计：[companion-call-alert-feasibility-and-design.md](../../../docs/minimal-browser/companion-call-alert-feasibility-and-design.md) · 计划：[companion-call-alert-development-plan.md](../../../docs/minimal-browser/companion-call-alert-development-plan.md)
