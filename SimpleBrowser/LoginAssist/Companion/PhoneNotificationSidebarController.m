@@ -4,6 +4,7 @@
 #import "PhoneNotificationItem.h"
 #import "PhoneAppIconCache.h"
 #import "CompanionChannel.h"
+#import "BrowserTransientToast.h"
 #import "SBTextField.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -12,6 +13,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 static const CGFloat kResizeHandleWidth = 8.0;
 static const NSTimeInterval kAutoMarkReadDelay = 0.5;
 static const NSTimeInterval kSearchDebounce = 0.25;
+static const NSTimeInterval kSyncPullTimeout = 20.0;
 
 typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     PhoneNotificationSidebarRowKindSection = 0,
@@ -110,6 +112,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 @property (nonatomic, strong) NSView *headerBar;
 @property (nonatomic, strong) NSView *headerBottomSep;
 @property (nonatomic, strong) NSTextField *titleLabel;
+@property (nonatomic, strong) NSButton *syncButton;
 @property (nonatomic, strong) NSButton *categoryButton;
 @property (nonatomic, strong) NSButton *closeButton;
 @property (nonatomic, strong) SBTextField *searchField;
@@ -140,6 +143,9 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 @property (nonatomic, strong, nullable) id localKeyMonitor;
 @property (nonatomic, copy, nullable) NSString *pendingRevealItemID;
 @property (nonatomic, strong, nullable) NSView *highlightFlashView;
+@property (nonatomic, assign) BOOL syncInFlight;
+@property (nonatomic, copy, nullable) NSString *pendingSyncRequestID;
+@property (nonatomic, strong, nullable) dispatch_block_t syncTimeoutBlock;
 @end
 
 @implementation PhoneNotificationSidebarController
@@ -163,12 +169,17 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
                                                  selector:@selector(inboxOrChannelDidChange:)
                                                      name:PhoneAppIconCacheDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(phoneNotificationPullDidFinish:)
+                                                     name:CompanionPhoneNotificationPullDidFinishNotification
+                                                   object:nil];
     }
     return self;
 }
 
 - (void)dealloc {
     [self uninstallKeyMonitor];
+    [self cancelSyncTimeout];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -240,7 +251,26 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         category.contentTintColor = [NSColor secondaryLabelColor];
     }
 
+    NSButton *sync = [NSButton buttonWithTitle:@"同步" target:self action:@selector(syncButtonClicked:)];
+    NSImage *syncImage = [self symbolNamed:@"arrow.triangle.2.circlepath"];
+    if (!syncImage) {
+        syncImage = [self symbolNamed:@"arrow.clockwise"];
+    }
+    if (syncImage) {
+        sync.image = syncImage;
+        sync.imagePosition = NSImageOnly;
+        sync.title = @"";
+    }
+    sync.translatesAutoresizingMaskIntoConstraints = NO;
+    sync.bezelStyle = NSBezelStyleInline;
+    sync.bordered = NO;
+    sync.toolTip = @"同步手机通知栏中仍可见的通知（断线期间已划掉的无法找回）";
+    if (@available(macOS 10.14, *)) {
+        sync.contentTintColor = [NSColor secondaryLabelColor];
+    }
+
     [headerBar addSubview:title];
+    [headerBar addSubview:sync];
     [headerBar addSubview:category];
     [headerBar addSubview:close];
     [headerBar addSubview:headerBottomSep];
@@ -421,7 +451,11 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         [category.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
         [category.widthAnchor constraintEqualToConstant:28],
         [category.heightAnchor constraintEqualToConstant:28],
-        [title.trailingAnchor constraintLessThanOrEqualToAnchor:category.leadingAnchor constant:-8],
+        [sync.trailingAnchor constraintEqualToAnchor:category.leadingAnchor constant:-2],
+        [sync.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [sync.widthAnchor constraintEqualToConstant:28],
+        [sync.heightAnchor constraintEqualToConstant:28],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:sync.leadingAnchor constant:-8],
 
         [headerBottomSep.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor],
         [headerBottomSep.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor],
@@ -478,6 +512,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     self.headerBar = headerBar;
     self.headerBottomSep = headerBottomSep;
     self.titleLabel = title;
+    self.syncButton = sync;
     self.categoryButton = category;
     self.closeButton = close;
     self.searchField = search;
@@ -498,6 +533,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
     [self applySidebarChromeColors];
     [self reloadList];
+    [self updateSyncButtonState];
 }
 
 - (void)applySidebarChromeColors {
@@ -1466,6 +1502,122 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     }
 }
 
+- (void)syncButtonClicked:(id)sender {
+    (void)sender;
+    if (self.syncInFlight) {
+        return;
+    }
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    if (channel.state != CompanionChannelStateConnected) {
+        [self showSyncToast:@"请先连接手机 Companion"];
+        [self updateSyncButtonState];
+        return;
+    }
+    NSString *requestID = [[NSUUID UUID] UUIDString];
+    if (![channel requestPhoneNotificationPullWithRequestID:requestID]) {
+        [self showSyncToast:@"同步请求发送失败"];
+        return;
+    }
+    self.syncInFlight = YES;
+    self.pendingSyncRequestID = requestID;
+    [self updateSyncButtonState];
+    [self scheduleSyncTimeout];
+    [self showSyncToast:@"正在同步手机通知…"];
+}
+
+- (void)phoneNotificationPullDidFinish:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo ?: @{};
+    NSString *requestID = info[CompanionPhoneNotificationPullRequestIDKey];
+    if (self.pendingSyncRequestID.length > 0 &&
+        requestID.length > 0 &&
+        ![requestID isEqualToString:self.pendingSyncRequestID]) {
+        return;
+    }
+    [self cancelSyncTimeout];
+    self.syncInFlight = NO;
+    self.pendingSyncRequestID = nil;
+    [self updateSyncButtonState];
+    [self reloadList];
+
+    NSString *error = info[CompanionPhoneNotificationPullErrorKey];
+    NSInteger pushed = [info[CompanionPhoneNotificationPullPushedKey] integerValue];
+    NSString *mode = info[CompanionPhoneNotificationPullModeKey] ?: @"";
+    if (error.length > 0) {
+        NSString *msg = @"同步失败";
+        if ([error isEqualToString:@"listener_disabled"]) {
+            msg = @"手机未开启通知使用权";
+        } else if ([error isEqualToString:@"listener_disconnected"]) {
+            msg = @"手机通知监听未连接，请在 Companion 中重试";
+        } else if ([error isEqualToString:@"service_unavailable"]) {
+            msg = @"手机 Companion 服务未就绪";
+        } else {
+            msg = [NSString stringWithFormat:@"同步失败：%@", error];
+        }
+        [self showSyncToast:msg];
+        return;
+    }
+    if (pushed <= 0) {
+        if ([mode isEqualToString:@"otp_only"]) {
+            [self showSyncToast:@"未发现可同步的验证码通知"];
+        } else {
+            [self showSyncToast:@"通知栏没有可同步的通知"];
+        }
+        return;
+    }
+    [self showSyncToast:[NSString stringWithFormat:@"已同步 %ld 条通知", (long)pushed]];
+}
+
+- (void)updateSyncButtonState {
+    BOOL connected = [CompanionChannel sharedChannel].state == CompanionChannelStateConnected;
+    self.syncButton.enabled = connected && !self.syncInFlight;
+    if (self.syncInFlight) {
+        self.syncButton.toolTip = @"正在同步…";
+    } else if (!connected) {
+        self.syncButton.toolTip = @"连接手机后可同步通知栏中仍可见的通知";
+    } else {
+        self.syncButton.toolTip = @"同步手机通知栏中仍可见的通知（断线期间已划掉的无法找回）";
+    }
+    if (@available(macOS 10.14, *)) {
+        self.syncButton.contentTintColor = self.syncButton.enabled
+            ? [NSColor secondaryLabelColor]
+            : [NSColor tertiaryLabelColor];
+    }
+}
+
+- (void)scheduleSyncTimeout {
+    [self cancelSyncTimeout];
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.syncInFlight) {
+            return;
+        }
+        strongSelf.syncInFlight = NO;
+        strongSelf.pendingSyncRequestID = nil;
+        [strongSelf updateSyncButtonState];
+        [strongSelf showSyncToast:@"同步超时，请确认手机已连接"];
+    });
+    self.syncTimeoutBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kSyncPullTimeout * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
+- (void)cancelSyncTimeout {
+    if (self.syncTimeoutBlock) {
+        dispatch_block_cancel(self.syncTimeoutBlock);
+        self.syncTimeoutBlock = nil;
+    }
+}
+
+- (void)showSyncToast:(NSString *)message {
+    NSWindow *window = self.view.window;
+    if (!window || message.length == 0) {
+        return;
+    }
+    [BrowserTransientToast showMessage:message inWindow:window duration:2.4];
+}
+
 - (void)emptyActionClicked:(id)sender {
     (void)sender;
     if ([self.delegate respondsToSelector:@selector(notificationSidebarDidRequestCompanionSettings:)]) {
@@ -1475,6 +1627,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
 - (void)inboxOrChannelDidChange:(NSNotification *)notification {
     (void)notification;
+    [self updateSyncButtonState];
     if (self.visible) {
         [self reloadList];
     }

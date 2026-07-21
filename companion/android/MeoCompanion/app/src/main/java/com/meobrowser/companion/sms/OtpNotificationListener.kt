@@ -88,6 +88,46 @@ class OtpNotificationListener : NotificationListenerService() {
     }
 
     /**
+     * Mac 侧栏补拉：收集当前通知栏可镜像载荷（不直接发送）。
+     * 仅验证码模式则现场推 otp，返回 hits。
+     */
+    fun collectActiveForMacPullLocal(): MacPullScanResult {
+        val mode = PairingPrefs(applicationContext).notificationMirrorMode
+        val modeName = when (mode) {
+            NotificationMirrorMode.ALL -> "all"
+            else -> "otp_only"
+        }
+        val list = try {
+            activeNotifications ?: emptyArray()
+        } catch (e: Exception) {
+            Log.e(TAG, "activeNotifications failed", e)
+            return MacPullScanResult(emptyList(), 0, modeName, "scan_failed")
+        }
+        val sorted = list.sortedByDescending { it.postTime }
+        if (mode != NotificationMirrorMode.ALL) {
+            var otpHits = 0
+            for (sbn in sorted) {
+                if (handleSbn(sbn, force = true, otpScanOnly = true)) {
+                    otpHits++
+                }
+            }
+            return MacPullScanResult(emptyList(), otpHits, modeName, null)
+        }
+
+        val payloads = ArrayList<PhoneNotificationPayload>()
+        val seenIds = HashSet<String>()
+        for (sbn in sorted) {
+            if (sbn.packageName == packageName) continue
+            if (NotificationNoiseFilter.shouldSkip(sbn, packageName)) continue
+            val payload = NotificationPayloadBuilder.build(applicationContext, sbn) ?: continue
+            if (!seenIds.add(payload.id)) continue
+            NotificationMirrorGate.forceAdmit(payload.id)
+            payloads.add(payload)
+        }
+        return MacPullScanResult(payloads, 0, modeName, null)
+    }
+
+    /**
      * @param otpScanOnly 手动「重新读取」时只走验证码路径，不刷全部镜像
      * @return 是否作为验证码候选处理成功（镜像推送不计入）
      */
@@ -251,6 +291,35 @@ class OtpNotificationListener : NotificationListenerService() {
                     "已开启且已连接，可从通知栏抓取验证码"
                 else ->
                     "设置已开，但监听服务未连接（重装后常见）。点「重新读取」会尝试重连；仍不行请开关一次通知使用权。"
+            }
+        }
+
+        data class MacPullScanResult(
+            val payloads: List<PhoneNotificationPayload>,
+            val otpRescanHits: Int,
+            val mode: String,
+            val error: String?,
+        )
+
+        /**
+         * Mac 主动补拉用：收集通知栏当前仍可见、可镜像的条目。
+         * 断线期间已划掉的通知无法恢复。
+         */
+        fun collectActiveForMacPull(context: Context): MacPullScanResult {
+            if (!isEnabled(context)) {
+                return MacPullScanResult(emptyList(), 0, "unknown", "listener_disabled")
+            }
+            val svc = instance
+            if (svc == null) {
+                pendingRescan = false
+                ensureBound(context)
+                return MacPullScanResult(emptyList(), 0, "unknown", "listener_disconnected")
+            }
+            return try {
+                svc.collectActiveForMacPullLocal()
+            } catch (e: Exception) {
+                Log.e(TAG, "collectActiveForMacPull failed", e)
+                MacPullScanResult(emptyList(), 0, "unknown", "scan_failed")
             }
         }
 

@@ -17,7 +17,7 @@ data class PhoneNotificationPayload(
     val ongoing: Boolean,
     val groupSummary: Boolean,
 ) {
-    fun toJson(deviceToken: String): JSONObject {
+    fun toJson(deviceToken: String, source: String? = null): JSONObject {
         val flags = JSONObject()
         flags.put("ongoing", ongoing)
         flags.put("groupSummary", groupSummary)
@@ -33,6 +33,10 @@ data class PhoneNotificationPayload(
             put("ts", ts)
             put("postTimeMs", postTimeMs)
             put("flags", flags)
+            // Mac 侧栏「同步通知」补拉：source=pull 时入库但不弹系统横幅
+            if (!source.isNullOrBlank()) {
+                put("source", source)
+            }
         }
     }
 }

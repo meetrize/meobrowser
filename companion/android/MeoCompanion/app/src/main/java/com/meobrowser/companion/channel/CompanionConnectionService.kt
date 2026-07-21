@@ -17,6 +17,7 @@ import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.call.CallEventPayload
 import com.meobrowser.companion.call.CallStateMonitor
+import com.meobrowser.companion.sms.OtpNotificationListener
 import com.meobrowser.companion.sms.PhoneNotificationPayload
 import com.meobrowser.companion.sms.AppIconExporter
 import com.meobrowser.companion.sync.SyncEngine
@@ -200,6 +201,12 @@ class CompanionConnectionService : Service() {
                 CompanionSession.lastSmsEvent =
                     if (id.isNotBlank()) "通知镜像已确认" else "通知镜像已确认"
                 CompanionSession.notifyStatus()
+            }
+            "phone_notification_pull" -> {
+                val requestId = json.optString("requestId")
+                executor.execute {
+                    CompanionSession.performPhoneNotificationPull(requestId)
+                }
             }
             "app_icon_ok" -> {
                 val pkg = json.optString("packageName")
@@ -615,9 +622,13 @@ object CompanionSession {
     }
 
     @Suppress("UNUSED_PARAMETER")
-    fun pushPhoneNotification(context: Context, payload: PhoneNotificationPayload) {
+    fun pushPhoneNotification(
+        context: Context,
+        payload: PhoneNotificationPayload,
+        source: String? = null,
+    ) {
         executor.execute {
-            pushPhoneNotificationOnWorker(payload)
+            pushPhoneNotificationOnWorker(payload, source)
         }
     }
 
@@ -685,18 +696,21 @@ object CompanionSession {
         }
     }
 
-    private fun pushPhoneNotificationOnWorker(payload: PhoneNotificationPayload) {
+    private fun pushPhoneNotificationOnWorker(
+        payload: PhoneNotificationPayload,
+        source: String? = null,
+    ): Boolean {
         val svc = service
         val prefs = if (svc != null) {
             PairingPrefs(svc)
         } else {
             noteMirrorSkip("服务未就绪，已跳过通知镜像")
-            return
+            return false
         }
         val token = prefs.deviceToken
         if (token.isNullOrBlank()) {
             noteMirrorSkip("尚未配对，已跳过通知镜像")
-            return
+            return false
         }
         if (!client.isConnected) {
             statusText = "连接已断，正在重连…"
@@ -706,7 +720,7 @@ object CompanionSession {
                 val port = prefs.lastPort
                 if (host.isNullOrBlank() || port <= 0) {
                     noteMirrorSkip("未连接，已跳过通知镜像")
-                    return
+                    return false
                 }
                 client.connect(host, port)
                 val hello = JSONObject()
@@ -719,16 +733,16 @@ object CompanionSession {
             } catch (e: Exception) {
                 Log.e("MeoCompanion", "auto-reconnect for mirror failed", e)
                 noteMirrorSkip("重连失败，已跳过通知镜像")
-                return
+                return false
             }
         }
         if (!client.isConnected) {
             noteMirrorSkip("未连接，已跳过通知镜像")
-            return
+            return false
         }
-        try {
+        return try {
             ensureAppIconPushedOnWorker(svc, payload.packageName, prefs)
-            client.send(payload.toJson(token))
+            client.send(payload.toJson(token, source))
             lastSmsEvent = "已镜像通知 · ${payload.appLabel.ifBlank { payload.packageName }}"
             if (!statusText.contains("连接保持中")) {
                 statusText = statusText
@@ -739,12 +753,73 @@ object CompanionSession {
             notifyStatus()
             Log.i(
                 "MeoCompanion",
-                "phone_notification pushed pkg=${payload.packageName} idLen=${payload.id.length} bodyLen=${payload.body.length}"
+                "phone_notification pushed pkg=${payload.packageName} idLen=${payload.id.length} bodyLen=${payload.body.length} source=${source ?: "live"}"
             )
+            true
         } catch (e: Exception) {
             Log.e("MeoCompanion", "send phone_notification failed", e)
             statusText = "通知镜像失败：${e.message}"
             notifyStatus()
+            false
+        }
+    }
+
+    /**
+     * Mac 侧栏「同步通知」：扫描手机通知栏当前仍可见条目并补推。
+     * 已划掉的历史通知系统无法取回。
+     */
+    fun performPhoneNotificationPull(requestId: String) {
+        val reply = JSONObject()
+        reply.put("v", 1)
+        reply.put("type", "phone_notification_pull_ok")
+        if (requestId.isNotBlank()) {
+            reply.put("requestId", requestId)
+        }
+        val ctx = service?.applicationContext
+        if (ctx == null) {
+            reply.put("pushed", 0)
+            reply.put("error", "service_unavailable")
+            trySendPullReply(reply)
+            return
+        }
+        try {
+            val scan = OtpNotificationListener.collectActiveForMacPull(ctx)
+            reply.put("mode", scan.mode)
+            if (scan.error != null) {
+                reply.put("error", scan.error)
+                reply.put("pushed", 0)
+            } else {
+                var pushed = 0
+                for ((index, payload) in scan.payloads.withIndex()) {
+                    if (pushPhoneNotificationOnWorker(payload, source = "pull")) {
+                        pushed++
+                    }
+                    if (index > 0 && index % 5 == 0) {
+                        Thread.sleep(120)
+                    }
+                }
+                if (scan.otpRescanHits > 0) {
+                    pushed += scan.otpRescanHits
+                }
+                reply.put("pushed", pushed)
+                lastSmsEvent = "已补同步通知 $pushed 条"
+                notifyStatus()
+            }
+        } catch (e: Exception) {
+            Log.e("MeoCompanion", "phone_notification_pull failed", e)
+            reply.put("pushed", 0)
+            reply.put("error", e.message ?: "pull_failed")
+        }
+        trySendPullReply(reply)
+    }
+
+    private fun trySendPullReply(reply: JSONObject) {
+        try {
+            if (client.isConnected) {
+                client.send(reply)
+            }
+        } catch (e: Exception) {
+            Log.e("MeoCompanion", "send phone_notification_pull_ok failed", e)
         }
     }
 

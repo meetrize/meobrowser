@@ -21,6 +21,11 @@
 #import <net/if.h>
 
 NSNotificationName const CompanionChannelStateDidChangeNotification = @"CompanionChannelStateDidChangeNotification";
+NSNotificationName const CompanionPhoneNotificationPullDidFinishNotification = @"CompanionPhoneNotificationPullDidFinishNotification";
+NSString * const CompanionPhoneNotificationPullRequestIDKey = @"requestId";
+NSString * const CompanionPhoneNotificationPullPushedKey = @"pushed";
+NSString * const CompanionPhoneNotificationPullModeKey = @"mode";
+NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
 
 @interface CompanionChannel () <CompanionBonjourServerDelegate>
 @property (nonatomic, strong) CompanionBonjourServer *server;
@@ -269,6 +274,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self handlePhoneNotification:json connectionID:connectionID server:server];
         return;
     }
+    if ([type isEqualToString:@"phone_notification_pull_ok"]) {
+        [self handlePhoneNotificationPullOK:json];
+        return;
+    }
     if ([type isEqualToString:@"app_icon"]) {
         [self handleAppIcon:json connectionID:connectionID server:server];
         return;
@@ -455,13 +464,61 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
     [self.activeConnectionIDs addObject:connectionID];
     // 先入库再横幅，保证关横幅仍有收件箱历史；无论是否展示一律 ack
     [[PhoneNotificationInboxStore sharedStore] upsertMirrorPayload:json];
-    [[PhoneNotificationPresenter sharedPresenter] presentFromPayload:json];
+    NSString *source = [json[@"source"] isKindOfClass:[NSString class]] ? json[@"source"] : @"";
+    // 侧栏主动补拉：只写入收件箱，避免刷系统横幅
+    if (![source isEqualToString:@"pull"]) {
+        [[PhoneNotificationPresenter sharedPresenter] presentFromPayload:json];
+    }
     [server sendJSON:@{
         @"v": @1,
         @"type": @"phone_notification_ok",
         @"id": payloadId,
     } toConnectionID:connectionID];
     [self refreshConnectedState];
+}
+
+- (void)handlePhoneNotificationPullOK:(NSDictionary *)json {
+    NSString *requestID = [json[@"requestId"] isKindOfClass:[NSString class]] ? json[@"requestId"] : @"";
+    NSInteger pushed = 0;
+    if ([json[@"pushed"] respondsToSelector:@selector(integerValue)]) {
+        pushed = [json[@"pushed"] integerValue];
+    }
+    NSString *mode = [json[@"mode"] isKindOfClass:[NSString class]] ? json[@"mode"] : @"";
+    NSString *error = [json[@"error"] isKindOfClass:[NSString class]] ? json[@"error"] : @"";
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    if (requestID.length > 0) {
+        info[CompanionPhoneNotificationPullRequestIDKey] = requestID;
+    }
+    info[CompanionPhoneNotificationPullPushedKey] = @(pushed);
+    if (mode.length > 0) {
+        info[CompanionPhoneNotificationPullModeKey] = mode;
+    }
+    if (error.length > 0) {
+        info[CompanionPhoneNotificationPullErrorKey] = error;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:CompanionPhoneNotificationPullDidFinishNotification
+                                                            object:self
+                                                          userInfo:info];
+    });
+}
+
+- (BOOL)requestPhoneNotificationPullWithRequestID:(NSString *)requestID {
+    if (self.state != CompanionChannelStateConnected || self.activeConnectionIDs.count == 0) {
+        return NO;
+    }
+    if (requestID.length == 0) {
+        return NO;
+    }
+    NSDictionary *json = @{
+        @"v": @1,
+        @"type": @"phone_notification_pull",
+        @"requestId": requestID,
+    };
+    for (NSString *connectionID in [self.activeConnectionIDs copy]) {
+        [self.server sendJSON:json toConnectionID:connectionID];
+    }
+    return YES;
 }
 
 - (void)handleAppIcon:(NSDictionary *)json

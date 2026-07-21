@@ -30,6 +30,14 @@ object NotificationMirrorGate {
         return true
     }
 
+    /** Mac 主动补拉：跳过去重与限流，仍写入 recent 以免紧随其后的实时推送重复。 */
+    @Synchronized
+    fun forceAdmit(id: String) {
+        val now = System.currentTimeMillis()
+        prune(now)
+        recentIds[id] = now
+    }
+
     private fun prune(now: Long) {
         val idIter = recentIds.entries.iterator()
         while (idIter.hasNext()) {
