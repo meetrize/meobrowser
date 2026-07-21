@@ -67,6 +67,11 @@
                                                      keyEquivalent:@""];
             loginSettings.target = nil;
 
+            NSMenuItem *companionSettings = [fileMenu addItemWithTitle:@"互联与配对…"
+                                                                action:@selector(showCompanionLinkSettings:)
+                                                         keyEquivalent:@""];
+            companionSettings.target = nil;
+
             NSMenuItem *captchaAssist = [fileMenu addItemWithTitle:@"验证码助手"
                                                             action:@selector(toggleCaptchaAssistPanel:)
                                                      keyEquivalent:@"c"];

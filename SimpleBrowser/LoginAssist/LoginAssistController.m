@@ -1049,6 +1049,17 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     }
 }
 
+- (void)presentCompanionSettings {
+    if (!self.settingsController) {
+        self.settingsController = [[BrowserLoginAssistSettingsWindowController alloc] init];
+        self.settingsController.pickerHost = self;
+    }
+    [self.settingsController showWindow:nil];
+    [self.settingsController.window center];
+    [self.settingsController.window makeKeyAndOrderFront:nil];
+    [self.settingsController revealCompanionSection];
+}
+
 - (WKWebView *)activeWebViewForPicking {
     return self.windowController.webView;
 }

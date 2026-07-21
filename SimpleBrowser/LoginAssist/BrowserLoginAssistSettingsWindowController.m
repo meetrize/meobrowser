@@ -7,6 +7,7 @@
 #import "LoginAssistPreferences.h"
 #import "CompanionChannel.h"
 #import "CompanionPairingStore.h"
+#import "CompanionLinkUI.h"
 #import "PhoneNotificationSettings.h"
 #import "CompanionSyncSettings.h"
 #import "PhoneNotificationPresenter.h"
@@ -38,6 +39,9 @@
 @property (nonatomic, strong) NSButton *inlineAssistCheck;
 @property (nonatomic, strong) NSButton *promptSaveCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
+@property (nonatomic, strong) NSView *companionStatusCard;
+@property (nonatomic, strong) NSView *companionStatusIconBg;
+@property (nonatomic, strong) NSView *companionStatusDotView;
 @property (nonatomic, strong) NSTextField *companionConnectionLabel;
 @property (nonatomic, strong) NSButton *companionEndpointButton;
 @property (nonatomic, strong) NSSegmentedControl *companionAuthModeControl;
@@ -59,6 +63,7 @@
 @property (nonatomic, strong) NSButton *syncShortcutsCheck;
 @property (nonatomic, strong) NSButton *syncHistoryCheck;
 @property (nonatomic, strong) NSButton *syncBookmarksCheck;
+@property (nonatomic, strong) NSScrollView *formScrollView;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @property (nonatomic, copy, nullable) NSString *displayedPairingCode;
@@ -72,7 +77,7 @@
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title = @"登录助手";
+    window.title = @"登录助手与互联";
     window.releasedWhenClosed = NO;
     window.minSize = NSMakeSize(700, 600);
     self = [super initWithWindow:window];
@@ -237,19 +242,72 @@
     self.statusLabel.textColor = [NSColor secondaryLabelColor];
     self.statusLabel.preferredMaxLayoutWidth = 460;
 
-    // Companion 分区
-    NSTextField *companionTitle = [NSTextField labelWithString:@"手机 Companion（短信自动填入）"];
-    companionTitle.font = [NSFont boldSystemFontOfSize:13];
-
-    self.companionConnectionLabel = [NSTextField labelWithString:@"连接状态：…"];
-    self.companionConnectionLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
+    // Companion：状态卡片 + 分区卡片（与 Android 互联页同构）
+    self.companionConnectionLabel = [NSTextField labelWithString:@"未连接"];
+    self.companionConnectionLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
     self.companionConnectionLabel.selectable = NO;
+
+    self.companionHintLabel = [NSTextField wrappingLabelWithString:@""];
+    self.companionHintLabel.font = [NSFont systemFontOfSize:12];
+    self.companionHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.companionHintLabel.preferredMaxLayoutWidth = 360;
+
+    self.companionStatusIconBg = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.companionStatusIconBg.wantsLayer = YES;
+    self.companionStatusIconBg.layer.cornerRadius = 22;
+    self.companionStatusIconBg.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.companionStatusIconBg.widthAnchor constraintEqualToConstant:44].active = YES;
+    [self.companionStatusIconBg.heightAnchor constraintEqualToConstant:44].active = YES;
+
+    NSImageView *statusIconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    statusIconView.translatesAutoresizingMaskIntoConstraints = NO;
+    statusIconView.imageScaling = NSImageScaleProportionallyDown;
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:16
+                                                            weight:NSFontWeightSemibold
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *linkImage = [NSImage imageWithSystemSymbolName:@"link" accessibilityDescription:nil];
+        statusIconView.image = [linkImage imageWithSymbolConfiguration:config];
+        if (@available(macOS 10.14, *)) {
+            statusIconView.contentTintColor = [NSColor labelColor];
+        }
+    }
+    [self.companionStatusIconBg addSubview:statusIconView];
+    [NSLayoutConstraint activateConstraints:@[
+        [statusIconView.centerXAnchor constraintEqualToAnchor:self.companionStatusIconBg.centerXAnchor],
+        [statusIconView.centerYAnchor constraintEqualToAnchor:self.companionStatusIconBg.centerYAnchor],
+        [statusIconView.widthAnchor constraintEqualToConstant:20],
+        [statusIconView.heightAnchor constraintEqualToConstant:20],
+    ]];
+
+    self.companionStatusDotView = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.companionStatusDotView.wantsLayer = YES;
+    self.companionStatusDotView.layer.cornerRadius = 5;
+    self.companionStatusDotView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.companionStatusIconBg addSubview:self.companionStatusDotView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.companionStatusDotView.widthAnchor constraintEqualToConstant:10],
+        [self.companionStatusDotView.heightAnchor constraintEqualToConstant:10],
+        [self.companionStatusDotView.trailingAnchor constraintEqualToAnchor:self.companionStatusIconBg.trailingAnchor constant:1],
+        [self.companionStatusDotView.bottomAnchor constraintEqualToAnchor:self.companionStatusIconBg.bottomAnchor constant:1],
+    ]];
+
+    NSStackView *statusTextCol = [NSStackView stackViewWithViews:@[self.companionConnectionLabel, self.companionHintLabel]];
+    statusTextCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+    statusTextCol.alignment = NSLayoutAttributeLeading;
+    statusTextCol.spacing = 4;
+
+    NSStackView *statusHeader = [NSStackView stackViewWithViews:@[self.companionStatusIconBg, statusTextCol]];
+    statusHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    statusHeader.alignment = NSLayoutAttributeCenterY;
+    statusHeader.spacing = 12;
 
     self.companionEndpointButton = [NSButton buttonWithTitle:@"主机：—"
                                                       target:self
                                                       action:@selector(copyCompanionEndpoint:)];
     self.companionEndpointButton.bordered = NO;
-    self.companionEndpointButton.font = [NSFont monospacedDigitSystemFontOfSize:15 weight:NSFontWeightMedium];
+    self.companionEndpointButton.font = [NSFont monospacedDigitSystemFontOfSize:13 weight:NSFontWeightMedium];
     self.companionEndpointButton.contentTintColor = [NSColor linkColor];
     self.companionEndpointButton.toolTip = @"点击复制完整地址（IP:端口）";
     self.companionEndpointButton.alignment = NSTextAlignmentLeft;
@@ -265,6 +323,9 @@
     endpointRow.alignment = NSLayoutAttributeCenterY;
     endpointRow.spacing = 12;
 
+    self.companionStatusCard = [self makeSettingsCardWithTitle:nil
+                                              arrangedSubviews:@[statusHeader, endpointRow]];
+
     self.companionAuthModeControl = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
     self.companionAuthModeControl.segmentCount = 2;
     [self.companionAuthModeControl setLabel:@"临时配对码" forSegment:0];
@@ -275,19 +336,6 @@
     self.companionAuthModeControl.action = @selector(companionAuthModeChanged:);
     self.companionAuthModeControl.translatesAutoresizingMaskIntoConstraints = NO;
     [self.companionAuthModeControl.widthAnchor constraintEqualToConstant:260].active = YES;
-
-    NSStackView *authModeRow = [NSStackView stackViewWithViews:@[
-        ({
-            NSTextField *c = [self caption:@"连接方式"];
-            c.translatesAutoresizingMaskIntoConstraints = NO;
-            [c.widthAnchor constraintEqualToConstant:88].active = YES;
-            c;
-        }),
-        self.companionAuthModeControl
-    ]];
-    authModeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    authModeRow.alignment = NSLayoutAttributeCenterY;
-    authModeRow.spacing = 8;
 
     self.pairingCodeCaption = [NSTextField labelWithString:@"配对码（点击可复制）"];
     self.pairingCodeCaption.font = [NSFont systemFontOfSize:11];
@@ -348,10 +396,13 @@
                                                  action:@selector(revokeCompanionDevices:)];
     revokeDevices.bezelStyle = NSBezelStyleRounded;
 
-    self.companionHintLabel = [NSTextField wrappingLabelWithString:@""];
-    self.companionHintLabel.font = [NSFont systemFontOfSize:11];
-    self.companionHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.companionHintLabel.preferredMaxLayoutWidth = 460;
+    NSView *authCard = [self makeSettingsCardWithTitle:@"连接方式"
+                                      arrangedSubviews:@[
+                                          self.companionAuthModeControl,
+                                          self.pairingModeStack,
+                                          self.securityModeStack,
+                                          revokeDevices,
+                                      ]];
 
     PhoneNotificationSettings *mirrorSettings = [PhoneNotificationSettings sharedSettings];
     self.mirrorEnabledCheck = [NSButton checkboxWithTitle:@"接收手机通知镜像（全部通知模式）"
@@ -372,7 +423,15 @@
     self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀（如「微信 · …」）。手机端需在 Companion 选择「全部通知」。"];
     self.mirrorHintLabel.font = [NSFont systemFontOfSize:11];
     self.mirrorHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.mirrorHintLabel.preferredMaxLayoutWidth = 460;
+    self.mirrorHintLabel.preferredMaxLayoutWidth = 420;
+
+    NSView *mirrorCard = [self makeSettingsCardWithTitle:@"通知镜像"
+                                        arrangedSubviews:@[
+                                            self.mirrorEnabledCheck,
+                                            self.otpBannerEnabledCheck,
+                                            self.openNotificationSettingsButton,
+                                            self.mirrorHintLabel,
+                                        ]];
 
     CompanionSyncSettings *syncSettings = [CompanionSyncSettings sharedSettings];
     self.syncEnabledCheck = [NSButton checkboxWithTitle:@"启用与 Android 的自动同步（局域网）"
@@ -395,7 +454,19 @@
     NSTextField *privacyNote = [NSTextField wrappingLabelWithString:@"默认：Android 仅上传验证码与时间戳。手机开启「全部通知」后会上传通知标题与正文（同局域网明文）。同步开启后会交换快捷方式等数据。端口默认固定，仅手动确认后才会更换。"];
     privacyNote.font = [NSFont systemFontOfSize:11];
     privacyNote.textColor = [NSColor secondaryLabelColor];
-    privacyNote.preferredMaxLayoutWidth = 460;
+    privacyNote.preferredMaxLayoutWidth = 420;
+
+    NSView *syncCard = [self makeSettingsCardWithTitle:@"局域网同步"
+                                      arrangedSubviews:@[
+                                          self.syncEnabledCheck,
+                                          self.syncShortcutsCheck,
+                                          self.syncHistoryCheck,
+                                          self.syncBookmarksCheck,
+                                          privacyNote,
+                                      ]];
+
+    NSTextField *recipeSectionTitle = [NSTextField labelWithString:@"登录配置"];
+    recipeSectionTitle.font = [NSFont boldSystemFontOfSize:13];
 
     NSStackView *modeRow = [NSStackView stackViewWithViews:@[
         ({
@@ -410,54 +481,45 @@
     modeRow.alignment = NSLayoutAttributeCenterY;
     modeRow.spacing = 8;
 
+    NSView *recipeCard = [self makeSettingsCardWithTitle:nil
+                                        arrangedSubviews:@[
+                                            [self labeledRow:@"名称" field:self.titleField pickAction:nil],
+                                            [self labeledRow:@"主机" field:self.hostField pickAction:nil],
+                                            [self labeledRow:@"路径前缀" field:self.pathPrefixField pickAction:nil],
+                                            modeRow,
+                                            [self labeledRow:@"用户名" field:self.usernameField pickAction:nil],
+                                            [self labeledRow:@"密码" field:self.passwordField pickAction:nil],
+                                            [self labeledRow:@"手机号" field:self.phoneField pickAction:nil],
+                                            [self labeledRow:@"用户名选择器" field:self.usernameSelectorField pickAction:@selector(pickUsernameSelector:)],
+                                            [self labeledRow:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPasswordSelector:)],
+                                            [self labeledRow:@"手机号选择器" field:self.phoneSelectorField pickAction:@selector(pickPhoneSelector:)],
+                                            [self labeledRow:@"验证码选择器" field:self.otpSelectorField pickAction:@selector(pickOTPSelector:)],
+                                            [self labeledRow:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSendCodeSelector:)],
+                                            [self labeledRow:@"提交选择器" field:self.submitSelectorField pickAction:@selector(pickSubmitSelector:)],
+                                            self.submitByEnterCheck,
+                                            self.autoLoginCheck,
+                                            self.defaultCheck,
+                                            saveButton,
+                                            self.inlineAssistCheck,
+                                            self.promptSaveCheck,
+                                            self.statusLabel,
+                                        ]];
+
     NSStackView *form = [NSStackView stackViewWithViews:@[
-        [self labeledRow:@"名称" field:self.titleField pickAction:nil],
-        [self labeledRow:@"主机" field:self.hostField pickAction:nil],
-        [self labeledRow:@"路径前缀" field:self.pathPrefixField pickAction:nil],
-        modeRow,
-        [self labeledRow:@"用户名" field:self.usernameField pickAction:nil],
-        [self labeledRow:@"密码" field:self.passwordField pickAction:nil],
-        [self labeledRow:@"手机号" field:self.phoneField pickAction:nil],
-        [self labeledRow:@"用户名选择器" field:self.usernameSelectorField pickAction:@selector(pickUsernameSelector:)],
-        [self labeledRow:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPasswordSelector:)],
-        [self labeledRow:@"手机号选择器" field:self.phoneSelectorField pickAction:@selector(pickPhoneSelector:)],
-        [self labeledRow:@"验证码选择器" field:self.otpSelectorField pickAction:@selector(pickOTPSelector:)],
-        [self labeledRow:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSendCodeSelector:)],
-        [self labeledRow:@"提交选择器" field:self.submitSelectorField pickAction:@selector(pickSubmitSelector:)],
-        self.submitByEnterCheck,
-        self.autoLoginCheck,
-        self.defaultCheck,
-        saveButton,
-        self.inlineAssistCheck,
-        self.promptSaveCheck,
-        self.statusLabel,
-        companionTitle,
-        self.companionConnectionLabel,
-        endpointRow,
-        authModeRow,
-        self.pairingModeStack,
-        self.securityModeStack,
-        revokeDevices,
-        self.companionHintLabel,
-        self.mirrorEnabledCheck,
-        self.otpBannerEnabledCheck,
-        self.openNotificationSettingsButton,
-        self.mirrorHintLabel,
-        self.syncEnabledCheck,
-        self.syncShortcutsCheck,
-        self.syncHistoryCheck,
-        self.syncBookmarksCheck,
-        privacyNote,
+        self.companionStatusCard,
+        authCard,
+        mirrorCard,
+        syncCard,
+        recipeSectionTitle,
+        recipeCard,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
     form.alignment = NSLayoutAttributeLeading;
-    form.spacing = 8;
+    form.spacing = 12;
     form.translatesAutoresizingMaskIntoConstraints = NO;
 
     for (NSView *row in form.arrangedSubviews) {
-        if ([row isKindOfClass:[NSStackView class]]) {
-            [row.widthAnchor constraintEqualToAnchor:form.widthAnchor].active = YES;
-        }
+        [row.widthAnchor constraintEqualToAnchor:form.widthAnchor].active = YES;
     }
 
     NSScrollView *formScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -465,6 +527,7 @@
     formScroll.hasVerticalScroller = YES;
     formScroll.borderType = NSNoBorder;
     formScroll.drawsBackground = NO;
+    self.formScrollView = formScroll;
     NSView *formDocument = [[NSView alloc] initWithFrame:NSZeroRect];
     formDocument.translatesAutoresizingMaskIntoConstraints = NO;
     [formDocument addSubview:form];
@@ -503,6 +566,79 @@
 - (void)reloadRecipes {
     self.recipes = [[LoginRecipeStore sharedStore] allRecipes];
     [self.tableView reloadData];
+}
+
+- (void)revealCompanionSection {
+    [self refreshCompanionUI];
+    NSView *card = self.companionStatusCard;
+    if (!card) {
+        return;
+    }
+    [self.window layoutIfNeeded];
+    [card scrollRectToVisible:NSInsetRect(card.bounds, 0, -8)];
+
+    CALayer *layer = card.layer;
+    if (!layer) {
+        return;
+    }
+    CGColorRef previous = layer.borderColor;
+    CGFloat previousWidth = layer.borderWidth;
+    if (@available(macOS 10.14, *)) {
+        layer.borderColor = [NSColor controlAccentColor].CGColor;
+    } else {
+        layer.borderColor = [NSColor selectedControlColor].CGColor;
+    }
+    layer.borderWidth = 2.0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        layer.borderColor = previous;
+        layer.borderWidth = previousWidth;
+    });
+}
+
+- (NSView *)makeSettingsCardWithTitle:(NSString *)title arrangedSubviews:(NSArray<NSView *> *)views {
+    NSMutableArray<NSView *> *parts = [NSMutableArray array];
+    if (title.length > 0) {
+        NSTextField *titleLabel = [NSTextField labelWithString:title];
+        titleLabel.font = [NSFont boldSystemFontOfSize:13];
+        [parts addObject:titleLabel];
+    }
+    if (views.count > 0) {
+        [parts addObjectsFromArray:views];
+    }
+    NSStackView *inner = [NSStackView stackViewWithViews:parts];
+    inner.orientation = NSUserInterfaceLayoutOrientationVertical;
+    inner.alignment = NSLayoutAttributeLeading;
+    inner.spacing = 8;
+    inner.edgeInsets = NSEdgeInsetsMake(14, 14, 14, 14);
+    inner.translatesAutoresizingMaskIntoConstraints = NO;
+
+    for (NSView *row in inner.arrangedSubviews) {
+        if ([row isKindOfClass:[NSStackView class]] || [row isKindOfClass:[NSTextField class]]) {
+            [row setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                            forOrientation:NSLayoutConstraintOrientationVertical];
+        }
+    }
+
+    NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
+    card.wantsLayer = YES;
+    card.layer.cornerRadius = 10.0;
+    if (@available(macOS 10.14, *)) {
+        card.layer.backgroundColor = [NSColor controlBackgroundColor].CGColor;
+        card.layer.borderColor = [[NSColor separatorColor] colorWithAlphaComponent:0.35].CGColor;
+    } else {
+        card.layer.backgroundColor = [NSColor whiteColor].CGColor;
+        card.layer.borderColor = [[NSColor blackColor] colorWithAlphaComponent:0.08].CGColor;
+    }
+    card.layer.borderWidth = 1.0;
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:inner];
+    [NSLayoutConstraint activateConstraints:@[
+        [inner.topAnchor constraintEqualToAnchor:card.topAnchor],
+        [inner.leadingAnchor constraintEqualToAnchor:card.leadingAnchor],
+        [inner.trailingAnchor constraintEqualToAnchor:card.trailingAnchor],
+        [inner.bottomAnchor constraintEqualToAnchor:card.bottomAnchor],
+    ]];
+    return card;
 }
 
 - (void)selectRecipeID:(NSString *)recipeID {
@@ -873,37 +1009,33 @@
 
     BOOL connected = (channel.state == CompanionChannelStateConnected);
     NSUInteger paired = store.pairedDevices.count;
+    CompanionLinkUIState uiState = [CompanionLinkUI stateFromChannel:channel];
+    self.companionConnectionLabel.stringValue = [CompanionLinkUI titleForState:uiState];
+    self.companionConnectionLabel.textColor = [NSColor labelColor];
+    NSColor *dotColor = [CompanionLinkUI dotColorForState:uiState];
+    self.companionStatusDotView.layer.backgroundColor = dotColor.CGColor;
+    if (@available(macOS 10.14, *)) {
+        self.companionStatusDotView.layer.borderWidth = 1.5;
+        self.companionStatusDotView.layer.borderColor = [NSColor controlBackgroundColor].CGColor;
+    }
+    self.companionStatusIconBg.layer.backgroundColor = [CompanionLinkUI iconBackgroundColorForState:uiState].CGColor;
 
     if (connected) {
-        self.companionConnectionLabel.stringValue = @"● 已连接";
-        if (@available(macOS 10.14, *)) {
-            self.companionConnectionLabel.textColor = [NSColor systemGreenColor];
-        } else {
-            self.companionConnectionLabel.textColor = [NSColor colorWithCalibratedRed:0.1 green:0.55 blue:0.2 alpha:1];
-        }
         self.companionHintLabel.stringValue = paired > 1
             ? [NSString stringWithFormat:@"手机已在线推码。另有 %lu 台曾配对设备。", (unsigned long)paired]
             : @"手机已在线，验证码会自动推送到本浏览器。";
+    } else if (channel.usingTemporaryPort) {
+        self.companionHintLabel.stringValue =
+            [NSString stringWithFormat:@"固定端口被占用，当前临时使用 %ld。点「更换端口…」确认采用新端口，或关闭占用后重启浏览器。",
+             (long)channel.listeningPort];
+    } else if (securityMode) {
+        self.companionHintLabel.stringValue = store.securityCode.length > 0
+            ? @"安全码模式：手机 Companion 选「固定安全码」并保存后，打开即可自动连接。"
+            : @"请先设定并保存固定安全码，再在手机 Companion 选择相同模式。";
     } else {
-        self.companionConnectionLabel.stringValue = @"○ 未连接";
-        if (@available(macOS 10.14, *)) {
-            self.companionConnectionLabel.textColor = [NSColor systemOrangeColor];
-        } else {
-            self.companionConnectionLabel.textColor = [NSColor orangeColor];
-        }
-        if (channel.usingTemporaryPort) {
-            self.companionHintLabel.stringValue =
-                [NSString stringWithFormat:@"固定端口被占用，当前临时使用 %ld。点「更换端口…」确认采用新端口，或关闭占用后重启浏览器。",
-                 (long)channel.listeningPort];
-        } else if (securityMode) {
-            self.companionHintLabel.stringValue = store.securityCode.length > 0
-                ? @"安全码模式：手机 Companion 选「固定安全码」并保存后，打开即可自动连接。"
-                : @"请先设定并保存固定安全码，再在手机 Companion 选择相同模式。";
-        } else {
-            self.companionHintLabel.stringValue = paired > 0
-                ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
-                : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
-        }
+        self.companionHintLabel.stringValue = paired > 0
+            ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
+            : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
     }
 
     NSString *endpoint = [channel preferredLANEndpoint] ?: @"—";

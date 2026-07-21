@@ -30,6 +30,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 页面内查找按钮；由窗口控制器设置 target/action。
 @property (nonatomic, strong, readonly, nullable) NSButton *findInPageButton;
 
+/// 互联（Companion）按钮；由窗口控制器设置 target/action，圆点由本视图维护。
+@property (nonatomic, strong, readonly, nullable) NSButton *companionLinkButton;
+
+/// 按 CompanionChannel 当前状态刷新互联按钮圆点与 tooltip。
+- (void)updateCompanionLinkAppearance;
+
 /// 根据拖拽增量调整按钮组宽度（正值为变宽）。
 - (void)applyWidthDelta:(CGFloat)deltaX;
 

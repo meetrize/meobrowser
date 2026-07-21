@@ -1,4 +1,6 @@
 #import "BrowserAddressBarActionGroup.h"
+#import "CompanionLinkUI.h"
+#import "CompanionChannel.h"
 
 static const CGFloat kActionButtonSize = 28.0;
 static const CGFloat kActionButtonSpacing = 2.0;
@@ -101,6 +103,8 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
 @property (nonatomic, strong, readwrite, nullable) NSButton *captchaAssistButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *companionLinkButton;
+@property (nonatomic, strong, nullable) NSView *companionLinkStatusDot;
 @property (nonatomic, assign) CGFloat preferredWidth;
 @property (nonatomic, assign) CGFloat maximumWidth;
 @property (nonatomic, assign) BOOL isResizingWidth;
@@ -164,6 +168,9 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         _widthConstraint = [self.widthAnchor constraintEqualToConstant:_preferredWidth];
         _widthConstraint.priority = NSLayoutPriorityDefaultHigh;
         _widthConstraint.active = YES;
+
+        [self ensureCompanionLinkStatusDot];
+        [self updateCompanionLinkAppearance];
     }
     return self;
 }
@@ -179,6 +186,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         @{@"id": @"findInPage", @"symbol": @"magnifyingglass", @"tip": @"查找（再点关闭）"},
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
+        @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
         @{@"id": @"rssFeed", @"symbol": @"dot.radiowaves.up.forward", @"tip": @"RSS"},
         @{@"id": @"share", @"symbol": @"square.and.arrow.up", @"tip": @"分享"},
@@ -224,9 +232,27 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
         }
     }
     for (BrowserAddressBarActionItem *item in defaults) {
-        if (![seen containsObject:item.itemID]) {
+        if ([seen containsObject:item.itemID]) {
+            continue;
+        }
+        // 升级迁移：新「互联」键插到登录助手之后，避免落到末尾溢出区
+        if ([item.itemID isEqualToString:@"companionLink"]) {
+            NSUInteger loginIdx = NSNotFound;
+            for (NSUInteger i = 0; i < ordered.count; i++) {
+                if ([ordered[i].itemID isEqualToString:@"loginAssist"]) {
+                    loginIdx = i;
+                    break;
+                }
+            }
+            if (loginIdx != NSNotFound) {
+                [ordered insertObject:item atIndex:loginIdx + 1];
+            } else {
+                [ordered addObject:item];
+            }
+        } else {
             [ordered addObject:item];
         }
+        [seen addObject:item.itemID];
     }
     return ordered;
 }
@@ -247,6 +273,7 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
     self.captchaAssistButton = nil;
     self.feedButton = nil;
     self.findInPageButton = nil;
+    self.companionLinkButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
         NSString *itemID = self.items[i].itemID;
         if ([itemID isEqualToString:@"download"]) {
@@ -259,8 +286,56 @@ static NSString * const kActionOrderDefaultsKey = @"BrowserAddressBarActionOrder
             self.feedButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"findInPage"]) {
             self.findInPageButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"companionLink"]) {
+            self.companionLinkButton = self.actionButtons[i];
         }
     }
+    [self ensureCompanionLinkStatusDot];
+    [self updateCompanionLinkAppearance];
+}
+
+- (void)ensureCompanionLinkStatusDot {
+    NSButton *button = self.companionLinkButton;
+    if (!button) {
+        [self.companionLinkStatusDot removeFromSuperview];
+        return;
+    }
+    if (!self.companionLinkStatusDot) {
+        NSView *dot = [[NSView alloc] initWithFrame:NSZeroRect];
+        dot.wantsLayer = YES;
+        dot.layer.cornerRadius = 4.0;
+        dot.translatesAutoresizingMaskIntoConstraints = NO;
+        self.companionLinkStatusDot = dot;
+    }
+    if (self.companionLinkStatusDot.superview != button) {
+        [self.companionLinkStatusDot removeFromSuperview];
+        [button addSubview:self.companionLinkStatusDot];
+        [NSLayoutConstraint activateConstraints:@[
+            [self.companionLinkStatusDot.widthAnchor constraintEqualToConstant:8],
+            [self.companionLinkStatusDot.heightAnchor constraintEqualToConstant:8],
+            [self.companionLinkStatusDot.topAnchor constraintEqualToAnchor:button.topAnchor constant:2],
+            [self.companionLinkStatusDot.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-2],
+        ]];
+    }
+}
+
+- (void)updateCompanionLinkAppearance {
+    [self ensureCompanionLinkStatusDot];
+    NSButton *button = self.companionLinkButton;
+    if (!button || !self.companionLinkStatusDot) {
+        return;
+    }
+    CompanionLinkUIState state = [CompanionLinkUI stateFromChannel:[CompanionChannel sharedChannel]];
+    NSColor *dotColor = [CompanionLinkUI dotColorForState:state];
+    self.companionLinkStatusDot.layer.backgroundColor = dotColor.CGColor;
+    if (@available(macOS 10.14, *)) {
+        self.companionLinkStatusDot.layer.borderWidth = 1.0;
+        self.companionLinkStatusDot.layer.borderColor = [NSColor controlBackgroundColor].CGColor;
+    }
+    button.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
+    NSString *title = [CompanionLinkUI titleForState:state];
+    button.toolTip = [NSString stringWithFormat:@"互联 · %@（拖动可调整顺序）", title];
+    button.accessibilityLabel = [NSString stringWithFormat:@"互联 · %@", title];
 }
 
 #pragma mark - Buttons

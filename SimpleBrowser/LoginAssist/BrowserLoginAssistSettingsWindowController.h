@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)selectRecipeID:(NSString *)recipeID;
 - (void)reloadRecipes;
+/// 滚到互联状态卡片并短暂强调（工具栏「互联」入口）。
+- (void)revealCompanionSection;
 
 @end
 

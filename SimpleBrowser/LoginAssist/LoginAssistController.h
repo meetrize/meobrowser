@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)showRecipeMenuFromButton:(NSButton *)button;
 
 - (void)presentSettingsEditingRecipeID:(nullable NSString *)recipeID;
+/// 打开设置并滚到互联状态卡片（工具栏「互联」入口）。
+- (void)presentCompanionSettings;
 - (void)wireLoginButton:(NSButton *)button;
 - (nullable WKWebView *)activeWebViewForPicking;
 

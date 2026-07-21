@@ -72,6 +72,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPairingStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBonjourServer.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionChannel.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionLinkUI.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationSettings.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationPresenter.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionSyncSettings.m \

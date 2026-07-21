@@ -28,6 +28,7 @@
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserCertificateWarningView.h"
 #import "BrowserHTTPAuthPrompt.h"
+#import "CompanionChannel.h"
 #import <Security/Security.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
@@ -483,10 +484,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireCompanionLinkButton];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(addressBarActionOrderDidChange:)
                                                  name:@"BrowserAddressBarActionOrderDidChangeNotification"
                                                object:self.addressBarActionGroup];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(companionChannelStateDidChange:)
+                                                 name:CompanionChannelStateDidChangeNotification
+                                               object:nil];
+    [self.addressBarActionGroup updateCompanionLinkAppearance];
 
     self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
                                                                  securityBadge:self.securityBadgeButton
@@ -696,6 +703,27 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireCompanionLinkButton];
+    [self.addressBarActionGroup updateCompanionLinkAppearance];
+}
+
+- (void)wireCompanionLinkButton {
+    NSButton *button = self.addressBarActionGroup.companionLinkButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(showCompanionLinkSettings:);
+}
+
+- (void)showCompanionLinkSettings:(id)sender {
+    (void)sender;
+    [self.loginAssistController presentCompanionSettings];
+}
+
+- (void)companionChannelStateDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self.addressBarActionGroup updateCompanionLinkAppearance];
 }
 
 - (void)toggleDownloadsPanel:(id)sender {

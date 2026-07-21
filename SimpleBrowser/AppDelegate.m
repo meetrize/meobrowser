@@ -214,6 +214,22 @@
     [_loginAssistSettingsController.window makeKeyAndOrderFront:nil];
 }
 
+- (void)showCompanionLinkSettings:(id)sender {
+    (void)sender;
+    BrowserWindowController *keyBrowser = [self keyBrowserWindowController];
+    if (keyBrowser) {
+        [keyBrowser showCompanionLinkSettings:sender];
+        return;
+    }
+    if (!_loginAssistSettingsController) {
+        _loginAssistSettingsController = [[BrowserLoginAssistSettingsWindowController alloc] init];
+    }
+    [_loginAssistSettingsController showWindow:nil];
+    [_loginAssistSettingsController.window center];
+    [_loginAssistSettingsController.window makeKeyAndOrderFront:nil];
+    [_loginAssistSettingsController revealCompanionSection];
+}
+
 - (void)browserWindowControllerWillClose:(BrowserWindowController *)controller {
     if (!controller) {
         return;
