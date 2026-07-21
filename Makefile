@@ -47,6 +47,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarActionGroup.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarRowView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
+                   $(BROWSER_SRC_DIR)/AddressBar/BrowserURLInputClassifier.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserHTTPAuthPrompt.m \

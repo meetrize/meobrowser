@@ -14,6 +14,7 @@
 #import "BrowserAddressBarAutocompleteController.h"
 #import "BrowserAddressBarActionGroup.h"
 #import "BrowserAddressBarRowView.h"
+#import "BrowserURLInputClassifier.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserDownloadProgressRingView.h"
@@ -1733,28 +1734,11 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         return nil;
     }
 
-    BOOL looksLikeURL = [trimmed containsString:@"."] &&
-                        ![trimmed containsString:@" "] &&
-                        ([trimmed hasPrefix:@"http://"] ||
-                         [trimmed hasPrefix:@"https://"] ||
-                         [trimmed rangeOfCharacterFromSet:[[NSCharacterSet alphanumericCharacterSet] invertedSet]
-                                                    options:0
-                                                      range:NSMakeRange(0, trimmed.length)].location == NSNotFound);
-
-    if (!looksLikeURL) {
-        return [BrowsingPreferences searchURLForQuery:trimmed];
+    NSURL *navigable = [BrowserURLInputClassifier navigableURLFromInput:trimmed];
+    if (navigable) {
+        return navigable;
     }
-
-    NSString *urlString = trimmed;
-    if (![urlString hasPrefix:@"http://"] && ![urlString hasPrefix:@"https://"]) {
-        urlString = [@"https://" stringByAppendingString:urlString];
-    }
-
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url || !url.host) {
-        return nil;
-    }
-    return url;
+    return [BrowsingPreferences searchURLForQuery:trimmed];
 }
 
 - (NSString *)canonicalAddressBarStringForTab:(BrowserTab *)tab {

@@ -17,6 +17,11 @@ static const NSUInteger kSuggestionLimit = 8;
 @property (nonatomic, strong) dispatch_block_t pendingQueryBlock;
 @property (nonatomic, strong) dispatch_block_t pendingDismissBlock;
 @property (nonatomic, assign) BOOL installed;
+@property (nonatomic, assign) BOOL applyingInlineAutocomplete;
+@property (nonatomic, assign) BOOL hasActiveInlineAutocomplete;
+/// 用户用 Backspace/Delete 清掉内联补全后，同一查询不再自动补上，直到输入变化。
+@property (nonatomic, assign) BOOL inlineAutocompleteSuppressed;
+@property (nonatomic, copy) NSString *suppressedForQuery;
 @end
 
 @implementation BrowserAddressBarAutocompleteController
@@ -92,6 +97,17 @@ static const NSUInteger kSuggestionLimit = 8;
 
 - (void)addressFieldTextDidChange:(NSNotification *)notification {
     (void)notification;
+    if (self.applyingInlineAutocomplete) {
+        return;
+    }
+    self.hasActiveInlineAutocomplete = NO;
+    // 输入内容变了则解除「删除后抑制」；同一前缀下的删除由 delete 键处理。
+    NSString *typed = [self userTypedQueryFromAddressField];
+    if (self.inlineAutocompleteSuppressed &&
+        ![typed isEqualToString:self.suppressedForQuery ?: @""]) {
+        self.inlineAutocompleteSuppressed = NO;
+        self.suppressedForQuery = nil;
+    }
     [self scheduleQuery];
 }
 
@@ -140,9 +156,21 @@ static const NSUInteger kSuggestionLimit = 8;
                    block);
 }
 
-- (void)performQuery {
+/// 若地址栏正显示内联补全（后缀选中），查询只用用户真正键入的前缀。
+- (NSString *)userTypedQueryFromAddressField {
     NSString *raw = self.addressField.stringValue ?: @"";
-    NSString *trimmed = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSText *editor = self.addressField.currentEditor;
+    if (editor) {
+        NSRange sel = editor.selectedRange;
+        if (sel.location > 0 && sel.length > 0 && NSMaxRange(sel) == raw.length) {
+            raw = [raw substringToIndex:sel.location];
+        }
+    }
+    return [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)performQuery {
+    NSString *trimmed = [self userTypedQueryFromAddressField];
     if (trimmed.length == 0) {
         [self dismissPanelImmediately];
         return;
@@ -150,6 +178,7 @@ static const NSUInteger kSuggestionLimit = 8;
 
     NSArray<BrowserShortcutItem *> *matches = [BrowserShortcutStore shortcutsMatchingQuery:trimmed limit:kSuggestionLimit];
     if (matches.count == 0) {
+        [self revertInlineAutocompleteToTypedQuery:trimmed];
         [self dismissPanelImmediately];
         return;
     }
@@ -166,12 +195,160 @@ static const NSUInteger kSuggestionLimit = 8;
                           query:trimmed
                  selectedIndex:self.selectedIndex
                     anchorRect:[self anchorRectOnScreen]];
+    [self applyInlineAutocompleteIfPossible];
 }
 
 - (void)refreshMatchesIfNeeded {
     if (self.panelVisible) {
         [self performQuery];
     }
+}
+
+#pragma mark - Inline autocomplete
+
+- (nullable NSString *)inlineSuggestionForItem:(BrowserShortcutItem *)item query:(NSString *)query {
+    if (query.length == 0 || item.urlString.length == 0) {
+        return nil;
+    }
+
+    NSString *q = query.lowercaseString;
+    NSURL *url = [NSURL URLWithString:item.urlString];
+    NSString *host = url.host ?: @"";
+    NSString *bareHost = host;
+    if ([bareHost.lowercaseString hasPrefix:@"www."]) {
+        bareHost = [bareHost substringFromIndex:4];
+    }
+
+    NSMutableArray<NSString *> *candidates = [[NSMutableArray alloc] init];
+    void (^addCandidate)(NSString *) = ^(NSString *value) {
+        if (value.length == 0) {
+            return;
+        }
+        for (NSString *existing in candidates) {
+            if ([existing caseInsensitiveCompare:value] == NSOrderedSame) {
+                return;
+            }
+        }
+        [candidates addObject:value];
+    };
+
+    addCandidate(bareHost);
+    addCandidate(host);
+
+    NSString *path = url.path;
+    if (path.length > 0 && ![path isEqualToString:@"/"]) {
+        addCandidate([bareHost stringByAppendingString:path]);
+        addCandidate([host stringByAppendingString:path]);
+    }
+
+    NSString *withoutScheme = item.urlString;
+    NSString *lowerURL = withoutScheme.lowercaseString;
+    if ([lowerURL hasPrefix:@"https://"]) {
+        withoutScheme = [withoutScheme substringFromIndex:8];
+    } else if ([lowerURL hasPrefix:@"http://"]) {
+        withoutScheme = [withoutScheme substringFromIndex:7];
+    }
+    addCandidate(withoutScheme);
+    addCandidate(item.urlString);
+
+    for (NSString *candidate in candidates) {
+        if (candidate.length > q.length && [candidate.lowercaseString hasPrefix:q]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
+- (void)applyInlineAutocompleteIfPossible {
+    BrowserShortcutItem *item = [self selectedItem];
+    NSString *query = self.currentQuery;
+    if (!item || query.length == 0) {
+        return;
+    }
+
+    if (self.inlineAutocompleteSuppressed &&
+        [query isEqualToString:self.suppressedForQuery ?: @""]) {
+        return;
+    }
+    if (self.inlineAutocompleteSuppressed) {
+        self.inlineAutocompleteSuppressed = NO;
+        self.suppressedForQuery = nil;
+    }
+
+    NSString *suggestion = [self inlineSuggestionForItem:item query:query];
+    if (!suggestion) {
+        if (self.hasActiveInlineAutocomplete) {
+            [self revertInlineAutocompleteToTypedQuery:query];
+        }
+        return;
+    }
+
+    NSString *suffix = [suggestion substringFromIndex:query.length];
+    NSString *full = [query stringByAppendingString:suffix];
+    [self setAddressFieldText:full selectingFrom:query.length];
+    self.hasActiveInlineAutocomplete = (suffix.length > 0);
+}
+
+/// Backspace/Delete：去掉内联补全后缀，保留已输入前缀，并抑制立即再次补全。
+- (BOOL)clearInlineAutocompleteForDelete {
+    if (!self.hasActiveInlineAutocomplete) {
+        return NO;
+    }
+    NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
+    [self revertInlineAutocompleteToTypedQuery:typed];
+    self.inlineAutocompleteSuppressed = YES;
+    self.suppressedForQuery = [typed copy];
+    return YES;
+}
+
+- (void)setAddressFieldText:(NSString *)text selectingFrom:(NSUInteger)prefixLength {
+    self.applyingInlineAutocomplete = YES;
+    self.addressField.stringValue = text ?: @"";
+    NSText *editor = self.addressField.currentEditor;
+    if (!editor) {
+        [self.addressField.window makeFirstResponder:self.addressField];
+        editor = self.addressField.currentEditor;
+    }
+    if (editor) {
+        NSUInteger length = text.length;
+        if (prefixLength > length) {
+            prefixLength = length;
+        }
+        [editor setSelectedRange:NSMakeRange(prefixLength, length - prefixLength)];
+    }
+    self.applyingInlineAutocomplete = NO;
+}
+
+- (void)revertInlineAutocompleteToTypedQuery:(NSString *)typed {
+    NSString *value = typed ?: @"";
+    self.applyingInlineAutocomplete = YES;
+    self.addressField.stringValue = value;
+    NSText *editor = self.addressField.currentEditor;
+    if (editor) {
+        [editor setSelectedRange:NSMakeRange(value.length, 0)];
+    }
+    self.applyingInlineAutocomplete = NO;
+    self.hasActiveInlineAutocomplete = NO;
+}
+
+- (BOOL)acceptInlineAutocompleteIfNeeded {
+    if (!self.hasActiveInlineAutocomplete) {
+        return NO;
+    }
+    NSText *editor = self.addressField.currentEditor;
+    NSString *text = self.addressField.stringValue ?: @"";
+    if (!editor) {
+        self.hasActiveInlineAutocomplete = NO;
+        return NO;
+    }
+    NSRange sel = editor.selectedRange;
+    if (sel.length > 0 && NSMaxRange(sel) == text.length) {
+        [editor setSelectedRange:NSMakeRange(text.length, 0)];
+        self.hasActiveInlineAutocomplete = NO;
+        return YES;
+    }
+    self.hasActiveInlineAutocomplete = NO;
+    return NO;
 }
 
 #pragma mark - Panel lifecycle
@@ -186,6 +363,9 @@ static const NSUInteger kSuggestionLimit = 8;
     self.matches = @[];
     self.currentQuery = @"";
     self.selectedIndex = 0;
+    self.hasActiveInlineAutocomplete = NO;
+    self.inlineAutocompleteSuppressed = NO;
+    self.suppressedForQuery = nil;
     [self.panel dismissPanel];
 }
 
@@ -248,7 +428,14 @@ static const NSUInteger kSuggestionLimit = 8;
     if (!item) {
         return NO;
     }
+    self.applyingInlineAutocomplete = YES;
     self.addressField.stringValue = item.urlString;
+    NSText *editor = self.addressField.currentEditor;
+    if (editor) {
+        [editor setSelectedRange:NSMakeRange(item.urlString.length, 0)];
+    }
+    self.applyingInlineAutocomplete = NO;
+    self.hasActiveInlineAutocomplete = NO;
     [self dismissPanelImmediately];
     [self.addressField.window makeFirstResponder:self.addressField];
     return YES;
@@ -268,6 +455,9 @@ static const NSUInteger kSuggestionLimit = 8;
                           query:self.currentQuery
                  selectedIndex:self.selectedIndex
                     anchorRect:[self anchorRectOnScreen]];
+    self.inlineAutocompleteSuppressed = NO;
+    self.suppressedForQuery = nil;
+    [self applyInlineAutocompleteIfPossible];
 }
 
 #pragma mark - Keyboard
@@ -276,11 +466,45 @@ static const NSUInteger kSuggestionLimit = 8;
     (void)textView;
 
     if (commandSelector == @selector(cancel:)) {
-        if (self.panelVisible) {
+        if (self.panelVisible || self.hasActiveInlineAutocomplete) {
+            NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
+            [self revertInlineAutocompleteToTypedQuery:typed];
             [self dismissPanelImmediately];
             return YES;
         }
         return NO;
+    }
+
+    if (commandSelector == @selector(deleteBackward:) ||
+        commandSelector == @selector(deleteForward:) ||
+        commandSelector == @selector(deleteWordBackward:) ||
+        commandSelector == @selector(deleteWordForward:) ||
+        commandSelector == @selector(deleteToBeginningOfLine:) ||
+        commandSelector == @selector(deleteToEndOfLine:)) {
+        if ([self clearInlineAutocompleteForDelete]) {
+            return YES;
+        }
+    }
+
+    if (commandSelector == @selector(moveRight:) ||
+        commandSelector == @selector(moveToEndOfLine:) ||
+        commandSelector == @selector(moveToRightEndOfLine:)) {
+        if ([self acceptInlineAutocompleteIfNeeded]) {
+            return YES;
+        }
+    }
+
+    // 左移：取消内联选中后缀，光标落在已输入末尾，便于继续 Backspace。
+    if (commandSelector == @selector(moveLeft:) ||
+        commandSelector == @selector(moveToBeginningOfLine:) ||
+        commandSelector == @selector(moveToLeftEndOfLine:)) {
+        if (self.hasActiveInlineAutocomplete) {
+            NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
+            [self revertInlineAutocompleteToTypedQuery:typed];
+            self.inlineAutocompleteSuppressed = YES;
+            self.suppressedForQuery = [typed copy];
+            return YES;
+        }
     }
 
     if (!self.panelVisible || self.matches.count == 0) {
@@ -342,6 +566,9 @@ static const NSUInteger kSuggestionLimit = 8;
     }
     self.selectedIndex = index;
     [self.panel setHighlightedIndex:index];
+    self.inlineAutocompleteSuppressed = NO;
+    self.suppressedForQuery = nil;
+    [self applyInlineAutocompleteIfPossible];
 }
 
 @end
