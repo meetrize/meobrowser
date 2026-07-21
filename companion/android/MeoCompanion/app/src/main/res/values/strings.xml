@@ -16,6 +16,10 @@
     <string name="nav_reload">刷新</string>
     <string name="address_hint">搜索或输入网址</string>
     <string name="link_status">互联状态</string>
+    <string name="link_status_connected">已连接到 Mac</string>
+    <string name="link_status_connecting">正在连接…</string>
+    <string name="link_status_disconnected">未连接</string>
+    <string name="link_disconnect">断开连接</string>
     <string name="menu">菜单</string>
     <string name="tools_panel">功能</string>
     <string name="tabs_panel">标签</string>

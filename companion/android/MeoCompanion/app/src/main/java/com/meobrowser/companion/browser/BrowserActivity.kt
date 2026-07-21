@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -54,6 +55,7 @@ import com.meobrowser.companion.browser.tab.BrowserTab
 import com.meobrowser.companion.browser.tab.TabManager
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
+import com.meobrowser.companion.channel.LinkConnectionState
 import com.meobrowser.companion.databinding.ActivityBrowserBinding
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.settings.SettingsActivity
@@ -84,6 +86,9 @@ class BrowserActivity : AppCompatActivity() {
     private var touchSlop = 0
     private val shortcutSyncListener: () -> Unit = {
         runOnUiThread { refreshShortcutGrid() }
+    }
+    private val linkStatusListener: (String, String) -> Unit = { status, _ ->
+        runOnUiThread { updateLinkStatusDot(status) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -140,8 +145,12 @@ class BrowserActivity : AppCompatActivity() {
         binding.forwardButton.setOnClickListener { goForward() }
         binding.toolsButton.setOnClickListener { showToolsSheet() }
         binding.tabsButton.setOnClickListener { showTabsSheet() }
+        binding.linkButton.setOnClickListener {
+            startActivity(Intent(this, MainActivity::class.java))
+        }
         binding.newTabButton.setOnClickListener { newTab() }
         binding.overflowButton.setOnClickListener { showOverflowMenu() }
+        updateLinkStatusDot(CompanionSession.statusText)
         binding.addressBar.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -172,13 +181,16 @@ class BrowserActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         SyncEngine.addShortcutChangeListener(shortcutSyncListener)
+        CompanionSession.addStatusListener(linkStatusListener)
         maybeAutoConnect()
         SyncEngine.onAppForeground(this)
         refreshShortcutGrid()
         updateNavChrome()
+        updateLinkStatusDot(CompanionSession.statusText)
     }
 
     override fun onStop() {
+        CompanionSession.removeStatusListener(linkStatusListener)
         SyncEngine.removeShortcutChangeListener(shortcutSyncListener)
         persistSession()
         super.onStop()
@@ -672,6 +684,22 @@ class BrowserActivity : AppCompatActivity() {
         binding.backButton.alpha = if (canBack) 1f else 0.35f
         binding.forwardButton.alpha = if (canForward) 1f else 0.35f
         binding.tabsCountBadge.text = tabManager.size.coerceAtMost(99).toString()
+    }
+
+    private fun updateLinkStatusDot(status: String) {
+        if (!::binding.isInitialized) return
+        val state = LinkConnectionState.from(status, CompanionSession.client.isConnected)
+        val stroke = (1.5f * resources.displayMetrics.density).toInt().coerceAtLeast(2)
+        binding.linkStatusDot.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(state.dotColor)
+            setStroke(stroke, 0xFFF7F8FA.toInt())
+        }
+        binding.linkIcon.alpha = when (state) {
+            LinkConnectionState.DISCONNECTED -> 0.7f
+            else -> 1f
+        }
+        binding.linkButton.contentDescription = "${getString(R.string.link_status)} · ${state.title}"
     }
 
     private fun showActiveTab() {

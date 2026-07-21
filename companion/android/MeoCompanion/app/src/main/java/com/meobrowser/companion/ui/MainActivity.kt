@@ -1,6 +1,7 @@
 package com.meobrowser.companion.ui
 
 import android.Manifest
+import android.graphics.drawable.GradientDrawable
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.View
@@ -9,10 +10,12 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.lifecycleScope
 import com.meobrowser.companion.R
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
+import com.meobrowser.companion.channel.LinkConnectionState
 import com.meobrowser.companion.databinding.ActivityMainBinding
 import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.NotificationMirrorMode
@@ -55,7 +58,7 @@ class MainActivity : AppCompatActivity() {
     private val statusListener: (String, String) -> Unit = { status, _ ->
         runOnUiThread {
             if (!::binding.isInitialized) return@runOnUiThread
-            binding.statusText.text = "状态：$status"
+            updateLinkStatusUi(status)
             refreshOtpDisplay()
             refreshChecks()
         }
@@ -65,12 +68,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        title = getString(R.string.settings_section_link)
         prefs = PairingPrefs(this)
+        setupToolbar()
         SmsListenCoordinator.start(this)
         restoreConnectionForm()
         applyAuthModeUi()
         applyMirrorModeUi(fromUser = false)
+        updateLinkStatusUi(CompanionSession.statusText)
 
         binding.authModeGroup.setOnCheckedChangeListener { _, checkedId ->
             prefs.authMode = when (checkedId) {
@@ -282,7 +286,7 @@ class MainActivity : AppCompatActivity() {
         didAutoConnect = true
         CompanionSession.statusText = "自动连接中…"
         CompanionSession.notifyStatus()
-        binding.statusText.text = "状态：${CompanionSession.statusText}"
+        updateLinkStatusUi(CompanionSession.statusText)
         connectFromForm(manual = false)
     }
 
@@ -455,7 +459,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        binding.statusText.text = "状态：${CompanionSession.statusText}"
+        updateLinkStatusUi(CompanionSession.statusText)
         refreshOtpDisplay()
         refreshChecks()
         binding.notifAccessHint.text = OtpNotificationListener.enabledDetail(this)
@@ -472,6 +476,44 @@ class MainActivity : AppCompatActivity() {
         // 从向导返回或再次进入前台时，安全码模式补一次自动连接
         if (!SetupChecker.shouldAutoShowWizard(this)) {
             maybeAutoConnect()
+        }
+    }
+
+    private fun setupToolbar() {
+        binding.linkToolbar.title = getString(R.string.settings_section_link)
+        binding.linkToolbar.setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material)
+        binding.linkToolbar.navigationIcon?.let { icon ->
+            DrawableCompat.setTint(DrawableCompat.wrap(icon.mutate()), 0xFF1C1C1E.toInt())
+        }
+        binding.linkToolbar.setNavigationOnClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
+    }
+
+    private fun updateLinkStatusUi(status: String) {
+        if (!::binding.isInitialized) return
+        val state = LinkConnectionState.from(status, CompanionSession.client.isConnected)
+        binding.linkStatusTitle.text = state.title
+        binding.statusText.text = status.ifBlank { state.title }
+        applyStatusDot(binding.linkStatusCardDot, state.dotColor)
+        binding.linkStatusIconBg.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(state.iconBackgroundColor)
+        }
+        val connected = state == LinkConnectionState.CONNECTED
+        val connecting = state == LinkConnectionState.CONNECTING
+        binding.connectButton.isEnabled = !connecting
+        binding.disconnectButton.isEnabled = connected || connecting
+        binding.connectButton.alpha = if (connecting) 0.5f else 1f
+        binding.disconnectButton.alpha = if (connected || connecting) 1f else 0.45f
+    }
+
+    private fun applyStatusDot(view: View, color: Int) {
+        val stroke = (1.5f * resources.displayMetrics.density).toInt().coerceAtLeast(2)
+        view.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            setStroke(stroke, 0xFFFFFFFF.toInt())
         }
     }
 
