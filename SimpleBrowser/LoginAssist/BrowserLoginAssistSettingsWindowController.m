@@ -581,7 +581,9 @@
     if (!layer) {
         return;
     }
-    CGColorRef previous = layer.borderColor;
+    // CALayer does not transfer ownership of borderColor; replacing it releases the old
+    // color, so we must copy before the delayed restore (otherwise setBorderColor: crashes).
+    CGColorRef previousBorder = layer.borderColor ? CGColorCreateCopy(layer.borderColor) : NULL;
     CGFloat previousWidth = layer.borderWidth;
     if (@available(macOS 10.14, *)) {
         layer.borderColor = [NSColor controlAccentColor].CGColor;
@@ -589,9 +591,16 @@
         layer.borderColor = [NSColor selectedControlColor].CGColor;
     }
     layer.borderWidth = 2.0;
+    __weak NSView *weakCard = card;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        layer.borderColor = previous;
-        layer.borderWidth = previousWidth;
+        CALayer *restoreLayer = weakCard.layer;
+        if (restoreLayer) {
+            restoreLayer.borderColor = previousBorder;
+            restoreLayer.borderWidth = previousWidth;
+        }
+        if (previousBorder) {
+            CGColorRelease(previousBorder);
+        }
     });
 }
 
