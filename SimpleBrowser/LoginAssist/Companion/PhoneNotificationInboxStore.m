@@ -80,7 +80,7 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
 
         NSString *appLabel = [self stringFrom:payload[@"appLabel"]];
         NSString *title = [self stringFrom:payload[@"title"]];
-        NSString *body = [self stringFrom:payload[@"body"]];
+        NSString *body = [self dedupeRepeatedBody:[self stringFrom:payload[@"body"]]];
         long long postTimeMs = 0;
         if ([payload[@"postTimeMs"] respondsToSelector:@selector(longLongValue)]) {
             postTimeMs = [payload[@"postTimeMs"] longLongValue];
@@ -541,6 +541,38 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
         return [(NSNumber *)value stringValue];
     }
     return @"";
+}
+
+/// 折叠 Android 把 EXTRA_TEXT / BIG_TEXT 拼成的重复行（同文案两遍）。
+- (NSString *)dedupeRepeatedBody:(NSString *)body {
+    if (body.length == 0) {
+        return body ?: @"";
+    }
+    NSArray<NSString *> *rawLines = [body componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+    NSMutableArray<NSString *> *kept = [NSMutableArray array];
+    for (NSString *raw in rawLines) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (line.length == 0) {
+            continue;
+        }
+        BOOL skip = NO;
+        for (NSUInteger i = 0; i < kept.count; i++) {
+            NSString *existing = kept[i];
+            if ([existing isEqualToString:line] || [existing containsString:line]) {
+                skip = YES;
+                break;
+            }
+            if ([line containsString:existing] && line.length > existing.length) {
+                kept[i] = line;
+                skip = YES;
+                break;
+            }
+        }
+        if (!skip) {
+            [kept addObject:line];
+        }
+    }
+    return [kept componentsJoinedByString:@"\n"];
 }
 
 - (NSString *)stableHash:(NSString *)string {

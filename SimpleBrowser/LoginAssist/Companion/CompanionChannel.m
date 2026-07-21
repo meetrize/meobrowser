@@ -7,6 +7,7 @@
 #import "OTPInbox.h"
 #import "PhoneNotificationPresenter.h"
 #import "PhoneNotificationInboxStore.h"
+#import "PhoneAppIconCache.h"
 #import "CallAlertSettings.h"
 #import "CallAlertPresenter.h"
 #import "CallAlertBannerController.h"
@@ -268,6 +269,10 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         [self handlePhoneNotification:json connectionID:connectionID server:server];
         return;
     }
+    if ([type isEqualToString:@"app_icon"]) {
+        [self handleAppIcon:json connectionID:connectionID server:server];
+        return;
+    }
     if ([type isEqualToString:@"call_event"]) {
         [self handleCallEvent:json connectionID:connectionID server:server];
         return;
@@ -455,6 +460,60 @@ NSNotificationName const CompanionChannelStateDidChangeNotification = @"Companio
         @"v": @1,
         @"type": @"phone_notification_ok",
         @"id": payloadId,
+    } toConnectionID:connectionID];
+    [self refreshConnectedState];
+}
+
+- (void)handleAppIcon:(NSDictionary *)json
+         connectionID:(NSString *)connectionID
+               server:(CompanionBonjourServer *)server {
+    NSString *deviceToken = json[@"deviceToken"];
+    NSString *packageName = json[@"packageName"];
+    NSString *iconHash = json[@"iconHash"];
+    NSString *pngBase64 = json[@"pngBase64"];
+    NSString *appLabel = [json[@"appLabel"] isKindOfClass:[NSString class]] ? json[@"appLabel"] : @"";
+
+    if (![deviceToken isKindOfClass:[NSString class]] ||
+        ![packageName isKindOfClass:[NSString class]] || packageName.length == 0 ||
+        ![iconHash isKindOfClass:[NSString class]] || iconHash.length == 0 ||
+        ![pngBase64 isKindOfClass:[NSString class]] || pngBase64.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"invalid app_icon"}
+          toConnectionID:connectionID];
+        return;
+    }
+    if (![[CompanionPairingStore sharedStore] validateDeviceToken:deviceToken deviceId:nil]) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"unauthorized"}
+          toConnectionID:connectionID];
+        return;
+    }
+
+    NSData *pngData = [[NSData alloc] initWithBase64EncodedString:pngBase64
+                                                          options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if (!pngData || pngData.length == 0) {
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": @"app_icon decode failed"}
+          toConnectionID:connectionID];
+        return;
+    }
+
+    NSError *storeError = nil;
+    BOOL ok = [[PhoneAppIconCache sharedCache] storePNGData:pngData
+                                                    package:packageName
+                                                   iconHash:iconHash
+                                                   appLabel:appLabel
+                                                      error:&storeError];
+    if (!ok) {
+        NSString *msg = storeError.localizedDescription ?: @"app_icon store failed";
+        [server sendJSON:@{@"v": @1, @"type": @"error", @"message": msg}
+          toConnectionID:connectionID];
+        return;
+    }
+
+    [self.activeConnectionIDs addObject:connectionID];
+    [server sendJSON:@{
+        @"v": @1,
+        @"type": @"app_icon_ok",
+        @"packageName": packageName,
+        @"iconHash": iconHash,
     } toConnectionID:connectionID];
     [self refreshConnectedState];
 }

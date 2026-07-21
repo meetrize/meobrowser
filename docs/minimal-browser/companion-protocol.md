@@ -1,8 +1,8 @@
-# Meo Companion 协议（V2 / V2.1 / V3）
+# Meo Companion 协议（V2 / V2.1 / V2.2 / V2.3 / V3）
 
-> MeoBrowser（Mac）↔ MeoCompanion / Android MeoBrowser：局域网 OTP、通知镜像、来电提醒与可选数据同步。  
+> MeoBrowser（Mac）↔ MeoCompanion / Android MeoBrowser：局域网 OTP、通知镜像、来电提醒、App 图标与可选数据同步。  
 > 传输：Bonjour `_meologin._tcp` + 长度前缀 JSON。  
-> 同步设计：[companion-sync-design.md](companion-sync-design.md) · 通知镜像：[companion-notification-mirror-design.md](companion-notification-mirror-design.md) · 来电提醒：[companion-call-alert-feasibility-and-design.md](companion-call-alert-feasibility-and-design.md)
+> 同步设计：[companion-sync-design.md](companion-sync-design.md) · 通知镜像：[companion-notification-mirror-design.md](companion-notification-mirror-design.md) · 来电提醒：[companion-call-alert-feasibility-and-design.md](companion-call-alert-feasibility-and-design.md) · App 图标：[companion-notification-app-icon-design.md](companion-notification-app-icon-design.md)
 
 ## 服务发现
 
@@ -166,6 +166,47 @@ Mac：系统通知 + 浏览器跨窗来电条；类型文案由 Mac 本地轻量
 
 鉴权失败用 `error`。即使用户关闭来电提醒或未授权通知，Mac 也应回 `call_event_ok`。
 
+### app_icon（V2.3，Android → Mac）
+
+侧栏等 UI 按 `packageName` 缓存应用小图标。与 `phone_notification` **分开发送**；不修改通知帧结构。
+
+```json
+{
+  "v": 1,
+  "type": "app_icon",
+  "deviceToken": "long-token",
+  "packageName": "com.tencent.mm",
+  "appLabel": "微信",
+  "iconHash": "a1b2c3d4e5f67890",
+  "mime": "image/png",
+  "width": 72,
+  "height": 72,
+  "pngBase64": "<base64…>",
+  "ts": 1710000000
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `deviceToken` | ✅ | 同 otp |
+| `packageName` | ✅ | 缓存主键 |
+| `appLabel` | 推荐 | 应用显示名 |
+| `iconHash` | ✅ | `hex(SHA-256(pngBytes) 前 8 字节)`，16 个 hex 字符 |
+| `mime` | ✅ | 固定 `image/png` |
+| `width` / `height` | ✅ | 像素边长（优先 72，超 12 KiB 可降 48） |
+| `pngBase64` | ✅ | 无前缀；解码后 ≤ 12 KiB |
+| `ts` | ✅ | Unix 秒 |
+
+Mac：校验鉴权与 PNG；成功落盘后回 `app_icon_ok`；失败回 `error`（Android 对本会话该 package 不再重试）。日志禁止打印 base64。
+
+### app_icon_ok（V2.3，Mac → Android）
+
+```json
+{ "v": 1, "type": "app_icon_ok", "packageName": "com.tencent.mm", "iconHash": "a1b2c3d4e5f67890" }
+```
+
+IC-MVP：某 package 在当前 TCP 会话首次发 `phone_notification` 前推送 `app_icon`。跨会话 `app_icon_need` 为后续阶段。
+
 ## V3 同步消息（快捷方式 / 历史 / 书签）
 
 > 设计详见 [companion-sync-design.md](companion-sync-design.md)。所有 sync_* 须带有效 `deviceToken`。单帧 ≤ 64 KiB，超出用 `sync_chunk`。
@@ -187,7 +228,7 @@ Mac：系统通知 + 浏览器跨窗来电条；类型文案由 Mac 本地轻量
 
 1. **临时配对码**：Mac 生成 6 位数字 `pairingToken`，默认有效 5 分钟，可刷新；校验通过后签发长期 `deviceToken` 并清除 pending 码。  
 2. **固定安全码**：用户在 Mac / Android 设定相同安全码；`pairingToken` 与安全码匹配即签发/更新 `deviceToken`，**安全码不清除**。Android 在安全码模式下打开 App 应默认自动连接。  
-3. 之后 `otp` / `phone_notification` / `call_event` 必须带有效 `deviceToken`。  
+3. 之后 `otp` / `phone_notification` / `call_event` / `app_icon` 必须带有效 `deviceToken`。  
 4. Mac「注销设备」删除 token；临时配对码需重新配对，安全码模式可用同一安全码再次连接。
 
 ## OTP 接受规则（Mac `OTPInbox`）

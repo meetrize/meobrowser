@@ -18,8 +18,10 @@ import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.call.CallEventPayload
 import com.meobrowser.companion.call.CallStateMonitor
 import com.meobrowser.companion.sms.PhoneNotificationPayload
+import com.meobrowser.companion.sms.AppIconExporter
 import com.meobrowser.companion.sync.SyncEngine
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
@@ -52,6 +54,7 @@ class CompanionConnectionService : Service() {
                 CompanionSession.userRequestedDisconnect = true
                 executor.execute {
                     client.disconnect(quiet = true)
+                    CompanionSession.clearSessionIconState()
                     CompanionSession.statusText = "已断开"
                     CompanionSession.notifyStatus()
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -198,6 +201,13 @@ class CompanionConnectionService : Service() {
                     if (id.isNotBlank()) "通知镜像已确认" else "通知镜像已确认"
                 CompanionSession.notifyStatus()
             }
+            "app_icon_ok" -> {
+                val pkg = json.optString("packageName")
+                val hash = json.optString("iconHash")
+                if (pkg.isNotBlank() && hash.isNotBlank()) {
+                    CompanionSession.markAppIconPushed(pkg, hash)
+                }
+            }
             "call_event_ok" -> {
                 CompanionSession.lastSmsEvent = "来电提醒已确认"
                 CompanionSession.notifyStatus()
@@ -209,6 +219,7 @@ class CompanionConnectionService : Service() {
                 val message = json.optString("message")
                 CompanionSession.statusText = "错误：$message"
                 CompanionSession.notifyStatus()
+                CompanionSession.noteAppIconError(message)
                 // 安全码模式：token 失效时清掉并用安全码重连
                 if (prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
                     message.contains("deviceToken", ignoreCase = true) &&
@@ -234,6 +245,7 @@ class CompanionConnectionService : Service() {
     }
 
     fun onPeerClosed() {
+        CompanionSession.clearSessionIconState()
         if (CompanionSession.userRequestedDisconnect) {
             return
         }
@@ -390,7 +402,49 @@ object CompanionSession {
     @Volatile
     var userRequestedDisconnect: Boolean = false
 
+    /** 本 TCP 会话已成功推送的 package → iconHash */
+    private val sessionIconPushed = ConcurrentHashMap<String, String>()
+
+    /** 本会话导出/发送失败后不再重试的 package */
+    private val sessionIconFailed = ConcurrentHashMap.newKeySet<String>()
+
+    /** 最近一次成功推图标的时间，用于 ≤2 icons/秒 节流 */
+    @Volatile
+    private var lastIconPushAtMs: Long = 0L
+
+    /** 等待 ok / 出错时关联的最近推送 package（简单单槽即可） */
+    @Volatile
+    private var lastIconPushPackage: String = ""
+
     private val statusListeners = java.util.concurrent.CopyOnWriteArraySet<(String, String) -> Unit>()
+
+    fun clearSessionIconState() {
+        sessionIconPushed.clear()
+        sessionIconFailed.clear()
+        lastIconPushPackage = ""
+        lastIconPushAtMs = 0L
+    }
+
+    fun markAppIconPushed(packageName: String, iconHash: String) {
+        sessionIconPushed[packageName] = iconHash
+        Log.i("MeoCompanion", "app_icon_ok pkg=$packageName hash=$iconHash")
+    }
+
+    fun noteAppIconError(message: String) {
+        val lower = message.lowercase()
+        if (!lower.contains("app_icon") &&
+            !lower.contains("png") &&
+            !lower.contains("decode") &&
+            !lower.contains("icon")
+        ) {
+            return
+        }
+        val pkg = lastIconPushPackage
+        if (pkg.isNotBlank()) {
+            sessionIconFailed.add(pkg)
+            Log.w("MeoCompanion", "app_icon failed for session pkg=$pkg msg=$message")
+        }
+    }
 
     fun addStatusListener(listener: (String, String) -> Unit) {
         statusListeners.add(listener)
@@ -673,6 +727,7 @@ object CompanionSession {
             return
         }
         try {
+            ensureAppIconPushedOnWorker(svc, payload.packageName, prefs)
             client.send(payload.toJson(token))
             lastSmsEvent = "已镜像通知 · ${payload.appLabel.ifBlank { payload.packageName }}"
             if (!statusText.contains("连接保持中")) {
@@ -690,6 +745,68 @@ object CompanionSession {
             Log.e("MeoCompanion", "send phone_notification failed", e)
             statusText = "通知镜像失败：${e.message}"
             notifyStatus()
+        }
+    }
+
+    /**
+     * 当前会话内某 package 首次镜像通知前推送小图标。
+     * 未连接 / 已推过 / 已失败 / 节流中 → 跳过，不影响通知发送。
+     */
+    private fun ensureAppIconPushedOnWorker(
+        svc: CompanionConnectionService?,
+        packageName: String,
+        prefs: PairingPrefs
+    ) {
+        if (svc == null) return
+        if (packageName.isBlank() || packageName == "otp") return
+        if (!client.isConnected) return
+        if (sessionIconPushed.containsKey(packageName)) return
+        if (sessionIconFailed.contains(packageName)) return
+
+        val token = prefs.deviceToken
+        if (token.isNullOrBlank()) return
+
+        val now = System.currentTimeMillis()
+        val elapsed = now - lastIconPushAtMs
+        if (elapsed in 0 until 500L) {
+            try {
+                Thread.sleep(500L - elapsed)
+            } catch (_: InterruptedException) {
+            }
+        }
+
+        val exported = AppIconExporter.export(svc, packageName)
+        if (exported == null) {
+            sessionIconFailed.add(packageName)
+            Log.w("MeoCompanion", "app_icon export skipped pkg=$packageName")
+            return
+        }
+
+        try {
+            lastIconPushPackage = packageName
+            val json = JSONObject()
+            json.put("v", 1)
+            json.put("type", "app_icon")
+            json.put("deviceToken", token)
+            json.put("packageName", packageName)
+            json.put("appLabel", exported.appLabel)
+            json.put("iconHash", exported.iconHash)
+            json.put("mime", "image/png")
+            json.put("width", exported.width)
+            json.put("height", exported.height)
+            json.put("pngBase64", AppIconExporter.toBase64(exported.pngBytes))
+            json.put("ts", System.currentTimeMillis() / 1000L)
+            client.send(json)
+            lastIconPushAtMs = System.currentTimeMillis()
+            // 乐观写入：即使 ok 稍后到，同会话也不重复发
+            sessionIconPushed[packageName] = exported.iconHash
+            Log.i(
+                "MeoCompanion",
+                "app_icon pushed pkg=$packageName hash=${exported.iconHash} bytes=${exported.pngBytes.size} size=${exported.width}"
+            )
+        } catch (e: Exception) {
+            sessionIconFailed.add(packageName)
+            Log.e("MeoCompanion", "send app_icon failed pkg=$packageName", e)
         }
     }
 

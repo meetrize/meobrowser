@@ -54,9 +54,8 @@ object NotificationPayloadBuilder {
             ?.joinToString("\n") { it?.toString().orEmpty() }
             .orEmpty()
         val sub = extras.charSeq(Notification.EXTRA_SUB_TEXT)
-        val bodyRaw = listOf(text, big, lines, sub)
-            .filter { it.isNotBlank() }
-            .joinToString("\n")
+        // 许多短信/App 通知 text 与 bigText 内容相同；直接拼接会在 Mac 显示成「同一条文案两遍」。
+        val bodyRaw = composeBody(text = text, big = big, lines = lines, sub = sub)
             .ifBlank {
                 // title 已单独上传；正文为空时用 title 作 body 兜底（避免 Mac 跳过）
                 if (title.isNotBlank()) title else ""
@@ -104,6 +103,34 @@ object NotificationPayloadBuilder {
             "$packageName:${title.hashCode()}:${body.hashCode()}:$bucket",
             180
         )
+    }
+
+    private fun composeBody(
+        text: String,
+        big: String,
+        lines: String,
+        sub: String,
+    ): String {
+        val parts = mutableListOf<String>()
+        fun addUnique(raw: String) {
+            val t = raw.trim()
+            if (t.isEmpty()) return
+            // 已有更长文案包含本段 → 跳过
+            if (parts.any { it == t || it.contains(t) }) return
+            // 本段更完整、包含已有短句 → 替换
+            val idx = parts.indexOfFirst { t.contains(it) }
+            if (idx >= 0) {
+                parts[idx] = t
+            } else {
+                parts.add(t)
+            }
+        }
+        // 优先 bigText（展开态通常最完整），再 text / lines / sub
+        addUnique(big)
+        addUnique(text)
+        addUnique(lines)
+        addUnique(sub)
+        return parts.joinToString("\n")
     }
 
     private fun resolveAppLabel(context: Context, packageName: String): String {

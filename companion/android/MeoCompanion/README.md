@@ -41,7 +41,8 @@ cd companion/android/MeoCompanion
 
 ## 手机通知镜像
 
-设置 → 通知中切换模式。设计见 [companion-notification-mirror-design.md](../../../docs/minimal-browser/companion-notification-mirror-design.md)。
+设置 → 通知中切换模式。设计见 [companion-notification-mirror-design.md](../../../docs/minimal-browser/companion-notification-mirror-design.md)。  
+Mac 收件箱侧栏会按包名缓存 App 小图标（会话内首次推送 `app_icon`）：[companion-notification-app-icon-design.md](../../../docs/minimal-browser/companion-notification-app-icon-design.md)。
 
 ## 来电提醒
 

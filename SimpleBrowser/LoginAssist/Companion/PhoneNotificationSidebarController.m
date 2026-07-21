@@ -2,6 +2,7 @@
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationItem.h"
+#import "PhoneAppIconCache.h"
 #import "CompanionChannel.h"
 #import "SBTextField.h"
 #import <QuartzCore/QuartzCore.h>
@@ -90,13 +91,33 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
 @end
 
+@interface PhoneNotificationSidebarBackgroundView : NSView
+@property (nonatomic, copy, nullable) void (^onAppearanceChange)(void);
+@end
+
+@implementation PhoneNotificationSidebarBackgroundView
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    if (self.onAppearanceChange) {
+        self.onAppearanceChange();
+    }
+}
+@end
+
 @interface PhoneNotificationSidebarController () <NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate>
 @property (nonatomic, strong, readwrite) NSView *view;
-@property (nonatomic, strong) NSVisualEffectView *effectView;
+@property (nonatomic, strong) NSView *backgroundView;
+@property (nonatomic, strong) NSView *headerBar;
+@property (nonatomic, strong) NSView *headerBottomSep;
 @property (nonatomic, strong) NSTextField *titleLabel;
+@property (nonatomic, strong) NSButton *categoryButton;
 @property (nonatomic, strong) NSButton *closeButton;
 @property (nonatomic, strong) SBTextField *searchField;
 @property (nonatomic, strong) NSSegmentedControl *bucketControl;
+@property (nonatomic, strong) NSView *filterBar;
+@property (nonatomic, strong) NSLayoutConstraint *filterBarHeightConstraint;
+@property (nonatomic, strong) NSTextField *filterBarLabel;
+@property (nonatomic, strong) NSButton *clearFilterButton;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) NSTableView *tableView;
 @property (nonatomic, strong) NSView *emptyContainer;
@@ -112,6 +133,8 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 @property (nonatomic, assign) CGFloat dragStartWidth;
 @property (nonatomic, assign) BOOL isResizingWidth;
 @property (nonatomic, strong) NSArray<PhoneNotificationSidebarRow *> *rows;
+@property (nonatomic, copy, nullable) NSString *packageFilter;
+@property (nonatomic, copy, nullable) NSString *packageFilterLabel;
 @property (nonatomic, strong, nullable) dispatch_block_t searchDebounceBlock;
 @property (nonatomic, strong, nullable) dispatch_block_t autoMarkReadBlock;
 @property (nonatomic, strong, nullable) id localKeyMonitor;
@@ -136,6 +159,10 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
                                                  selector:@selector(inboxOrChannelDidChange:)
                                                      name:CompanionChannelStateDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(inboxOrChannelDidChange:)
+                                                     name:PhoneAppIconCacheDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -154,19 +181,26 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     root.clipsToBounds = YES;
     root.hidden = YES;
 
-    NSVisualEffectView *effect = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
-    effect.translatesAutoresizingMaskIntoConstraints = NO;
-    effect.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-    if (@available(macOS 10.14, *)) {
-        effect.material = NSVisualEffectMaterialSidebar;
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        effect.material = NSVisualEffectMaterialAppearanceBased;
-#pragma clang diagnostic pop
-    }
-    effect.state = NSVisualEffectStateFollowsWindowActiveState;
-    [root addSubview:effect];
+    PhoneNotificationSidebarBackgroundView *background = [[PhoneNotificationSidebarBackgroundView alloc] initWithFrame:NSZeroRect];
+    background.translatesAutoresizingMaskIntoConstraints = NO;
+    background.wantsLayer = YES;
+    __weak typeof(self) weakSelfForAppearance = self;
+    background.onAppearanceChange = ^{
+        [weakSelfForAppearance applySidebarChromeColors];
+        if (weakSelfForAppearance.visible) {
+            [weakSelfForAppearance.tableView reloadData];
+        }
+    };
+    [root addSubview:background];
+
+    NSView *headerBar = [[NSView alloc] initWithFrame:NSZeroRect];
+    headerBar.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBar.wantsLayer = YES;
+
+    NSView *headerBottomSep = [[NSView alloc] initWithFrame:NSZeroRect];
+    headerBottomSep.translatesAutoresizingMaskIntoConstraints = NO;
+    headerBottomSep.wantsLayer = YES;
+    headerBottomSep.identifier = @"headerBottomSep";
 
     NSTextField *title = [NSTextField labelWithString:@"手机通知"];
     title.translatesAutoresizingMaskIntoConstraints = NO;
@@ -188,6 +222,29 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         close.contentTintColor = [NSColor secondaryLabelColor];
     }
 
+    NSButton *category = [NSButton buttonWithTitle:@"分类" target:self action:@selector(categoryButtonClicked:)];
+    NSImage *categoryImage = [self symbolNamed:@"square.grid.2x2"];
+    if (!categoryImage) {
+        categoryImage = [self symbolNamed:@"rectangle.3.group"];
+    }
+    if (categoryImage) {
+        category.image = categoryImage;
+        category.imagePosition = NSImageOnly;
+        category.title = @"";
+    }
+    category.translatesAutoresizingMaskIntoConstraints = NO;
+    category.bezelStyle = NSBezelStyleInline;
+    category.bordered = NO;
+    category.toolTip = @"按 App 分类查看";
+    if (@available(macOS 10.14, *)) {
+        category.contentTintColor = [NSColor secondaryLabelColor];
+    }
+
+    [headerBar addSubview:title];
+    [headerBar addSubview:category];
+    [headerBar addSubview:close];
+    [headerBar addSubview:headerBottomSep];
+
     SBTextField *search = [SBTextField standardField];
     search.translatesAutoresizingMaskIntoConstraints = NO;
     search.placeholderString = @"搜索通知…";
@@ -204,6 +261,29 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     [bucket setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    NSView *filterBar = [[NSView alloc] initWithFrame:NSZeroRect];
+    filterBar.translatesAutoresizingMaskIntoConstraints = NO;
+    filterBar.hidden = YES;
+    filterBar.wantsLayer = YES;
+    filterBar.layer.cornerRadius = 8.0;
+
+    NSTextField *filterLabel = [NSTextField labelWithString:@""];
+    filterLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    filterLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+    filterLabel.textColor = [NSColor secondaryLabelColor];
+    filterLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+
+    NSButton *clearFilter = [NSButton buttonWithTitle:@"全部" target:self action:@selector(clearPackageFilterClicked:)];
+    clearFilter.translatesAutoresizingMaskIntoConstraints = NO;
+    clearFilter.bezelStyle = NSBezelStyleInline;
+    clearFilter.bordered = NO;
+    clearFilter.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+    if (@available(macOS 10.14, *)) {
+        clearFilter.contentTintColor = [NSColor systemBlueColor];
+    }
+    [filterBar addSubview:filterLabel];
+    [filterBar addSubview:clearFilter];
+
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.hasVerticalScroller = YES;
@@ -211,14 +291,23 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     scroll.autohidesScrollers = YES;
     scroll.borderType = NSNoBorder;
     scroll.drawsBackground = NO;
+    scroll.backgroundColor = [NSColor clearColor];
+    scroll.automaticallyAdjustsContentInsets = NO;
+    scroll.contentInsets = NSEdgeInsetsZero;
+    if (@available(macOS 11.0, *)) {
+        scroll.scrollerInsets = NSEdgeInsetsZero;
+    }
 
     NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
     table.headerView = nil;
     table.backgroundColor = [NSColor clearColor];
     table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleRegular;
     table.allowsEmptySelection = YES;
-    table.rowHeight = 56;
-    table.intercellSpacing = NSMakeSize(0, 2);
+    table.rowHeight = 72;
+    table.intercellSpacing = NSMakeSize(0, 0);
+    if (@available(macOS 11.0, *)) {
+        table.style = NSTableViewStylePlain;
+    }
     table.target = self;
     table.doubleAction = @selector(tableDoubleClicked:);
     NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"main"];
@@ -281,60 +370,87 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         [weakSelf persistWidth];
     };
 
-    NSView *separator = [[NSView alloc] initWithFrame:NSZeroRect];
-    separator.translatesAutoresizingMaskIntoConstraints = NO;
-    separator.wantsLayer = YES;
-    separator.layer.backgroundColor = [NSColor separatorColor].CGColor;
+    NSView *edgeSeparator = [[NSView alloc] initWithFrame:NSZeroRect];
+    edgeSeparator.translatesAutoresizingMaskIntoConstraints = NO;
+    edgeSeparator.wantsLayer = YES;
+    edgeSeparator.identifier = @"edgeSep";
 
-    [effect addSubview:title];
-    [effect addSubview:close];
-    [effect addSubview:search];
-    [effect addSubview:bucket];
-    [effect addSubview:scroll];
-    [effect addSubview:empty];
-    [effect addSubview:markAll];
-    [effect addSubview:purge];
+    [background addSubview:headerBar];
+    [background addSubview:search];
+    [background addSubview:bucket];
+    [background addSubview:filterBar];
+    [background addSubview:scroll];
+    [background addSubview:empty];
+    [background addSubview:markAll];
+    [background addSubview:purge];
     [root addSubview:handle];
-    [root addSubview:separator];
+    [root addSubview:edgeSeparator];
 
     self.widthConstraint = [root.widthAnchor constraintEqualToConstant:0];
     self.widthConstraint.active = YES;
+    NSLayoutConstraint *filterHeight = [filterBar.heightAnchor constraintEqualToConstant:0];
 
     [NSLayoutConstraint activateConstraints:@[
-        [effect.topAnchor constraintEqualToAnchor:root.topAnchor],
-        [effect.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
-        [effect.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
-        [effect.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [background.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [background.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [background.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [background.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
 
         [handle.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
         [handle.topAnchor constraintEqualToAnchor:root.topAnchor],
         [handle.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
         [handle.widthAnchor constraintEqualToConstant:kResizeHandleWidth],
 
-        [separator.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
-        [separator.topAnchor constraintEqualToAnchor:root.topAnchor],
-        [separator.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
-        [separator.widthAnchor constraintEqualToConstant:1],
+        [edgeSeparator.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [edgeSeparator.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [edgeSeparator.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [edgeSeparator.widthAnchor constraintEqualToConstant:1],
 
-        [title.leadingAnchor constraintEqualToAnchor:effect.leadingAnchor constant:14],
-        [title.topAnchor constraintEqualToAnchor:effect.topAnchor constant:12],
-        [close.trailingAnchor constraintEqualToAnchor:effect.trailingAnchor constant:-10],
-        [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+        [headerBar.leadingAnchor constraintEqualToAnchor:background.leadingAnchor],
+        [headerBar.trailingAnchor constraintEqualToAnchor:background.trailingAnchor],
+        [headerBar.topAnchor constraintEqualToAnchor:background.topAnchor],
+        [headerBar.heightAnchor constraintEqualToConstant:44],
+
+        [title.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor constant:14],
+        [title.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [close.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor constant:-10],
+        [close.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
         [close.widthAnchor constraintEqualToConstant:28],
         [close.heightAnchor constraintEqualToConstant:28],
+        [category.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-2],
+        [category.centerYAnchor constraintEqualToAnchor:headerBar.centerYAnchor],
+        [category.widthAnchor constraintEqualToConstant:28],
+        [category.heightAnchor constraintEqualToConstant:28],
+        [title.trailingAnchor constraintLessThanOrEqualToAnchor:category.leadingAnchor constant:-8],
 
-        [search.leadingAnchor constraintEqualToAnchor:effect.leadingAnchor constant:12],
-        [search.trailingAnchor constraintEqualToAnchor:effect.trailingAnchor constant:-12],
-        [search.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
+        [headerBottomSep.leadingAnchor constraintEqualToAnchor:headerBar.leadingAnchor],
+        [headerBottomSep.trailingAnchor constraintEqualToAnchor:headerBar.trailingAnchor],
+        [headerBottomSep.bottomAnchor constraintEqualToAnchor:headerBar.bottomAnchor],
+        [headerBottomSep.heightAnchor constraintEqualToConstant:1],
+
+        [search.leadingAnchor constraintEqualToAnchor:background.leadingAnchor constant:12],
+        [search.trailingAnchor constraintEqualToAnchor:background.trailingAnchor constant:-12],
+        [search.topAnchor constraintEqualToAnchor:headerBar.bottomAnchor constant:10],
         [search.heightAnchor constraintEqualToConstant:26],
 
         [bucket.leadingAnchor constraintEqualToAnchor:search.leadingAnchor],
         [bucket.trailingAnchor constraintEqualToAnchor:search.trailingAnchor],
         [bucket.topAnchor constraintEqualToAnchor:search.bottomAnchor constant:8],
 
-        [scroll.leadingAnchor constraintEqualToAnchor:effect.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:effect.trailingAnchor],
-        [scroll.topAnchor constraintEqualToAnchor:bucket.bottomAnchor constant:8],
+        [filterBar.leadingAnchor constraintEqualToAnchor:search.leadingAnchor],
+        [filterBar.trailingAnchor constraintEqualToAnchor:search.trailingAnchor],
+        [filterBar.topAnchor constraintEqualToAnchor:bucket.bottomAnchor constant:6],
+        filterHeight,
+
+        [filterLabel.leadingAnchor constraintEqualToAnchor:filterBar.leadingAnchor constant:10],
+        [filterLabel.centerYAnchor constraintEqualToAnchor:filterBar.centerYAnchor],
+        [filterLabel.trailingAnchor constraintLessThanOrEqualToAnchor:clearFilter.leadingAnchor constant:-8],
+        [clearFilter.trailingAnchor constraintEqualToAnchor:filterBar.trailingAnchor constant:-8],
+        [clearFilter.centerYAnchor constraintEqualToAnchor:filterBar.centerYAnchor],
+
+        [scroll.leadingAnchor constraintEqualToAnchor:background.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:background.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:filterBar.bottomAnchor constant:6],
         [scroll.bottomAnchor constraintEqualToAnchor:markAll.topAnchor constant:-6],
 
         [empty.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor],
@@ -351,18 +467,25 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         [emptyAction.topAnchor constraintEqualToAnchor:emptyDetail.bottomAnchor constant:14],
         [emptyAction.centerXAnchor constraintEqualToAnchor:empty.centerXAnchor],
 
-        [markAll.leadingAnchor constraintEqualToAnchor:effect.leadingAnchor constant:12],
-        [markAll.bottomAnchor constraintEqualToAnchor:effect.bottomAnchor constant:-10],
+        [markAll.leadingAnchor constraintEqualToAnchor:background.leadingAnchor constant:12],
+        [markAll.bottomAnchor constraintEqualToAnchor:background.bottomAnchor constant:-10],
         [purge.leadingAnchor constraintEqualToAnchor:markAll.trailingAnchor constant:12],
         [purge.centerYAnchor constraintEqualToAnchor:markAll.centerYAnchor],
     ]];
 
     self.view = root;
-    self.effectView = effect;
+    self.backgroundView = background;
+    self.headerBar = headerBar;
+    self.headerBottomSep = headerBottomSep;
     self.titleLabel = title;
+    self.categoryButton = category;
     self.closeButton = close;
     self.searchField = search;
     self.bucketControl = bucket;
+    self.filterBar = filterBar;
+    self.filterBarHeightConstraint = filterHeight;
+    self.filterBarLabel = filterLabel;
+    self.clearFilterButton = clearFilter;
     self.scrollView = scroll;
     self.tableView = table;
     self.emptyContainer = empty;
@@ -373,7 +496,55 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     self.purgeReadButton = purge;
     self.resizeHandle = handle;
 
+    [self applySidebarChromeColors];
     [self reloadList];
+}
+
+- (void)applySidebarChromeColors {
+    // 浅色：纯白，让灰色分隔线更清晰；深色：略抬升的内容底，避免发灰糊成一片
+    BOOL dark = NO;
+    if (@available(macOS 10.14, *)) {
+        NSAppearanceName match = [self.backgroundView.effectiveAppearance
+            bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+        dark = (match == NSAppearanceNameDarkAqua);
+    }
+    NSColor *bg = dark ? [NSColor colorWithCalibratedWhite:0.16 alpha:1.0] : [NSColor whiteColor];
+    NSColor *edge = dark
+        ? [NSColor colorWithCalibratedWhite:0.28 alpha:1.0]
+        : [NSColor colorWithCalibratedWhite:0.86 alpha:1.0];
+    self.backgroundView.layer.backgroundColor = bg.CGColor;
+    NSView *edgeSep = nil;
+    for (NSView *sub in self.view.subviews) {
+        if ([sub.identifier isEqualToString:@"edgeSep"]) {
+            edgeSep = sub;
+            break;
+        }
+    }
+    edgeSep.layer.backgroundColor = edge.CGColor;
+
+    // 标题栏浅底：比内容区略灰一点，区分工具区与列表
+    NSColor *headerBG = dark
+        ? [NSColor colorWithCalibratedWhite:0.20 alpha:1.0]
+        : [NSColor colorWithCalibratedWhite:0.955 alpha:1.0];
+    NSColor *headerLine = dark
+        ? [NSColor colorWithCalibratedWhite:0.30 alpha:1.0]
+        : [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];
+    self.headerBar.layer.backgroundColor = headerBG.CGColor;
+    self.headerBottomSep.layer.backgroundColor = headerLine.CGColor;
+
+    if (self.filterBar.wantsLayer) {
+        NSColor *chip = dark
+            ? [NSColor colorWithCalibratedWhite:0.22 alpha:1.0]
+            : [NSColor colorWithCalibratedWhite:0.96 alpha:1.0];
+        self.filterBar.layer.backgroundColor = chip.CGColor;
+    }
+}
+
+- (void)viewAppearanceChanged {
+    [self applySidebarChromeColors];
+    if (self.visible) {
+        [self.tableView reloadData];
+    }
 }
 
 - (nullable NSImage *)symbolNamed:(NSString *)name {
@@ -418,6 +589,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     if (visible) {
         self.currentWidth = [PhoneNotificationInboxSettings sharedSettings].sidebarWidth;
         self.view.hidden = NO;
+        [self applySidebarChromeColors];
         [self installKeyMonitor];
     } else {
         [self uninstallKeyMonitor];
@@ -468,6 +640,10 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         self.widthConstraint.constant = next;
         [self.view.superview layoutSubtreeIfNeeded];
     } completionHandler:nil];
+    if (self.rows.count > 0) {
+        NSIndexSet *all = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.rows.count)];
+        [self.tableView noteHeightOfRowsWithIndexesChanged:all];
+    }
 }
 
 - (void)persistWidth {
@@ -517,64 +693,82 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     PhoneNotificationFilter *filter = [[PhoneNotificationFilter alloc] init];
     filter.bucket = [self selectedBucket];
     filter.query = self.searchField.stringValue;
+    filter.packageName = self.packageFilter;
     NSArray<PhoneNotificationItem *> *items = [[PhoneNotificationInboxStore sharedStore] itemsMatchingFilter:filter];
     self.rows = [self buildRowsFromItems:items];
+    [self updatePackageFilterChrome];
     [self.tableView reloadData];
     [self refreshEmptyState];
     [self scheduleAutoMarkRead];
 }
 
+- (void)updatePackageFilterChrome {
+    BOOL active = self.packageFilter.length > 0;
+    self.filterBar.hidden = !active;
+    self.filterBarHeightConstraint.constant = active ? 28.0 : 0.0;
+    if (active) {
+        NSString *name = self.packageFilterLabel.length > 0 ? self.packageFilterLabel : self.packageFilter;
+        self.filterBarLabel.stringValue = [NSString stringWithFormat:@"正在查看 · %@", name];
+    }
+    if (@available(macOS 10.14, *)) {
+        self.categoryButton.contentTintColor = active ? [NSColor systemBlueColor] : [NSColor secondaryLabelColor];
+    }
+    self.categoryButton.toolTip = active
+        ? [NSString stringWithFormat:@"当前：%@（点击切换分类）", self.packageFilterLabel ?: self.packageFilter]
+        : @"按 App 分类查看";
+}
+
 - (NSArray<PhoneNotificationSidebarRow *> *)buildRowsFromItems:(NSArray<PhoneNotificationItem *> *)items {
-    NSMutableArray<PhoneNotificationSidebarRow *> *rows = [NSMutableArray array];
-    NSMutableArray<PhoneNotificationItem *> *pinned = [NSMutableArray array];
-    NSMutableArray<PhoneNotificationItem *> *rest = [NSMutableArray array];
+    // 默认时间序平铺，不再按 App 分 section
+    NSMutableArray<PhoneNotificationSidebarRow *> *rows = [NSMutableArray arrayWithCapacity:items.count];
     for (PhoneNotificationItem *item in items) {
-        if (item.pinned && [self selectedBucket] != PhoneNotificationInboxBucketPinned) {
-            [pinned addObject:item];
-        } else {
-            [rest addObject:item];
-        }
-    }
-
-    if (pinned.count > 0) {
-        PhoneNotificationSidebarRow *sec = [[PhoneNotificationSidebarRow alloc] init];
-        sec.kind = PhoneNotificationSidebarRowKindSection;
-        sec.sectionTitle = @"已钉选";
-        [rows addObject:sec];
-        for (PhoneNotificationItem *item in pinned) {
-            PhoneNotificationSidebarRow *row = [[PhoneNotificationSidebarRow alloc] init];
-            row.kind = PhoneNotificationSidebarRowKindItem;
-            row.item = item;
-            [rows addObject:row];
-        }
-    }
-
-    NSMutableArray<NSString *> *order = [NSMutableArray array];
-    NSMutableDictionary<NSString *, NSMutableArray<PhoneNotificationItem *> *> *byPkg = [NSMutableDictionary dictionary];
-    for (PhoneNotificationItem *item in rest) {
-        NSString *key = item.packageName.length > 0 ? item.packageName : @"unknown";
-        if (!byPkg[key]) {
-            byPkg[key] = [NSMutableArray array];
-            [order addObject:key];
-        }
-        [byPkg[key] addObject:item];
-    }
-    for (NSString *pkg in order) {
-        NSArray<PhoneNotificationItem *> *group = byPkg[pkg];
-        PhoneNotificationItem *first = group.firstObject;
-        NSString *label = first.appLabel.length > 0 ? first.appLabel : pkg;
-        PhoneNotificationSidebarRow *sec = [[PhoneNotificationSidebarRow alloc] init];
-        sec.kind = PhoneNotificationSidebarRowKindSection;
-        sec.sectionTitle = label;
-        [rows addObject:sec];
-        for (PhoneNotificationItem *item in group) {
-            PhoneNotificationSidebarRow *row = [[PhoneNotificationSidebarRow alloc] init];
-            row.kind = PhoneNotificationSidebarRowKindItem;
-            row.item = item;
-            [rows addObject:row];
-        }
+        PhoneNotificationSidebarRow *row = [[PhoneNotificationSidebarRow alloc] init];
+        row.kind = PhoneNotificationSidebarRowKindItem;
+        row.item = item;
+        [rows addObject:row];
     }
     return rows;
+}
+
+/// 收件箱中出现过的 App（按当前分桶+搜索，不含 package 过滤），用于分类菜单。
+- (NSArray<NSDictionary *> *)appCategoryEntries {
+    PhoneNotificationFilter *filter = [[PhoneNotificationFilter alloc] init];
+    filter.bucket = [self selectedBucket];
+    filter.query = self.searchField.stringValue;
+    filter.packageName = nil;
+    NSArray<PhoneNotificationItem *> *items = [[PhoneNotificationInboxStore sharedStore] itemsMatchingFilter:filter];
+
+    NSMutableDictionary<NSString *, NSMutableDictionary *> *map = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString *> *order = [NSMutableArray array];
+    for (PhoneNotificationItem *item in items) {
+        NSString *pkg = item.packageName.length > 0 ? item.packageName : @"unknown";
+        NSMutableDictionary *entry = map[pkg];
+        if (!entry) {
+            entry = [@{
+                @"packageName": pkg,
+                @"label": item.appLabel.length > 0 ? item.appLabel : pkg,
+                @"count": @0,
+            } mutableCopy];
+            map[pkg] = entry;
+            [order addObject:pkg];
+        }
+        entry[@"count"] = @([entry[@"count"] integerValue] + 1);
+        if (item.appLabel.length > 0) {
+            entry[@"label"] = item.appLabel;
+        }
+    }
+
+    [order sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        NSString *la = map[a][@"label"] ?: a;
+        NSString *lb = map[b][@"label"] ?: b;
+        return [la localizedStandardCompare:lb];
+    }];
+
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray arrayWithCapacity:order.count];
+    for (NSString *pkg in order) {
+        [result addObject:[map[pkg] copy]];
+    }
+    return result;
 }
 
 - (void)refreshEmptyState {
@@ -603,7 +797,9 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     } else if (!hasRows) {
         showEmpty = YES;
         self.emptyTitleLabel.stringValue = @"无匹配结果";
-        self.emptyDetailLabel.stringValue = @"试试其他分桶或清空搜索。";
+        self.emptyDetailLabel.stringValue = self.packageFilter.length > 0
+            ? @"该 App 下暂无匹配通知，可点「全部」清除分类。"
+            : @"试试其他分桶或清空搜索。";
     }
 
     self.emptyContainer.hidden = !showEmpty;
@@ -755,11 +951,78 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 }
 
 - (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row {
-    (void)tableView;
     PhoneNotificationSidebarRow *r = self.rows[(NSUInteger)row];
-    if (r.kind == PhoneNotificationSidebarRowKindSection) return 24;
-    if (r.item.kind == PhoneNotificationItemKindOTP) return 64;
-    return 52;
+    if (r.kind == PhoneNotificationSidebarRowKindSection) return 26;
+    return [self heightForItem:r.item tableWidth:MAX(180.0, tableView.bounds.size.width)];
+}
+
+- (CGFloat)contentTextWidthForTableWidth:(CGFloat)tableWidth {
+    // leading 10 + icon 28 + gap 6 + trailing 10
+    return MAX(120.0, tableWidth - 10 - 28 - 6 - 10);
+}
+
+- (CGFloat)heightForWrappedText:(NSString *)text font:(NSFont *)font width:(CGFloat)width {
+    if (text.length == 0 || width < 1) {
+        return 0;
+    }
+    NSRect bounds = [text boundingRectWithSize:NSMakeSize(width, CGFLOAT_MAX)
+                                       options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                    attributes:@{NSFontAttributeName: font}];
+    return ceil(MAX(font.pointSize + 2.0, bounds.size.height));
+}
+
+- (CGFloat)heightForItem:(PhoneNotificationItem *)item tableWidth:(CGFloat)tableWidth {
+    if (!item) return 64;
+    CGFloat textW = [self contentTextWidthForTableWidth:tableWidth];
+    // 时间列约占 44pt
+    CGFloat titleW = MAX(80.0, textW - 48.0);
+
+    NSString *meta = [self metaLineForItem:item];
+    NSString *title = [self displayTitleForItem:item];
+    NSString *body = [self displayBodyForItem:item];
+
+    NSFont *metaFont = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    NSFont *titleFont = [NSFont systemFontOfSize:13 weight:item.read ? NSFontWeightMedium : NSFontWeightSemibold];
+    NSFont *bodyFont = (item.kind == PhoneNotificationItemKindOTP && item.otpCode.length > 0)
+        ? [NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightSemibold]
+        : [NSFont systemFontOfSize:12];
+
+    CGFloat top = 10.0;
+    CGFloat metaH = [self heightForWrappedText:meta font:metaFont width:titleW];
+    CGFloat titleH = [self heightForWrappedText:title font:titleFont width:textW];
+    CGFloat bodyH = [self heightForWrappedText:body font:bodyFont width:textW];
+    CGFloat otpBtn = (item.kind == PhoneNotificationItemKindOTP && item.otpCode.length > 0) ? 30.0 : 0.0;
+    CGFloat gaps = 4.0 + (bodyH > 0 ? 4.0 : 0.0) + (otpBtn > 0 ? 4.0 : 0.0);
+    CGFloat bottom = 12.0;
+    CGFloat contentH = top + metaH + gaps + titleH + bodyH + otpBtn + bottom;
+    CGFloat iconMin = 10.0 + 28.0 + 12.0;
+    return MAX(iconMin, contentH);
+}
+
+- (NSString *)metaLineForItem:(PhoneNotificationItem *)item {
+    NSString *app = item.appLabel.length > 0 ? item.appLabel
+        : (item.packageName.length > 0 ? item.packageName : @"通知");
+    if (item.pinned) {
+        return [NSString stringWithFormat:@"📌 %@", app];
+    }
+    return app;
+}
+
+- (NSString *)displayTitleForItem:(PhoneNotificationItem *)item {
+    if (item.title.length > 0) {
+        return item.title;
+    }
+    if (item.kind == PhoneNotificationItemKindOTP) {
+        return @"验证码";
+    }
+    return item.appLabel.length > 0 ? item.appLabel : @"通知";
+}
+
+- (NSString *)displayBodyForItem:(PhoneNotificationItem *)item {
+    if (item.kind == PhoneNotificationItemKindOTP && item.otpCode.length > 0) {
+        return item.otpCode;
+    }
+    return item.body.length > 0 ? item.body : @"";
 }
 
 - (BOOL)tableView:(NSTableView *)tableView shouldSelectRow:(NSInteger)row {
@@ -783,76 +1046,148 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     }
 
     PhoneNotificationItem *item = r.item;
-    NSTableCellView *cell = [tableView makeViewWithIdentifier:@"item" owner:self];
+    NSTableCellView *cell = [tableView makeViewWithIdentifier:@"item.v9" owner:self];
     if (!cell) {
         cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
-        cell.identifier = @"item";
+        cell.identifier = @"item.v9";
 
+        NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        icon.translatesAutoresizingMaskIntoConstraints = NO;
+        icon.identifier = @"appIcon";
+        icon.imageScaling = NSImageScaleProportionallyUpOrDown;
+        icon.wantsLayer = YES;
+        icon.layer.cornerRadius = 7.0;
+        icon.layer.masksToBounds = YES;
+
+        // 未读点叠在图标左上角，不额外占左右 padding
         NSView *dot = [[NSView alloc] initWithFrame:NSZeroRect];
         dot.translatesAutoresizingMaskIntoConstraints = NO;
         dot.wantsLayer = YES;
         dot.layer.cornerRadius = 3.5;
         dot.identifier = @"unreadDot";
 
-        NSTextField *title = [NSTextField labelWithString:@""];
+        NSTextField *meta = [NSTextField wrappingLabelWithString:@""];
+        meta.translatesAutoresizingMaskIntoConstraints = NO;
+        meta.identifier = @"meta";
+        meta.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        meta.textColor = [NSColor tertiaryLabelColor];
+        meta.maximumNumberOfLines = 1;
+        meta.cell.lineBreakMode = NSLineBreakByTruncatingTail;
+
+        NSTextField *title = [NSTextField wrappingLabelWithString:@""];
         title.translatesAutoresizingMaskIntoConstraints = NO;
         title.identifier = @"title";
-        title.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
-        title.lineBreakMode = NSLineBreakByTruncatingTail;
+        title.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        title.maximumNumberOfLines = 0;
+        title.cell.wraps = YES;
+        title.cell.usesSingleLineMode = NO;
+        title.lineBreakMode = NSLineBreakByWordWrapping;
         [title setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [title setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                          forOrientation:NSLayoutConstraintOrientationVertical];
 
-        NSTextField *body = [NSTextField labelWithString:@""];
+        NSTextField *body = [NSTextField wrappingLabelWithString:@""];
         body.translatesAutoresizingMaskIntoConstraints = NO;
         body.identifier = @"body";
-        body.font = [NSFont systemFontOfSize:11];
+        body.font = [NSFont systemFontOfSize:12];
         body.textColor = [NSColor secondaryLabelColor];
-        body.lineBreakMode = NSLineBreakByTruncatingTail;
+        body.maximumNumberOfLines = 0;
+        body.cell.wraps = YES;
+        body.cell.usesSingleLineMode = NO;
+        body.lineBreakMode = NSLineBreakByWordWrapping;
+        [body setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [body setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationVertical];
 
         NSTextField *time = [NSTextField labelWithString:@""];
         time.translatesAutoresizingMaskIntoConstraints = NO;
         time.identifier = @"time";
-        time.font = [NSFont systemFontOfSize:10];
+        time.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
         time.textColor = [NSColor tertiaryLabelColor];
         time.alignment = NSTextAlignmentRight;
+        [time setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        NSButton *copyOTP = [NSButton buttonWithTitle:@"复制码" target:self action:@selector(copyOTPFromCell:)];
+        NSButton *copyOTP = [NSButton buttonWithTitle:@"复制验证码" target:self action:@selector(copyOTPFromCell:)];
         copyOTP.translatesAutoresizingMaskIntoConstraints = NO;
         copyOTP.identifier = @"copyOTP";
         copyOTP.bezelStyle = NSBezelStyleInline;
-        copyOTP.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        copyOTP.bordered = NO;
+        copyOTP.wantsLayer = YES;
+        copyOTP.layer.cornerRadius = 5.0;
+        copyOTP.layer.masksToBounds = YES;
+        copyOTP.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
         copyOTP.hidden = YES;
 
+        NSView *sep = [[NSView alloc] initWithFrame:NSZeroRect];
+        sep.translatesAutoresizingMaskIntoConstraints = NO;
+        sep.wantsLayer = YES;
+        sep.identifier = @"rowSep";
+
+        [cell addSubview:icon];
         [cell addSubview:dot];
+        [cell addSubview:meta];
         [cell addSubview:title];
         [cell addSubview:body];
         [cell addSubview:time];
         [cell addSubview:copyOTP];
+        [cell addSubview:sep];
         [NSLayoutConstraint activateConstraints:@[
-            [dot.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:10],
-            [dot.topAnchor constraintEqualToAnchor:cell.topAnchor constant:10],
+            [icon.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:10],
+            [icon.topAnchor constraintEqualToAnchor:cell.topAnchor constant:10],
+            [icon.widthAnchor constraintEqualToConstant:28],
+            [icon.heightAnchor constraintEqualToConstant:28],
+            [dot.leadingAnchor constraintEqualToAnchor:icon.leadingAnchor constant:-1],
+            [dot.topAnchor constraintEqualToAnchor:icon.topAnchor constant:-1],
             [dot.widthAnchor constraintEqualToConstant:7],
             [dot.heightAnchor constraintEqualToConstant:7],
-            [title.leadingAnchor constraintEqualToAnchor:dot.trailingAnchor constant:8],
-            [title.topAnchor constraintEqualToAnchor:cell.topAnchor constant:6],
-            [title.trailingAnchor constraintEqualToAnchor:time.leadingAnchor constant:-6],
+            [meta.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+            [meta.topAnchor constraintEqualToAnchor:cell.topAnchor constant:10],
+            [meta.trailingAnchor constraintEqualToAnchor:time.leadingAnchor constant:-4],
             [time.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-10],
-            [time.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-            [time.widthAnchor constraintGreaterThanOrEqualToConstant:40],
+            [time.centerYAnchor constraintEqualToAnchor:meta.centerYAnchor],
+            [time.widthAnchor constraintGreaterThanOrEqualToConstant:36],
+            [title.leadingAnchor constraintEqualToAnchor:meta.leadingAnchor],
+            [title.topAnchor constraintEqualToAnchor:meta.bottomAnchor constant:3],
+            [title.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-10],
             [body.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-            [body.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
-            [body.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-10],
+            [body.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
+            [body.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
             [copyOTP.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-            [copyOTP.topAnchor constraintEqualToAnchor:body.bottomAnchor constant:2],
-            [copyOTP.heightAnchor constraintEqualToConstant:20],
+            [copyOTP.topAnchor constraintEqualToAnchor:body.bottomAnchor constant:6],
+            [copyOTP.heightAnchor constraintEqualToConstant:24],
+            [copyOTP.widthAnchor constraintGreaterThanOrEqualToConstant:88],
+            [sep.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor],
+            [sep.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
+            [sep.bottomAnchor constraintEqualToAnchor:cell.bottomAnchor],
+            [sep.heightAnchor constraintEqualToConstant:1],
         ]];
     }
 
     NSView *dot = [self subview:cell id:@"unreadDot"];
+    NSImageView *icon = (NSImageView *)[self subview:cell id:@"appIcon"];
+    NSTextField *meta = (NSTextField *)[self subview:cell id:@"meta"];
     NSTextField *title = (NSTextField *)[self subview:cell id:@"title"];
     NSTextField *body = (NSTextField *)[self subview:cell id:@"body"];
     NSTextField *time = (NSTextField *)[self subview:cell id:@"time"];
     NSButton *copyOTP = (NSButton *)[self subview:cell id:@"copyOTP"];
+    NSView *sep = [self subview:cell id:@"rowSep"];
+    if (sep.wantsLayer) {
+        BOOL dark = NO;
+        if (@available(macOS 10.14, *)) {
+            NSAppearanceName match = [cell.effectiveAppearance
+                bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+            dark = (match == NSAppearanceNameDarkAqua);
+        }
+        NSColor *sepColor = dark
+            ? [NSColor colorWithCalibratedWhite:0.30 alpha:1.0]
+            : [NSColor colorWithCalibratedWhite:0.90 alpha:1.0];
+        sep.layer.backgroundColor = sepColor.CGColor;
+    }
+
+    sep.hidden = NO;
 
     BOOL unread = !item.read;
     dot.hidden = !unread;
@@ -862,29 +1197,61 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         dot.layer.backgroundColor = [NSColor blueColor].CGColor;
     }
 
-    NSString *head = item.title.length > 0 ? item.title : (item.appLabel.length > 0 ? item.appLabel : @"通知");
-    if (item.pinned) {
-        head = [@"📌 " stringByAppendingString:head];
+    BOOL isOTP = (item.kind == PhoneNotificationItemKindOTP) ||
+                 [item.packageName isEqualToString:@"otp"];
+    if (isOTP) {
+        icon.image = [PhoneAppIconCache otpPlaceholderImage];
+    } else {
+        NSImage *cached = [[PhoneAppIconCache sharedCache] imageForPackage:item.packageName];
+        icon.image = cached ?: [PhoneAppIconCache placeholderImageWithLabel:item.appLabel
+                                                                    package:item.packageName];
     }
-    title.stringValue = head;
-    title.font = [NSFont systemFontOfSize:12 weight:unread ? NSFontWeightSemibold : NSFontWeightMedium];
 
+    meta.stringValue = [self metaLineForItem:item];
+    title.stringValue = [self displayTitleForItem:item];
+    title.font = [NSFont systemFontOfSize:13 weight:unread ? NSFontWeightSemibold : NSFontWeightMedium];
+    title.textColor = [NSColor labelColor];
+
+    NSString *bodyText = [self displayBodyForItem:item];
     if (item.kind == PhoneNotificationItemKindOTP && item.otpCode.length > 0) {
-        body.stringValue = item.otpCode;
-        body.font = [NSFont monospacedDigitSystemFontOfSize:16 weight:NSFontWeightSemibold];
+        body.stringValue = bodyText;
+        body.font = [NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightSemibold];
         body.textColor = [NSColor labelColor];
         copyOTP.hidden = NO;
         copyOTP.tag = row;
+        [self applyCopyOTPButtonStyle:copyOTP appearance:cell.effectiveAppearance];
     } else {
-        body.stringValue = item.body.length > 0 ? item.body : @"";
-        body.font = [NSFont systemFontOfSize:11];
+        body.stringValue = bodyText;
+        body.font = [NSFont systemFontOfSize:12];
         body.textColor = [NSColor secondaryLabelColor];
         copyOTP.hidden = YES;
     }
+    body.hidden = (bodyText.length == 0);
 
     time.stringValue = [self formatTime:item.postTimeMs];
     cell.objectValue = item.itemID;
     return cell;
+}
+
+- (void)applyCopyOTPButtonStyle:(NSButton *)button appearance:(NSAppearance *)appearance {
+    BOOL dark = NO;
+    if (@available(macOS 10.14, *)) {
+        NSAppearanceName match = [appearance
+            bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+        dark = (match == NSAppearanceNameDarkAqua);
+    }
+    // 加深蓝底白字，比 inline 链接更醒目
+    NSColor *fill = dark
+        ? [NSColor colorWithCalibratedRed:0.18 green:0.40 blue:0.88 alpha:1.0]
+        : [NSColor colorWithCalibratedRed:0.10 green:0.36 blue:0.86 alpha:1.0];
+    button.wantsLayer = YES;
+    button.layer.backgroundColor = fill.CGColor;
+    button.layer.cornerRadius = 5.0;
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: [NSColor whiteColor],
+    };
+    button.attributedTitle = [[NSAttributedString alloc] initWithString:@"复制验证码" attributes:attrs];
 }
 
 - (nullable NSView *)subview:(NSView *)parent id:(NSString *)identifier {
@@ -917,6 +1284,81 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 }
 
 #pragma mark - Actions
+
+- (void)categoryButtonClicked:(id)sender {
+    (void)sender;
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"App 分类"];
+    menu.autoenablesItems = NO;
+
+    NSMenuItem *all = [[NSMenuItem alloc] initWithTitle:@"全部应用"
+                                                 action:@selector(selectAppCategory:)
+                                          keyEquivalent:@""];
+    all.target = self;
+    all.representedObject = @{};
+    all.state = (self.packageFilter.length == 0) ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:all];
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSArray<NSDictionary *> *entries = [self appCategoryEntries];
+    if (entries.count == 0) {
+        NSMenuItem *empty = [[NSMenuItem alloc] initWithTitle:@"暂无 App"
+                                                       action:nil
+                                                keyEquivalent:@""];
+        empty.enabled = NO;
+        [menu addItem:empty];
+    } else {
+        for (NSDictionary *entry in entries) {
+            NSString *pkg = entry[@"packageName"] ?: @"";
+            NSString *label = entry[@"label"] ?: pkg;
+            NSInteger count = [entry[@"count"] integerValue];
+            NSString *title = [NSString stringWithFormat:@"%@（%ld）", label, (long)count];
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                          action:@selector(selectAppCategory:)
+                                                   keyEquivalent:@""];
+            item.target = self;
+            item.representedObject = entry;
+            item.state = [pkg isEqualToString:self.packageFilter]
+                ? NSControlStateValueOn : NSControlStateValueOff;
+
+            BOOL isOTP = [pkg isEqualToString:@"otp"];
+            NSImage *icon = isOTP
+                ? [PhoneAppIconCache otpPlaceholderImage]
+                : ([[PhoneAppIconCache sharedCache] imageForPackage:pkg]
+                   ?: [PhoneAppIconCache placeholderImageWithLabel:label package:pkg]);
+            if (icon) {
+                NSImage *sized = [icon copy];
+                sized.size = NSMakeSize(16, 16);
+                item.image = sized;
+            }
+            [menu addItem:item];
+        }
+    }
+
+    NSPoint point = NSMakePoint(0, self.categoryButton.bounds.size.height + 2);
+    [menu popUpMenuPositioningItem:nil atLocation:point inView:self.categoryButton];
+}
+
+- (void)selectAppCategory:(NSMenuItem *)sender {
+    NSDictionary *entry = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject : @{};
+    NSString *pkg = entry[@"packageName"];
+    if (![pkg isKindOfClass:[NSString class]] || pkg.length == 0) {
+        self.packageFilter = nil;
+        self.packageFilterLabel = nil;
+    } else {
+        self.packageFilter = pkg;
+        NSString *label = entry[@"label"];
+        self.packageFilterLabel = [label isKindOfClass:[NSString class]] ? label : pkg;
+    }
+    [self reloadList];
+}
+
+- (void)clearPackageFilterClicked:(id)sender {
+    (void)sender;
+    self.packageFilter = nil;
+    self.packageFilterLabel = nil;
+    [self reloadList];
+}
 
 - (void)bucketChanged:(id)sender {
     (void)sender;
