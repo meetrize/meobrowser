@@ -18,6 +18,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.lifecycleScope
 import com.meobrowser.companion.R
+import com.meobrowser.companion.a11y.WeChatReplyAccessibilityService
+import com.meobrowser.companion.a11y.WeChatReplyPrefs
 import com.meobrowser.companion.call.CallAlertPrefs
 import com.meobrowser.companion.call.CallStateMonitor
 import com.meobrowser.companion.channel.CompanionConnectionService
@@ -35,6 +37,8 @@ import com.meobrowser.companion.sms.OtpParser
 import com.meobrowser.companion.sms.RecentOtpSms
 import com.meobrowser.companion.sms.RecentSmsOtpReader
 import com.meobrowser.companion.sms.SmsListenCoordinator
+import android.content.Intent
+import android.provider.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,11 +47,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: PairingPrefs
     private lateinit var callAlertPrefs: CallAlertPrefs
+    private lateinit var wechatReplyPrefs: WeChatReplyPrefs
     private var readingRecentOtp = false
     private var showAllChecks = false
     private var didAutoConnect = false
     private var suppressMirrorModeCallback = false
     private var suppressCallAlertCallback = false
+    private var suppressWechatReplyCallback = false
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -96,6 +102,7 @@ class MainActivity : AppCompatActivity() {
             refreshOtpDisplay()
             refreshChecks()
             refreshCallAlertSummary()
+            refreshWechatReplySummary()
         }
     }
 
@@ -105,12 +112,14 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         prefs = PairingPrefs(this)
         callAlertPrefs = CallAlertPrefs(this)
+        wechatReplyPrefs = WeChatReplyPrefs(this)
         setupToolbar()
         SmsListenCoordinator.start(this)
         restoreConnectionForm()
         applyAuthModeUi()
         applyMirrorModeUi(fromUser = false)
         applyCallAlertUi()
+        applyWechatReplyUi()
         updateLinkStatusUi(CompanionSession.statusText)
 
         binding.authModeGroup.setOnCheckedChangeListener { _, checkedId ->
@@ -145,6 +154,20 @@ class MainActivity : AppCompatActivity() {
 
         binding.callScreeningButton.setOnClickListener {
             requestCallScreeningRole()
+        }
+
+        binding.wechatReplySwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (suppressWechatReplyCallback) return@setOnCheckedChangeListener
+            if (isChecked) {
+                confirmEnableWechatReply()
+            } else {
+                wechatReplyPrefs.wechatReplyEnabled = false
+                refreshWechatReplySummary()
+            }
+        }
+
+        binding.wechatReplyA11yButton.setOnClickListener {
+            openAccessibilitySettings()
         }
 
         binding.toggleChecksButton.setOnClickListener {
@@ -289,6 +312,56 @@ class MainActivity : AppCompatActivity() {
         }
         if (fromUser) {
             // no-op; prefs already saved
+        }
+    }
+
+    private fun confirmEnableWechatReply() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.wechat_reply_confirm_title)
+            .setMessage(R.string.wechat_reply_confirm_message)
+            .setPositiveButton("开启") { _, _ ->
+                wechatReplyPrefs.wechatReplyEnabled = true
+                applyWechatReplyUi()
+                if (!WeChatReplyAccessibilityService.isEnabled(this)) {
+                    openAccessibilitySettings()
+                    Toast.makeText(this, "请开启「微信回复」无障碍后返回", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "已开启微信回复（实验）", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消") { _, _ ->
+                wechatReplyPrefs.wechatReplyEnabled = false
+                applyWechatReplyUi()
+            }
+            .setOnCancelListener {
+                wechatReplyPrefs.wechatReplyEnabled = false
+                applyWechatReplyUi()
+            }
+            .show()
+    }
+
+    private fun applyWechatReplyUi() {
+        suppressWechatReplyCallback = true
+        binding.wechatReplySwitch.isChecked = wechatReplyPrefs.wechatReplyEnabled
+        suppressWechatReplyCallback = false
+        refreshWechatReplySummary()
+    }
+
+    private fun refreshWechatReplySummary() {
+        if (!::binding.isInitialized) return
+        val on = wechatReplyPrefs.wechatReplyEnabled
+        val a11y = WeChatReplyAccessibilityService.isEnabled(this)
+        val parts = mutableListOf<String>()
+        parts += if (on) "实验开关✓" else "实验开关✗"
+        parts += if (a11y) "无障碍✓" else "无障碍✗"
+        binding.wechatReplySummary.text = parts.joinToString(" · ")
+    }
+
+    private fun openAccessibilitySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(this, "无法打开无障碍设置：${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -607,6 +680,7 @@ class MainActivity : AppCompatActivity() {
         }
         applyMirrorModeUi(fromUser = false)
         applyCallAlertUi()
+        applyWechatReplyUi()
         OtpNotificationListener.ensureBound(this)
         // 从向导返回或再次进入前台时，安全码模式补一次自动连接
         if (!SetupChecker.shouldAutoShowWizard(this)) {

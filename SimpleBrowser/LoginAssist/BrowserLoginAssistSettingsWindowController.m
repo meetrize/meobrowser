@@ -65,6 +65,7 @@
 @property (nonatomic, strong) NSButton *inboxEnabledCheck;
 @property (nonatomic, strong) NSButton *otpToInboxCheck;
 @property (nonatomic, strong) NSButton *autoMarkReadCheck;
+@property (nonatomic, strong) NSButton *wechatReplyEnabledCheck;
 @property (nonatomic, strong) NSPopUpButton *inboxRetentionPopup;
 @property (nonatomic, strong) NSButton *purgeInboxButton;
 @property (nonatomic, strong) NSButton *openNotificationSettingsButton;
@@ -453,6 +454,11 @@
                                                   action:@selector(inboxSettingsChanged:)];
     self.autoMarkReadCheck.state = inboxSettings.autoMarkReadOnVisible ? NSControlStateValueOn : NSControlStateValueOff;
 
+    self.wechatReplyEnabledCheck = [NSButton checkboxWithTitle:@"微信回复（实验）：侧栏可回复微信通知"
+                                                        target:self
+                                                        action:@selector(inboxSettingsChanged:)];
+    self.wechatReplyEnabledCheck.state = inboxSettings.wechatReplyEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+
     NSTextField *retentionLabel = [NSTextField labelWithString:@"保留期限"];
     retentionLabel.font = [NSFont systemFontOfSize:12];
     self.inboxRetentionPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
@@ -481,7 +487,7 @@
                                                              action:@selector(openSystemNotificationSettings:)];
     self.openNotificationSettingsButton.bezelStyle = NSBezelStyleRounded;
 
-    self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀。收件箱内容仅存本机，可随时清空。手机端需在 Companion 选择「全部通知」才会有普通通知。"];
+    self.mirrorHintLabel = [NSTextField wrappingLabelWithString:@"系统通知左侧图标为本应用（MeoBrowser）；来源看标题前缀。收件箱内容仅存本机。微信回复为实验能力：需手机 Companion 开启对应开关与无障碍；按通知标题匹配联系人。手机端选「全部通知」才会有普通微信通知。"];
     self.mirrorHintLabel.font = [NSFont systemFontOfSize:11];
     self.mirrorHintLabel.textColor = [NSColor secondaryLabelColor];
     self.mirrorHintLabel.preferredMaxLayoutWidth = 420;
@@ -493,6 +499,7 @@
                                             self.inboxEnabledCheck,
                                             self.otpToInboxCheck,
                                             self.autoMarkReadCheck,
+                                            self.wechatReplyEnabledCheck,
                                             retentionRow,
                                             self.purgeInboxButton,
                                             self.openNotificationSettingsButton,
@@ -1190,6 +1197,7 @@
     self.inboxEnabledCheck.state = inboxSettings.inboxEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.otpToInboxCheck.state = inboxSettings.otpToInbox ? NSControlStateValueOn : NSControlStateValueOff;
     self.autoMarkReadCheck.state = inboxSettings.autoMarkReadOnVisible ? NSControlStateValueOn : NSControlStateValueOff;
+    self.wechatReplyEnabledCheck.state = inboxSettings.wechatReplyEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     NSInteger days = inboxSettings.retentionDays;
     NSInteger retentionIndex = 1;
     if (days == 1) retentionIndex = 0;
@@ -1224,6 +1232,7 @@
     settings.inboxEnabled = (self.inboxEnabledCheck.state == NSControlStateValueOn);
     settings.otpToInbox = (self.otpToInboxCheck.state == NSControlStateValueOn);
     settings.autoMarkReadOnVisible = (self.autoMarkReadCheck.state == NSControlStateValueOn);
+    settings.wechatReplyEnabled = (self.wechatReplyEnabledCheck.state == NSControlStateValueOn);
     switch (self.inboxRetentionPopup.indexOfSelectedItem) {
         case 0: settings.retentionDays = 1; break;
         case 2: settings.retentionDays = 30; break;

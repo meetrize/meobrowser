@@ -14,6 +14,8 @@ static const CGFloat kResizeHandleWidth = 8.0;
 static const NSTimeInterval kAutoMarkReadDelay = 0.5;
 static const NSTimeInterval kSearchDebounce = 0.25;
 static const NSTimeInterval kSyncPullTimeout = 20.0;
+static const NSTimeInterval kWeChatReplyTimeout = 25.0;
+static NSString * const kWeChatPackageName = @"com.tencent.mm";
 
 typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     PhoneNotificationSidebarRowKindSection = 0,
@@ -146,6 +148,9 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 @property (nonatomic, assign) BOOL syncInFlight;
 @property (nonatomic, copy, nullable) NSString *pendingSyncRequestID;
 @property (nonatomic, strong, nullable) dispatch_block_t syncTimeoutBlock;
+@property (nonatomic, assign) BOOL replyInFlight;
+@property (nonatomic, copy, nullable) NSString *pendingReplyRequestID;
+@property (nonatomic, strong, nullable) dispatch_block_t replyTimeoutBlock;
 @end
 
 @implementation PhoneNotificationSidebarController
@@ -173,6 +178,10 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
                                                  selector:@selector(phoneNotificationPullDidFinish:)
                                                      name:CompanionPhoneNotificationPullDidFinishNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(weChatReplyDidFinish:)
+                                                     name:CompanionWeChatReplyDidFinishNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -180,6 +189,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 - (void)dealloc {
     [self uninstallKeyMonitor];
     [self cancelSyncTimeout];
+    [self cancelReplyTimeout];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -595,6 +605,8 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
 - (NSMenu *)buildContextMenu {
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"通知"];
+    [menu addItemWithTitle:@"回复…" action:@selector(replyWeChatClicked:) keyEquivalent:@""];
+    [menu addItem:[NSMenuItem separatorItem]];
     [menu addItemWithTitle:@"复制标题" action:@selector(copyTitleClicked:) keyEquivalent:@""];
     [menu addItemWithTitle:@"复制正文" action:@selector(copyBodyClicked:) keyEquivalent:@""];
     [menu addItemWithTitle:@"复制验证码" action:@selector(copyOTPClicked:) keyEquivalent:@""];
@@ -1493,6 +1505,161 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     [[PhoneNotificationInboxStore sharedStore] setMuted:YES forPackage:item.packageName];
 }
 
+- (BOOL)canReplyToItem:(PhoneNotificationItem *)item {
+    if (!item) {
+        return NO;
+    }
+    if (![PhoneNotificationInboxSettings sharedSettings].wechatReplyEnabled) {
+        return NO;
+    }
+    if (![item.packageName isEqualToString:kWeChatPackageName]) {
+        return NO;
+    }
+    NSString *contact = [item.title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return contact.length > 0;
+}
+
+- (void)replyWeChatClicked:(id)sender {
+    (void)sender;
+    if (self.replyInFlight) {
+        [self showSyncToast:@"正在发送回复…"];
+        return;
+    }
+    PhoneNotificationItem *item = [self clickedOrSelectedItem];
+    if (![self canReplyToItem:item]) {
+        if (![PhoneNotificationInboxSettings sharedSettings].wechatReplyEnabled) {
+            [self showSyncToast:@"请先在「登录助手」开启微信回复（实验）"];
+        }
+        return;
+    }
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    if (channel.state != CompanionChannelStateConnected) {
+        [self showSyncToast:@"请先连接手机 Companion"];
+        return;
+    }
+
+    NSString *contact = [item.title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"回复「%@」", contact];
+    alert.informativeText = @"将发送到手机微信。请确保手机已开启「微信回复」实验开关与无障碍。";
+    [alert addButtonWithTitle:@"发送"];
+    [alert addButtonWithTitle:@"取消"];
+
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 36)];
+    SBTextField *field = [SBTextField standardField];
+    field.frame = NSMakeRect(0, 4, 320, 28);
+    field.placeholderString = @"输入回复内容";
+    field.usesCompactVerticalTextInsets = YES;
+    [accessory addSubview:field];
+    alert.accessoryView = accessory;
+
+    NSWindow *host = self.view.window;
+    if (!host) {
+        return;
+    }
+    [alert beginSheetModalForWindow:host completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+        NSString *text = [field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (text.length == 0) {
+            [self showSyncToast:@"回复内容不能为空"];
+            return;
+        }
+        if (text.length > 1000) {
+            [self showSyncToast:@"回复过长（最多 1000 字）"];
+            return;
+        }
+        [self sendWeChatReplyForItem:item text:text];
+    }];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [field.window makeFirstResponder:field];
+    });
+}
+
+- (void)sendWeChatReplyForItem:(PhoneNotificationItem *)item text:(NSString *)text {
+    NSString *contact = [item.title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *requestID = [[NSUUID UUID] UUIDString];
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    if (![channel requestWeChatReplyWithRequestID:requestID
+                                          contact:contact
+                                             text:text
+                                   notificationId:item.itemID]) {
+        [self showSyncToast:@"回复请求发送失败（未连接或未配对）"];
+        return;
+    }
+    self.replyInFlight = YES;
+    self.pendingReplyRequestID = requestID;
+    [self scheduleReplyTimeout];
+    [self showSyncToast:[NSString stringWithFormat:@"正在回复「%@」…", contact]];
+}
+
+- (void)weChatReplyDidFinish:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo ?: @{};
+    NSString *requestID = info[CompanionWeChatReplyRequestIDKey];
+    if (self.pendingReplyRequestID.length > 0 &&
+        requestID.length > 0 &&
+        ![requestID isEqualToString:self.pendingReplyRequestID]) {
+        return;
+    }
+    [self cancelReplyTimeout];
+    self.replyInFlight = NO;
+    self.pendingReplyRequestID = nil;
+
+    BOOL ok = [info[CompanionWeChatReplyOKKey] boolValue];
+    NSString *contact = info[CompanionWeChatReplyContactKey] ?: @"";
+    if (ok) {
+        [self showSyncToast:contact.length > 0
+            ? [NSString stringWithFormat:@"已发送给「%@」", contact]
+            : @"已发送"];
+        return;
+    }
+    NSString *code = info[CompanionWeChatReplyCodeKey] ?: @"";
+    NSString *message = info[CompanionWeChatReplyMessageKey] ?: @"";
+    NSString *toast = message.length > 0 ? message : @"回复失败";
+    if ([code isEqualToString:@"disabled"]) {
+        toast = @"手机未开启「微信回复」实验开关";
+    } else if ([code isEqualToString:@"a11y_required"]) {
+        toast = @"请在手机开启 Meo「微信回复」无障碍";
+    } else if ([code isEqualToString:@"contact_not_found"]) {
+        toast = contact.length > 0
+            ? [NSString stringWithFormat:@"未找到「%@」会话。请保留手机通知栏里该微信消息后再试", contact]
+            : @"未找到对应微信会话。请保留手机通知栏里的微信消息后再试";
+    } else if ([code isEqualToString:@"busy"]) {
+        toast = @"手机正在处理上一条回复";
+    } else if ([code isEqualToString:@"timeout"]) {
+        toast = @"手机回复超时";
+    } else if ([code isEqualToString:@"wechat_not_installed"]) {
+        toast = @"手机未安装微信";
+    }
+    [self showSyncToast:toast];
+}
+
+- (void)scheduleReplyTimeout {
+    [self cancelReplyTimeout];
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.replyInFlight) {
+            return;
+        }
+        strongSelf.replyInFlight = NO;
+        strongSelf.pendingReplyRequestID = nil;
+        [strongSelf showSyncToast:@"回复超时，请确认手机已连接且无障碍已开"];
+    });
+    self.replyTimeoutBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kWeChatReplyTimeout * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
+- (void)cancelReplyTimeout {
+    if (self.replyTimeoutBlock) {
+        dispatch_block_cancel(self.replyTimeoutBlock);
+        self.replyTimeoutBlock = nil;
+    }
+}
+
 - (void)markAllReadClicked:(id)sender {
     (void)sender;
     [[PhoneNotificationInboxStore sharedStore] markAllRead];
@@ -1651,6 +1818,11 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
     PhoneNotificationItem *item = [self clickedOrSelectedItem];
     SEL action = menuItem.action;
+    if (action == @selector(replyWeChatClicked:)) {
+        return [self canReplyToItem:item] &&
+            [CompanionChannel sharedChannel].state == CompanionChannelStateConnected &&
+            !self.replyInFlight;
+    }
     if (action == @selector(copyOTPClicked:)) {
         return item.otpCode.length > 0;
     }

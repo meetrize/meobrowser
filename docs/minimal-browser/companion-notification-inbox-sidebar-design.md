@@ -134,7 +134,7 @@ rootStack (vertical)
 | 复制正文 / 复制验证码 | 低 | ✅ |
 | App 静音（本地不再入库 / 不弹横幅） | 中 | NI-MVP 本地；NI-1 回传 |
 | 打开来源（深链到手机 App） | 高 | ❌ 桌面无法可靠唤起手机 App |
-| 回复微信等 | 高 | ❌ 超出浏览器边界 |
+| 回复微信等 | 高 | ❌ 超出浏览器边界 → **实验方案见** [companion-wechat-sidebar-reply-design.md](companion-wechat-sidebar-reply-design.md)（WR，默认关） |
 
 ### 2.5 分类功能
 

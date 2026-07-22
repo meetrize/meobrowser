@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.meobrowser.companion.R
+import com.meobrowser.companion.a11y.WeChatReplyExecutor
 import com.meobrowser.companion.browser.BrowserActivity
 import com.meobrowser.companion.pairing.CompanionAuthMode
 import com.meobrowser.companion.pairing.PairingPrefs
@@ -327,6 +328,24 @@ class CompanionConnectionService : Service() {
                 val requestId = json.optString("requestId")
                 executor.execute {
                     CompanionSession.performPhoneNotificationPull(requestId)
+                }
+            }
+            "wechat_reply" -> {
+                val requestId = json.optString("requestId")
+                val contact = json.optString("contact")
+                val text = json.optString("text")
+                val notificationId = json.optString("notificationId").ifBlank { null }
+                val packageName = json.optString("packageName").ifBlank {
+                    com.meobrowser.companion.a11y.WeChatReplyIntentCache.WECHAT_PACKAGE
+                }
+                executor.execute {
+                    CompanionSession.handleWeChatReply(
+                        requestId = requestId,
+                        contact = contact,
+                        text = text,
+                        notificationId = notificationId,
+                        packageName = packageName,
+                    )
                 }
             }
             "app_icon_ok" -> {
@@ -772,6 +791,104 @@ object CompanionSession {
     ) {
         executor.execute {
             pushPhoneNotificationOnWorker(payload, source)
+        }
+    }
+
+    /**
+     * Mac → Android：侧栏微信回复（WR-0）。
+     * 在 Companion IO 线程调用；结果回 wechat_reply_ok / wechat_reply_err。
+     */
+    fun handleWeChatReply(
+        requestId: String,
+        contact: String,
+        text: String,
+        notificationId: String?,
+        packageName: String,
+    ) {
+        val svc = service
+        val prefs = if (svc != null) PairingPrefs(svc) else null
+        val token = prefs?.deviceToken.orEmpty()
+
+        fun sendErr(code: String, message: String) {
+            if (requestId.isBlank()) return
+            val json = JSONObject().apply {
+                put("v", 1)
+                put("type", "wechat_reply_err")
+                if (token.isNotBlank()) put("deviceToken", token)
+                put("requestId", requestId)
+                put("code", code)
+                put("message", message)
+            }
+            try {
+                if (client.isConnected) client.send(json)
+            } catch (e: Exception) {
+                Log.e("MeoCompanion", "send wechat_reply_err failed", e)
+            }
+            lastSmsEvent = "微信回复失败：$message"
+            notifyStatus()
+        }
+
+        if (svc == null) {
+            sendErr("invalid", "服务未就绪")
+            return
+        }
+        if (token.isBlank()) {
+            sendErr("invalid", "尚未配对")
+            return
+        }
+        if (requestId.isBlank()) {
+            sendErr("invalid", "缺少 requestId")
+            return
+        }
+        if (!client.isConnected) {
+            sendErr("invalid", "未连接到 Mac")
+            return
+        }
+
+        lastSmsEvent = "正在回复微信 · ${contact.trim().take(16)}"
+        notifyStatus()
+
+        val result = WeChatReplyExecutor.tryExecute(
+            svc,
+            WeChatReplyExecutor.Request(
+                requestId = requestId,
+                contact = contact,
+                text = text,
+                notificationId = notificationId,
+                packageName = packageName,
+            ),
+        )
+        when (result) {
+            is WeChatReplyExecutor.Result.Ok -> {
+                val json = JSONObject().apply {
+                    put("v", 1)
+                    put("type", "wechat_reply_ok")
+                    put("deviceToken", token)
+                    put("requestId", requestId)
+                    put("contact", contact.trim())
+                    put("elapsedMs", result.elapsedMs)
+                    if (!notificationId.isNullOrBlank()) {
+                        put("notificationId", notificationId)
+                    }
+                }
+                try {
+                    client.send(json)
+                    lastSmsEvent = "微信回复已发送 · ${contact.trim().take(16)}"
+                    notifyStatus()
+                    Log.i(
+                        "MeoCompanion",
+                        "wechat_reply_ok contactLen=${contact.length} elapsedMs=${result.elapsedMs}",
+                    )
+                } catch (e: Exception) {
+                    Log.e("MeoCompanion", "send wechat_reply_ok failed", e)
+                    lastSmsEvent = "微信回复成功但回执失败"
+                    notifyStatus()
+                }
+            }
+            is WeChatReplyExecutor.Result.Err -> {
+                sendErr(result.code, result.message)
+                Log.w("MeoCompanion", "wechat_reply_err code=${result.code} msg=${result.message}")
+            }
         }
     }
 

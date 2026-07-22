@@ -69,4 +69,9 @@
     <string name="shortcut_hint_icon">https://example.com/favicon.ico（可选）</string>
     <string name="shortcut_fetch_icon">自动获取</string>
     <string name="shortcut_fetch_icon_busy">获取中…</string>
+    <string name="wechat_reply_a11y_summary">微信回复</string>
+    <string name="wechat_reply_a11y_desc">允许 MeoBrowser 在你授权后，将 Mac 侧栏的微信回复粘贴并发送到手机微信（实验功能）。可随时关闭。</string>
+    <string name="wechat_reply_hint">实验功能：从 Mac 通知侧栏回复微信。需开启下方无障碍；微信常挖空节点树，建议同时开启系统「语音朗读/TalkBack」或保留通知栏里的微信消息以便打开会话。按显示名匹配联系人，有误入风险。</string>
+    <string name="wechat_reply_confirm_title">开启微信回复（实验）？</string>
+    <string name="wechat_reply_confirm_message">将允许已配对的 Mac 在本机自动打开微信、粘贴并发送消息。需授予无障碍权限。请仅在可信网络与自用设备上开启。</string>
 </resources>

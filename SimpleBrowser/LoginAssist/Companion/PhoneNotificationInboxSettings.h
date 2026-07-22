@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 侧栏宽度（pt），默认 360；建议钳制 320～560。
 @property (nonatomic, assign) CGFloat sidebarWidth;
 
+/// 实验：侧栏微信快捷回复（默认 NO）。需手机开启对应开关与无障碍。
+@property (nonatomic, assign) BOOL wechatReplyEnabled;
+
 @end
 
 NS_ASSUME_NONNULL_END

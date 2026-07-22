@@ -16,6 +16,15 @@ extern NSString * const CompanionPhoneNotificationPullPushedKey;
 extern NSString * const CompanionPhoneNotificationPullModeKey;
 extern NSString * const CompanionPhoneNotificationPullErrorKey;
 
+/// 微信回复完成（userInfo: requestId / ok / contact / code / message / elapsedMs）。
+extern NSNotificationName const CompanionWeChatReplyDidFinishNotification;
+extern NSString * const CompanionWeChatReplyRequestIDKey;
+extern NSString * const CompanionWeChatReplyOKKey;
+extern NSString * const CompanionWeChatReplyContactKey;
+extern NSString * const CompanionWeChatReplyCodeKey;
+extern NSString * const CompanionWeChatReplyMessageKey;
+extern NSString * const CompanionWeChatReplyElapsedMsKey;
+
 /// Bonjour 收码通道：hello 配对 → otp / phone_notification → OTPInbox / 系统通知。
 @interface CompanionChannel : NSObject
 
@@ -46,6 +55,12 @@ extern NSString * const CompanionPhoneNotificationPullErrorKey;
 
 /// 请求手机把当前通知栏仍可见的通知补推到 Mac（侧栏「同步通知」）。未连接返回 NO。
 - (BOOL)requestPhoneNotificationPullWithRequestID:(NSString *)requestID;
+
+/// 请求手机打开微信并回复（WR）。`contact` 为通知 title；未连接或参数非法返回 NO。
+- (BOOL)requestWeChatReplyWithRequestID:(NSString *)requestID
+                                contact:(NSString *)contact
+                                   text:(NSString *)text
+                         notificationId:(nullable NSString *)notificationId;
 
 /// 已配对且未连接时：浏览 `_meocompanion._tcp` 并向手机发 `invite`。
 - (void)invitePairedPhones;

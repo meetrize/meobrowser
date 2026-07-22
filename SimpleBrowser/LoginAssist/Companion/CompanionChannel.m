@@ -28,6 +28,14 @@ NSString * const CompanionPhoneNotificationPullPushedKey = @"pushed";
 NSString * const CompanionPhoneNotificationPullModeKey = @"mode";
 NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
 
+NSNotificationName const CompanionWeChatReplyDidFinishNotification = @"CompanionWeChatReplyDidFinishNotification";
+NSString * const CompanionWeChatReplyRequestIDKey = @"requestId";
+NSString * const CompanionWeChatReplyOKKey = @"ok";
+NSString * const CompanionWeChatReplyContactKey = @"contact";
+NSString * const CompanionWeChatReplyCodeKey = @"code";
+NSString * const CompanionWeChatReplyMessageKey = @"message";
+NSString * const CompanionWeChatReplyElapsedMsKey = @"elapsedMs";
+
 @interface CompanionChannel () <CompanionBonjourServerDelegate>
 @property (nonatomic, strong) CompanionBonjourServer *server;
 @property (nonatomic, strong) CompanionPhoneDiscovery *phoneDiscovery;
@@ -319,6 +327,10 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
         [self handlePhoneNotificationPullOK:json];
         return;
     }
+    if ([type isEqualToString:@"wechat_reply_ok"] || [type isEqualToString:@"wechat_reply_err"]) {
+        [self handleWeChatReplyResult:json];
+        return;
+    }
     if ([type isEqualToString:@"app_icon"]) {
         [self handleAppIcon:json connectionID:connectionID server:server];
         return;
@@ -560,6 +572,94 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
         [self.server sendJSON:json toConnectionID:connectionID];
     }
     return YES;
+}
+
+- (nullable NSString *)resolvedDeviceToken {
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    NSString *deviceId = self.lastConnectedDeviceId;
+    if (deviceId.length > 0) {
+        for (CompanionPairedDevice *device in store.pairedDevices) {
+            if ([device.deviceId isEqualToString:deviceId] && device.deviceToken.length > 0) {
+                return device.deviceToken;
+            }
+        }
+    }
+    for (CompanionPairedDevice *device in store.pairedDevices) {
+        if (device.deviceToken.length > 0) {
+            return device.deviceToken;
+        }
+    }
+    return nil;
+}
+
+- (BOOL)requestWeChatReplyWithRequestID:(NSString *)requestID
+                                contact:(NSString *)contact
+                                   text:(NSString *)text
+                         notificationId:(NSString *)notificationId {
+    if (self.state != CompanionChannelStateConnected || self.activeConnectionIDs.count == 0) {
+        return NO;
+    }
+    NSString *trimmedContact = [contact stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *trimmedText = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (requestID.length == 0 || trimmedContact.length == 0 || trimmedText.length == 0) {
+        return NO;
+    }
+    if (trimmedContact.length > 64 || trimmedText.length > 1000) {
+        return NO;
+    }
+    NSString *deviceToken = [self resolvedDeviceToken];
+    if (deviceToken.length == 0) {
+        return NO;
+    }
+    NSMutableDictionary *json = [@{
+        @"v": @1,
+        @"type": @"wechat_reply",
+        @"deviceToken": deviceToken,
+        @"requestId": requestID,
+        @"contact": trimmedContact,
+        @"text": trimmedText,
+        @"packageName": @"com.tencent.mm",
+    } mutableCopy];
+    if (notificationId.length > 0) {
+        json[@"notificationId"] = notificationId;
+    }
+    for (NSString *connectionID in [self.activeConnectionIDs copy]) {
+        [self.server sendJSON:json toConnectionID:connectionID];
+    }
+    return YES;
+}
+
+- (void)handleWeChatReplyResult:(NSDictionary *)json {
+    NSString *type = [json[@"type"] isKindOfClass:[NSString class]] ? json[@"type"] : @"";
+    BOOL ok = [type isEqualToString:@"wechat_reply_ok"];
+    NSString *requestID = [json[@"requestId"] isKindOfClass:[NSString class]] ? json[@"requestId"] : @"";
+    NSString *contact = [json[@"contact"] isKindOfClass:[NSString class]] ? json[@"contact"] : @"";
+    NSString *code = [json[@"code"] isKindOfClass:[NSString class]] ? json[@"code"] : @"";
+    NSString *message = [json[@"message"] isKindOfClass:[NSString class]] ? json[@"message"] : @"";
+    NSInteger elapsedMs = 0;
+    if ([json[@"elapsedMs"] respondsToSelector:@selector(integerValue)]) {
+        elapsedMs = [json[@"elapsedMs"] integerValue];
+    }
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    info[CompanionWeChatReplyOKKey] = @(ok);
+    if (requestID.length > 0) {
+        info[CompanionWeChatReplyRequestIDKey] = requestID;
+    }
+    if (contact.length > 0) {
+        info[CompanionWeChatReplyContactKey] = contact;
+    }
+    if (code.length > 0) {
+        info[CompanionWeChatReplyCodeKey] = code;
+    }
+    if (message.length > 0) {
+        info[CompanionWeChatReplyMessageKey] = message;
+    }
+    info[CompanionWeChatReplyElapsedMsKey] = @(elapsedMs);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:CompanionWeChatReplyDidFinishNotification
+                                                            object:self
+                                                          userInfo:info];
+    });
 }
 
 - (void)handleAppIcon:(NSDictionary *)json

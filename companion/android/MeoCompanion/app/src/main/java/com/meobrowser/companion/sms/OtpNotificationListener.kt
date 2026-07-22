@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.meobrowser.companion.a11y.WeChatReplyIntentCache
 import com.meobrowser.companion.channel.CompanionSession
 import com.meobrowser.companion.pairing.NotificationMirrorMode
 import com.meobrowser.companion.pairing.PairingPrefs
@@ -120,6 +121,7 @@ class OtpNotificationListener : NotificationListenerService() {
             if (sbn.packageName == packageName) continue
             if (NotificationNoiseFilter.shouldSkip(sbn, packageName)) continue
             val payload = NotificationPayloadBuilder.build(applicationContext, sbn) ?: continue
+            WeChatReplyIntentCache.remember(sbn, payload.title)
             if (!seenIds.add(payload.id)) continue
             NotificationMirrorGate.forceAdmit(payload.id)
             payloads.add(payload)
@@ -138,6 +140,13 @@ class OtpNotificationListener : NotificationListenerService() {
     ): Boolean {
         if (sbn.packageName == packageName) return false
 
+        // 缓存微信通知 contentIntent，供 Mac 侧栏回复打开对应会话
+        run {
+            val title = sbn.notification?.extras
+                ?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            WeChatReplyIntentCache.remember(sbn, title)
+        }
+
         val mode = PairingPrefs(applicationContext).notificationMirrorMode
         val mirrorAll = !otpScanOnly && mode == NotificationMirrorMode.ALL
 
@@ -147,6 +156,7 @@ class OtpNotificationListener : NotificationListenerService() {
             }
             val payload = NotificationPayloadBuilder.build(applicationContext, sbn)
             if (payload != null) {
+                WeChatReplyIntentCache.remember(sbn, payload.title)
                 if (NotificationMirrorGate.tryAdmit(payload.id)) {
                     CompanionSession.pushPhoneNotification(applicationContext, payload)
                 } else {
@@ -222,6 +232,28 @@ class OtpNotificationListener : NotificationListenerService() {
         private var pendingRescan: Boolean = false
 
         fun isConnected(): Boolean = instance != null
+
+        /** 回复前刷新：从通知栏现存微信通知补齐 contentIntent 缓存。 */
+        fun refreshWeChatReplyIntentCache(): Int {
+            val listener = instance ?: return -1
+            val list = try {
+                listener.activeNotifications ?: emptyArray()
+            } catch (e: Exception) {
+                Log.e(TAG, "refreshWeChatReplyIntentCache failed", e)
+                return -1
+            }
+            var n = 0
+            for (sbn in list) {
+                val pkg = sbn.packageName.orEmpty()
+                if (pkg != "com.tencent.mm" && !pkg.contains("tencent.mm")) continue
+                val title = sbn.notification?.extras
+                    ?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+                WeChatReplyIntentCache.remember(sbn, title)
+                n++
+            }
+            Log.i(TAG, "refreshWeChatReplyIntentCache count=$n cacheSize=${WeChatReplyIntentCache.size()}")
+            return n
+        }
 
         fun isEnabled(context: Context): Boolean {
             val flat = Settings.Secure.getString(

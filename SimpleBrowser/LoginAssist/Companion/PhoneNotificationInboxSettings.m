@@ -5,6 +5,7 @@ static NSString * const kOTPToInboxKey = @"MeoPhoneNotificationOTPToInbox";
 static NSString * const kRetentionDaysKey = @"MeoPhoneNotificationInboxRetentionDays";
 static NSString * const kAutoMarkReadKey = @"MeoPhoneNotificationInboxAutoMarkRead";
 static NSString * const kSidebarWidthKey = @"MeoPhoneNotificationInboxSidebarWidth";
+static NSString * const kWeChatReplyEnabledKey = @"MeoWeChatReplyEnabled";
 
 static const CGFloat kDefaultSidebarWidth = 360.0;
 static const CGFloat kMinSidebarWidth = 320.0;
@@ -83,6 +84,15 @@ static const CGFloat kMaxSidebarWidth = 560.0;
 - (void)setSidebarWidth:(CGFloat)sidebarWidth {
     CGFloat clamped = MIN(kMaxSidebarWidth, MAX(kMinSidebarWidth, sidebarWidth));
     [NSUserDefaults.standardUserDefaults setDouble:clamped forKey:kSidebarWidthKey];
+}
+
+- (BOOL)wechatReplyEnabled {
+    // 无 key → NO（实验默认关）
+    return [NSUserDefaults.standardUserDefaults boolForKey:kWeChatReplyEnabledKey];
+}
+
+- (void)setWechatReplyEnabled:(BOOL)wechatReplyEnabled {
+    [NSUserDefaults.standardUserDefaults setBool:wechatReplyEnabled forKey:kWeChatReplyEnabledKey];
 }
 
 @end
