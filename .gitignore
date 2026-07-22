@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# AI 一键提交本地密钥（勿提交）
+.git-ai.env
+
 # MeoBrowser / AppKit 构建产物
 /build/
 
