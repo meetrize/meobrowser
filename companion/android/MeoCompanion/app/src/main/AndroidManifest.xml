@@ -83,6 +83,15 @@
             android:exported="false"
             android:label="设置向导" />
 
+        <activity
+            android:name=".a11y.WeChatReplyTrampolineActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:finishOnTaskLaunch="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".channel.CompanionConnectionService"
             android:exported="false"

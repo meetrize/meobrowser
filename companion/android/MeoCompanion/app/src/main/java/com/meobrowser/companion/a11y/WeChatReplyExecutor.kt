@@ -1,5 +1,6 @@
 package com.meobrowser.companion.a11y
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -85,10 +86,15 @@ object WeChatReplyExecutor {
             fun remaining(): Long = (deadline - System.currentTimeMillis()).coerceAtLeast(0)
             if (remaining() <= 0) return Result.Err("timeout", "回复超时")
 
-            if (!openChat(contact, remaining())) {
+            if (!openChat(contact, remaining(), app)) {
+                val miuiBlocked = WeChatReplyLaunchHelper.isMiuiBackgroundStartAllowed(app) == false
                 return Result.Err(
-                    "contact_not_found",
-                    "无法打开「$contact」会话：请保留该微信通知（下拉通知栏点进一次更稳），或确认会话列表可见该联系人",
+                    if (miuiBlocked) "background_launch_blocked" else "contact_not_found",
+                    if (miuiBlocked) {
+                        "系统拦截了后台打开微信。请在系统设置中允许 Meo Companion「后台弹出界面」后重试"
+                    } else {
+                        "无法打开「$contact」会话：请保留该微信通知，或确认已允许后台弹出微信"
+                    },
                 )
             }
             sleep(900)
@@ -156,7 +162,7 @@ object WeChatReplyExecutor {
         }
     }
 
-    private fun openChat(contact: String, timeoutMs: Long): Boolean {
+    private fun openChat(contact: String, timeoutMs: Long, app: Context): Boolean {
         // 已在目标会话（可读时用标题校验；挖空树时仅有输入框则先走 Intent）
         if (onMain { it.findEditText() != null && it.likelyChatWith(contact) }) {
             Log.i(TAG, "already in target chat contact=$contact")
@@ -178,40 +184,51 @@ object WeChatReplyExecutor {
         val cached = WeChatReplyIntentCache.find(contact)
         Log.i(
             TAG,
-            "cache lookup contact=$contact hit=${cached != null} hasIntent=${cached?.contentIntent != null} title=${cached?.title} size=${WeChatReplyIntentCache.size()}",
+            "cache lookup contact=$contact hit=${cached != null} hasIntent=${cached?.contentIntent != null} title=${cached?.title} size=${WeChatReplyIntentCache.size()} miuiBg=${WeChatReplyLaunchHelper.isMiuiBackgroundStartAllowed(app)}",
         )
         val pi = cached?.contentIntent
         if (pi != null) {
-            val sent = try {
-                pi.send()
-                Log.i(TAG, "opened via notification intent title=${cached.title}")
-                true
-            } catch (e: Exception) {
-                Log.w(TAG, "contentIntent failed", e)
-                false
-            }
+            val sent = WeChatReplyLaunchHelper.sendPendingIntent(pi)
+            Log.i(TAG, "opened via notification intent title=${cached.title} sent=$sent")
             if (sent) {
-                sleep(1400)
-                if (onMain { it.findEditText() != null || it.likelyChatWith(contact) }) {
-                    return true
+                sleep(1600)
+                if (waitWeChatForeground(2200)) {
+                    if (onMain { it.findEditText() != null || it.likelyChatWith(contact) || !it.isWeChatTreeReadable() }) {
+                        return true
+                    }
                 }
-                // 挖空树：Intent 已发，无法再校验节点
-                if (onMain { !it.isWeChatTreeReadable() && it.isWeChatForeground() }) {
+            }
+            // PendingIntent 可能已失效或被 MIUI 静默拦截 → 中转页再试一次
+            WeChatReplyLaunchHelper.startTrampoline(app, contact, pi)
+            sleep(1600)
+            if (waitWeChatForeground(2200)) {
+                if (onMain { it.findEditText() != null || it.likelyChatWith(contact) || !it.isWeChatTreeReadable() }) {
                     return true
                 }
             }
         }
 
-        return openViaListOrLaunch(contact, timeoutMs)
+        return openViaListOrLaunch(contact, timeoutMs, app)
     }
 
-    private fun openViaListOrLaunch(contact: String, @Suppress("UNUSED_PARAMETER") timeoutMs: Long): Boolean {
-        onMain { launchWeChat(it) }
-        sleep(1400)
+    private fun openViaListOrLaunch(contact: String, @Suppress("UNUSED_PARAMETER") timeoutMs: Long, app: Context): Boolean {
+        bringWeChatToForeground(app, contact, WeChatReplyIntentCache.find(contact)?.contentIntent)
+        sleep(1600)
+        if (!waitWeChatForeground(3000)) {
+            Log.w(TAG, "wechat still not foreground after launch attempts titles=${onMain { it.windowTitles() }}")
+            // 通知栏里若还有该会话，尝试点开
+            if (openViaNotificationShade(contact)) {
+                sleep(1200)
+            }
+        }
         if (onMain { it.findEditText() != null && it.likelyChatWith(contact) }) return true
 
         val readable = onMain { it.isWeChatTreeReadable() }
-        Log.i(TAG, "wechat tree readable=$readable fg=${onMain { it.isWeChatForeground() }}")
+        val fg = onMain { it.isWeChatForeground() }
+        Log.i(TAG, "wechat tree readable=$readable fg=$fg")
+        if (!fg) {
+            return false
+        }
         if (readable) {
             if (openReadableContact(contact)) return true
         } else {
@@ -221,6 +238,51 @@ object WeChatReplyExecutor {
         // 节点不可读：尽量留在微信内搜索（弱兜底）
         Log.i(TAG, "fallback opaque search for contact=$contact")
         return openOpaqueBySearch(contact)
+    }
+
+    private fun bringWeChatToForeground(app: Context, contact: String, contentIntent: PendingIntent?) {
+        onMain { launchWeChat(it) }
+        sleep(400)
+        if (onMain { it.isWeChatForeground() }) return
+        WeChatReplyLaunchHelper.launchWeChatPackage(app)
+        sleep(400)
+        if (onMain { it.isWeChatForeground() }) return
+        WeChatReplyLaunchHelper.startTrampoline(app, contact, contentIntent)
+    }
+
+    private fun waitWeChatForeground(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (onMain { it.isWeChatForeground() }) return true
+            sleep(250)
+        }
+        return onMain { it.isWeChatForeground() }
+    }
+
+    /** 下拉通知栏点击仍在的微信通知（contentIntent 失效时的兜底）。 */
+    private fun openViaNotificationShade(contact: String): Boolean {
+        Log.i(TAG, "try notification shade for contact=$contact")
+        onMain {
+            it.performGlobalAction(
+                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS,
+            )
+        }
+        sleep(900)
+        val clicked = onMain { a11y ->
+            val hit = a11y.findContactNode(contact) ?: return@onMain false
+            a11y.click(hit)
+        }
+        sleep(800)
+        // 收起通知栏
+        onMain {
+            it.performGlobalAction(
+                android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK,
+            )
+        }
+        sleep(500)
+        val ok = onMain { it.isWeChatForeground() }
+        Log.i(TAG, "notification shade click=$clicked fg=$ok")
+        return ok
     }
 
     private fun openReadableContact(contact: String): Boolean {
@@ -377,22 +439,14 @@ object WeChatReplyExecutor {
     private fun ensureWeChatForeground(): Boolean {
         if (onMain { it.isWeChatForeground() }) return true
         onMain { launchWeChat(it) }
-        sleep(1400)
-        val ok = onMain { it.isWeChatForeground() }
-        if (!ok) Log.w(TAG, "wechat not foreground titles=${onMain { it.windowTitles() }}")
-        return ok
+        sleep(800)
+        if (waitWeChatForeground(2000)) return true
+        Log.w(TAG, "wechat not foreground titles=${onMain { it.windowTitles() }}")
+        return false
     }
 
     private fun launchWeChat(a11y: WeChatReplyAccessibilityService) {
-        val launch = a11y.packageManager.getLaunchIntentForPackage(WeChatReplyIntentCache.WECHAT_PACKAGE)
-            ?: return
-        launch.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP,
-        )
-        a11y.startActivity(launch)
+        WeChatReplyLaunchHelper.launchWeChatPackage(a11y)
     }
 
     private fun pasteIntoChat(text: String, @Suppress("UNUSED_PARAMETER") timeoutMs: Long): Boolean {

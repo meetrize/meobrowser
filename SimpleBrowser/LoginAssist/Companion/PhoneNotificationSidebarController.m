@@ -1625,6 +1625,8 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         toast = contact.length > 0
             ? [NSString stringWithFormat:@"未找到「%@」会话。请保留手机通知栏里该微信消息后再试", contact]
             : @"未找到对应微信会话。请保留手机通知栏里的微信消息后再试";
+    } else if ([code isEqualToString:@"background_launch_blocked"]) {
+        toast = @"手机系统拦截后台打开微信。请在 Companion 开启「后台弹出界面」后重试";
     } else if ([code isEqualToString:@"busy"]) {
         toast = @"手机正在处理上一条回复";
     } else if ([code isEqualToString:@"timeout"]) {

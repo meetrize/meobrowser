@@ -19,6 +19,7 @@ import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.lifecycleScope
 import com.meobrowser.companion.R
 import com.meobrowser.companion.a11y.WeChatReplyAccessibilityService
+import com.meobrowser.companion.a11y.WeChatReplyLaunchHelper
 import com.meobrowser.companion.a11y.WeChatReplyPrefs
 import com.meobrowser.companion.call.CallAlertPrefs
 import com.meobrowser.companion.call.CallStateMonitor
@@ -168,6 +169,16 @@ class MainActivity : AppCompatActivity() {
 
         binding.wechatReplyA11yButton.setOnClickListener {
             openAccessibilitySettings()
+        }
+
+        binding.wechatReplyBgPopupButton.setOnClickListener {
+            val opened = WeChatReplyLaunchHelper.openBackgroundPopupSettings(this)
+            Toast.makeText(
+                this,
+                if (opened) getString(R.string.wechat_reply_bg_popup_toast)
+                else "请到系统设置 → 应用 → Meo Companion → 权限中开启「后台弹出界面」",
+                Toast.LENGTH_LONG,
+            ).show()
         }
 
         binding.toggleChecksButton.setOnClickListener {
@@ -354,6 +365,11 @@ class MainActivity : AppCompatActivity() {
         val parts = mutableListOf<String>()
         parts += if (on) "实验开关✓" else "实验开关✗"
         parts += if (a11y) "无障碍✓" else "无障碍✗"
+        when (WeChatReplyLaunchHelper.isMiuiBackgroundStartAllowed(this)) {
+            true -> parts += "后台弹出✓"
+            false -> parts += "后台弹出✗（必开）"
+            null -> Unit
+        }
         binding.wechatReplySummary.text = parts.joinToString(" · ")
     }
 
