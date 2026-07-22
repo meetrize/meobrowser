@@ -63,10 +63,17 @@ object WeChatReplyExecutor {
         if (!isWeChatInstalled(app)) {
             return Result.Err("wechat_not_installed", "未安装微信")
         }
-        if (WeChatReplyAccessibilityService.instance == null ||
-            !WeChatReplyAccessibilityService.isEnabled(app)
-        ) {
-            return Result.Err("a11y_required", "请开启 Meo「微信回复」无障碍服务")
+        // TalkBack 开关切换后，Meo 无障碍可能短暂崩溃/未绑定：设置里仍显示已开但 instance==null
+        if (!waitForAccessibilityReady(app, timeoutMs = 4_000L)) {
+            val listed = WeChatReplyAccessibilityService.isEnabled(app)
+            return Result.Err(
+                "a11y_required",
+                if (listed) {
+                    "Meo「微信回复」无障碍未就绪（可能刚崩溃）。请关闭再打开一次该无障碍后重试"
+                } else {
+                    "请开启 Meo「微信回复」无障碍服务"
+                },
+            )
         }
         if (!busy.compareAndSet(false, true)) {
             return Result.Err("busy", "已有回复任务进行中")
@@ -160,6 +167,18 @@ object WeChatReplyExecutor {
         } finally {
             busy.set(false)
         }
+    }
+
+    private fun waitForAccessibilityReady(app: Context, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val bound = WeChatReplyAccessibilityService.instance != null
+            val listed = WeChatReplyAccessibilityService.isEnabled(app)
+            if (bound && listed) return true
+            if (bound) return true
+            sleep(300)
+        }
+        return WeChatReplyAccessibilityService.instance != null
     }
 
     private fun openChat(contact: String, timeoutMs: Long, app: Context): Boolean {
