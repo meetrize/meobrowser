@@ -47,6 +47,9 @@ extern NSString * const CompanionPhoneNotificationPullErrorKey;
 /// 请求手机把当前通知栏仍可见的通知补推到 Mac（侧栏「同步通知」）。未连接返回 NO。
 - (BOOL)requestPhoneNotificationPullWithRequestID:(NSString *)requestID;
 
+/// 已配对且未连接时：浏览 `_meocompanion._tcp` 并向手机发 `invite`。
+- (void)invitePairedPhones;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -15,6 +15,8 @@ typedef NS_ENUM(NSInteger, CompanionLinkUIState) {
 
 + (CompanionLinkUIState)stateFromChannel:(CompanionChannel *)channel;
 + (NSString *)titleForState:(CompanionLinkUIState)state;
+/// 根据频道状态与是否已配对生成工具栏 / 设置页短标题。
++ (NSString *)titleForChannel:(CompanionChannel *)channel;
 + (NSColor *)dotColorForState:(CompanionLinkUIState)state;
 + (NSColor *)iconBackgroundColorForState:(CompanionLinkUIState)state;
 

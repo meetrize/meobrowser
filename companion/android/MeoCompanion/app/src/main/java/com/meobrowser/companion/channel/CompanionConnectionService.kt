@@ -24,6 +24,11 @@ import com.meobrowser.companion.sync.SyncEngine
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 前台服务：维持与 Mac 的长连接。Client 放在 [CompanionSession] 单例中，避免 Service 重建丢 socket。
@@ -32,6 +37,7 @@ class CompanionConnectionService : Service() {
     private val executor = CompanionSession.executor
     private val client: CompanionClient get() = CompanionSession.client
     private lateinit var prefs: PairingPrefs
+    private var inviteAdvertiser: CompanionInviteAdvertiser? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +46,7 @@ class CompanionConnectionService : Service() {
         CompanionSession.attachHandlers(this)
         com.meobrowser.companion.sms.SmsListenCoordinator.start(this)
         CallStateMonitor.start(this)
+        refreshInviteAdvertiser()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -48,11 +55,15 @@ class CompanionConnectionService : Service() {
                 val pairingCode = intent.getStringExtra(EXTRA_PAIRING_CODE)
                 val hostOverride = intent.getStringExtra(EXTRA_HOST_OVERRIDE)
                 val forceSecurityCode = intent.getStringExtra(EXTRA_FORCE_SECURITY_CODE)
+                CompanionSession.cancelReconnect()
+                CompanionSession.userRequestedDisconnect = false
                 startForeground(NOTIF_ID, buildNotification("正在连接…"))
                 executor.execute { connectInternal(pairingCode, hostOverride, forceSecurityCode) }
             }
             ACTION_DISCONNECT -> {
                 CompanionSession.userRequestedDisconnect = true
+                CompanionSession.cancelReconnect()
+                stopInviteAdvertiser()
                 executor.execute {
                     client.disconnect(quiet = true)
                     CompanionSession.clearSessionIconState()
@@ -72,41 +83,40 @@ class CompanionConnectionService : Service() {
             }
             else -> {
                 // 被系统重启时尝试重连：优先 deviceToken；安全码模式可回退用安全码
-                if (!client.isConnected) {
-                    val canToken = !prefs.deviceToken.isNullOrBlank()
-                    val canSecurity = prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
-                        !prefs.securityCode.isNullOrBlank()
-                    if (canToken || canSecurity) {
-                        startForeground(NOTIF_ID, buildNotification("正在重连…"))
-                        executor.execute {
-                            connectInternal(
-                                pairingCode = if (canToken) null else prefs.securityCode,
-                                hostOverride = null,
-                                forceSecurityCode = prefs.securityCode
-                            )
-                        }
-                    }
+                if (!client.isConnected && canPersistReconnect()) {
+                    startForeground(NOTIF_ID, buildNotification("正在重连…"))
+                    executor.execute { reconnectOnce(forceRediscover = false) }
                 }
             }
         }
         return START_STICKY
     }
 
+    /** 已配对且允许自动连接时，断线后保持 FGS 并持续重试。 */
+    private fun canPersistReconnect(): Boolean {
+        if (!prefs.autoConnectOnLaunch) return false
+        if (!prefs.deviceToken.isNullOrBlank()) return true
+        return prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
+            !prefs.securityCode.isNullOrBlank()
+    }
+
     private fun connectInternal(
         pairingCode: String?,
         hostOverride: String?,
-        forceSecurityCode: String? = null
+        forceSecurityCode: String? = null,
+        forceRediscover: Boolean = false
     ) {
         try {
             CompanionSession.userRequestedDisconnect = false
             // 已连接且只需保活：不重复建连
             if (client.isConnected && pairingCode.isNullOrBlank()) {
+                CompanionSession.resetReconnectBackoff()
                 CompanionSession.statusText = "已连接（保持中）"
                 CompanionSession.notifyStatus()
                 updateNotification(CompanionSession.statusText)
                 return
             }
-            val (host, port) = resolveTarget(hostOverride)
+            val (host, port) = resolveTarget(hostOverride, forceRediscover)
             client.connect(host, port)
             prefs.lastHost = host
             prefs.lastPort = port
@@ -149,17 +159,29 @@ class CompanionConnectionService : Service() {
             CompanionSession.statusText = "已连接 $host:$port，等待 hello_ok"
             updateNotification(CompanionSession.statusText)
             CompanionSession.notifyStatus()
+            // 已在连 Mac：先停 invite 广告，避免重复唤醒
+            stopInviteAdvertiser()
         } catch (e: Exception) {
             Log.e(TAG, "connect failed", e)
             CompanionSession.statusText = "连接失败：${e.message}"
             CompanionSession.notifyStatus()
             client.disconnect(quiet = true)
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            if (!CompanionSession.userRequestedDisconnect && canPersistReconnect()) {
+                refreshInviteAdvertiser()
+                scheduleReconnect(fromFailure = true)
+            } else {
+                stopInviteAdvertiser()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 
-    private fun resolveTarget(hostOverride: String?): Pair<String, Int> {
+    /**
+     * 解析目标主机。
+     * @param forceRediscover true 时优先 Bonjour（Mac 端口/IP 可能已变）；否则先用缓存。
+     */
+    private fun resolveTarget(hostOverride: String?, forceRediscover: Boolean): Pair<String, Int> {
         if (!hostOverride.isNullOrBlank()) {
             val parts = hostOverride.trim().split(":")
             val host = parts[0]
@@ -167,13 +189,110 @@ class CompanionConnectionService : Service() {
             if (port <= 0) throw IllegalArgumentException("手动主机需包含端口，如 192.168.1.10:12345")
             return host to port
         }
-        // 优先已保存的主机，避免每次推码去 Bonjour（慢且可能失败）
-        if (!prefs.lastHost.isNullOrBlank() && prefs.lastPort > 0) {
-            return prefs.lastHost!! to prefs.lastPort
+        val cachedHost = prefs.lastHost
+        val cachedPort = prefs.lastPort
+        val hasCache = !cachedHost.isNullOrBlank() && cachedPort > 0
+
+        if (forceRediscover || !hasCache) {
+            val discovered = BonjourDiscovery.discover(this)
+            if (discovered != null) {
+                return discovered.host to discovered.port
+            }
+            if (hasCache) {
+                Log.w(TAG, "Bonjour miss, fallback to cached $cachedHost:$cachedPort")
+                return cachedHost!! to cachedPort
+            }
+            throw IllegalStateException("未发现 MeoBrowser（_meologin._tcp），请确认同 Wi‑Fi 或填写手动主机")
         }
-        val discovered = BonjourDiscovery.discover(this)
-            ?: throw IllegalStateException("未发现 MeoBrowser（_meologin._tcp），请确认同 Wi‑Fi 或填写手动主机")
-        return discovered.host to discovered.port
+
+        // 优先已保存的主机，避免每次推码去 Bonjour（慢且可能失败）
+        return cachedHost!! to cachedPort
+    }
+
+    /** 指数退避：0.5s → 1s → 2s → … 上限 60s。每 3 次失败强制 Bonjour。 */
+    private fun scheduleReconnect(fromFailure: Boolean) {
+        if (CompanionSession.userRequestedDisconnect) return
+        if (!canPersistReconnect()) {
+            CompanionSession.statusText = "已断开"
+            CompanionSession.notifyStatus()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+        if (client.isConnected) return
+
+        if (fromFailure) {
+            CompanionSession.consecutiveFailures += 1
+        }
+        val failures = CompanionSession.consecutiveFailures.coerceAtLeast(1)
+        val exp = (failures - 1).coerceAtMost(7)
+        val delayMs = (500L * (1L shl exp)).coerceAtMost(60_000L)
+        val generation = CompanionSession.nextReconnectGeneration()
+        val forceBonjour = failures >= 3 && failures % 3 == 0
+        val waitSec = (delayMs + 999) / 1000
+        CompanionSession.statusText = "等待 Mac（${waitSec}s 后重试）"
+        CompanionSession.notifyStatus()
+        updateNotification(CompanionSession.statusText)
+        startForeground(NOTIF_ID, buildNotification(CompanionSession.statusText))
+        refreshInviteAdvertiser()
+
+        CompanionSession.scheduleReconnectDelay(delayMs) {
+            if (generation != CompanionSession.reconnectGeneration) return@scheduleReconnectDelay
+            if (CompanionSession.userRequestedDisconnect || client.isConnected) return@scheduleReconnectDelay
+            executor.execute { reconnectOnce(forceRediscover = forceBonjour) }
+        }
+    }
+
+    private fun reconnectOnce(forceRediscover: Boolean) {
+        if (CompanionSession.userRequestedDisconnect || client.isConnected) return
+        if (!canPersistReconnect()) return
+        CompanionSession.statusText = "正在重连…"
+        CompanionSession.notifyStatus()
+        updateNotification(CompanionSession.statusText)
+        val canToken = !prefs.deviceToken.isNullOrBlank()
+        connectInternal(
+            pairingCode = if (canToken) null else prefs.securityCode,
+            hostOverride = null,
+            forceSecurityCode = prefs.securityCode,
+            forceRediscover = forceRediscover
+        )
+    }
+
+    /** Mac invite 到达：立刻取消退避并用 Bonjour 找 Mac。 */
+    fun onMacInvite() {
+        // accept 线程回调：全部切回 IO 线程，避免与 connect 交错
+        executor.execute {
+            if (CompanionSession.userRequestedDisconnect) return@execute
+            if (client.isConnected) return@execute
+            if (!canPersistReconnect()) return@execute
+            CompanionSession.cancelReconnect()
+            CompanionSession.consecutiveFailures = 0
+            CompanionSession.statusText = "收到 Mac 邀请，正在连接…"
+            CompanionSession.notifyStatus()
+            updateNotification(CompanionSession.statusText)
+            startForeground(NOTIF_ID, buildNotification(CompanionSession.statusText))
+            reconnectOnce(forceRediscover = true)
+        }
+    }
+
+    private fun refreshInviteAdvertiser() {
+        if (CompanionSession.userRequestedDisconnect || client.isConnected || !canPersistReconnect()) {
+            stopInviteAdvertiser()
+            return
+        }
+        if (inviteAdvertiser != null) return
+        val adv = CompanionInviteAdvertiser(
+            context = applicationContext,
+            deviceId = prefs.deviceId,
+            onInvite = { onMacInvite() }
+        )
+        inviteAdvertiser = adv
+        adv.start()
+    }
+
+    private fun stopInviteAdvertiser() {
+        inviteAdvertiser?.stop()
+        inviteAdvertiser = null
     }
 
     fun handleMessage(json: JSONObject) {
@@ -183,10 +302,12 @@ class CompanionConnectionService : Service() {
                 if (token.isNotBlank()) {
                     prefs.deviceToken = token
                 }
+                CompanionSession.resetReconnectBackoff()
                 val hostName = json.optString("hostName", "MeoBrowser")
                 CompanionSession.statusText = "已配对 · $hostName（连接保持中）"
                 updateNotification(CompanionSession.statusText)
                 CompanionSession.notifyStatus()
+                stopInviteAdvertiser()
                 SyncEngine.onConnected(applicationContext)
             }
             "otp_ok" -> {
@@ -259,26 +380,13 @@ class CompanionConnectionService : Service() {
         CompanionSession.statusText = "连接中断，尝试重连…"
         CompanionSession.notifyStatus()
         updateNotification(CompanionSession.statusText)
-        val canToken = !prefs.deviceToken.isNullOrBlank()
-        val canSecurity = prefs.authMode == CompanionAuthMode.SECURITY_CODE &&
-            !prefs.securityCode.isNullOrBlank()
-        if (canToken || canSecurity) {
-            executor.execute {
-                try {
-                    Thread.sleep(400)
-                    if (CompanionSession.userRequestedDisconnect || client.isConnected) return@execute
-                    connectInternal(
-                        pairingCode = if (canToken) null else prefs.securityCode,
-                        hostOverride = null,
-                        forceSecurityCode = prefs.securityCode
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "reconnect failed", e)
-                    CompanionSession.statusText = "重连失败：${e.message}"
-                    CompanionSession.notifyStatus()
-                }
-            }
+        if (canPersistReconnect()) {
+            // 首次断线尽快试一次，再进入指数退避
+            CompanionSession.consecutiveFailures = 0
+            refreshInviteAdvertiser()
+            scheduleReconnect(fromFailure = true)
         } else {
+            stopInviteAdvertiser()
             CompanionSession.statusText = "已断开"
             CompanionSession.notifyStatus()
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -322,6 +430,7 @@ class CompanionConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        stopInviteAdvertiser()
         if (CompanionSession.service === this) {
             CompanionSession.service = null
         }
@@ -408,6 +517,40 @@ object CompanionSession {
 
     @Volatile
     var userRequestedDisconnect: Boolean = false
+
+    /** 作废挂起的退避重连任务。 */
+    private val reconnectGenerationCounter = AtomicInteger(0)
+    var reconnectGeneration: Int
+        get() = reconnectGenerationCounter.get()
+        set(value) { reconnectGenerationCounter.set(value) }
+
+    /** 连续连接失败次数（hello_ok 后清零）。 */
+    @Volatile
+    var consecutiveFailures: Int = 0
+
+    private val reconnectScheduler: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "meo-companion-reconnect").apply { isDaemon = true }
+        }
+    private val pendingReconnect = AtomicReference<ScheduledFuture<*>?>(null)
+
+    fun nextReconnectGeneration(): Int = reconnectGenerationCounter.incrementAndGet()
+
+    fun cancelReconnect() {
+        reconnectGenerationCounter.incrementAndGet()
+        pendingReconnect.getAndSet(null)?.cancel(false)
+    }
+
+    fun resetReconnectBackoff() {
+        consecutiveFailures = 0
+        cancelReconnect()
+    }
+
+    fun scheduleReconnectDelay(delayMs: Long, block: () -> Unit) {
+        pendingReconnect.getAndSet(null)?.cancel(false)
+        val future = reconnectScheduler.schedule(block, delayMs, TimeUnit.MILLISECONDS)
+        pendingReconnect.set(future)
+    }
 
     /** 本 TCP 会话已成功推送的 package → iconHash */
     private val sessionIconPushed = ConcurrentHashMap<String, String>()

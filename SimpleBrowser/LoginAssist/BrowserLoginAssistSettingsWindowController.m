@@ -58,6 +58,7 @@
 @property (nonatomic, strong) SBTextField *securityCodeField;
 @property (nonatomic, strong) NSButton *saveSecurityCodeButton;
 @property (nonatomic, strong) NSButton *changePortButton;
+@property (nonatomic, strong) NSButton *invitePhoneButton;
 @property (nonatomic, strong) NSTextField *companionHintLabel;
 @property (nonatomic, strong) NSButton *mirrorEnabledCheck;
 @property (nonatomic, strong) NSButton *otpBannerEnabledCheck;
@@ -331,7 +332,15 @@
     self.changePortButton.bezelStyle = NSBezelStyleRounded;
     self.changePortButton.toolTip = @"端口默认固定；仅在手动确认后才会更换";
 
-    NSStackView *endpointRow = [NSStackView stackViewWithViews:@[self.companionEndpointButton, self.changePortButton]];
+    self.invitePhoneButton = [NSButton buttonWithTitle:@"邀请手机重连"
+                                                target:self
+                                                action:@selector(invitePhoneClicked:)];
+    self.invitePhoneButton.bezelStyle = NSBezelStyleRounded;
+    self.invitePhoneButton.toolTip = @"向局域网已配对手机发送 invite，促使其立即连接";
+
+    NSStackView *endpointRow = [NSStackView stackViewWithViews:@[self.companionEndpointButton,
+                                                                self.changePortButton,
+                                                                self.invitePhoneButton]];
     endpointRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     endpointRow.alignment = NSLayoutAttributeCenterY;
     endpointRow.spacing = 12;
@@ -1103,7 +1112,7 @@
     BOOL connected = (channel.state == CompanionChannelStateConnected);
     NSUInteger paired = store.pairedDeviceCountHint;
     CompanionLinkUIState uiState = [CompanionLinkUI stateFromChannel:channel];
-    self.companionConnectionLabel.stringValue = [CompanionLinkUI titleForState:uiState];
+    self.companionConnectionLabel.stringValue = [CompanionLinkUI titleForChannel:channel];
     self.companionConnectionLabel.textColor = [NSColor labelColor];
     NSColor *dotColor = [CompanionLinkUI dotColorForState:uiState];
     self.companionStatusDotView.layer.backgroundColor = dotColor.CGColor;
@@ -1123,13 +1132,17 @@
              (long)channel.listeningPort];
     } else if (securityMode) {
         self.companionHintLabel.stringValue = store.securityCode.length > 0
-            ? @"安全码模式：手机 Companion 选「固定安全码」并保存后，打开即可自动连接。"
+            ? (paired > 0
+               ? @"已配对，等待手机重连。也可点「邀请手机重连」主动唤醒。"
+               : @"安全码模式：手机 Companion 选「固定安全码」并保存后，打开即可自动连接。")
             : @"请先设定并保存固定安全码，再在手机 Companion 选择相同模式。";
     } else {
         self.companionHintLabel.stringValue = paired > 0
-            ? @"等待手机连接。可点配对码复制，或点「刷新配对码」给新设备。"
+            ? @"已配对，等待手机重连。也可点「邀请手机重连」主动唤醒；或「刷新配对码」给新设备。"
             : @"请在手机 Companion 输入下方配对码，或填写主机地址手动连接。";
     }
+
+    self.invitePhoneButton.enabled = (!connected && paired > 0);
 
     NSString *endpoint = [channel preferredLANEndpoint] ?: @"—";
     self.displayedEndpoint = ([endpoint isEqualToString:@"—"] || [endpoint containsString:@"未检测到"]) ? nil : endpoint;
@@ -1321,6 +1334,24 @@
                                         (unsigned long)store.securityCode.length];
     }
     [self refreshCompanionUI];
+}
+
+- (void)invitePhoneClicked:(id)sender {
+    (void)sender;
+    CompanionChannel *channel = [CompanionChannel sharedChannel];
+    if (channel.state == CompanionChannelStateConnected) {
+        self.statusLabel.stringValue = @"手机已连接，无需邀请。";
+        return;
+    }
+    if ([CompanionPairingStore sharedStore].pairedDeviceCountHint == 0) {
+        self.statusLabel.stringValue = @"尚未配对设备，请先完成配对。";
+        return;
+    }
+    if (channel.state == CompanionChannelStateStopped) {
+        [channel start];
+    }
+    [channel invitePairedPhones];
+    self.statusLabel.stringValue = @"已向局域网已配对手机发送邀请…";
 }
 
 - (void)changeCompanionPort:(id)sender {

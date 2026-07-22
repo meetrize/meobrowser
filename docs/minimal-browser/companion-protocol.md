@@ -8,11 +8,18 @@
 
 | 项 | 值 |
 |----|-----|
-| 类型 | `_meologin._tcp.` |
-| 名称 | `MeoBrowser`（可带主机后缀） |
-| 端口 | **固定 sticky 端口**（首次启动写入 UserDefaults；仅用户在设置中确认「更换端口」后才变） |
+| 类型（Mac 业务） | `_meologin._tcp.` |
+| 名称（Mac） | `MeoBrowser`（可带主机后缀） |
+| 端口（Mac） | **固定 sticky 端口**（首次启动写入 UserDefaults；仅用户在设置中确认「更换端口」后才变） |
+| 类型（手机 invite） | `_meocompanion._tcp.` |
+| 名称（手机） | `MeoC-<deviceId>`（`deviceId` 为 Android 侧稳定 UUID） |
+| TXT（手机，可选） | `deviceId=<uuid>` |
 
 Android 应缓存 `lastHost:lastPort`，依赖 sticky 端口做快速重连；Bonjour 作兜底发现。
+
+**重连（客户端）**：已配对且开启自动连接时，Android 在 Mac 不可达时应**指数退避持续重试**（上限约 60s），并周期性 Bonjour 再发现；不要在单次失败后退出前台服务。详见 [companion-mac-initiated-reconnect-development-plan.md](companion-mac-initiated-reconnect-development-plan.md)。
+
+**Mac 主动 invite（MR-3）**：手机在「已配对且未连上 Mac」时广告 `_meocompanion._tcp`；Mac 浏览到已配对 `deviceId` 后，向该端口发一帧 `invite`（不含 token）。手机收到后立即按现有逻辑连接 `_meologin._tcp` 并 `hello`。业务通道角色不变（Mac 仍为服务端）。
 
 ## 帧格式
 
@@ -70,6 +77,30 @@ UTF-8 JSON payload（length 字节）
 ```json
 { "v": 1, "type": "error", "message": "invalid pairing" }
 ```
+
+### invite（V2.4，Mac → Android，唤醒用）
+
+Mac 发现 `_meocompanion._tcp` 后建立短连接发送；**不含** `deviceToken` / 配对码。
+
+```json
+{
+  "v": 1,
+  "type": "invite",
+  "from": "mac",
+  "hostName": "MeoBrowser-on-MacBook",
+  "nonce": "uuid",
+  "deviceId": "optional-target-android-uuid"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `from` | ✅ | 固定 `"mac"` |
+| `hostName` | 推荐 | 展示用 |
+| `nonce` | 推荐 | 去重；手机可忽略 |
+| `deviceId` | 推荐 | 目标手机；与广告名不一致时可忽略本帧 |
+
+手机处理：若已连接则忽略；否则取消当前退避，立即发现/连接 Mac 并 `hello`。可不回包（短连接随即关闭）。
 
 ### phone_notification（V2.1，Android → Mac）
 

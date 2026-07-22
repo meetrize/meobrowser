@@ -1,5 +1,6 @@
 #import "CompanionChannel.h"
 #import "CompanionBonjourServer.h"
+#import "CompanionPhoneDiscovery.h"
 #import "CompanionPairingStore.h"
 #import "CompanionShortcutSync.h"
 #import "CompanionSyncSettings.h"
@@ -29,6 +30,7 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
 
 @interface CompanionChannel () <CompanionBonjourServerDelegate>
 @property (nonatomic, strong) CompanionBonjourServer *server;
+@property (nonatomic, strong) CompanionPhoneDiscovery *phoneDiscovery;
 @property (nonatomic, assign, readwrite) CompanionChannelState state;
 @property (nonatomic, copy, readwrite, nullable) NSString *statusText;
 @property (nonatomic, assign, readwrite) NSInteger listeningPort;
@@ -54,6 +56,7 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
     if (self) {
         _server = [[CompanionBonjourServer alloc] init];
         _server.delegate = self;
+        _phoneDiscovery = [[CompanionPhoneDiscovery alloc] init];
         _activeConnectionIDs = [NSMutableSet set];
         _state = CompanionChannelStateStopped;
         _statusText = @"未启动";
@@ -74,19 +77,16 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
         [self postStateChange];
         return;
     }
+    // listener ready 前 isRunning 可能仍为 NO；先进入广告态，端口回调再 refresh。
     // 不在此 ensurePairingCode：会间接触发钥匙串；配对码在设置页 / 手机来连时再准备。
     self.state = CompanionChannelStateAdvertising;
-    if (store.authMode == CompanionAuthModeSecurityCode) {
-        self.statusText = store.securityCode.length > 0
-            ? @"等待手机连接（安全码模式）"
-            : @"请先在设置中设定固定安全码";
-    } else {
-        self.statusText = @"等待手机连接（Bonjour）";
-    }
+    [self applyAdvertisingStatusText];
     [self postStateChange];
+    [self refreshPhoneInviteDiscovery];
 }
 
 - (void)stop {
+    [self.phoneDiscovery stop];
     [self.server stop];
     [self.activeConnectionIDs removeAllObjects];
     self.state = CompanionChannelStateStopped;
@@ -188,37 +188,78 @@ NSString * const CompanionPhoneNotificationPullErrorKey = @"error";
     return ip;
 }
 
+- (void)applyAdvertisingStatusText {
+    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
+    NSUInteger paired = store.pairedDeviceCountHint;
+    if (self.usingTemporaryPort) {
+        self.statusText = [NSString stringWithFormat:@"临时端口 %ld（固定端口被占用，请确认更换）",
+                           (long)self.listeningPort];
+    } else if (store.authMode == CompanionAuthModeSecurityCode) {
+        self.statusText = store.securityCode.length > 0
+            ? (paired > 0
+               ? [NSString stringWithFormat:@"已配对 %lu 台，等待手机重连（安全码）", (unsigned long)paired]
+               : @"等待手机连接（安全码模式）")
+            : @"请先设定固定安全码";
+    } else if (paired > 0) {
+        self.statusText = [NSString stringWithFormat:@"已配对 %lu 台，等待手机重连", (unsigned long)paired];
+    } else {
+        self.statusText = @"等待手机配对（Bonjour）";
+    }
+}
+
+- (NSSet<NSString *> *)pairedDeviceIdSet {
+    NSMutableSet<NSString *> *ids = [NSMutableSet set];
+    for (CompanionPairedDevice *device in [CompanionPairingStore sharedStore].pairedDevices) {
+        if (device.deviceId.length > 0) {
+            [ids addObject:device.deviceId];
+        }
+    }
+    return ids;
+}
+
+- (void)refreshPhoneInviteDiscovery {
+    if (self.state != CompanionChannelStateAdvertising) {
+        [self.phoneDiscovery stop];
+        return;
+    }
+    // 无配对 hint 时不碰钥匙串；有 hint 再读 deviceId 白名单。
+    if ([CompanionPairingStore sharedStore].pairedDeviceCountHint == 0) {
+        [self.phoneDiscovery stop];
+        return;
+    }
+    NSSet<NSString *> *ids = [self pairedDeviceIdSet];
+    if (ids.count == 0) {
+        [self.phoneDiscovery stop];
+        return;
+    }
+    NSString *hostName = NSHost.currentHost.localizedName ?: @"MeoBrowser";
+    [self.phoneDiscovery startWithAllowedDeviceIds:ids hostName:hostName];
+}
+
+- (void)invitePairedPhones {
+    [self refreshPhoneInviteDiscovery];
+    [self.phoneDiscovery inviteNow];
+}
+
 - (void)postStateChange {
     [[NSNotificationCenter defaultCenter] postNotificationName:CompanionChannelStateDidChangeNotification
                                                         object:self];
 }
 
 - (void)refreshConnectedState {
-    CompanionPairingStore *store = [CompanionPairingStore sharedStore];
     if (self.activeConnectionIDs.count > 0) {
         self.state = CompanionChannelStateConnected;
         NSString *device = self.lastConnectedDeviceId.length > 0 ? self.lastConnectedDeviceId : @"已配对设备";
         self.statusText = [NSString stringWithFormat:@"已连接 · %@", device];
-    } else if (self.server.isRunning) {
+        [self.phoneDiscovery stop];
+    } else if (self.server.isRunning || self.state == CompanionChannelStateAdvertising) {
         self.state = CompanionChannelStateAdvertising;
-        NSUInteger paired = store.pairedDeviceCountHint;
-        if (self.usingTemporaryPort) {
-            self.statusText = [NSString stringWithFormat:@"临时端口 %ld（固定端口被占用，请确认更换）",
-                               (long)self.listeningPort];
-        } else if (store.authMode == CompanionAuthModeSecurityCode) {
-            self.statusText = store.securityCode.length > 0
-                ? (paired > 0
-                   ? [NSString stringWithFormat:@"等待连接（安全码 · 已配对 %lu 台）", (unsigned long)paired]
-                   : @"等待手机连接（安全码模式）")
-                : @"请先设定固定安全码";
-        } else if (paired > 0) {
-            self.statusText = [NSString stringWithFormat:@"等待连接（已配对 %lu 台）", (unsigned long)paired];
-        } else {
-            self.statusText = @"等待手机配对（Bonjour）";
-        }
+        [self applyAdvertisingStatusText];
+        [self refreshPhoneInviteDiscovery];
     } else {
         self.state = CompanionChannelStateStopped;
         self.statusText = @"未启动";
+        [self.phoneDiscovery stop];
     }
     [self postStateChange];
 }

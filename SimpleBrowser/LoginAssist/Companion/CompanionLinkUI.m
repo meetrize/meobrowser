@@ -1,4 +1,5 @@
 #import "CompanionLinkUI.h"
+#import "CompanionPairingStore.h"
 
 @implementation CompanionLinkUI
 
@@ -27,6 +28,18 @@
         default:
             return @"未连接";
     }
+}
+
++ (NSString *)titleForChannel:(CompanionChannel *)channel {
+    CompanionLinkUIState state = [self stateFromChannel:channel];
+    if (state == CompanionLinkUIStateWaiting) {
+        NSUInteger paired = [CompanionPairingStore sharedStore].pairedDeviceCountHint;
+        if (paired > 0) {
+            return @"已配对，等待手机重连…";
+        }
+        return @"等待手机连接…";
+    }
+    return [self titleForState:state];
 }
 
 + (NSColor *)dotColorForState:(CompanionLinkUIState)state {

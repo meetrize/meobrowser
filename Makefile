@@ -71,6 +71,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/OTPInbox.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPairingStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBonjourServer.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPhoneDiscovery.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionChannel.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionLinkUI.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationSettings.m \
@@ -181,7 +182,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <key>NSLocalNetworkUsageDescription</key>' >> $(1)/Contents/Info.plist
 	@echo '  <string>登录助手通过局域网与手机 Companion 配对，以自动填入短信验证码。</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSBonjourServices</key>' >> $(1)/Contents/Info.plist
-	@echo '  <array><string>_meologin._tcp</string></array>' >> $(1)/Contents/Info.plist
+	@echo '  <array><string>_meologin._tcp</string><string>_meocompanion._tcp</string></array>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSCameraUsageDescription</key>' >> $(1)/Contents/Info.plist
 	@echo '  <string>网页可请求使用摄像头进行视频通话或拍照。</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSMicrophoneUsageDescription</key>' >> $(1)/Contents/Info.plist

@@ -418,7 +418,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         self.companionLinkStatusDot.layer.borderColor = [NSColor controlBackgroundColor].CGColor;
     }
     button.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
-    NSString *title = [CompanionLinkUI titleForState:state];
+    NSString *title = [CompanionLinkUI titleForChannel:[CompanionChannel sharedChannel]];
     button.toolTip = [NSString stringWithFormat:@"互联 · %@", title];
     button.accessibilityLabel = [NSString stringWithFormat:@"互联 · %@", title];
 }
