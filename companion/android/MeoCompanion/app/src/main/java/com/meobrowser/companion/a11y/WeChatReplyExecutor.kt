@@ -80,19 +80,21 @@ object WeChatReplyExecutor {
         }
         val started = System.currentTimeMillis()
         return try {
-            // 重装/杀进程后内存缓存为空：从通知栏补齐 contentIntent
-            repeat(6) { attempt ->
+            // 缓存刷新：成功或已有条目立即继续，避免空等
+            repeat(3) { attempt ->
                 OtpNotificationListener.ensureBound(app)
                 val refreshed = OtpNotificationListener.refreshWeChatReplyIntentCache()
-                Log.i(TAG, "intent cache refresh attempt=$attempt result=$refreshed size=${WeChatReplyIntentCache.size()}")
-                if (refreshed >= 0) return@repeat
-                sleep(350)
+                val size = WeChatReplyIntentCache.size()
+                Log.i(TAG, "intent cache refresh attempt=$attempt result=$refreshed size=$size")
+                if (refreshed >= 0 || size > 0) return@repeat
+                sleep(180)
             }
 
             val deadline = started + TIMEOUT_MS
             fun remaining(): Long = (deadline - System.currentTimeMillis()).coerceAtLeast(0)
             if (remaining() <= 0) return Result.Err("timeout", "回复超时")
 
+            val tOpen = System.currentTimeMillis()
             if (!openChat(contact, remaining(), app)) {
                 val miuiBlocked = WeChatReplyLaunchHelper.isMiuiBackgroundStartAllowed(app) == false
                 return Result.Err(
@@ -104,58 +106,51 @@ object WeChatReplyExecutor {
                     },
                 )
             }
-            sleep(900)
-            if (remaining() <= 0) return Result.Err("timeout", "回复超时")
+            Log.i(TAG, "phase openMs=${System.currentTimeMillis() - tOpen}")
 
-            // 进入会话后稍等输入框出现
-            var ready = false
-            repeat(5) {
-                if (onMain { it.findEditText() != null || !it.isWeChatTreeReadable() }) {
-                    ready = true
-                    return@repeat
+            // 等输入框（或挖空树下微信已在前台），替代固定 sleep(900)
+            var ready = waitUntil(1_800L, 100L) {
+                onMain {
+                    it.findEditText() != null ||
+                        (!it.isWeChatTreeReadable() && it.isWeChatForeground())
                 }
-                sleep(350)
             }
-            Log.i(TAG, "chat ready=$ready")
+            if (!ready) {
+                // 再给一轮短等待
+                ready = waitUntil(800L, 120L) {
+                    onMain { it.findEditText() != null || it.isWeChatForeground() }
+                }
+            }
+            Log.i(TAG, "chat ready=$ready readyWaitMs=${System.currentTimeMillis() - tOpen}")
 
-            onMain { it.setClipboard(text) }
-            sleep(200)
-
+            val tPaste = System.currentTimeMillis()
             if (!pasteIntoChat(text, remaining())) {
                 return Result.Err("paste_failed", "粘贴到输入框失败")
             }
-            sleep(500)
-            // 可读树时：确认输入框已有正文，避免空发送误报成功
-            if (onMain { it.isWeChatTreeReadable() }) {
-                val typed = onMain { it.findEditText()?.text?.toString().orEmpty() }
-                if (!typed.contains(text)) {
-                    Log.w(TAG, "paste not reflected in EditText: '$typed'")
-                    return Result.Err("paste_failed", "输入框未出现回复内容，请重试")
-                }
-            }
+            Log.i(TAG, "phase pasteMs=${System.currentTimeMillis() - tPaste}")
             if (remaining() <= 0) return Result.Err("timeout", "回复超时")
 
+            val tSend = System.currentTimeMillis()
             if (!tapSend(remaining())) {
                 return Result.Err("send_failed", "未找到或未能点击「发送」")
             }
-            sleep(900)
-
-            val verified = onMain { a11y ->
-                val bubble = a11y.bubbleContains(text)
-                val editText = a11y.findEditText()?.text?.toString().orEmpty()
-                val sendGone = a11y.findSendButton() == null
-                when {
-                    bubble -> true
-                    a11y.isWeChatTreeReadable() -> {
-                        // 可读时必须以气泡或「输入已清空」为准
-                        (editText.isEmpty() || !editText.contains(text)) && sendGone
-                    }
-                    else -> {
-                        // 挖空树 + 已在疑似会话：弱校验
-                        a11y.likelyChatWith(contact) && a11y.isWeChatForeground()
+            val verified = waitUntil(1_400L, 100L) {
+                onMain { a11y ->
+                    val bubble = a11y.bubbleContains(text)
+                    val editText = a11y.findEditText()?.text?.toString().orEmpty()
+                    val sendGone = a11y.findSendButton() == null
+                    when {
+                        bubble -> true
+                        a11y.isWeChatTreeReadable() -> {
+                            (editText.isEmpty() || !editText.contains(text)) && sendGone
+                        }
+                        else -> {
+                            a11y.likelyChatWith(contact) && a11y.isWeChatForeground()
+                        }
                     }
                 }
             }
+            Log.i(TAG, "phase sendMs=${System.currentTimeMillis() - tSend} verified=$verified")
             if (verified) {
                 Result.Ok(System.currentTimeMillis() - started)
             } else {
@@ -167,6 +162,16 @@ object WeChatReplyExecutor {
         } finally {
             busy.set(false)
         }
+    }
+
+    /** 轮询直到条件成立或超时。 */
+    private fun waitUntil(timeoutMs: Long, stepMs: Long, pred: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (pred()) return true
+            sleep(stepMs)
+        }
+        return pred()
     }
 
     private fun waitForAccessibilityReady(app: Context, timeoutMs: Long): Boolean {
@@ -182,8 +187,12 @@ object WeChatReplyExecutor {
     }
 
     private fun openChat(contact: String, timeoutMs: Long, app: Context): Boolean {
-        // 已在目标会话（可读时用标题校验；挖空树时仅有输入框则先走 Intent）
-        if (onMain { it.findEditText() != null && it.likelyChatWith(contact) }) {
+        // 已在目标会话：标题 / 顶栏名 / 联系人节点任一命中即可（TalkBack 聚焦输入框时 window.title 常为空）
+        if (onMain {
+                it.findEditText() != null &&
+                    (it.likelyChatWith(contact) || it.findContactNode(contact) != null)
+            }
+        ) {
             Log.i(TAG, "already in target chat contact=$contact")
             return true
         }
@@ -210,21 +219,26 @@ object WeChatReplyExecutor {
             val sent = WeChatReplyLaunchHelper.sendPendingIntent(pi)
             Log.i(TAG, "opened via notification intent title=${cached.title} sent=$sent")
             if (sent) {
-                sleep(1600)
-                if (waitWeChatForeground(2200)) {
-                    if (onMain { it.findEditText() != null || it.likelyChatWith(contact) || !it.isWeChatTreeReadable() }) {
-                        return true
+                // 轮询进入会话，替代固定 sleep(1600)+再等 2200
+                val ok = waitUntil(2_800L, 120L) {
+                    onMain {
+                        it.findEditText() != null ||
+                            it.likelyChatWith(contact) ||
+                            (!it.isWeChatTreeReadable() && it.isWeChatForeground())
                     }
                 }
+                if (ok) return true
             }
             // PendingIntent 可能已失效或被 MIUI 静默拦截 → 中转页再试一次
             WeChatReplyLaunchHelper.startTrampoline(app, contact, pi)
-            sleep(1600)
-            if (waitWeChatForeground(2200)) {
-                if (onMain { it.findEditText() != null || it.likelyChatWith(contact) || !it.isWeChatTreeReadable() }) {
-                    return true
+            val ok2 = waitUntil(2_400L, 120L) {
+                onMain {
+                    it.findEditText() != null ||
+                        it.likelyChatWith(contact) ||
+                        (!it.isWeChatTreeReadable() && it.isWeChatForeground())
                 }
             }
+            if (ok2) return true
         }
 
         return openViaListOrLaunch(contact, timeoutMs, app)
@@ -232,12 +246,10 @@ object WeChatReplyExecutor {
 
     private fun openViaListOrLaunch(contact: String, @Suppress("UNUSED_PARAMETER") timeoutMs: Long, app: Context): Boolean {
         bringWeChatToForeground(app, contact, WeChatReplyIntentCache.find(contact)?.contentIntent)
-        sleep(1600)
-        if (!waitWeChatForeground(3000)) {
+        if (!waitWeChatForeground(2_400L)) {
             Log.w(TAG, "wechat still not foreground after launch attempts titles=${onMain { it.windowTitles() }}")
-            // 通知栏里若还有该会话，尝试点开
             if (openViaNotificationShade(contact)) {
-                sleep(1200)
+                waitUntil(1_200L, 100L) { onMain { it.isWeChatForeground() } }
             }
         }
         if (onMain { it.findEditText() != null && it.likelyChatWith(contact) }) return true
@@ -254,28 +266,20 @@ object WeChatReplyExecutor {
             Log.w(TAG, "tree opaque; list open needs TalkBack/读屏 or notification intent")
         }
 
-        // 节点不可读：尽量留在微信内搜索（弱兜底）
         Log.i(TAG, "fallback opaque search for contact=$contact")
         return openOpaqueBySearch(contact)
     }
 
     private fun bringWeChatToForeground(app: Context, contact: String, contentIntent: PendingIntent?) {
         onMain { launchWeChat(it) }
-        sleep(400)
-        if (onMain { it.isWeChatForeground() }) return
+        if (waitUntil(500L, 80L) { onMain { it.isWeChatForeground() } }) return
         WeChatReplyLaunchHelper.launchWeChatPackage(app)
-        sleep(400)
-        if (onMain { it.isWeChatForeground() }) return
+        if (waitUntil(500L, 80L) { onMain { it.isWeChatForeground() } }) return
         WeChatReplyLaunchHelper.startTrampoline(app, contact, contentIntent)
     }
 
     private fun waitWeChatForeground(timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (onMain { it.isWeChatForeground() }) return true
-            sleep(250)
-        }
-        return onMain { it.isWeChatForeground() }
+        return waitUntil(timeoutMs, 120L) { onMain { it.isWeChatForeground() } }
     }
 
     /** 下拉通知栏点击仍在的微信通知（contentIntent 失效时的兜底）。 */
@@ -322,14 +326,16 @@ object WeChatReplyExecutor {
                 a11y.click(hit)
             }
             if (hitClicked) {
-                sleep(1000)
-                if (onMain { it.findEditText() != null || it.likelyChatWith(contact) }) {
+                val opened = waitUntil(1_200L, 100L) {
+                    onMain { it.findEditText() != null || it.likelyChatWith(contact) }
+                }
+                if (opened) {
                     Log.i(TAG, "opened contact via list page=$page")
                     return true
                 }
             }
             onMain { it.scrollForwardOnce() }
-            sleep(500)
+            sleep(350)
         }
 
         val searched = onMain { a11y ->
@@ -470,7 +476,7 @@ object WeChatReplyExecutor {
 
     private fun pasteIntoChat(text: String, @Suppress("UNUSED_PARAMETER") timeoutMs: Long): Boolean {
         onMain { it.setClipboard(text) }
-        sleep(150)
+        sleep(60)
 
         repeat(3) { attempt ->
             val setOk = onMain { a11y ->
@@ -480,8 +486,7 @@ object WeChatReplyExecutor {
                 a11y.setTextOn(edit, text)
             }
             if (setOk) {
-                sleep(280)
-                if (onMain { it.editTextContains(text) }) {
+                if (waitUntil(450L, 60L) { onMain { it.editTextContains(text) } }) {
                     Log.i(TAG, "SET_TEXT verified attempt=$attempt")
                     return true
                 }
@@ -494,21 +499,17 @@ object WeChatReplyExecutor {
                 edit.performAction(AccessibilityNodeInfo.ACTION_PASTE)
             }
             if (pasteOk) {
-                sleep(280)
-                if (onMain { it.editTextContains(text) }) {
+                if (waitUntil(450L, 60L) { onMain { it.editTextContains(text) } }) {
                     Log.i(TAG, "ACTION_PASTE verified attempt=$attempt")
                     return true
                 }
             }
 
-            // 系统 shell 注入多数机型会失败；仅作兜底
             onMain { it.injectPasteKeyEvent() }
-            sleep(350)
-            if (onMain { it.editTextContains(text) }) {
+            if (waitUntil(350L, 60L) { onMain { it.editTextContains(text) } }) {
                 Log.i(TAG, "KEYCODE_PASTE verified attempt=$attempt")
                 return true
             }
-            sleep(200)
         }
 
         // 长按输入框中心 → 点「粘贴」
