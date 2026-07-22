@@ -178,7 +178,10 @@ static const NSUInteger kSuggestionLimit = 8;
 
     NSArray<BrowserShortcutItem *> *matches = [BrowserShortcutStore shortcutsMatchingQuery:trimmed limit:kSuggestionLimit];
     if (matches.count == 0) {
-        [self revertInlineAutocompleteToTypedQuery:trimmed];
+        // 仅在确有内联补全时才回写文本；否则会把光标强行挪到行末，破坏中间/开头连续输入。
+        if (self.hasActiveInlineAutocomplete) {
+            [self revertInlineAutocompleteToTypedQuery:trimmed];
+        }
         [self dismissPanelImmediately];
         return;
     }
@@ -205,6 +208,24 @@ static const NSUInteger kSuggestionLimit = 8;
 }
 
 #pragma mark - Inline autocomplete
+
+/// 内联补全只在「末尾输入」时安全：插入点在行末，或已有延伸到行末的补全选区。
+- (BOOL)shouldApplyInlineAutocompleteAtCurrentCaret {
+    NSText *editor = self.addressField.currentEditor;
+    if (!editor) {
+        return NO;
+    }
+    NSString *raw = self.addressField.stringValue ?: @"";
+    NSRange sel = editor.selectedRange;
+    if (sel.location == NSNotFound) {
+        return NO;
+    }
+    if (sel.length == 0) {
+        return sel.location == raw.length;
+    }
+    // 已有内联后缀选中（前缀 + 选中到行末）时允许继续刷新补全。
+    return sel.location > 0 && NSMaxRange(sel) == raw.length;
+}
 
 - (nullable NSString *)inlineSuggestionForItem:(BrowserShortcutItem *)item query:(NSString *)query {
     if (query.length == 0 || item.urlString.length == 0) {
@@ -263,6 +284,11 @@ static const NSUInteger kSuggestionLimit = 8;
     BrowserShortcutItem *item = [self selectedItem];
     NSString *query = self.currentQuery;
     if (!item || query.length == 0) {
+        return;
+    }
+
+    // 在地址中间/开头编辑时不要改写 stringValue，否则光标会跳到行末。
+    if (![self shouldApplyInlineAutocompleteAtCurrentCaret]) {
         return;
     }
 
