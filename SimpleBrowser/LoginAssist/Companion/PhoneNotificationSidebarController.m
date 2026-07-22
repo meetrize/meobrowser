@@ -1436,6 +1436,17 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
 - (void)tableDoubleClicked:(id)sender {
     (void)sender;
+    PhoneNotificationItem *item = [self clickedOrSelectedItem];
+    if ([self canReplyToItem:item]) {
+        [self replyWeChatClicked:nil];
+        return;
+    }
+    // 微信回复未开启时，双击微信行给出提示，避免误以为只能复制
+    if (item && [item.packageName isEqualToString:kWeChatPackageName] &&
+        ![PhoneNotificationInboxSettings sharedSettings].wechatReplyEnabled) {
+        [self showSyncToast:@"请先在「登录助手」开启微信回复（实验）"];
+        return;
+    }
     [self copyBodyClicked:nil];
 }
 

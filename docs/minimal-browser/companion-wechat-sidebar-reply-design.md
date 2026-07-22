@@ -255,7 +255,7 @@ WeChatReplyExecutor（由探测服务升级）
 | `OtpNotificationListener`                           | 微信通知写入 IntentCache                               |
 | `MainActivity`                                      | 实验开关 + 跳转无障碍设置                                   |
 | `CompanionChannel`（Mac）                             | `requestWeChatReply…` + `wechat_reply_ok/err` 通知 |
-| `PhoneNotificationSidebarController`                | 右键「回复…」+ `SBTextField` 输入 sheet                  |
+| `PhoneNotificationSidebarController`                | 双击微信行 / 右键「回复…」+ `SBTextField` 输入 sheet        |
 | `PhoneNotificationInboxSettings.wechatReplyEnabled` | Mac 实验开关，默认关                                     |
 | 登录助手设置                                              | 「微信回复（实验）」复选框                                    |
 
