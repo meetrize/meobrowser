@@ -1,5 +1,6 @@
 package com.meobrowser.companion.sms
 
+import android.app.Notification
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -7,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -35,27 +37,7 @@ object AppIconExporter {
             val appInfo = pm.getApplicationInfo(packageName, 0)
             val label = pm.getApplicationLabel(appInfo).toString()
             val drawable = pm.getApplicationIcon(appInfo)
-            val at72 = encodePng(drawableToBitmap(drawable, PREFERRED_SIZE), PREFERRED_SIZE)
-            val chosen = when {
-                at72 != null && at72.size <= MAX_BYTES -> Pair(at72, PREFERRED_SIZE)
-                else -> {
-                    val at48 = encodePng(drawableToBitmap(drawable, FALLBACK_SIZE), FALLBACK_SIZE)
-                    if (at48 == null || at48.size > MAX_BYTES) {
-                        Log.w(TAG, "icon too large or encode failed pkg=$packageName")
-                        return null
-                    }
-                    Pair(at48, FALLBACK_SIZE)
-                }
-            }
-            val bytes = chosen.first
-            val size = chosen.second
-            ExportedIcon(
-                pngBytes = bytes,
-                iconHash = iconHash(bytes),
-                width = size,
-                height = size,
-                appLabel = label
-            )
+            encodeDrawable(drawable, label)
         } catch (e: PackageManager.NameNotFoundException) {
             Log.w(TAG, "package not found: $packageName")
             null
@@ -63,6 +45,61 @@ object AppIconExporter {
             Log.e(TAG, "export failed pkg=$packageName", e)
             null
         }
+    }
+
+    /**
+     * 从通知自带 small/large icon 导出 PNG。
+     * 用于厂商代理包（如「智能服务」）无法归因到真实 package 时的侧栏展示。
+     */
+    fun exportNotificationIcon(
+        context: Context,
+        notification: Notification,
+        appLabel: String,
+    ): ExportedIcon? {
+        val candidates = mutableListOf<Icon>()
+        try {
+            notification.getLargeIcon()?.let { candidates.add(it) }
+        } catch (_: Exception) {
+        }
+        notification.smallIcon?.let { candidates.add(it) }
+        for (icon in candidates) {
+            val drawable = try {
+                icon.loadDrawable(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "loadDrawable failed", e)
+                null
+            } ?: continue
+            val exported = encodeDrawable(drawable, appLabel)
+            if (exported != null) {
+                return exported
+            }
+        }
+        Log.w(TAG, "notification icon export failed label=$appLabel")
+        return null
+    }
+
+    private fun encodeDrawable(drawable: Drawable, appLabel: String): ExportedIcon? {
+        val at72 = encodePng(drawableToBitmap(drawable, PREFERRED_SIZE), PREFERRED_SIZE)
+        val chosen = when {
+            at72 != null && at72.size <= MAX_BYTES -> Pair(at72, PREFERRED_SIZE)
+            else -> {
+                val at48 = encodePng(drawableToBitmap(drawable, FALLBACK_SIZE), FALLBACK_SIZE)
+                if (at48 == null || at48.size > MAX_BYTES) {
+                    Log.w(TAG, "icon too large or encode failed label=$appLabel")
+                    return null
+                }
+                Pair(at48, FALLBACK_SIZE)
+            }
+        }
+        val bytes = chosen.first
+        val size = chosen.second
+        return ExportedIcon(
+            pngBytes = bytes,
+            iconHash = iconHash(bytes),
+            width = size,
+            height = size,
+            appLabel = appLabel
+        )
     }
 
     fun toBase64(bytes: ByteArray): String =

@@ -1239,7 +1239,13 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     if (isOTP) {
         icon.image = [PhoneAppIconCache otpPlaceholderImage];
     } else {
-        NSImage *cached = [[PhoneAppIconCache sharedCache] imageForPackage:item.packageName];
+        NSImage *cached = nil;
+        if (item.inlineIconHash.length > 0) {
+            cached = [[PhoneAppIconCache sharedCache] imageForNotificationItemID:item.itemID];
+        }
+        if (!cached) {
+            cached = [[PhoneAppIconCache sharedCache] imageForPackage:item.packageName];
+        }
         icon.image = cached ?: [PhoneAppIconCache placeholderImageWithLabel:item.appLabel
                                                                     package:item.packageName];
     }

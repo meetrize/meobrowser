@@ -184,6 +184,53 @@ static const CGFloat kIconPointSize = 28.0;
     return YES;
 }
 
+- (NSString *)cacheKeyForNotificationItemID:(NSString *)itemID {
+    return [@"item:" stringByAppendingString:itemID ?: @""];
+}
+
+- (nullable NSImage *)imageForNotificationItemID:(NSString *)itemID {
+    if (itemID.length == 0) {
+        return nil;
+    }
+    return [self imageForPackage:[self cacheKeyForNotificationItemID:itemID]];
+}
+
+- (BOOL)storeNotificationItemIconPNGData:(NSData *)data
+                                  itemID:(NSString *)itemID
+                                iconHash:(NSString *)iconHash
+                                   error:(NSError **)error {
+    if (itemID.length == 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"PhoneAppIconCache" code:1
+                                     userInfo:@{NSLocalizedDescriptionKey: @"invalid itemID"}];
+        }
+        return NO;
+    }
+    return [self storePNGData:data
+                      package:[self cacheKeyForNotificationItemID:itemID]
+                     iconHash:iconHash
+                     appLabel:nil
+                        error:error];
+}
+
+- (void)removeNotificationItemIconForID:(NSString *)itemID {
+    if (itemID.length == 0) {
+        return;
+    }
+    NSString *key = [self cacheKeyForNotificationItemID:itemID];
+    dispatch_sync(self.queue, ^{
+        NSDictionary *entry = self.index[key];
+        NSString *file = entry[@"file"];
+        if ([file isKindOfClass:[NSString class]] && file.length > 0) {
+            NSString *path = [self.directoryPath stringByAppendingPathComponent:file];
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        }
+        [self.index removeObjectForKey:key];
+        [self persistIndexLocked];
+    });
+    [self.memoryCache removeObjectForKey:key];
+}
+
 - (NSArray<NSString *> *)packagesMissingFrom:(NSArray<NSString *> *)packages {
     __block NSMutableArray<NSString *> *missing = [NSMutableArray array];
     dispatch_sync(self.queue, ^{

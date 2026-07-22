@@ -896,7 +896,9 @@ object CompanionSession {
             notifyStatus()
             Log.i(
                 "MeoCompanion",
-                "phone_notification pushed pkg=${payload.packageName} idLen=${payload.id.length} bodyLen=${payload.body.length} source=${source ?: "live"}"
+                "phone_notification pushed pkg=${payload.packageName} label=${payload.appLabel} " +
+                    "idLen=${payload.id.length} bodyLen=${payload.body.length} " +
+                    "inlineIcon=${payload.inlineIconPng != null} source=${source ?: "live"}"
             )
             true
         } catch (e: Exception) {

@@ -1,5 +1,6 @@
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationInboxSettings.h"
+#import "PhoneAppIconCache.h"
 #import <os/log.h>
 
 NSNotificationName const PhoneNotificationInboxDidChangeNotification = @"PhoneNotificationInboxDidChangeNotification";
@@ -91,15 +92,28 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             postTimeMs = (long long)([NSDate date].timeIntervalSince1970 * 1000.0);
         }
 
+        NSString *source = [self stringFrom:payload[@"source"]];
+        BOOL isPull = [source isEqualToString:@"pull"];
+
         PhoneNotificationItem *existing = [self itemForIDLocked:itemID];
         if (existing) {
+            // 实时更新时 Android 常保留旧 postTime（同 key 刷新）；抬到入库时刻保证侧栏置顶。
+            // 补拉（pull）则信任手机侧原始 postTime，避免旧通知刷到顶部。
+            if (!isPull) {
+                long long nowMs = (long long)([NSDate date].timeIntervalSince1970 * 1000.0);
+                if (postTimeMs < nowMs) {
+                    postTimeMs = nowMs;
+                }
+            }
             existing.packageName = packageName;
             existing.appLabel = appLabel;
             existing.title = title;
             existing.body = body;
             existing.postTimeMs = postTimeMs;
+            existing.receivedAt = [NSDate date];
             existing.source = PhoneNotificationItemSourceMirror;
-            // 保留 read / pinned
+            [self applyInlineIconFromPayload:payload toItem:existing];
+            // 保留 read / pinned；同 id 更新（如微信会话）按时间重新排序置顶
         } else {
             PhoneNotificationItem *item = [[PhoneNotificationItem alloc] init];
             item.itemID = itemID;
@@ -113,9 +127,11 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             item.read = NO;
             item.pinned = NO;
             item.source = PhoneNotificationItemSourceMirror;
+            [self applyInlineIconFromPayload:payload toItem:item];
             [self.items insertObject:item atIndex:0];
         }
 
+        [self sortItemsByRecencyLocked];
         [self enforceRetentionAndCapLocked];
         [self persistLocked];
         changed = YES;
@@ -154,6 +170,7 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             existing.body = trimmed;
             existing.title = @"验证码";
             existing.postTimeMs = (long long)(now * 1000.0);
+            existing.receivedAt = [NSDate date];
         } else {
             PhoneNotificationItem *item = [[PhoneNotificationItem alloc] init];
             item.itemID = itemID;
@@ -171,6 +188,7 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             [self.items insertObject:item atIndex:0];
         }
 
+        [self sortItemsByRecencyLocked];
         [self enforceRetentionAndCapLocked];
         [self persistLocked];
         changed = YES;
@@ -231,6 +249,8 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
         if (idx == NSNotFound) {
             return;
         }
+        PhoneNotificationItem *item = self.items[idx];
+        [self removeInlineIconForItem:item];
         [self.items removeObjectAtIndex:idx];
         [self persistLocked];
         changed = YES;
@@ -269,6 +289,10 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
         if (toRemove.count == 0) {
             return;
         }
+        [toRemove enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+            (void)stop;
+            [self removeInlineIconForItem:self.items[idx]];
+        }];
         [self.items removeObjectsAtIndexes:toRemove];
         [self persistLocked];
         changed = YES;
@@ -283,6 +307,9 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
     dispatch_sync(self.queue, ^{
         if (self.items.count == 0) {
             return;
+        }
+        for (PhoneNotificationItem *item in self.items) {
+            [self removeInlineIconForItem:item];
         }
         [self.items removeAllObjects];
         [self persistLocked];
@@ -371,6 +398,9 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             }
             [out addObject:item];
         }
+        [out sortUsingComparator:^NSComparisonResult(PhoneNotificationItem *a, PhoneNotificationItem *b) {
+            return [self compareItemByRecency:a to:b];
+        }];
         result = [out copy];
     });
     return result;
@@ -428,6 +458,42 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
 
 #pragma mark - Locked helpers
 
+- (void)applyInlineIconFromPayload:(NSDictionary *)payload toItem:(PhoneNotificationItem *)item {
+    if (!item || item.itemID.length == 0) {
+        return;
+    }
+    NSString *b64 = [self stringFrom:payload[@"iconPngBase64"]];
+    NSString *hash = [self stringFrom:payload[@"iconHash"]];
+    if (b64.length == 0 || hash.length == 0) {
+        return;
+    }
+    NSData *png = [[NSData alloc] initWithBase64EncodedString:b64
+                                                      options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if (!png || png.length == 0) {
+        os_log_info(OS_LOG_DEFAULT, "inbox inline icon decode failed id=%{public}@", item.itemID);
+        return;
+    }
+    NSError *err = nil;
+    BOOL ok = [[PhoneAppIconCache sharedCache] storeNotificationItemIconPNGData:png
+                                                                         itemID:item.itemID
+                                                                       iconHash:hash
+                                                                          error:&err];
+    if (ok) {
+        item.inlineIconHash = hash;
+    } else {
+        os_log_info(OS_LOG_DEFAULT, "inbox inline icon store failed id=%{public}@ err=%{public}@",
+                    item.itemID, err.localizedDescription ?: @"?");
+    }
+}
+
+- (void)removeInlineIconForItem:(PhoneNotificationItem *)item {
+    if (!item || item.inlineIconHash.length == 0 || item.itemID.length == 0) {
+        return;
+    }
+    [[PhoneAppIconCache sharedCache] removeNotificationItemIconForID:item.itemID];
+    item.inlineIconHash = nil;
+}
+
 - (nullable PhoneNotificationItem *)itemForIDLocked:(NSString *)itemID {
     NSUInteger idx = [self indexOfIDLocked:itemID];
     return idx == NSNotFound ? nil : self.items[idx];
@@ -438,6 +504,24 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
         (void)idx;
         (void)stop;
         return [item.itemID isEqualToString:itemID];
+    }];
+}
+
+/// 新→旧：优先 postTimeMs，其次 receivedAt，最后 itemID 保证稳定。
+- (NSComparisonResult)compareItemByRecency:(PhoneNotificationItem *)a to:(PhoneNotificationItem *)b {
+    if (a.postTimeMs != b.postTimeMs) {
+        return (a.postTimeMs > b.postTimeMs) ? NSOrderedAscending : NSOrderedDescending;
+    }
+    NSComparisonResult byReceived = [b.receivedAt compare:a.receivedAt];
+    if (byReceived != NSOrderedSame) {
+        return byReceived;
+    }
+    return [b.itemID compare:a.itemID];
+}
+
+- (void)sortItemsByRecencyLocked {
+    [self.items sortUsingComparator:^NSComparisonResult(PhoneNotificationItem *a, PhoneNotificationItem *b) {
+        return [self compareItemByRecency:a to:b];
     }];
 }
 
@@ -454,6 +538,10 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             return [item.receivedAt timeIntervalSince1970] < cutoff;
         }];
         if (expired.count > 0) {
+            [expired enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                [self removeInlineIconForItem:self.items[idx]];
+            }];
             [self.items removeObjectsAtIndexes:expired];
         }
     }
@@ -461,7 +549,7 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
     if (self.items.count <= kInboxHardCap) {
         return;
     }
-    // 已按插入序大致新→旧；淘汰最旧的非钉选
+    // 列表已按新→旧排序；从尾部淘汰最旧的非钉选
     NSMutableIndexSet *remove = [NSMutableIndexSet indexSet];
     for (NSInteger i = (NSInteger)self.items.count - 1; i >= 0 && self.items.count - remove.count > kInboxHardCap; i--) {
         PhoneNotificationItem *item = self.items[(NSUInteger)i];
@@ -470,6 +558,10 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
         }
     }
     if (remove.count > 0) {
+        [remove enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+            (void)stop;
+            [self removeInlineIconForItem:self.items[idx]];
+        }];
         [self.items removeObjectsAtIndexes:remove];
     }
 }
@@ -495,6 +587,7 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
             }
         }
     }
+    [self sortItemsByRecencyLocked];
     NSArray *muted = root[@"mutedPackages"];
     if ([muted isKindOfClass:[NSArray class]]) {
         for (id pkg in muted) {

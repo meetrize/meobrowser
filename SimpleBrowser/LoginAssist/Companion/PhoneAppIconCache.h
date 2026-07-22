@@ -19,6 +19,14 @@ extern NSString * const PhoneAppIconCachePackageNameKey;
             appLabel:(nullable NSString *)appLabel
                error:(NSError * _Nullable * _Nullable)error;
 
+/// 单条通知自带图标（厂商代理包无法归因时）；与 package 缓存隔离。
+- (nullable NSImage *)imageForNotificationItemID:(nullable NSString *)itemID;
+- (BOOL)storeNotificationItemIconPNGData:(NSData *)data
+                                  itemID:(NSString *)itemID
+                                iconHash:(NSString *)iconHash
+                                   error:(NSError * _Nullable * _Nullable)error;
+- (void)removeNotificationItemIconForID:(nullable NSString *)itemID;
+
 - (NSArray<NSString *> *)packagesMissingFrom:(NSArray<NSString *> *)packages;
 
 /// 28×28 首字占位（无缓存时）。

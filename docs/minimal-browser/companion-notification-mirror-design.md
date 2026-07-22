@@ -257,10 +257,17 @@ title, EXTRA_TEXT, EXTRA_BIG_TEXT, EXTRA_TEXT_LINES, EXTRA_SUB_TEXT
 `appLabel`：
 
 ```text
-pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0))
+优先 Notification.EXTRA_SUBSTITUTE_APP_NAME（非空）
+否则 pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0))
 ```
 
 失败则空字符串。
+
+厂商推送代理（如华为「智能服务」）时：`sbn.packageName` 可能不是真实 App。处理顺序：
+
+1. 若 posted 包为已知代理 / 标签含「智能服务」，尝试用通知 Icon 的 `resPackage` 归因到已安装 App  
+2. 归因成功 → 用真实 `packageName`（随后走常规 `app_icon`）  
+3. 仍无法归因 → `appLabel` 用 substitute；并在 `phone_notification` 附带可选 `iconPngBase64`（通知自带 small/large icon）
 
 ### 5.4 去重 `id`
 

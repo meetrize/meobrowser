@@ -15,10 +15,19 @@
 - 手机与 Mac **同一 Wi‑Fi**（Bonjour `_meologin._tcp`）时使用互联功能
 - 互联需授予短信与通知权限（浏览本身不需要）
 
-## 构建
+## 构建 / 一键部署到手机
 
 ```bash
 cd companion/android/MeoCompanion
+
+# 一键：编译 debug → adb 安装 → 启动（需 USB 调试）
+./one-click-deploy.sh
+
+# 多机时指定序列号，或安装到全部
+./one-click-deploy.sh -s <serial>
+./one-click-deploy.sh -a
+
+# 仅编译
 ./gradlew assembleDebug
 # APK: app/build/outputs/apk/debug/app-debug.apk
 ```

@@ -129,14 +129,17 @@ Mac 发现 `_meocompanion._tcp` 后建立短连接发送；**不含** `deviceTok
 |------|------|------|
 | `deviceToken` | ✅ | 同 `otp` |
 | `id` | ✅ | 去重 / 通知 request 标识 |
-| `packageName` | ✅ | 来源包名 |
-| `appLabel` | 推荐 | 应用显示名 |
+| `packageName` | ✅ | 来源包名（厂商代理时尽量归因到真实 App） |
+| `appLabel` | 推荐 | 应用显示名；优先 `EXTRA_SUBSTITUTE_APP_NAME` |
 | `title` / `body` | 推荐 | 截断：title ≤ 200，body ≤ 1000 字符 |
 | `ts` | ✅ | Unix 秒 |
 | `postTimeMs` | 可选 | 原始通知时间 |
 | `flags` | 可选 | Android 侧应已过滤 ongoing |
+| `iconPngBase64` | 可选 | 代理包无法归因时附带的通知自带 PNG（无前缀；解码后 ≤ 12 KiB） |
+| `iconHash` | 可选 | 与 `app_icon` 相同算法；有 `iconPngBase64` 时必填 |
+| `iconWidth` / `iconHeight` | 可选 | 像素边长 |
 
-Mac 展示：系统通知标题用 `appLabel`（及可选 `title`）前缀；**左侧图标仍为 MeoBrowser**（系统限制）。
+Mac 展示：系统通知标题用 `appLabel`（及可选 `title`）前缀；**系统横幅左侧图标仍为 MeoBrowser**（系统限制）。侧栏：有条目 `iconPngBase64` 时优先用该图标，否则用 `packageName` → `app_icon` 缓存。
 
 ### phone_notification_ok（V2.1，Mac → Android）
 

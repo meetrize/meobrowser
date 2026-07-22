@@ -34,6 +34,8 @@ typedef NS_ENUM(NSInteger, PhoneNotificationInboxBucket) {
 @property (nonatomic, copy) NSString *body;
 @property (nonatomic, assign) PhoneNotificationItemKind kind;
 @property (nonatomic, copy, nullable) NSString *otpCode;
+/// 厂商代理通知附带的条目图标 hash；非空时侧栏优先用 item 图标而非 package 缓存。
+@property (nonatomic, copy, nullable) NSString *inlineIconHash;
 @property (nonatomic, assign) long long postTimeMs;
 @property (nonatomic, strong) NSDate *receivedAt;
 @property (nonatomic, assign) BOOL read;

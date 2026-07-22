@@ -40,6 +40,9 @@
     if (self.otpCode.length > 0) {
         dict[@"otpCode"] = self.otpCode;
     }
+    if (self.inlineIconHash.length > 0) {
+        dict[@"inlineIconHash"] = self.inlineIconHash;
+    }
     return dict;
 }
 
@@ -62,6 +65,10 @@
     item.otpCode = [self stringFrom:dictionary[@"otpCode"]];
     if (item.otpCode.length == 0) {
         item.otpCode = nil;
+    }
+    item.inlineIconHash = [self stringFrom:dictionary[@"inlineIconHash"]];
+    if (item.inlineIconHash.length == 0) {
+        item.inlineIconHash = nil;
     }
     item.postTimeMs = [dictionary[@"postTimeMs"] respondsToSelector:@selector(longLongValue)]
         ? [dictionary[@"postTimeMs"] longLongValue] : 0;
