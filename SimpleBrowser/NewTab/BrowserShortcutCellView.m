@@ -74,6 +74,39 @@ static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
     return [[host substringToIndex:1] uppercaseString];
 }
 
+/// 悬停 tip / 无障碍用的展示用 host（去掉 www.）。
+static NSString *BrowserShortcutDisplayHost(BrowserShortcutItem *item) {
+    if (item == nil || item.isFolder) {
+        return @"";
+    }
+    NSURL *url = [NSURL URLWithString:item.urlString];
+    NSString *host = url.host.length > 0 ? url.host : item.urlString;
+    if ([host.lowercaseString hasPrefix:@"www."]) {
+        host = [host substringFromIndex:4];
+    }
+    return host ?: @"";
+}
+
+/// 标题已能代表 host（相等，或「GitHub」对「github.com」）时不再拼进 tip。
+static BOOL BrowserShortcutTitleRepresentsHost(NSString *title, NSString *host) {
+    if (title.length == 0 || host.length == 0) {
+        return NO;
+    }
+    NSString *t = title.lowercaseString;
+    NSString *h = host.lowercaseString;
+    if ([t isEqualToString:h]) {
+        return YES;
+    }
+    if ([t containsString:h]) {
+        return YES;
+    }
+    // 「github」对应「github.com」
+    if ([h hasPrefix:t] && h.length > t.length && [h characterAtIndex:t.length] == '.') {
+        return YES;
+    }
+    return NO;
+}
+
 static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) {
     if (shortcut == nil || shortcut.isFolder || shortcut.iconURLString.length > 0) {
         return;
@@ -554,6 +587,68 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     [self applyTitleColor:[[BrowserWallpaperStore sharedStore] shortcutTitleColor]];
 }
 
+- (BOOL)isTitleLabelTruncated {
+    NSString *text = self.titleLabel.stringValue;
+    if (text.length == 0 || self.titleLabel.hidden) {
+        return NO;
+    }
+    NSFont *font = self.titleLabel.font ?: [NSFont systemFontOfSize:13];
+    CGFloat textWidth = [text sizeWithAttributes:@{ NSFontAttributeName: font }].width;
+    // 标题相对 cell 左右各外扩 6pt（见约束），未 layout 时用估算宽度。
+    CGFloat available = NSWidth(self.titleLabel.bounds);
+    if (available < 1.0) {
+        available = [BrowserLaunchpadAppearance cellWidthForIconSize:self.iconSize] + 12.0;
+    }
+    return textWidth > available + 0.5;
+}
+
+/// 悬停 tip：仅「添加」或标题截断时出现；无障碍标签始终给完整信息。
+- (void)refreshHoverToolTip {
+    NSString *tip = nil;
+    NSString *accessibility = nil;
+
+    if (self.addCell) {
+        tip = @"添加快捷方式";
+        accessibility = tip;
+    } else if (self.shortcut != nil) {
+        NSString *title = self.shortcut.title ?: @"";
+        if (self.shortcut.isFolder) {
+            NSUInteger count = self.folderChildren.count;
+            accessibility = (count > 0)
+                ? [NSString stringWithFormat:@"%@，%lu 个快捷方式", title, (unsigned long)count]
+                : title;
+            if ([self isTitleLabelTruncated]) {
+                tip = accessibility;
+            }
+        } else {
+            NSString *host = BrowserShortcutDisplayHost(self.shortcut);
+            accessibility = (host.length > 0)
+                ? [NSString stringWithFormat:@"%@，%@", title, host]
+                : title;
+            if ([self isTitleLabelTruncated]) {
+                BOOL appendHost = host.length > 0 && !BrowserShortcutTitleRepresentsHost(title, host);
+                tip = appendHost
+                    ? [NSString stringWithFormat:@"%@ — %@", title, host]
+                    : title;
+            }
+        }
+    }
+
+    if (tip.length == 0) {
+        if (self.toolTip != nil) {
+            self.toolTip = nil;
+        }
+    } else if (![tip isEqualToString:self.toolTip]) {
+        self.toolTip = tip;
+    }
+    self.accessibilityLabel = accessibility;
+}
+
+- (void)layout {
+    [super layout];
+    [self refreshHoverToolTip];
+}
+
 - (void)applyIconSize:(CGFloat)iconSize {
     if (fabs(self.iconSize - iconSize) < 0.5) {
         return;
@@ -588,6 +683,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
         [tile applyCornerRadiusForParentIconSize:iconSize];
     }
     [self setNeedsLayout:YES];
+    [self refreshHoverToolTip];
 }
 
 - (void)updateTrackingAreas {
@@ -681,6 +777,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
         self.folderGridView.hidden = YES;
         [self loadIconForShortcut:shortcut];
     }
+    [self refreshHoverToolTip];
 }
 
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut {
@@ -717,6 +814,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     self.letterLabel.textColor = [NSColor secondaryLabelColor];
     [self refreshTitleColorFromWallpaper];
     [self updateIconFillColor:BrowserShortcutAddCellPlateColor(self.effectiveAppearance)];
+    [self refreshHoverToolTip];
 }
 
 - (void)viewDidChangeEffectiveAppearance {
