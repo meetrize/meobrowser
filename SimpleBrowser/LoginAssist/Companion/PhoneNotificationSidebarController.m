@@ -595,6 +595,7 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
 
 - (NSMenu *)buildContextMenu {
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"通知"];
+    [menu addItemWithTitle:@"复制标题" action:@selector(copyTitleClicked:) keyEquivalent:@""];
     [menu addItemWithTitle:@"复制正文" action:@selector(copyBodyClicked:) keyEquivalent:@""];
     [menu addItemWithTitle:@"复制验证码" action:@selector(copyOTPClicked:) keyEquivalent:@""];
     [menu addItem:[NSMenuItem separatorItem]];
@@ -1420,6 +1421,14 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     [self copyBodyClicked:nil];
 }
 
+- (void)copyTitleClicked:(id)sender {
+    (void)sender;
+    PhoneNotificationItem *item = [self clickedOrSelectedItem];
+    if (!item || item.title.length == 0) return;
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:item.title forType:NSPasteboardTypeString];
+}
+
 - (void)copyBodyClicked:(id)sender {
     (void)sender;
     PhoneNotificationItem *item = [self clickedOrSelectedItem];
@@ -1641,6 +1650,9 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     }
     if (action == @selector(muteAppClicked:)) {
         return item.packageName.length > 0 && ![item.packageName isEqualToString:@"otp"];
+    }
+    if (action == @selector(copyTitleClicked:)) {
+        return item.title.length > 0;
     }
     if (action == @selector(copyBodyClicked:) ||
         action == @selector(togglePinClicked:) ||
