@@ -1,7 +1,7 @@
 # 侧栏微信快捷回复（WR）可行性评测与方案
 
 > 状态：**WR-0 + WR-1 已实现** · 日期：2026-07-22  
-> 关联：[companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md) · [companion-protocol.md](companion-protocol.md) · [companion-notification-mirror-design.md](companion-notification-mirror-design.md)
+> 关联：[companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md) · [companion-protocol.md](companion-protocol.md) · [companion-notification-mirror-design.md](companion-notification-mirror-design.md) · [companion-wechat-chat-window-design.md](companion-wechat-chat-window-design.md)（会话窗 / 全历史，待做）
 
 ## 1. 目标
 

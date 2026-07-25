@@ -1,6 +1,7 @@
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneAppIconCache.h"
+#import "PhoneChatStore.h"
 #import <os/log.h>
 
 NSNotificationName const PhoneNotificationInboxDidChangeNotification = @"PhoneNotificationInboxDidChangeNotification";
@@ -141,6 +142,17 @@ static const NSTimeInterval kOTPTimeBucketSeconds = 120.0;
                     (unsigned long)title.length,
                     (unsigned long)body.length,
                     (unsigned long)self.items.count);
+
+        // WH-0：微信入站同步追加到会话库（正文有变化才追加）
+        if ([packageName isEqualToString:PhoneChatStoreWeChatPackageName] && title.length > 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[PhoneChatStore sharedStore] appendInboundIfNeededForPackageName:packageName
+                                                                            title:title
+                                                                             body:body
+                                                                   notificationID:itemID
+                                                                       postTimeMs:postTimeMs];
+            });
+        }
     });
     if (changed) {
         [self postDidChange];

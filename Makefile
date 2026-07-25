@@ -79,6 +79,9 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationItem.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationInboxStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationSidebarController.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneChatModels.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneChatStore.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneChatWindowController.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneAppIconCache.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/PhoneNotificationPresenter.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CallAlertSettings.m \
