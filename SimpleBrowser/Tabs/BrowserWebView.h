@@ -27,6 +27,21 @@ NS_ASSUME_NONNULL_BEGIN
 /// 若正在处理右键「新窗口打开」，取出 URL 并清除标记；否则返回 nil。
 - (nullable NSURL *)consumePendingContextMenuOpenInNewWindowURL:(NSURL *)candidateURL;
 
+/// 系统 HTTP 代理下，WKWebView 可能把 URL fragment 以 %23 打进请求路径导致 404。
+/// 对 http: 主文档导航应剥离 fragment，经查询参数在 document-start 写回 hash。
++ (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller;
++ (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView;
+/// 同文档改 hash：replaceState + hashchange，避免 http+# 经代理发网。
++ (void)applySameDocumentFragment:(nullable NSString *)fragment inWebView:(WKWebView *)webView;
++ (BOOL)shouldStripFragmentForNetworkLoadOfURL:(nullable NSURL *)url;
++ (BOOL)URL:(nullable NSURL *)url isSameDocumentAsURL:(nullable NSURL *)otherURL;
+/// 将 path 内误编码的 %23 还原为 fragment；若无需处理则返回原 URL。
++ (NSURL *)URLByNormalizingEmbeddedFragment:(NSURL *)url;
+/// 生成可供网络加载的 URL（去掉 fragment，必要时带上恢复用查询参数）。
++ (nullable NSURL *)networkLoadURLByStrippingFragment:(NSURL *)url;
+/// 地址栏 / 会话用：去掉内部 `__meo_hf`，还原为用户可见的 #hash URL。
++ (nullable NSURL *)publicURLFromInternalURL:(nullable NSURL *)url;
+
 @end
 
 NS_ASSUME_NONNULL_END

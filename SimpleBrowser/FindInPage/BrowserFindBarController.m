@@ -84,7 +84,7 @@ static const NSUInteger kSelectionFillMaxLength = 200;
         return NO;
     }
     if (tab.webView == nil) {
-        [tab wakeFromHibernationIfNeeded];
+        [self.windowController refreshTabsUI];
     }
     return tab.webView != nil;
 }

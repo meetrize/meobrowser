@@ -10,6 +10,8 @@
 @property (nonatomic, assign) BOOL hasPendingMainFrameNavigation;
 @property (nonatomic, strong) NSMutableSet<WKNavigation *> *mainFrameNavigations;
 @property (nonatomic, assign, readwrite) NSInteger titleUpdateGeneration;
+/// 已创建 WebView、待 navigationDelegate 挂上后再加载 restorableURL。
+@property (nonatomic, assign) BOOL pendingRestorableLoad;
 @end
 
 @implementation BrowserTab
@@ -33,11 +35,13 @@
         return nil;
     }
     NSURL *liveURL = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
+    liveURL = [BrowserWebView publicURLFromInternalURL:liveURL];
     if ([BrowsingPreferences isPersistableURL:liveURL]) {
         return liveURL;
     }
-    if ([BrowsingPreferences isPersistableURL:self.restorableURL]) {
-        return self.restorableURL;
+    NSURL *restored = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
+    if ([BrowsingPreferences isPersistableURL:restored]) {
+        return restored;
     }
     return nil;
 }
@@ -88,6 +92,7 @@
         return;
     }
     NSURL *url = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
+    url = [BrowserWebView publicURLFromInternalURL:url];
     if ([BrowsingPreferences isPersistableURL:url]) {
         self.restorableURL = url;
         if (self.title.length == 0 || [self.title isEqualToString:@"新标签页"]) {
@@ -108,12 +113,27 @@
     if (self.webView != nil) {
         return;
     }
-    NSURL *url = self.restorableURL;
+    NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     if (![BrowsingPreferences isPersistableURL:url]) {
         [self loadNewTabPage];
         return;
     }
+    self.restorableURL = url;
     [self ensureWebView];
+    // 不在这里 loadRequest：须等窗口把 navigationDelegate 挂上，否则 #hash 恢复会未经拦截直接发网 → 代理下 404。
+    self.pendingRestorableLoad = YES;
+}
+
+- (void)loadPendingRestorableURLIfNeeded {
+    if (!self.pendingRestorableLoad || self.webView == nil) {
+        return;
+    }
+    self.pendingRestorableLoad = NO;
+    NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
+    if (![BrowsingPreferences isPersistableURL:url]) {
+        return;
+    }
+    self.restorableURL = url;
     [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 
@@ -122,15 +142,23 @@
     self.title = @"新标签页";
     self.addressBarDraft = nil;
     self.restorableURL = nil;
+    self.pendingRestorableLoad = NO;
     [self discardWebView];
 }
 
 - (void)loadURL:(NSURL *)url {
+    url = [BrowserWebView publicURLFromInternalURL:url] ?: url;
     self.isNewTabPage = NO;
     self.addressBarDraft = nil;
     self.restorableURL = url;
     [self ensureWebView];
-    [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+    // 尚无 navigationDelegate 时只记 pending，等窗口 attach 后再加载（避免 #hash 恢复竞态）。
+    if (self.webView.navigationDelegate == nil) {
+        self.pendingRestorableLoad = YES;
+    } else {
+        self.pendingRestorableLoad = NO;
+        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+    }
 }
 
 - (NSString *)displayTitle {

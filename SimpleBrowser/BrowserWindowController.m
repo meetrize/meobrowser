@@ -212,6 +212,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     if (@available(macOS 12.3, *)) {
         configuration.preferences.elementFullscreenEnabled = YES;
     }
+    // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
+    [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
@@ -1307,8 +1309,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     if (selectedTab != nil && !selectedTab.isNewTabPage) {
+        // 先创建 WebView → 挂 navigationDelegate → 再 load。
+        // 若先 load，document-start 写回 #hash 时无 delegate，代理下会把 # 编成 %23 → 404。
         [selectedTab wakeFromHibernationIfNeeded];
         [self attachWebViewForTab:selectedTab];
+        [selectedTab loadPendingRestorableURLIfNeeded];
         if (selectedTab.webView != nil) {
             selectedTab.webView.hidden = NO;
         }
@@ -1454,6 +1459,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     if (webView.isLoading || tab.isLoading) {
+        // stop() 后 isLoading 已为 NO，但 tab 仍可能标记加载中。
+        if (tab.isLoading && !webView.isLoading) {
+            [self syncFromWebView:webView];
+            return;
+        }
         [self.loadingProgressView setProgress:webView.estimatedProgress animated:NO];
         return;
     }
@@ -1496,6 +1506,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     double progress = webView.estimatedProgress;
+    // hash 恢复后 stop() 可能不走 didFinish；进度到 1 或已非 loading 时收尾 UI。
+    if (tab.isLoading && (!webView.isLoading || progress >= 1.0)) {
+        [self syncFromWebView:webView];
+        return;
+    }
     if (webView.isLoading || tab.isLoading || (progress > 0.0 && progress < 1.0)) {
         [self.loadingProgressView setProgress:progress animated:YES];
     } else if (progress >= 1.0) {
@@ -1921,7 +1936,6 @@ didRequestTransferTabID:(NSUUID *)tabID
     (void)sender;
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab.isHibernated) {
-        [tab wakeFromHibernationIfNeeded];
         [self refreshTabsUI];
         return;
     }
@@ -2559,7 +2573,29 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         return;
     }
 
-    if (navigationAction.targetFrame.isMainFrame) {
+    // http: + fragment：经系统代理时 WebKit 可能把 # 编成 %23 打进路径 → 站点 404。
+    // 同文档仅改 hash：取消联网导航，改用 replaceState；跨文档则剥离后加载。
+    NSURL *requestURL = [BrowserWebView URLByNormalizingEmbeddedFragment:navigationAction.request.URL];
+    BOOL isMainFrame = navigationAction.targetFrame.isMainFrame
+        || (navigationAction.targetFrame == nil && navigationAction.sourceFrame == nil);
+    BOOL sameDocument = [BrowserWebView URL:requestURL isSameDocumentAsURL:webView.URL];
+    if (isMainFrame
+        && [BrowserWebView shouldStripFragmentForNetworkLoadOfURL:requestURL]
+        && [webView isKindOfClass:[BrowserWebView class]]) {
+        if (sameDocument) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [BrowserWebView applySameDocumentFragment:requestURL.fragment inWebView:webView];
+            return;
+        }
+        decisionHandler(WKNavigationActionPolicyCancel);
+        NSMutableURLRequest *retry = [navigationAction.request mutableCopy];
+        retry.URL = requestURL;
+        [webView loadRequest:retry];
+        return;
+    }
+
+    // 同文档 hash 变更不会走 provisional 回调；若仍 notePending 会扰乱 isLoading / didFinish。
+    if (navigationAction.targetFrame.isMainFrame && !sameDocument) {
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         [tab notePendingMainFrameNavigation];
     }
@@ -2627,10 +2663,24 @@ didBecomeDownload:(WKDownload *)download {
     if (![tab isMainFrameNavigation:navigation]) {
         return;
     }
+    [BrowserWebView cleanupHashRestoreQueryInWebView:webView];
     [self.findBarController noteNavigationCommittedInWebView:webView];
     // URL 在 commit 时已可用；尽早刷新星标，避免等 didFinish。
     if (webView == self.webView) {
         if (tab.addressBarDraft == nil) {
+            // cleanup 是异步 JS；稍后用对外 URL（#hash）刷新地址栏，避免残留 __meo_hf。
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (!strongSelf || strongSelf.webView != webView) {
+                    return;
+                }
+                BrowserTab *current = [strongSelf.tabController tabForWebView:webView];
+                if (current.addressBarDraft == nil) {
+                    [strongSelf applyAddressBarStringForTab:current];
+                }
+            });
             [self applyAddressBarStringForTab:tab];
         }
         self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
@@ -2639,6 +2689,31 @@ didBecomeDownload:(WKDownload *)download {
         [self updateBookmarkButtonState];
         [self updateConnectionSecurityStateForTab:tab webView:webView];
         [self updateSecurityBadgeVisibility];
+    }
+
+    // hash 恢复脚本里的 window.stop() 可能让 isLoading 变 NO 却不回调 didFinish；
+    // 轮询几次，避免标签/进度条一直转圈。
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    for (NSInteger i = 1; i <= 8; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 200 * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            WKWebView *strongWebView = weakWebView;
+            if (!strongSelf || !strongWebView) {
+                return;
+            }
+            BrowserTab *current = [strongSelf.tabController tabForWebView:strongWebView];
+            if (!current || !current.isLoading) {
+                return;
+            }
+            if (!strongWebView.isLoading || strongWebView.estimatedProgress >= 1.0) {
+                if ([current isMainFrameNavigation:navigation]) {
+                    [current endMainFrameNavigation:navigation];
+                }
+                [strongSelf syncFromWebView:strongWebView];
+            }
+        });
     }
 }
 

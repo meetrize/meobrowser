@@ -41,8 +41,10 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)prepareForClose;
 /// 销毁 WebView，保留 restorableURL 与标题，便于再次选中时恢复。
 - (void)hibernate;
-/// 若已休眠则重建 WebView 并加载 restorableURL。
+/// 若已休眠则仅重建 WebView，不发起导航（须先挂上 navigationDelegate，再调 loadPendingRestorableURLIfNeeded）。
 - (void)wakeFromHibernationIfNeeded;
+/// 在 navigationDelegate 已设置后加载 restorableURL（会话恢复 / 唤醒用）。
+- (void)loadPendingRestorableURLIfNeeded;
 /// 当前页面 URL，或休眠占位 URL。
 - (nullable NSURL *)currentOrRestorableURL;
 @property (nonatomic, readonly, getter=isHibernated) BOOL hibernated;

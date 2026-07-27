@@ -1,6 +1,9 @@
 #import "BrowserWebView.h"
 #import "BrowsingPreferences.h"
 
+// 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
+static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
+
 @interface BrowserWebView ()
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuDownload;
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuOpenInNewWindow;
@@ -10,6 +13,247 @@
 @end
 
 @implementation BrowserWebView
+
++ (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller {
+    if (controller == nil) {
+        return;
+    }
+    // document-start：在页面脚本读 location 前，用 replaceState 写回 #hash（勿用 location.hash=
+    // 或加载后再改 hash——代理下会变成带 # 的真实导航 → 404）。
+    // replaceState 含 # 时 WebKit 可能一直 isLoading；DOMContentLoaded 后稍延迟 window.stop()
+    // 结束幽灵加载，又给 SPA 留出发起接口请求的时间（过早 stop 会出现「连接服务器超时」）。
+    NSString *restoreJS =
+        @"(function(){"
+        @"try{"
+        @"var qs=new URLSearchParams(location.search);"
+        @"if(!qs.has('__meo_hf'))return;"
+        @"var h=qs.get('__meo_hf')||'';"
+        @"qs.delete('__meo_hf');"
+        @"var q=qs.toString();"
+        @"history.replaceState(null,'',location.pathname+(q?('?'+q):'')+'#'+h);"
+        @"document.addEventListener('DOMContentLoaded',function(){"
+        @"setTimeout(function(){try{window.stop();}catch(e){}},150);"
+        @"});"
+        @"}catch(e){}"
+        @"})();";
+    [controller addUserScript:[[WKUserScript alloc] initWithSource:restoreJS
+                                                     injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                  forMainFrameOnly:YES]];
+}
+
+/// 页面 commit 后清掉残留 __meo_hf；写回 hash 只用 replaceState，避免触发联网导航。
++ (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView {
+    if (webView == nil) {
+        return;
+    }
+    NSString *js =
+        @"(function(){"
+        @"try{"
+        @"var qs=new URLSearchParams(location.search);"
+        @"if(!qs.has('__meo_hf'))return;"
+        @"var h=qs.get('__meo_hf')||'';"
+        @"qs.delete('__meo_hf');"
+        @"var q=qs.toString();"
+        @"var path=location.pathname+(q?('?'+q):'');"
+        @"var hash=(location.hash&&location.hash.length>1)?location.hash:('#'+h);"
+        @"history.replaceState(null,'',path+hash);"
+        @"setTimeout(function(){try{window.stop();}catch(e){}},150);"
+        @"}catch(e){}"
+        @"})();";
+    [webView evaluateJavaScript:js completionHandler:nil];
+}
+
+/// 同文档仅改 hash：用 replaceState，避免 http+# 经代理发网 404。
++ (void)applySameDocumentFragment:(NSString *)fragment inWebView:(WKWebView *)webView {
+    if (webView == nil) {
+        return;
+    }
+    NSString *frag = fragment ?: @"";
+    NSString *escaped = [[[frag stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+        stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]
+        stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){try{"
+        @"var h='%@';"
+        @"var want=h.length?('#'+h):'';"
+        @"if(location.hash===want)return;"
+        @"history.replaceState(null,'',location.pathname+location.search+want);"
+        @"try{window.dispatchEvent(new HashChangeEvent('hashchange'));}catch(e){"
+        @"try{window.dispatchEvent(new Event('hashchange'));}catch(e2){}"
+        @"}"
+        @"}catch(e){}})();",
+        escaped];
+    [webView evaluateJavaScript:js completionHandler:nil];
+}
+
++ (NSURL *)URLByNormalizingEmbeddedFragment:(NSURL *)url {
+    if (url == nil) {
+        return url;
+    }
+    if (url.fragment.length > 0) {
+        return url;
+    }
+    NSString *absolute = url.absoluteString;
+    NSRange encodedHash = [absolute rangeOfString:@"%23" options:NSCaseInsensitiveSearch];
+    if (encodedHash.location == NSNotFound) {
+        return url;
+    }
+    NSString *before = [absolute substringToIndex:encodedHash.location];
+    NSString *after = [absolute substringFromIndex:NSMaxRange(encodedHash)];
+    NSURL *base = [NSURL URLWithString:before];
+    if (base == nil) {
+        return url;
+    }
+    NSString *fragment = [after stringByRemovingPercentEncoding] ?: after;
+    NSURLComponents *components = [NSURLComponents componentsWithURL:base resolvingAgainstBaseURL:NO];
+    components.fragment = fragment;
+    return components.URL ?: url;
+}
+
++ (BOOL)shouldStripFragmentForNetworkLoadOfURL:(NSURL *)url {
+    url = [self URLByNormalizingEmbeddedFragment:url];
+    if (url.fragment.length == 0) {
+        return NO;
+    }
+    // HTTPS 走 CONNECT，未见此问题；仅 http: 绝对形式代理请求会把 # 编成 %23。
+    return [url.scheme caseInsensitiveCompare:@"http"] == NSOrderedSame;
+}
+
++ (BOOL)URL:(NSURL *)url isSameDocumentAsURL:(NSURL *)otherURL {
+    if (url == nil || otherURL == nil) {
+        return NO;
+    }
+    // about:blank 尚未落到真实文档，不能当成同文档。
+    NSString *otherAbs = otherURL.absoluteString.lowercaseString;
+    if ([otherAbs isEqualToString:@"about:blank"] || [otherAbs hasPrefix:@"about:blank?"]) {
+        return NO;
+    }
+    url = [self URLByNormalizingEmbeddedFragment:url];
+    otherURL = [self URLByNormalizingEmbeddedFragment:otherURL];
+    NSURLComponents *a = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSURLComponents *b = [NSURLComponents componentsWithURL:otherURL resolvingAgainstBaseURL:NO];
+    if (a == nil || b == nil) {
+        return NO;
+    }
+    a.fragment = nil;
+    b.fragment = nil;
+    [self meo_removeHashRestoreQueryItemFromComponents:a];
+    [self meo_removeHashRestoreQueryItemFromComponents:b];
+    NSString *as = a.URL.absoluteString;
+    NSString *bs = b.URL.absoluteString;
+    return as.length > 0 && [as isEqualToString:bs];
+}
+
++ (void)meo_removeHashRestoreQueryItemFromComponents:(NSURLComponents *)components {
+    NSArray<NSURLQueryItem *> *items = components.queryItems;
+    if (items.count == 0) {
+        return;
+    }
+    NSMutableArray<NSURLQueryItem *> *filtered = [NSMutableArray arrayWithCapacity:items.count];
+    for (NSURLQueryItem *item in items) {
+        if ([item.name isEqualToString:kMeoHashRestoreQueryItem]) {
+            continue;
+        }
+        [filtered addObject:item];
+    }
+    components.queryItems = filtered.count > 0 ? filtered : nil;
+}
+
++ (NSURL *)networkLoadURLByStrippingFragment:(NSURL *)url {
+    url = [self URLByNormalizingEmbeddedFragment:url];
+    NSString *fragment = url.fragment;
+    if (fragment.length == 0) {
+        return url;
+    }
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (components == nil) {
+        return url;
+    }
+    components.fragment = nil;
+    [self meo_removeHashRestoreQueryItemFromComponents:components];
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
+    if (components.queryItems.count > 0) {
+        [items addObjectsFromArray:components.queryItems];
+    }
+    [items addObject:[NSURLQueryItem queryItemWithName:kMeoHashRestoreQueryItem value:fragment]];
+    components.queryItems = items;
+    return components.URL ?: url;
+}
+
++ (NSURL *)publicURLFromInternalURL:(NSURL *)url {
+    if (url == nil) {
+        return nil;
+    }
+    url = [self URLByNormalizingEmbeddedFragment:url];
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (components == nil) {
+        return url;
+    }
+
+    NSString *restoreFragment = nil;
+    NSMutableArray<NSURLQueryItem *> *filtered = [NSMutableArray array];
+    BOOL sawRestoreItem = NO;
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        if ([item.name isEqualToString:kMeoHashRestoreQueryItem]) {
+            restoreFragment = item.value;
+            sawRestoreItem = YES;
+            continue;
+        }
+        [filtered addObject:item];
+    }
+    if (!sawRestoreItem) {
+        return url;
+    }
+
+    components.queryItems = filtered.count > 0 ? filtered : nil;
+    if (components.fragment.length == 0 && restoreFragment.length > 0) {
+        components.fragment = restoreFragment;
+    }
+    return components.URL ?: url;
+}
+
+- (nullable WKNavigation *)loadRequest:(NSURLRequest *)request {
+    NSURL *url = request.URL;
+    // 会话里若仍残留 __meo_hf，先还原成 #hash，再走统一剥离逻辑。
+    NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:url];
+    if (publicURL != nil && ![publicURL.absoluteString isEqualToString:url.absoluteString]) {
+        NSMutableURLRequest *normalized = [request mutableCopy];
+        normalized.URL = publicURL;
+        request = normalized;
+        url = publicURL;
+    }
+    if (![BrowserWebView shouldStripFragmentForNetworkLoadOfURL:url]) {
+        return [super loadRequest:request];
+    }
+
+    NSURL *stripped = [BrowserWebView networkLoadURLByStrippingFragment:url];
+    if (stripped == nil || [stripped.absoluteString isEqualToString:url.absoluteString]) {
+        return [super loadRequest:request];
+    }
+
+    NSMutableURLRequest *mutableRequest = [request mutableCopy];
+    mutableRequest.URL = stripped;
+    return [super loadRequest:mutableRequest];
+}
+
+- (nullable WKNavigation *)reload {
+    // WKWebView.reload 会按当前 URL（含 #hash）发网，代理下易把 # 编成 %23 → 404。
+    NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:self.URL] ?: self.URL;
+    if ([BrowserWebView shouldStripFragmentForNetworkLoadOfURL:publicURL]) {
+        return [self loadRequest:[NSURLRequest requestWithURL:publicURL]];
+    }
+    return [super reload];
+}
+
+- (nullable WKNavigation *)reloadFromOrigin {
+    NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:self.URL] ?: self.URL;
+    if ([BrowserWebView shouldStripFragmentForNetworkLoadOfURL:publicURL]) {
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:publicURL];
+        request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        return [self loadRequest:request];
+    }
+    return [super reloadFromOrigin];
+}
 
 - (void)willOpenMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
     [super willOpenMenu:menu withEvent:event];

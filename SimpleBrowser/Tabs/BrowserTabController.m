@@ -85,7 +85,11 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 - (BrowserTab *)addTabWithURL:(NSURL *)url {
     BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
-    [tab loadURL:url];
+    url = [BrowserWebView publicURLFromInternalURL:url] ?: url;
+    // 只占位，不在此处 load：等 refreshTabsUI 挂上 navigationDelegate 后再加载。
+    tab.isNewTabPage = NO;
+    tab.restorableURL = url;
+    tab.title = url.host.length > 0 ? url.host : (url.absoluteString.length > 0 ? url.absoluteString : @"新标签页");
     [self.mutableTabs addObject:tab];
     [self selectTabInternal:tab notify:YES];
     return tab;
@@ -209,7 +213,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     }
     [self.recentlyClosedEntries removeLastObject];
 
-    BrowserTab *tab = [self tabFromSessionEntry:entry.sessionEntry materialize:YES];
+    BrowserTab *tab = [self tabFromSessionEntry:entry.sessionEntry materialize:NO];
     tab.pinned = entry.wasPinned;
 
     NSUInteger insertIndex = MIN(entry.insertionIndex, self.mutableTabs.count);
@@ -229,7 +233,10 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         return;
     }
     if (self.selectedTab == tab) {
-        [tab wakeFromHibernationIfNeeded];
+        // 已选中但可能仍休眠：走 refreshTabsUI，保证先 attach 再 load。
+        if (tab.isHibernated) {
+            [self notifyChange];
+        }
         return;
     }
     [self selectTabInternal:tab notify:YES];
@@ -350,11 +357,11 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 - (void)selectTabInternal:(BrowserTab *)tab notify:(BOOL)notify {
     self.selectedTab = tab;
     tab.lastActiveTimestamp = [NSDate date].timeIntervalSince1970;
-    [tab wakeFromHibernationIfNeeded];
-    [self enforceLiveWebViewBudget];
+    // 不在此处 wake+load：由 refreshTabsUI 先 attach navigationDelegate 再加载。
     if (notify) {
         [self notifyChange];
     }
+    [self enforceLiveWebViewBudget];
 }
 
 - (void)removeTabsAtIndexes:(NSIndexSet *)indexes {

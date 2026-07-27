@@ -29,6 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSDictionary *)sessionDictionary;
 /// 用会话字典恢复标签与可选窗口 frame；session 为空或无效时打开 NTP。
 - (void)applySessionDictionary:(nullable NSDictionary *)session;
+- (void)refreshTabsUI;
 - (void)scheduleTrafficLightPositioning;
 - (void)openURLsFromExternalSource:(NSArray<NSURL *> *)urls;
 - (void)showLoginAssistSettings:(nullable id)sender;
