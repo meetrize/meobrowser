@@ -45,36 +45,52 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     return YES;
 }
 
+/// 窗口开启 movableByWindowBackground 时，空视图默认会把 mouseDown 当成拖窗。
+- (BOOL)mouseDownCanMoveWindow {
+    return NO;
+}
+
 - (void)resetCursorRects {
     [self addCursorRect:self.bounds cursor:[NSCursor resizeLeftRightCursor]];
 }
 
-- (void)mouseDown:(NSEvent *)event {
-    self.dragging = YES;
+- (CGFloat)screenXFromEvent:(NSEvent *)event {
     NSPoint inWindow = event.locationInWindow;
-    self.dragStartScreenX = self.window ? [self.window convertPointToScreen:inWindow].x : inWindow.x;
+    if (self.window) {
+        return [self.window convertPointToScreen:inWindow].x;
+    }
+    return inWindow.x;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+    self.dragging = YES;
+    self.dragStartScreenX = [self screenXFromEvent:event];
     if (self.onDragBegan) {
         self.onDragBegan();
     }
     [[NSCursor resizeLeftRightCursor] push];
-}
 
-- (void)mouseDragged:(NSEvent *)event {
-    if (!self.dragging) {
-        return;
+    // 本地跟踪循环：吃掉 drag/up，避免事件落到窗口拖移路径。
+    while (self.dragging) {
+        NSEvent *next = [window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
+                                            untilDate:[NSDate distantFuture]
+                                               inMode:NSEventTrackingRunLoopMode
+                                              dequeue:YES];
+        if (!next) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseUp) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseDragged && self.onDragToOffset) {
+            self.onDragToOffset([self screenXFromEvent:next] - self.dragStartScreenX);
+        }
     }
-    NSPoint inWindow = event.locationInWindow;
-    CGFloat nowX = self.window ? [self.window convertPointToScreen:inWindow].x : inWindow.x;
-    if (self.onDragToOffset) {
-        self.onDragToOffset(nowX - self.dragStartScreenX);
-    }
-}
 
-- (void)mouseUp:(NSEvent *)event {
-    (void)event;
-    if (!self.dragging) {
-        return;
-    }
     self.dragging = NO;
     [NSCursor pop];
     if (self.onDragEnded) {

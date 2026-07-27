@@ -49,42 +49,13 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     return YES;
 }
 
+/// 窗口开启 movableByWindowBackground 时，空视图默认会把 mouseDown 当成拖窗。
+- (BOOL)mouseDownCanMoveWindow {
+    return NO;
+}
+
 - (void)resetCursorRects {
     [self addCursorRect:self.bounds cursor:[NSCursor resizeLeftRightCursor]];
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    self.dragging = YES;
-    self.dragStartScreenX = [self screenXFromEvent:event];
-    if (self.onDragBegan) {
-        self.onDragBegan();
-    }
-    // 拖拽期间锁住指针为左右拉伸光标
-    [[NSCursor resizeLeftRightCursor] push];
-}
-
-- (void)mouseDragged:(NSEvent *)event {
-    if (!self.dragging) {
-        return;
-    }
-    CGFloat nowX = [self screenXFromEvent:event];
-    // 正值 = 鼠标右移；左侧边缘右移 → 侧栏变窄
-    CGFloat deltaFromStart = nowX - self.dragStartScreenX;
-    if (self.onDragToOffset) {
-        self.onDragToOffset(deltaFromStart);
-    }
-}
-
-- (void)mouseUp:(NSEvent *)event {
-    (void)event;
-    if (!self.dragging) {
-        return;
-    }
-    self.dragging = NO;
-    [NSCursor pop];
-    if (self.onDragEnded) {
-        self.onDragEnded();
-    }
 }
 
 - (CGFloat)screenXFromEvent:(NSEvent *)event {
@@ -93,6 +64,42 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         return [self.window convertPointToScreen:inWindow].x;
     }
     return inWindow.x;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+    self.dragging = YES;
+    self.dragStartScreenX = [self screenXFromEvent:event];
+    if (self.onDragBegan) {
+        self.onDragBegan();
+    }
+    [[NSCursor resizeLeftRightCursor] push];
+
+    while (self.dragging) {
+        NSEvent *next = [window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
+                                            untilDate:[NSDate distantFuture]
+                                               inMode:NSEventTrackingRunLoopMode
+                                              dequeue:YES];
+        if (!next) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseUp) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseDragged && self.onDragToOffset) {
+            // 正值 = 鼠标右移；左侧边缘右移 → 侧栏变窄
+            self.onDragToOffset([self screenXFromEvent:next] - self.dragStartScreenX);
+        }
+    }
+
+    self.dragging = NO;
+    [NSCursor pop];
+    if (self.onDragEnded) {
+        self.onDragEnded();
+    }
 }
 
 @end
@@ -410,6 +417,10 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     handle.onDragEnded = ^{
         weakSelf.isResizingWidth = NO;
         [weakSelf persistWidth];
+        if (weakSelf.rows.count > 0) {
+            NSIndexSet *all = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, weakSelf.rows.count)];
+            [weakSelf.tableView noteHeightOfRowsWithIndexesChanged:all];
+        }
     };
 
     NSView *edgeSeparator = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -691,7 +702,8 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
         self.widthConstraint.constant = next;
         [self.view.superview layoutSubtreeIfNeeded];
     } completionHandler:nil];
-    if (self.rows.count > 0) {
+    // 拖宽过程中不要反复重算行高，避免卡顿
+    if (!self.isResizingWidth && self.rows.count > 0) {
         NSIndexSet *all = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.rows.count)];
         [self.tableView noteHeightOfRowsWithIndexesChanged:all];
     }
