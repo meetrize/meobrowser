@@ -62,10 +62,27 @@
             loginAssist.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
             loginAssist.target = nil;
 
+            NSMenuItem *fillMemo = [fileMenu addItemWithTitle:@"填入站点备忘"
+                                                       action:@selector(fillSiteMemo:)
+                                                keyEquivalent:@"m"];
+            fillMemo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            fillMemo.target = nil;
+
+            NSMenuItem *assistSidebar = [fileMenu addItemWithTitle:@"助手侧栏"
+                                                            action:@selector(toggleAssistSidebar:)
+                                                     keyEquivalent:@"a"];
+            assistSidebar.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            assistSidebar.target = nil;
+
             NSMenuItem *loginSettings = [fileMenu addItemWithTitle:@"登录助手…"
                                                             action:@selector(showLoginAssistSettings:)
                                                      keyEquivalent:@""];
             loginSettings.target = nil;
+
+            NSMenuItem *memoSettings = [fileMenu addItemWithTitle:@"站点备忘…"
+                                                           action:@selector(showFormMemoSettings:)
+                                                    keyEquivalent:@""];
+            memoSettings.target = nil;
 
             NSMenuItem *companionSettings = [fileMenu addItemWithTitle:@"互联与配对…"
                                                                 action:@selector(showCompanionLinkSettings:)
@@ -181,6 +198,13 @@
                                               keyEquivalent:@"]"];
             nextTab.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
             nextTab.target = nil;
+
+            [tabMenu addItem:[NSMenuItem separatorItem]];
+
+            NSMenuItem *sendToPhone = [tabMenu addItemWithTitle:@"发送到手机"
+                                                         action:@selector(sendCurrentTabToPhone:)
+                                                  keyEquivalent:@""];
+            sendToPhone.target = nil;
 
             tabMenuItem.submenu = tabMenu;
             NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];

@@ -216,6 +216,22 @@
     [_loginAssistSettingsController.window makeKeyAndOrderFront:nil];
 }
 
+- (void)showFormMemoSettings:(id)sender {
+    (void)sender;
+    BrowserWindowController *keyBrowser = [self keyBrowserWindowController];
+    if (keyBrowser) {
+        [keyBrowser showFormMemoSettings:sender];
+        return;
+    }
+    if (!_loginAssistSettingsController) {
+        _loginAssistSettingsController = [[BrowserLoginAssistSettingsWindowController alloc] init];
+    }
+    [_loginAssistSettingsController showWindow:nil];
+    [_loginAssistSettingsController.window center];
+    [_loginAssistSettingsController.window makeKeyAndOrderFront:nil];
+    [_loginAssistSettingsController revealMemoSection];
+}
+
 - (void)showCompanionLinkSettings:(id)sender {
     (void)sender;
     BrowserWindowController *keyBrowser = [self keyBrowserWindowController];

@@ -164,6 +164,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | **每站点 User CSS/JS** | P3 | 轻量 userscript，改文档站样式、隐藏干扰元素 |
 | **站点登录助手（一键/自动登录）** | P2 | 按站点 Recipe：账密一键、可选短信 OTP / 二维码减负；非完整密码管理器。见 [auto-login-design.md](auto-login-design.md) |
 | **登录表单内联助手** | P2 | 检测登录表单、字段内钥匙入口、系统密码填充、成功后询问保存 Recipe。见 [login-form-inline-design.md](login-form-inline-design.md) |
+| **站点表单备忘（多字段填入）** | P2 | 按 URL 关联常用文本，普通表单一键填入；与登录 Recipe 平行。见 [site-form-memo-design.md](site-form-memo-design.md) |
 | **与终端联动** | P3 | 「在 iTerm 打开当前目录」类集成（偏 niche） |
 
 ### 3.10 质量与可观测 — 贯穿各阶段

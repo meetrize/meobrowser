@@ -14,6 +14,12 @@
 #import "BrowserTransientToast.h"
 #import "OTPInbox.h"
 #import "CompanionChannel.h"
+#import "FormMemo.h"
+#import "FormMemoStore.h"
+#import "FormMemoRunner.h"
+#import "FormMemoInlineDetector.h"
+#import "FormMemoPreferences.h"
+#import "FormMemoPageSaveCoordinator.h"
 #import "SBTextField.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <AppKit/AppKit.h>
@@ -29,6 +35,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
 @interface LoginAssistController ()
 @property (nonatomic, strong) NSArray<LoginRecipe *> *matchedRecipes;
+@property (nonatomic, strong) NSArray<FormMemo *> *matchedMemos;
 @property (nonatomic, assign) BOOL isRunning;
 @property (nonatomic, assign) BOOL hasDetectedLoginForm;
 @property (nonatomic, assign) BOOL detectedHasOTP;
@@ -43,6 +50,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @property (nonatomic, strong, nullable) BrowserLoginAssistSettingsWindowController *settingsController;
 @property (nonatomic, strong) SystemPasswordBridge *passwordBridge;
 @property (nonatomic, strong) SaveRecipePromptCoordinator *savePromptCoordinator;
+@property (nonatomic, strong) FormMemoPageSaveCoordinator *memoSaveCoordinator;
 @property (nonatomic, strong, nullable) NSDictionary *lastIconContext;
 @property (nonatomic, strong, nullable) NSTimer *clipboardPollTimer;
 @property (nonatomic, copy, nullable) NSString *lastSeenPasteboardChangeCount;
@@ -55,15 +63,25 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     if (self) {
         _windowController = windowController;
         _matchedRecipes = @[];
+        _matchedMemos = @[];
         _passwordBridge = [[SystemPasswordBridge alloc] init];
         _savePromptCoordinator = [[SaveRecipePromptCoordinator alloc] initWithWindowController:windowController];
+        _memoSaveCoordinator = [[FormMemoPageSaveCoordinator alloc] initWithWindowController:windowController];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(memosDidChange:)
+                                                     name:FormMemoStoreDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(otpInboxDidReceiveCode:)
                                                      name:OTPInboxDidReceiveCodeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(formMemoPreferencesDidChange:)
+                                                     name:FormMemoPreferencesDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -78,6 +96,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration {
     [LoginElementPicker registerMessageHandlerOnConfiguration:configuration handler:self];
     [LoginFormDetector installOnConfiguration:configuration messageHandler:self];
+    [FormMemoInlineDetector installOnConfiguration:configuration messageHandler:self];
+}
+
+- (void)formMemoPreferencesDidChange:(NSNotification *)notification {
+    (void)notification;
+    // 开关变更对新建标签 / 新导航后的页面生效（与登录内联一致）。
 }
 
 - (void)wireLoginButton:(NSButton *)button {
@@ -95,6 +119,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 }
 
 - (void)recipesDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self updateForURL:self.windowController.webView.URL];
+}
+
+- (void)memosDidChange:(NSNotification *)notification {
     (void)notification;
     [self updateForURL:self.windowController.webView.URL];
 }
@@ -560,16 +589,56 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 - (void)updateForURL:(NSURL *)url {
     if (!url || url.absoluteString.length == 0) {
         self.matchedRecipes = @[];
+        self.matchedMemos = @[];
         self.hasDetectedLoginForm = NO;
     } else if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
         self.matchedRecipes = @[];
+        self.matchedMemos = @[];
         self.hasDetectedLoginForm = NO;
         self.detectedHasOTP = NO;
         self.detectedFormId = nil;
     } else {
         self.matchedRecipes = [[LoginRecipeStore sharedStore] recipesMatchingURL:url];
+        self.matchedMemos = [[FormMemoStore sharedStore] memosMatchingURL:url];
     }
     [self refreshButtonAppearance];
+    [self pushMemoFillTargetsToActiveWebView];
+}
+
+- (void)pushMemoFillTargetsToActiveWebView {
+    WKWebView *webView = self.windowController.webView;
+    if (!webView) {
+        return;
+    }
+    FormMemo *memo = nil;
+    NSURL *url = webView.URL;
+    BOOL hasMemo = NO;
+    if (url && ![BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
+        memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:url];
+        if (!memo && self.matchedMemos.count > 0) {
+            memo = self.matchedMemos.firstObject;
+        }
+        if (!memo) {
+            NSArray<FormMemo *> *matched = [[FormMemoStore sharedStore] memosMatchingURL:url];
+            memo = matched.firstObject;
+        }
+        hasMemo = (memo != nil) || (self.matchedMemos.count > 0);
+    }
+    NSArray<NSDictionary *> *targets = [FormMemoInlineDetector fillTargetDictionariesFromMemo:memo];
+    if (targets.count > 0) {
+        hasMemo = YES;
+    }
+    NSString *js = [FormMemoInlineDetector javaScriptSettingFillTargets:targets hasMemo:hasMemo];
+    [webView evaluateJavaScript:js completionHandler:nil];
+}
+
+- (void)scheduleMemoFillTargetRetries {
+    __weak typeof(self) weakSelf = self;
+    for (NSNumber *delay in @[ @0.3, @0.8, @1.6, @3.0 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf pushMemoFillTargetsToActiveWebView];
+        });
+    }
 }
 
 - (void)refreshButtonAppearance {
@@ -577,8 +646,9 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     if (!button) {
         return;
     }
-    BOOL hasMatch = self.matchedRecipes.count > 0;
-    BOOL useful = hasMatch || self.hasDetectedLoginForm;
+    BOOL hasRecipe = self.matchedRecipes.count > 0;
+    BOOL hasMemo = self.matchedMemos.count > 0;
+    BOOL useful = hasRecipe || hasMemo || self.hasDetectedLoginForm;
     button.enabled = useful && !self.isRunning;
     if (@available(macOS 10.14, *)) {
         button.contentTintColor = (useful && !self.isRunning)
@@ -586,15 +656,21 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
             : [NSColor tertiaryLabelColor];
     }
     if (self.isRunning) {
-        button.toolTip = @"正在登录…";
-    } else if (hasMatch) {
+        button.toolTip = @"正在执行…";
+    } else if (hasRecipe && hasMemo) {
+        button.toolTip = @"登录助手 / 站点备忘（单击打开菜单；⌘⇧A 助手侧栏）";
+    } else if (hasRecipe) {
         LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
         NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
-        button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L；右键更多）", name ?: @"站点"];
+        button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L；⌘⇧A 侧栏）", name ?: @"站点"];
+    } else if (hasMemo) {
+        FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
+        NSString *name = memo.title.length > 0 ? memo.title : memo.host;
+        button.toolTip = [NSString stringWithFormat:@"填入站点备忘：%@（⌘⇧M；⌘⇧A 侧栏）", name ?: @"站点"];
     } else if (self.hasDetectedLoginForm) {
-        button.toolTip = @"检测到登录表单（单击打开登录助手）";
+        button.toolTip = @"检测到登录表单（⌘⇧A 打开助手侧栏）";
     } else {
-        button.toolTip = @"登录助手";
+        button.toolTip = @"登录助手（⌘⇧A 打开助手侧栏）";
     }
 }
 
@@ -602,6 +678,8 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self updateForURL:url];
     [self scheduleAutoLoginIfNeededForURL:url];
     [self.savePromptCoordinator noteNavigationFinishedInWebView:webView URL:url];
+    // SPA / 晚渲染：多次重试推送填入图标
+    [self scheduleMemoFillTargetRetries];
 }
 
 - (void)scheduleAutoLoginIfNeededForURL:(NSURL *)url {
@@ -668,6 +746,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     }
     if (self.isRunning) {
         [LoginRunner cancelAll];
+        [FormMemoRunner cancelAll];
         [self stopClipboardPolling];
         self.isRunning = NO;
         [self refreshButtonAppearance];
@@ -678,13 +757,51 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     (void)sender;
     [self cancelPendingAutoLogin];
     LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
+    FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
+    if (recipe && memo) {
+        [self presentAssistMenuFromView:self.loginButton context:nil];
+        return;
+    }
     if (recipe) {
         // Recipe 自带 waitOTP 时走完整流程；仅启发式 OTP（无 Recipe 短信步）才 fillOnly。
         BOOL fillOnly = self.detectedHasOTP && ![recipe requiresOTPWait];
         [self runRecipe:recipe fillOnly:fillOnly notifyOTP:fillOnly];
         return;
     }
+    if (memo) {
+        [self runMemo:memo];
+        return;
+    }
     [self presentAssistMenuFromView:self.loginButton context:nil];
+}
+
+- (IBAction)fillSiteMemo:(id)sender {
+    (void)sender;
+    [self cancelPendingAutoLogin];
+    FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
+    if (!memo) {
+        NSWindow *window = self.windowController.window;
+        if (window) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"当前页无站点备忘";
+            alert.informativeText = @"可为该网址配置字段备忘，之后即可一键填入普通表单。";
+            alert.alertStyle = NSAlertStyleInformational;
+            [alert addButtonWithTitle:@"打开站点备忘"];
+            [alert addButtonWithTitle:@"取消"];
+            __weak typeof(self) weakSelf = self;
+            [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
+                if (returnCode == NSAlertFirstButtonReturn) {
+                    [weakSelf presentAssistSidebarRevealingMemoID:nil];
+                }
+            }];
+        }
+        return;
+    }
+    if (self.matchedMemos.count > 1) {
+        [self presentAssistMenuFromView:self.loginButton context:nil];
+        return;
+    }
+    [self runMemo:memo];
 }
 
 - (void)showRecipeMenuFromButton:(NSButton *)button {
@@ -768,6 +885,54 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
     [menu addItem:[NSMenuItem separatorItem]];
 
+    NSArray<FormMemo *> *memos = self.matchedMemos;
+    if (memos.count == 0) {
+        NSMenuItem *emptyMemo = [[NSMenuItem alloc] initWithTitle:@"（无匹配的站点备忘）"
+                                                           action:nil
+                                                    keyEquivalent:@""];
+        emptyMemo.enabled = NO;
+        [menu addItem:emptyMemo];
+    } else if (memos.count == 1) {
+        FormMemo *memo = memos.firstObject;
+        NSString *base = memo.title.length > 0 ? memo.title : memo.host;
+        NSMenuItem *fillMemo = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"填入站点备忘：%@", base]
+                                                          action:@selector(runMemoFromMenu:)
+                                                   keyEquivalent:@""];
+        fillMemo.target = self;
+        fillMemo.representedObject = memo.memoID;
+        [menu addItem:fillMemo];
+    } else {
+        NSMenu *sub = [[NSMenu alloc] initWithTitle:@"填入站点备忘"];
+        for (FormMemo *memo in memos) {
+            NSString *base = memo.title.length > 0 ? memo.title : memo.host;
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:base
+                                                          action:@selector(runMemoFromMenu:)
+                                                   keyEquivalent:@""];
+            item.target = self;
+            item.representedObject = memo.memoID;
+            [sub addItem:item];
+        }
+        NSMenuItem *parent = [[NSMenuItem alloc] initWithTitle:@"填入站点备忘"
+                                                        action:nil
+                                                 keyEquivalent:@""];
+        parent.submenu = sub;
+        [menu addItem:parent];
+    }
+
+    NSMenuItem *manageMemo = [[NSMenuItem alloc] initWithTitle:@"管理站点备忘…"
+                                                        action:@selector(openMemoSidebar:)
+                                                 keyEquivalent:@""];
+    manageMemo.target = self;
+    [menu addItem:manageMemo];
+
+    NSMenuItem *openSidebar = [[NSMenuItem alloc] initWithTitle:@"打开助手侧栏"
+                                                         action:@selector(openAssistSidebar:)
+                                                  keyEquivalent:@""];
+    openSidebar.target = self;
+    [menu addItem:openSidebar];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
     NSMenuItem *save = [[NSMenuItem alloc] initWithTitle:@"将当前输入保存为配置…"
                                                   action:@selector(saveCurrentInputAsRecipe:)
                                            keyEquivalent:@""];
@@ -776,10 +941,16 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [menu addItem:save];
 
     NSMenuItem *manage = [[NSMenuItem alloc] initWithTitle:@"管理登录配置…"
-                                                    action:@selector(openSettings:)
+                                                    action:@selector(openRecipeSidebar:)
                                              keyEquivalent:@""];
     manage.target = self;
     [menu addItem:manage];
+
+    NSMenuItem *advanced = [[NSMenuItem alloc] initWithTitle:@"高级设置…"
+                                                      action:@selector(openSettings:)
+                                               keyEquivalent:@""];
+    advanced.target = self;
+    [menu addItem:advanced];
 
     NSMenuItem *pasteOTP = [[NSMenuItem alloc] initWithTitle:@"粘贴验证码…"
                                                       action:@selector(pasteOTPFromUser)
@@ -863,8 +1034,128 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self presentSettingsEditingRecipeID:nil];
 }
 
+- (void)openMemoSettings:(id)sender {
+    (void)sender;
+    [self presentSettingsEditingMemoID:nil];
+}
+
+- (void)openAssistSidebar:(id)sender {
+    (void)sender;
+    [self presentAssistSidebar];
+}
+
+- (void)openRecipeSidebar:(id)sender {
+    (void)sender;
+    [self presentAssistSidebarRevealingRecipeID:nil];
+}
+
+- (void)openMemoSidebar:(id)sender {
+    (void)sender;
+    [self presentAssistSidebarRevealingMemoID:nil];
+}
+
+- (void)presentAssistSidebar {
+    [self.windowController setAssistSidebarVisible:YES revealingRecipeID:nil memoID:nil];
+}
+
+- (void)presentAssistSidebarRevealingRecipeID:(NSString *)recipeID {
+    if (recipeID.length > 0) {
+        [self.windowController setAssistSidebarVisible:YES revealingRecipeID:recipeID memoID:nil];
+    } else {
+        [self.windowController showLoginAssistSettings:nil];
+    }
+}
+
+- (void)presentAssistSidebarRevealingMemoID:(NSString *)memoID {
+    if (memoID.length > 0) {
+        [self.windowController setAssistSidebarVisible:YES revealingRecipeID:nil memoID:memoID];
+    } else {
+        [self.windowController showFormMemoSettings:nil];
+    }
+}
+
+- (void)runMemoFromMenu:(NSMenuItem *)item {
+    FormMemo *memo = [[FormMemoStore sharedStore] memoWithID:item.representedObject];
+    if (memo) {
+        [self cancelPendingAutoLogin];
+        [self runMemo:memo];
+    }
+}
+
 - (void)runRecipe:(LoginRecipe *)recipe {
     [self runRecipe:recipe fillOnly:NO notifyOTP:NO];
+}
+
+- (void)runRecipe:(LoginRecipe *)recipe fillOnly:(BOOL)fillOnly {
+    [self runRecipe:recipe fillOnly:fillOnly notifyOTP:fillOnly];
+}
+
+- (void)runMemo:(FormMemo *)memo {
+    if (self.isRunning || !memo) {
+        return;
+    }
+    WKWebView *webView = self.windowController.webView;
+    if (!webView) {
+        [self showError:@"无法填入" message:@"当前没有可操作的网页。" recipeID:nil];
+        return;
+    }
+    if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:webView.URL]) {
+        [BrowserTransientToast showMessage:@"当前页为人机验证或高风险域，请手动完成"
+                                  inWindow:self.windowController.window
+                                  duration:2.5];
+        return;
+    }
+    NSArray<FormMemoField *> *fields = [memo enabledFields];
+    if (fields.count == 0) {
+        [self showMemoResultAlertWithMemoID:memo.memoID
+                                    message:@"没有可填入的字段。请先在站点备忘中配置选择器。"];
+        return;
+    }
+
+    self.isRunning = YES;
+    [self refreshButtonAppearance];
+    __weak typeof(self) weakSelf = self;
+    NSString *memoID = memo.memoID;
+    [FormMemoRunner fillFields:fields
+                     inWebView:webView
+                   waitTimeout:memo.waitTimeoutMs
+                    completion:^(FormMemoFillResult *result) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.isRunning = NO;
+        [strongSelf refreshButtonAppearance];
+        NSWindow *window = strongSelf.windowController.window;
+        if (result.allSucceeded) {
+            [BrowserTransientToast showMessage:result.summaryMessage
+                                      inWindow:window
+                                      duration:2.0];
+            return;
+        }
+        [strongSelf showMemoResultAlertWithMemoID:memoID message:result.summaryMessage];
+    }];
+}
+
+- (void)showMemoResultAlertWithMemoID:(NSString *)memoID message:(NSString *)message {
+    NSWindow *window = self.windowController.window;
+    if (!window) {
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"站点备忘";
+    alert.informativeText = message.length > 0 ? message : @"填入未完成。";
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"确定"];
+    if (memoID.length > 0) {
+        [alert addButtonWithTitle:@"打开编辑"];
+    }
+    __weak typeof(self) weakSelf = self;
+    [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode == NSAlertSecondButtonReturn && memoID.length > 0) {
+            [weakSelf presentAssistSidebarRevealingMemoID:memoID];
+        }
+    }];
 }
 
 - (void)runRecipe:(LoginRecipe *)recipe fillOnly:(BOOL)fillOnly notifyOTP:(BOOL)notifyOTP {
@@ -893,11 +1184,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     BOOL needsOTP = [recipe requiresOTPWait];
     BOOL hasUserPass = (credentials.username.length > 0) || (credentials.password.length > 0);
     if (!needsOTP && !hasUserPass) {
-        [self showError:@"缺少账号密码" message:@"请在登录助手设置中填写用户名与密码。" recipeID:recipe.recipeID];
+        [self showError:@"缺少账号密码" message:@"请在助手侧栏中填写用户名与密码。" recipeID:recipe.recipeID];
         return;
     }
     if (needsOTP && recipe.otpSelector.length == 0) {
-        [self showError:@"缺少验证码配置" message:@"请在登录助手设置中配置验证码选择器。" recipeID:recipe.recipeID];
+        [self showError:@"缺少验证码配置" message:@"请在助手侧栏中配置验证码选择器。" recipeID:recipe.recipeID];
         return;
     }
 
@@ -930,7 +1221,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
             NSString *message = error.localizedDescription ?: @"未知错误";
             if ([CompanionChannel sharedChannel].state != CompanionChannelStateConnected &&
                 [recipe requiresOTPWait]) {
-                message = [message stringByAppendingString:@"\n提示：可打开登录助手设置查看配对状态，或粘贴验证码后重试。"];
+                message = [message stringByAppendingString:@"\n提示：可在助手侧栏或高级设置中查看配对状态，或粘贴验证码后重试。"];
             }
             [strongSelf showError:@"登录助手执行失败"
                           message:message
@@ -1025,7 +1316,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     __weak typeof(self) weakSelf = self;
     [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
         if (returnCode == NSAlertSecondButtonReturn && recipeID.length > 0) {
-            [weakSelf presentSettingsEditingRecipeID:recipeID];
+            [weakSelf presentAssistSidebarRevealingRecipeID:recipeID];
         }
     }];
 }
@@ -1038,8 +1329,23 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self.settingsController showWindow:nil];
     [self.settingsController.window center];
     [self.settingsController.window makeKeyAndOrderFront:nil];
+    [self.settingsController revealRecipeSection];
     if (recipeID.length > 0) {
         [self.settingsController selectRecipeID:recipeID];
+    }
+}
+
+- (void)presentSettingsEditingMemoID:(NSString *)memoID {
+    if (!self.settingsController) {
+        self.settingsController = [[BrowserLoginAssistSettingsWindowController alloc] init];
+        self.settingsController.pickerHost = self;
+    }
+    [self.settingsController showWindow:nil];
+    [self.settingsController.window center];
+    [self.settingsController.window makeKeyAndOrderFront:nil];
+    [self.settingsController revealMemoSection];
+    if (memoID.length > 0) {
+        [self.settingsController selectMemoID:memoID];
     }
 }
 
@@ -1065,6 +1371,36 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     (void)userContentController;
     if ([message.name isEqualToString:@"loginAssistPick"]) {
         [LoginElementPicker handleScriptMessageBody:message.body];
+        return;
+    }
+    if ([message.name isEqualToString:FormMemoInlineHandlerName]) {
+        NSURL *pageURL = message.webView.URL;
+        if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:pageURL]) {
+            return;
+        }
+        if (![message.body isKindOfClass:[NSDictionary class]]) {
+            return;
+        }
+        NSDictionary *body = (NSDictionary *)message.body;
+        NSString *type = body[@"type"];
+        if ([type isEqualToString:@"saveField"]) {
+            if (![FormMemoPreferences inlineSaveEnabled]) {
+                return;
+            }
+            [self.memoSaveCoordinator handleSaveFieldMessage:body fromWebView:message.webView];
+        } else if ([type isEqualToString:@"fillMemo"]) {
+            FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:pageURL];
+            if (!memo) {
+                memo = [[FormMemoStore sharedStore] memosMatchingURL:pageURL].firstObject;
+            }
+            if (memo) {
+                [self runMemo:memo];
+            } else {
+                [BrowserTransientToast showMessage:@"当前页没有站点备忘"
+                                          inWindow:self.windowController.window
+                                          duration:2.0];
+            }
+        }
         return;
     }
     if (![message.name isEqualToString:LoginFormInlineHandlerName]) {

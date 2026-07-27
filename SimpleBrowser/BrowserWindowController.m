@@ -31,7 +31,13 @@
 #import "BrowserCertificateWarningView.h"
 #import "BrowserHTTPAuthPrompt.h"
 #import "CompanionChannel.h"
+#import "BrowserTransientToast.h"
 #import "PhoneNotificationSidebarController.h"
+#import "BrowserTrailingSidebarSlot.h"
+#import "AssistSidebarController.h"
+#import "AssistSidebarSettings.h"
+#import "LoginRecipe.h"
+#import "FormMemo.h"
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationPresenter.h"
@@ -89,7 +95,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 }
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, PhoneNotificationSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -97,6 +103,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSView *contentContainer;
 @property (nonatomic, strong) NSStackView *contentRowStack;
 @property (nonatomic, strong) PhoneNotificationSidebarController *notificationSidebarController;
+@property (nonatomic, strong) AssistSidebarController *assistSidebarController;
+@property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
@@ -382,8 +390,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     // 极窄窗口自动收起侧栏，避免网页区不可用
-    if (self.notificationSidebarController.visible && NSWidth(self.window.frame) < 720) {
-        [self.notificationSidebarController setVisible:NO animated:YES];
+    if (NSWidth(self.window.frame) < 720) {
+        [self.trailingSidebarSlot hideAllAnimated:YES];
         [self updateNotificationInboxButtonAppearance];
     }
 }
@@ -522,6 +530,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self wireFindInPageButton];
     [self wireCompanionLinkButton];
+    [self wireSendToPhoneButton];
     [self wirePhonePolicyButton];
     [self wireNotificationInboxButton];
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -574,8 +583,22 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.notificationSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.assistSidebarController = [[AssistSidebarController alloc] init];
+    self.assistSidebarController.delegate = self;
+    self.assistSidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.assistSidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.assistSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.trailingSidebarSlot = [[BrowserTrailingSidebarSlot alloc] init];
+    self.trailingSidebarSlot.notificationSidebar = self.notificationSidebarController;
+    self.trailingSidebarSlot.assistSidebar = self.assistSidebarController;
+
     self.contentRowStack = [NSStackView stackViewWithViews:@[
-        self.contentContainer, self.notificationSidebarController.view
+        self.contentContainer,
+        self.notificationSidebarController.view,
+        self.assistSidebarController.view
     ]];
     self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.contentRowStack.spacing = 0;
@@ -773,6 +796,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self wireFindInPageButton];
     [self wireCompanionLinkButton];
+    [self wireSendToPhoneButton];
     [self wirePhonePolicyButton];
     [self wireNotificationInboxButton];
     [self.addressBarActionGroup updateCompanionLinkAppearance];
@@ -786,6 +810,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     button.target = self;
     button.action = @selector(showCompanionLinkSettings:);
+}
+
+- (void)wireSendToPhoneButton {
+    NSButton *button = self.addressBarActionGroup.sendToPhoneButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(sendCurrentTabToPhone:);
 }
 
 - (void)wirePhonePolicyButton {
@@ -834,7 +867,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)toggleNotificationInboxSidebar:(id)sender {
     (void)sender;
     BOOL open = !self.notificationSidebarController.visible;
-    [self.notificationSidebarController setVisible:open animated:YES];
+    [self.trailingSidebarSlot setNotificationVisible:open animated:YES];
     [self updateNotificationInboxButtonAppearance];
 }
 
@@ -887,7 +920,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)notificationSidebarDidRequestClose:(PhoneNotificationSidebarController *)controller {
     (void)controller;
-    [self.notificationSidebarController setVisible:NO animated:YES];
+    [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
     [self updateNotificationInboxButtonAppearance];
 }
 
@@ -899,6 +932,81 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)notificationSidebar:(PhoneNotificationSidebarController *)controller didChangeWidth:(CGFloat)width {
     (void)controller;
     [PhoneNotificationInboxSettings sharedSettings].sidebarWidth = width;
+}
+
+#pragma mark - Assist sidebar
+
+- (void)toggleAssistSidebar:(id)sender {
+    (void)sender;
+    BOOL open = !self.assistSidebarController.visible;
+    [self setAssistSidebarVisible:open revealingRecipeID:nil memoID:nil];
+}
+
+- (void)setAssistSidebarVisible:(BOOL)visible
+             revealingRecipeID:(NSString *)recipeID
+                        memoID:(NSString *)memoID {
+    if (visible) {
+        if (self.notificationSidebarController.visible) {
+            [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
+            [self updateNotificationInboxButtonAppearance];
+        }
+        if (recipeID.length > 0) {
+            [self.trailingSidebarSlot setAssistVisible:YES animated:YES];
+            [self.assistSidebarController revealRecipeID:recipeID];
+        } else if (memoID.length > 0) {
+            [self.trailingSidebarSlot setAssistVisible:YES animated:YES];
+            [self.assistSidebarController revealMemoID:memoID];
+        } else if (!self.assistSidebarController.visible) {
+            [self.trailingSidebarSlot setAssistVisible:YES animated:YES];
+        } else {
+            [self.assistSidebarController reloadList];
+        }
+    } else {
+        [self.trailingSidebarSlot setAssistVisible:NO animated:YES];
+    }
+}
+
+- (void)showAssistSidebar:(id)sender {
+    [self setAssistSidebarVisible:YES revealingRecipeID:nil memoID:nil];
+}
+
+- (void)assistSidebarDidRequestClose:(AssistSidebarController *)controller {
+    (void)controller;
+    [self.trailingSidebarSlot setAssistVisible:NO animated:YES];
+}
+
+- (void)assistSidebar:(AssistSidebarController *)controller didChangeWidth:(CGFloat)width {
+    (void)controller;
+    [AssistSidebarSettings sharedSettings].sidebarWidth = width;
+}
+
+- (NSURL *)assistSidebarCurrentURL:(AssistSidebarController *)controller {
+    (void)controller;
+    return self.webView.URL;
+}
+
+- (WKWebView *)assistSidebarWebViewForPicking:(AssistSidebarController *)controller {
+    (void)controller;
+    return self.webView;
+}
+
+- (void)assistSidebar:(AssistSidebarController *)controller runRecipe:(LoginRecipe *)recipe fillOnly:(BOOL)fillOnly {
+    (void)controller;
+    [self.loginAssistController runRecipe:recipe fillOnly:fillOnly];
+}
+
+- (void)assistSidebar:(AssistSidebarController *)controller runMemo:(FormMemo *)memo {
+    (void)controller;
+    [self.loginAssistController runMemo:memo];
+}
+
+- (void)assistSidebarDidRequestAdvancedSettings:(AssistSidebarController *)controller preferMemos:(BOOL)preferMemos {
+    (void)controller;
+    if (preferMemos) {
+        [self.loginAssistController presentSettingsEditingMemoID:nil];
+    } else {
+        [self.loginAssistController presentSettingsEditingRecipeID:nil];
+    }
 }
 
 - (void)showPhonePolicyPanel:(id)sender {
@@ -1918,6 +2026,42 @@ didRequestTransferTabID:(NSUUID *)tabID
     [self.tabController selectPreviousTab];
 }
 
+- (nullable NSURL *)currentSendableURL {
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    NSURL *url = [tab currentOrRestorableURL];
+    if (![BrowsingPreferences isPersistableURL:url]) {
+        return nil;
+    }
+    return url;
+}
+
+- (void)sendCurrentTabToPhone:(id)sender {
+    (void)sender;
+    NSURL *url = [self currentSendableURL];
+    if (!url) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"无法发送到手机";
+        alert.informativeText = @"当前标签页没有可发送的网页地址。";
+        [alert addButtonWithTitle:@"好"];
+        [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    BrowserTab *tab = self.tabController.selectedTab;
+    BOOL ok = [[CompanionChannel sharedChannel] sendOpenURLToPhone:url title:tab.title];
+    if (!ok) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"未连接手机";
+        alert.informativeText = @"请先在「互联与配对」中配对，并确保手机与 Mac 在同一局域网且已连接。";
+        [alert addButtonWithTitle:@"好"];
+        [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    [BrowserTransientToast showMessage:@"已发送到手机" inWindow:self.window duration:2.0];
+}
+
 #pragma mark - Navigation Actions
 
 - (void)goBack:(id)sender {
@@ -1997,8 +2141,18 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(restoreRecentlyClosedBrowserTab:)) {
         return self.tabController.canRestoreRecentlyClosedTab;
     }
+    if (action == @selector(sendCurrentTabToPhone:)) {
+        return [CompanionChannel sharedChannel].state == CompanionChannelStateConnected
+            && [self currentSendableURL] != nil;
+    }
     if (action == @selector(oneClickLogin:)) {
         return self.loginAssistController.loginButton.enabled;
+    }
+    if (action == @selector(fillSiteMemo:)) {
+        return YES;
+    }
+    if (action == @selector(toggleAssistSidebar:) || action == @selector(showAssistSidebar:)) {
+        return YES;
     }
     if (action == @selector(toggleCaptchaAssistPanel:)) {
         return YES;
@@ -2033,9 +2187,32 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self.loginAssistController oneClickLogin:sender];
 }
 
+- (void)fillSiteMemo:(id)sender {
+    [self.loginAssistController fillSiteMemo:sender];
+}
+
 - (void)showLoginAssistSettings:(id)sender {
     (void)sender;
-    [self.loginAssistController presentSettingsEditingRecipeID:nil];
+    if (self.notificationSidebarController.visible) {
+        [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
+        [self updateNotificationInboxButtonAppearance];
+    }
+    [self.assistSidebarController revealRecipeID:nil];
+}
+
+- (void)showFormMemoSettings:(id)sender {
+    (void)sender;
+    if (self.notificationSidebarController.visible) {
+        [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
+        [self updateNotificationInboxButtonAppearance];
+    }
+    [self.assistSidebarController revealMemoID:nil];
+}
+
+- (void)reloadAssistSidebarIfVisible {
+    if (self.assistSidebarController.visible) {
+        [self.assistSidebarController reloadList];
+    }
 }
 
 - (void)toggleCaptchaAssistPanel:(id)sender {
@@ -2121,6 +2298,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [self updateBookmarkButtonState];
         [self updateSecurityBadgeVisibility];
         [self.loginAssistController updateForURL:nil];
+        [self reloadAssistSidebarIfVisible];
         [self.captchaAssistController updateForURL:nil];
         [self.feedAssistController updateForURL:nil];
         return;
@@ -2139,6 +2317,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self updateConnectionSecurityStateForTab:tab webView:webView];
     [self updateSecurityBadgeVisibility];
     [self.loginAssistController updateForURL:webView.URL];
+    [self reloadAssistSidebarIfVisible];
     [self.captchaAssistController updateForURL:webView.URL];
     [self.feedAssistController updateForURL:webView.URL];
 }

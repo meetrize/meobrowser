@@ -5,6 +5,9 @@
 #import "LoginCredentialStore.h"
 #import "LoginElementPicker.h"
 #import "LoginAssistPreferences.h"
+#import "FormMemo.h"
+#import "FormMemoStore.h"
+#import "FormMemoPreferences.h"
 #import "CompanionChannel.h"
 #import "CompanionPairingStore.h"
 #import "CompanionLinkUI.h"
@@ -17,13 +20,22 @@
 #import "PhoneNotificationPresenter.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
+#import "SBTextView.h"
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 #import <UserNotifications/UserNotifications.h>
 
-@interface BrowserLoginAssistSettingsWindowController () <NSTableViewDataSource, NSTableViewDelegate>
+typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
+    BrowserLoginAssistSettingsModeRecipes = 0,
+    BrowserLoginAssistSettingsModeMemos = 1,
+};
+
+@interface BrowserLoginAssistSettingsWindowController () <NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate>
+@property (nonatomic, strong) NSSegmentedControl *sectionControl;
+@property (nonatomic, assign) BrowserLoginAssistSettingsMode settingsMode;
 @property (nonatomic, strong) NSTableView *tableView;
 @property (nonatomic, strong) NSArray<LoginRecipe *> *recipes;
+@property (nonatomic, strong) NSArray<FormMemo *> *memos;
 @property (nonatomic, strong) SBTextField *titleField;
 @property (nonatomic, strong) SBTextField *hostField;
 @property (nonatomic, strong) SBTextField *pathPrefixField;
@@ -79,7 +91,25 @@
 @property (nonatomic, strong) NSButton *syncHistoryCheck;
 @property (nonatomic, strong) NSButton *syncBookmarksCheck;
 @property (nonatomic, strong) NSScrollView *formScrollView;
+@property (nonatomic, strong) NSView *recipeCard;
+@property (nonatomic, strong) NSView *memoCard;
+@property (nonatomic, strong) NSTextField *recipeSectionTitle;
+@property (nonatomic, strong) NSTextField *memoSectionTitle;
+@property (nonatomic, strong) SBTextField *memoTitleField;
+@property (nonatomic, strong) SBTextField *memoHostField;
+@property (nonatomic, strong) SBTextField *memoPathPrefixField;
+@property (nonatomic, strong) NSButton *memoDefaultCheck;
+@property (nonatomic, strong) NSTableView *memoFieldsTable;
+@property (nonatomic, strong) NSMutableArray<FormMemoField *> *editingMemoFields;
+@property (nonatomic, strong) SBTextField *memoFieldLabelField;
+@property (nonatomic, strong) SBTextField *memoFieldSelectorField;
+@property (nonatomic, strong) SBTextView *memoFieldValueView;
+@property (nonatomic, strong) NSScrollView *memoFieldValueScroll;
+@property (nonatomic, strong) NSButton *memoFieldEnabledCheck;
+@property (nonatomic, strong) NSTextField *memoStatusLabel;
+@property (nonatomic, strong) NSButton *memoInlineSaveCheck;
 @property (nonatomic, copy, nullable) NSString *editingRecipeID;
+@property (nonatomic, copy, nullable) NSString *editingMemoID;
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @property (nonatomic, copy, nullable) NSString *displayedPairingCode;
 @property (nonatomic, copy, nullable) NSString *displayedEndpoint;
@@ -92,16 +122,23 @@
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title = @"登录助手与互联";
+    window.title = @"登录助手与互联（高级）";
     window.releasedWhenClosed = NO;
     window.minSize = NSMakeSize(700, 600);
     self = [super initWithWindow:window];
     if (self) {
         _recipes = @[];
+        _memos = @[];
+        _editingMemoFields = [NSMutableArray array];
+        _settingsMode = BrowserLoginAssistSettingsModeRecipes;
         [self buildUI];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(memosDidChange:)
+                                                     name:FormMemoStoreDidChangeNotification
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(companionStateDidChange:)
@@ -119,8 +156,17 @@
     (void)note;
     NSString *keepID = self.editingRecipeID;
     [self reloadRecipes];
-    if (keepID.length > 0) {
+    if (self.settingsMode == BrowserLoginAssistSettingsModeRecipes && keepID.length > 0) {
         [self selectRecipeID:keepID];
+    }
+}
+
+- (void)memosDidChange:(NSNotification *)note {
+    (void)note;
+    NSString *keepID = self.editingMemoID;
+    [self reloadMemos];
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos && keepID.length > 0) {
+        [self selectMemoID:keepID];
     }
 }
 
@@ -170,6 +216,17 @@
 }
 
 - (void)buildUI {
+    self.sectionControl = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
+    self.sectionControl.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sectionControl.segmentCount = 2;
+    [self.sectionControl setLabel:@"登录配置" forSegment:0];
+    [self.sectionControl setLabel:@"站点备忘" forSegment:1];
+    self.sectionControl.selectedSegment = 0;
+    self.sectionControl.segmentStyle = NSSegmentStyleRounded;
+    self.sectionControl.target = self;
+    self.sectionControl.action = @selector(sectionChanged:);
+    [self.sectionControl.widthAnchor constraintEqualToConstant:200].active = YES;
+
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     scroll.hasVerticalScroller = YES;
@@ -189,17 +246,17 @@
 
     NSButton *addButton = [NSButton buttonWithTitle:@"新建"
                                              target:self
-                                             action:@selector(addRecipe:)];
+                                             action:@selector(addListItem:)];
     addButton.bezelStyle = NSBezelStyleRounded;
     NSButton *deleteButton = [NSButton buttonWithTitle:@"删除"
                                                 target:self
-                                                action:@selector(deleteRecipe:)];
+                                                action:@selector(deleteListItem:)];
     deleteButton.bezelStyle = NSBezelStyleRounded;
     NSStackView *listButtons = [NSStackView stackViewWithViews:@[addButton, deleteButton]];
     listButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     listButtons.spacing = 8;
 
-    NSStackView *listColumn = [NSStackView stackViewWithViews:@[scroll, listButtons]];
+    NSStackView *listColumn = [NSStackView stackViewWithViews:@[self.sectionControl, scroll, listButtons]];
     listColumn.orientation = NSUserInterfaceLayoutOrientationVertical;
     listColumn.spacing = 8;
     listColumn.translatesAutoresizingMaskIntoConstraints = NO;
@@ -566,6 +623,7 @@
 
     NSTextField *recipeSectionTitle = [NSTextField labelWithString:@"登录配置"];
     recipeSectionTitle.font = [NSFont boldSystemFontOfSize:13];
+    self.recipeSectionTitle = recipeSectionTitle;
 
     NSStackView *modeRow = [NSStackView stackViewWithViews:@[
         ({
@@ -580,29 +638,34 @@
     modeRow.alignment = NSLayoutAttributeCenterY;
     modeRow.spacing = 8;
 
-    NSView *recipeCard = [self makeSettingsCardWithTitle:nil
-                                        arrangedSubviews:@[
-                                            [self labeledRow:@"名称" field:self.titleField pickAction:nil],
-                                            [self labeledRow:@"主机" field:self.hostField pickAction:nil],
-                                            [self labeledRow:@"路径前缀" field:self.pathPrefixField pickAction:nil],
-                                            modeRow,
-                                            [self labeledRow:@"用户名" field:self.usernameField pickAction:nil],
-                                            [self labeledRow:@"密码" field:self.passwordField pickAction:nil],
-                                            [self labeledRow:@"手机号" field:self.phoneField pickAction:nil],
-                                            [self labeledRow:@"用户名选择器" field:self.usernameSelectorField pickAction:@selector(pickUsernameSelector:)],
-                                            [self labeledRow:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPasswordSelector:)],
-                                            [self labeledRow:@"手机号选择器" field:self.phoneSelectorField pickAction:@selector(pickPhoneSelector:)],
-                                            [self labeledRow:@"验证码选择器" field:self.otpSelectorField pickAction:@selector(pickOTPSelector:)],
-                                            [self labeledRow:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSendCodeSelector:)],
-                                            [self labeledRow:@"提交选择器" field:self.submitSelectorField pickAction:@selector(pickSubmitSelector:)],
-                                            self.submitByEnterCheck,
-                                            self.autoLoginCheck,
-                                            self.defaultCheck,
-                                            saveButton,
-                                            self.inlineAssistCheck,
-                                            self.promptSaveCheck,
-                                            self.statusLabel,
-                                        ]];
+    self.recipeCard = [self makeSettingsCardWithTitle:nil
+                                     arrangedSubviews:@[
+                                         [self labeledRow:@"名称" field:self.titleField pickAction:nil],
+                                         [self labeledRow:@"主机" field:self.hostField pickAction:nil],
+                                         [self labeledRow:@"路径前缀" field:self.pathPrefixField pickAction:nil],
+                                         modeRow,
+                                         [self labeledRow:@"用户名" field:self.usernameField pickAction:nil],
+                                         [self labeledRow:@"密码" field:self.passwordField pickAction:nil],
+                                         [self labeledRow:@"手机号" field:self.phoneField pickAction:nil],
+                                         [self labeledRow:@"用户名选择器" field:self.usernameSelectorField pickAction:@selector(pickUsernameSelector:)],
+                                         [self labeledRow:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPasswordSelector:)],
+                                         [self labeledRow:@"手机号选择器" field:self.phoneSelectorField pickAction:@selector(pickPhoneSelector:)],
+                                         [self labeledRow:@"验证码选择器" field:self.otpSelectorField pickAction:@selector(pickOTPSelector:)],
+                                         [self labeledRow:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSendCodeSelector:)],
+                                         [self labeledRow:@"提交选择器" field:self.submitSelectorField pickAction:@selector(pickSubmitSelector:)],
+                                         self.submitByEnterCheck,
+                                         self.autoLoginCheck,
+                                         self.defaultCheck,
+                                         saveButton,
+                                         self.inlineAssistCheck,
+                                         self.promptSaveCheck,
+                                         self.statusLabel,
+                                     ]];
+
+    self.memoCard = [self buildMemoCard];
+    NSTextField *memoSectionTitle = [NSTextField labelWithString:@"站点备忘"];
+    memoSectionTitle.font = [NSFont boldSystemFontOfSize:13];
+    self.memoSectionTitle = memoSectionTitle;
 
     NSStackView *form = [NSStackView stackViewWithViews:@[
         self.companionStatusCard,
@@ -610,8 +673,10 @@
         mirrorCard,
         callAlertCard,
         syncCard,
-        recipeSectionTitle,
-        recipeCard,
+        self.recipeSectionTitle,
+        self.recipeCard,
+        self.memoSectionTitle,
+        self.memoCard,
     ]];
     form.orientation = NSUserInterfaceLayoutOrientationVertical;
     form.alignment = NSLayoutAttributeLeading;
@@ -659,13 +724,25 @@
     ]];
 
     [self reloadRecipes];
+    [self reloadMemos];
     [self clearForm];
+    [self clearMemoForm];
     [self refreshCompanionUI];
+    [self applySettingsModeUI];
 }
 
 - (void)reloadRecipes {
     self.recipes = [[LoginRecipeStore sharedStore] allRecipes];
-    [self.tableView reloadData];
+    if (self.settingsMode == BrowserLoginAssistSettingsModeRecipes) {
+        [self.tableView reloadData];
+    }
+}
+
+- (void)reloadMemos {
+    self.memos = [[FormMemoStore sharedStore] allMemos];
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        [self.tableView reloadData];
+    }
 }
 
 - (void)revealCompanionSection {
@@ -751,6 +828,7 @@
 }
 
 - (void)selectRecipeID:(NSString *)recipeID {
+    [self revealRecipeSection];
     [self reloadRecipes];
     for (NSInteger i = 0; i < (NSInteger)self.recipes.count; i++) {
         if ([self.recipes[i].recipeID isEqualToString:recipeID]) {
@@ -854,11 +932,43 @@
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
-    (void)tableView;
+    if (tableView == self.memoFieldsTable) {
+        return (NSInteger)self.editingMemoFields.count;
+    }
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        return (NSInteger)self.memos.count;
+    }
     return (NSInteger)self.recipes.count;
 }
 
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
+    if (tableView == self.memoFieldsTable) {
+        NSString *identifier = @"MemoFieldCell";
+        NSTableCellView *cell = [tableView makeViewWithIdentifier:identifier owner:self];
+        if (!cell) {
+            cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+            cell.identifier = identifier;
+            NSTextField *text = [NSTextField labelWithString:@""];
+            text.translatesAutoresizingMaskIntoConstraints = NO;
+            text.lineBreakMode = NSLineBreakByTruncatingTail;
+            [cell addSubview:text];
+            cell.textField = text;
+            [NSLayoutConstraint activateConstraints:@[
+                [text.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:4],
+                [text.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-4],
+                [text.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+            ]];
+        }
+        if (row >= 0 && row < (NSInteger)self.editingMemoFields.count) {
+            FormMemoField *field = self.editingMemoFields[row];
+            NSString *label = field.label.length > 0 ? field.label : @"未命名字段";
+            NSString *sel = field.selector.length > 0 ? field.selector : @"（未设选择器）";
+            cell.textField.stringValue = [NSString stringWithFormat:@"%@ · %@", label, sel];
+            cell.textField.textColor = field.enabled ? [NSColor labelColor] : [NSColor tertiaryLabelColor];
+        }
+        return cell;
+    }
+
     (void)tableColumn;
     NSString *identifier = @"LoginAssistCell";
     NSTableCellView *cell = [tableView makeViewWithIdentifier:identifier owner:self];
@@ -876,7 +986,17 @@
             [text.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
         ]];
     }
-    if (row >= 0 && row < (NSInteger)self.recipes.count) {
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        if (row >= 0 && row < (NSInteger)self.memos.count) {
+            FormMemo *memo = self.memos[row];
+            NSString *title = memo.title.length > 0 ? memo.title : memo.host;
+            if (memo.isDefault) {
+                title = [title stringByAppendingString:@" ★"];
+            }
+            NSUInteger count = memo.fields.count;
+            cell.textField.stringValue = [NSString stringWithFormat:@"%@（%lu）", title, (unsigned long)count];
+        }
+    } else if (row >= 0 && row < (NSInteger)self.recipes.count) {
         LoginRecipe *recipe = self.recipes[row];
         NSString *title = recipe.title.length > 0 ? recipe.title : recipe.host;
         if (recipe.autoLogin) {
@@ -890,6 +1010,13 @@
 - (void)tableSelectionChanged:(id)sender {
     (void)sender;
     NSInteger row = self.tableView.selectedRow;
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        if (row < 0 || row >= (NSInteger)self.memos.count) {
+            return;
+        }
+        [self loadMemoIntoForm:self.memos[row]];
+        return;
+    }
     if (row < 0 || row >= (NSInteger)self.recipes.count) {
         return;
     }
@@ -908,6 +1035,12 @@
     self.statusLabel.stringValue = @"偏好已保存。内联图标开关对新建标签 / 新导航后的页面生效。";
 }
 
+- (void)memoInlinePrefsChanged:(id)sender {
+    (void)sender;
+    [FormMemoPreferences setInlineSaveEnabled:(self.memoInlineSaveCheck.state == NSControlStateValueOn)];
+    self.memoStatusLabel.stringValue = @"偏好已保存。「保存到站点备忘」图标对新建标签 / 新导航后的页面生效。";
+}
+
 - (void)addRecipe:(id)sender {
     (void)sender;
     [self.tableView deselectAll:nil];
@@ -924,6 +1057,22 @@
         self.titleField.stringValue = url.host;
     }
     self.statusLabel.stringValue = @"填写后点击保存以创建配置。";
+}
+
+- (void)addListItem:(id)sender {
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        [self addMemo:sender];
+    } else {
+        [self addRecipe:sender];
+    }
+}
+
+- (void)deleteListItem:(id)sender {
+    if (self.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+        [self deleteMemo:sender];
+    } else {
+        [self deleteRecipe:sender];
+    }
 }
 
 - (void)deleteRecipe:(id)sender {
@@ -1084,14 +1233,21 @@
             strongSelf.sendCodeSelectorField.stringValue = cssSelector;
         } else if ([strongSelf.pickingTarget isEqualToString:@"submit"]) {
             strongSelf.submitSelectorField.stringValue = cssSelector;
+        } else if ([strongSelf.pickingTarget isEqualToString:@"memoField"]) {
+            strongSelf.memoFieldSelectorField.stringValue = cssSelector;
+            [strongSelf applyMemoFieldEditorToSelection];
         }
         strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"已拾取：%@", cssSelector];
+        if (strongSelf.settingsMode == BrowserLoginAssistSettingsModeMemos) {
+            strongSelf.memoStatusLabel.stringValue = [NSString stringWithFormat:@"已拾取：%@", cssSelector];
+        }
         strongSelf.pickingTarget = nil;
     }];
 }
 
 - (void)showWindow:(id)sender {
     [self reloadRecipes];
+    [self reloadMemos];
     [self refreshCompanionUI];
     [super showWindow:sender];
 }
@@ -1486,6 +1642,417 @@
         self.statusLabel.stringValue = @"已注销全部配对设备，请刷新配对码。";
     }
     [self refreshCompanionUI];
+}
+
+#pragma mark - Site Form Memo
+
+- (NSView *)buildMemoCard {
+    self.memoTitleField = [self makeField];
+    self.memoHostField = [self makeField];
+    self.memoPathPrefixField = [self makeField];
+    self.memoDefaultCheck = [NSButton checkboxWithTitle:@"设为该站点默认备忘"
+                                                 target:nil
+                                                 action:nil];
+    self.memoInlineSaveCheck = [NSButton checkboxWithTitle:@"输入时显示「保存到站点备忘」（新标签生效）"
+                                                    target:self
+                                                    action:@selector(memoInlinePrefsChanged:)];
+    self.memoInlineSaveCheck.state = [FormMemoPreferences inlineSaveEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSScrollView *fieldsScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    fieldsScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    fieldsScroll.hasVerticalScroller = YES;
+    fieldsScroll.borderType = NSBezelBorder;
+    self.memoFieldsTable = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"field"];
+    col.title = @"字段";
+    col.width = 360;
+    [self.memoFieldsTable addTableColumn:col];
+    self.memoFieldsTable.headerView = nil;
+    self.memoFieldsTable.delegate = self;
+    self.memoFieldsTable.dataSource = self;
+    self.memoFieldsTable.target = self;
+    self.memoFieldsTable.action = @selector(memoFieldSelectionChanged:);
+    fieldsScroll.documentView = self.memoFieldsTable;
+    [fieldsScroll.heightAnchor constraintEqualToConstant:110].active = YES;
+
+    NSButton *addField = [NSButton buttonWithTitle:@"添加字段"
+                                            target:self
+                                            action:@selector(addMemoField:)];
+    addField.bezelStyle = NSBezelStyleRounded;
+    addField.controlSize = NSControlSizeSmall;
+    NSButton *removeField = [NSButton buttonWithTitle:@"删除字段"
+                                               target:self
+                                               action:@selector(removeMemoField:)];
+    removeField.bezelStyle = NSBezelStyleRounded;
+    removeField.controlSize = NSControlSizeSmall;
+    NSButton *moveUp = [NSButton buttonWithTitle:@"上移"
+                                          target:self
+                                          action:@selector(moveMemoFieldUp:)];
+    moveUp.bezelStyle = NSBezelStyleRounded;
+    moveUp.controlSize = NSControlSizeSmall;
+    NSButton *moveDown = [NSButton buttonWithTitle:@"下移"
+                                            target:self
+                                            action:@selector(moveMemoFieldDown:)];
+    moveDown.bezelStyle = NSBezelStyleRounded;
+    moveDown.controlSize = NSControlSizeSmall;
+    NSStackView *fieldButtons = [NSStackView stackViewWithViews:@[addField, removeField, moveUp, moveDown]];
+    fieldButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    fieldButtons.spacing = 6;
+
+    self.memoFieldLabelField = [self makeField];
+    self.memoFieldSelectorField = [self makeField];
+    self.memoFieldEnabledCheck = [NSButton checkboxWithTitle:@"启用该字段"
+                                                      target:self
+                                                      action:@selector(memoFieldEditorChanged:)];
+
+    self.memoFieldValueView = [SBTextView standardTextView];
+    self.memoFieldValueView.delegate = self;
+    self.memoFieldValueView.font = [NSFont systemFontOfSize:13];
+    self.memoFieldValueScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    self.memoFieldValueScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    self.memoFieldValueScroll.hasVerticalScroller = YES;
+    self.memoFieldValueScroll.borderType = NSBezelBorder;
+    self.memoFieldValueScroll.documentView = self.memoFieldValueView;
+    [self.memoFieldValueScroll.heightAnchor constraintEqualToConstant:72].active = YES;
+
+    NSButton *pickField = [NSButton buttonWithTitle:@"点选"
+                                             target:self
+                                             action:@selector(pickMemoFieldSelector:)];
+    pickField.bezelStyle = NSBezelStyleRounded;
+    pickField.controlSize = NSControlSizeSmall;
+    NSButton *applyField = [NSButton buttonWithTitle:@"应用到选中字段"
+                                              target:self
+                                              action:@selector(applyMemoFieldEditorToSelection)];
+    applyField.bezelStyle = NSBezelStyleRounded;
+    applyField.controlSize = NSControlSizeSmall;
+
+    NSButton *saveMemo = [NSButton buttonWithTitle:@"保存备忘"
+                                            target:self
+                                            action:@selector(saveMemo:)];
+    saveMemo.bezelStyle = NSBezelStyleRounded;
+
+    self.memoStatusLabel = [NSTextField wrappingLabelWithString:@"备忘为明文本地存储，请勿存放密码；密码请用「登录配置」。清除网站数据不会删除备忘。"];
+    self.memoStatusLabel.font = [NSFont systemFontOfSize:11];
+    self.memoStatusLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSTextField *valueCaption = [self caption:@"字段内容"];
+    valueCaption.translatesAutoresizingMaskIntoConstraints = NO;
+    [valueCaption.widthAnchor constraintEqualToConstant:88].active = YES;
+    NSStackView *valueRow = [NSStackView stackViewWithViews:@[valueCaption, self.memoFieldValueScroll]];
+    valueRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    valueRow.alignment = NSLayoutAttributeTop;
+    valueRow.spacing = 8;
+    [self.memoFieldValueScroll setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *applyRow = [NSStackView stackViewWithViews:@[applyField, pickField]];
+    applyRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    applyRow.spacing = 8;
+
+    return [self makeSettingsCardWithTitle:nil
+                          arrangedSubviews:@[
+                              [self labeledRow:@"名称" field:self.memoTitleField pickAction:nil],
+                              [self labeledRow:@"主机" field:self.memoHostField pickAction:nil],
+                              [self labeledRow:@"路径前缀" field:self.memoPathPrefixField pickAction:nil],
+                              self.memoDefaultCheck,
+                              self.memoInlineSaveCheck,
+                              fieldsScroll,
+                              fieldButtons,
+                              [self labeledRow:@"字段标签" field:self.memoFieldLabelField pickAction:nil],
+                              [self labeledRow:@"选择器" field:self.memoFieldSelectorField pickAction:nil],
+                              valueRow,
+                              self.memoFieldEnabledCheck,
+                              applyRow,
+                              saveMemo,
+                              self.memoStatusLabel,
+                          ]];
+}
+
+- (void)sectionChanged:(id)sender {
+    (void)sender;
+    self.settingsMode = (BrowserLoginAssistSettingsMode)self.sectionControl.selectedSegment;
+    [self applySettingsModeUI];
+    [self.tableView reloadData];
+    [self.tableView deselectAll:nil];
+}
+
+- (void)applySettingsModeUI {
+    BOOL memo = (self.settingsMode == BrowserLoginAssistSettingsModeMemos);
+    self.recipeSectionTitle.hidden = memo;
+    self.recipeCard.hidden = memo;
+    self.memoSectionTitle.hidden = !memo;
+    self.memoCard.hidden = !memo;
+    self.sectionControl.selectedSegment = memo ? 1 : 0;
+}
+
+- (void)revealRecipeSection {
+    self.settingsMode = BrowserLoginAssistSettingsModeRecipes;
+    [self applySettingsModeUI];
+    [self.tableView reloadData];
+    [self.window layoutIfNeeded];
+    [self.recipeCard scrollRectToVisible:NSInsetRect(self.recipeCard.bounds, 0, -8)];
+}
+
+- (void)revealMemoSection {
+    self.settingsMode = BrowserLoginAssistSettingsModeMemos;
+    [self applySettingsModeUI];
+    [self.tableView reloadData];
+    [self.window layoutIfNeeded];
+    [self.memoCard scrollRectToVisible:NSInsetRect(self.memoCard.bounds, 0, -8)];
+}
+
+- (void)selectMemoID:(NSString *)memoID {
+    [self revealMemoSection];
+    [self reloadMemos];
+    for (NSInteger i = 0; i < (NSInteger)self.memos.count; i++) {
+        if ([self.memos[i].memoID isEqualToString:memoID]) {
+            [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:i] byExtendingSelection:NO];
+            [self loadMemoIntoForm:self.memos[i]];
+            return;
+        }
+    }
+}
+
+- (void)clearMemoForm {
+    self.editingMemoID = nil;
+    self.memoTitleField.stringValue = @"";
+    self.memoHostField.stringValue = @"";
+    self.memoPathPrefixField.stringValue = @"";
+    self.memoDefaultCheck.state = NSControlStateValueOff;
+    [self.editingMemoFields removeAllObjects];
+    [self.memoFieldsTable reloadData];
+    self.memoFieldLabelField.stringValue = @"";
+    self.memoFieldSelectorField.stringValue = @"";
+    self.memoFieldValueView.string = @"";
+    self.memoFieldEnabledCheck.state = NSControlStateValueOn;
+    self.memoStatusLabel.stringValue = @"备忘为明文本地存储，请勿存放密码；密码请用「登录配置」。清除网站数据不会删除备忘。";
+}
+
+- (void)loadMemoIntoForm:(FormMemo *)memo {
+    self.editingMemoID = memo.memoID;
+    self.memoTitleField.stringValue = memo.title ?: @"";
+    self.memoHostField.stringValue = memo.host ?: @"";
+    self.memoPathPrefixField.stringValue = memo.pathPrefix ?: @"";
+    self.memoDefaultCheck.state = memo.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
+    [self.editingMemoFields removeAllObjects];
+    for (FormMemoField *field in memo.fields) {
+        [self.editingMemoFields addObject:[field copy]];
+    }
+    [self.memoFieldsTable reloadData];
+    if (self.editingMemoFields.count > 0) {
+        [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+        [self loadMemoFieldEditorFromIndex:0];
+    } else {
+        self.memoFieldLabelField.stringValue = @"";
+        self.memoFieldSelectorField.stringValue = @"";
+        self.memoFieldValueView.string = @"";
+        self.memoFieldEnabledCheck.state = NSControlStateValueOn;
+    }
+    self.memoStatusLabel.stringValue = [NSString stringWithFormat:@"正在编辑「%@」· %lu 个字段",
+                                        memo.title.length > 0 ? memo.title : memo.host,
+                                        (unsigned long)memo.fields.count];
+}
+
+- (void)addMemo:(id)sender {
+    (void)sender;
+    [self.tableView deselectAll:nil];
+    [self clearMemoForm];
+    NSURL *url = self.pickerHost.activeWebViewForPicking.URL;
+    if (url.isFileURL) {
+        self.memoHostField.stringValue = @"file";
+        self.memoTitleField.stringValue = @"本地表单备忘";
+        if (url.path.lastPathComponent.length > 0) {
+            self.memoPathPrefixField.stringValue = url.path.lastPathComponent;
+        }
+    } else if (url.host.length > 0) {
+        self.memoHostField.stringValue = url.host.lowercaseString;
+        self.memoTitleField.stringValue = url.host;
+    }
+    FormMemoField *seed = [FormMemoField fieldWithLabel:@"字段1" selector:@"" value:@""];
+    [self.editingMemoFields addObject:seed];
+    [self.memoFieldsTable reloadData];
+    [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    [self loadMemoFieldEditorFromIndex:0];
+    self.memoStatusLabel.stringValue = @"填写主机与字段后点击「保存备忘」。";
+}
+
+- (void)deleteMemo:(id)sender {
+    (void)sender;
+    NSString *memoID = self.editingMemoID;
+    if (memoID.length == 0) {
+        NSInteger row = self.tableView.selectedRow;
+        if (row >= 0 && row < (NSInteger)self.memos.count) {
+            memoID = self.memos[row].memoID;
+        }
+    }
+    if (memoID.length == 0) {
+        return;
+    }
+    NSAlert *confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"删除此站点备忘？";
+    confirm.informativeText = @"将删除该备忘下的全部字段文本。";
+    confirm.alertStyle = NSAlertStyleWarning;
+    [confirm addButtonWithTitle:@"删除"];
+    [confirm addButtonWithTitle:@"取消"];
+    __weak typeof(self) weakSelf = self;
+    [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse code) {
+        if (code != NSAlertFirstButtonReturn) {
+            return;
+        }
+        [[FormMemoStore sharedStore] deleteMemoWithID:memoID error:nil];
+        [weakSelf clearMemoForm];
+        [weakSelf reloadMemos];
+    }];
+}
+
+- (void)saveMemo:(id)sender {
+    (void)sender;
+    [self applyMemoFieldEditorToSelection];
+    NSString *host = [self.memoHostField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (host.length == 0) {
+        self.memoStatusLabel.stringValue = @"请填写主机。";
+        return;
+    }
+    FormMemo *memo = nil;
+    if (self.editingMemoID.length > 0) {
+        memo = [[[FormMemoStore sharedStore] memoWithID:self.editingMemoID] copy];
+    }
+    if (!memo) {
+        memo = [FormMemo memoWithHost:host title:self.memoTitleField.stringValue];
+    }
+    memo.host = host.lowercaseString;
+    memo.title = self.memoTitleField.stringValue.length > 0 ? self.memoTitleField.stringValue : host;
+    NSString *path = [self.memoPathPrefixField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    memo.pathPrefix = path.length > 0 ? path : nil;
+    memo.isDefault = (self.memoDefaultCheck.state == NSControlStateValueOn);
+    NSMutableArray<FormMemoField *> *fields = [NSMutableArray array];
+    for (FormMemoField *field in self.editingMemoFields) {
+        [fields addObject:[field copy]];
+    }
+    memo.fields = fields;
+
+    NSError *error = nil;
+    if (![[FormMemoStore sharedStore] upsertMemo:memo error:&error]) {
+        self.memoStatusLabel.stringValue = error.localizedDescription ?: @"保存失败";
+        return;
+    }
+    self.editingMemoID = memo.memoID;
+    [self reloadMemos];
+    [self selectMemoID:memo.memoID];
+    self.memoStatusLabel.stringValue = @"备忘已保存。";
+}
+
+- (void)memoFieldSelectionChanged:(id)sender {
+    (void)sender;
+    NSInteger row = self.memoFieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.editingMemoFields.count) {
+        return;
+    }
+    [self loadMemoFieldEditorFromIndex:row];
+}
+
+- (void)loadMemoFieldEditorFromIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.editingMemoFields.count) {
+        return;
+    }
+    FormMemoField *field = self.editingMemoFields[index];
+    self.memoFieldLabelField.stringValue = field.label ?: @"";
+    self.memoFieldSelectorField.stringValue = field.selector ?: @"";
+    self.memoFieldValueView.string = field.value ?: @"";
+    self.memoFieldEnabledCheck.state = field.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (void)applyMemoFieldEditorToSelection {
+    [self applyMemoFieldEditorToSelectionKeepingSelection:YES];
+}
+
+- (void)applyMemoFieldEditorToSelectionKeepingSelection:(BOOL)keep {
+    NSInteger row = self.memoFieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.editingMemoFields.count) {
+        return;
+    }
+    FormMemoField *field = self.editingMemoFields[row];
+    field.label = self.memoFieldLabelField.stringValue ?: @"";
+    field.selector = self.memoFieldSelectorField.stringValue ?: @"";
+    field.value = self.memoFieldValueView.string ?: @"";
+    field.enabled = (self.memoFieldEnabledCheck.state == NSControlStateValueOn);
+    [self.memoFieldsTable reloadData];
+    if (keep) {
+        [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    }
+}
+
+- (void)memoFieldEditorChanged:(id)sender {
+    (void)sender;
+    [self applyMemoFieldEditorToSelection];
+}
+
+- (void)textDidChange:(NSNotification *)notification {
+    if (notification.object == self.memoFieldValueView) {
+        [self applyMemoFieldEditorToSelection];
+    }
+}
+
+- (void)addMemoField:(id)sender {
+    (void)sender;
+    [self applyMemoFieldEditorToSelection];
+    FormMemoField *field = [FormMemoField fieldWithLabel:[NSString stringWithFormat:@"字段%lu",
+                                                          (unsigned long)(self.editingMemoFields.count + 1)]
+                                                selector:@""
+                                                   value:@""];
+    [self.editingMemoFields addObject:field];
+    [self.memoFieldsTable reloadData];
+    NSInteger row = (NSInteger)self.editingMemoFields.count - 1;
+    [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    [self loadMemoFieldEditorFromIndex:row];
+}
+
+- (void)removeMemoField:(id)sender {
+    (void)sender;
+    NSInteger row = self.memoFieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.editingMemoFields.count) {
+        return;
+    }
+    [self.editingMemoFields removeObjectAtIndex:row];
+    [self.memoFieldsTable reloadData];
+    if (self.editingMemoFields.count == 0) {
+        self.memoFieldLabelField.stringValue = @"";
+        self.memoFieldSelectorField.stringValue = @"";
+        self.memoFieldValueView.string = @"";
+        return;
+    }
+    NSInteger next = MIN(row, (NSInteger)self.editingMemoFields.count - 1);
+    [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:next] byExtendingSelection:NO];
+    [self loadMemoFieldEditorFromIndex:next];
+}
+
+- (void)moveMemoFieldUp:(id)sender {
+    (void)sender;
+    [self applyMemoFieldEditorToSelection];
+    NSInteger row = self.memoFieldsTable.selectedRow;
+    if (row <= 0 || row >= (NSInteger)self.editingMemoFields.count) {
+        return;
+    }
+    [self.editingMemoFields exchangeObjectAtIndex:row withObjectAtIndex:row - 1];
+    [self.memoFieldsTable reloadData];
+    [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row - 1] byExtendingSelection:NO];
+}
+
+- (void)moveMemoFieldDown:(id)sender {
+    (void)sender;
+    [self applyMemoFieldEditorToSelection];
+    NSInteger row = self.memoFieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.editingMemoFields.count - 1) {
+        return;
+    }
+    [self.editingMemoFields exchangeObjectAtIndex:row withObjectAtIndex:row + 1];
+    [self.memoFieldsTable reloadData];
+    [self.memoFieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row + 1] byExtendingSelection:NO];
+}
+
+- (void)pickMemoFieldSelector:(id)sender {
+    (void)sender;
+    [self beginPickForTarget:@"memoField"];
 }
 
 @end

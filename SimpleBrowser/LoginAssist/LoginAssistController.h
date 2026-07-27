@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 
 @class LoginRecipe;
+@class FormMemo;
 @class BrowserWindowController;
 
 NS_ASSUME_NONNULL_BEGIN
@@ -19,14 +20,21 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(nullable NSURL *)url;
 
 - (IBAction)oneClickLogin:(nullable id)sender;
+- (IBAction)fillSiteMemo:(nullable id)sender;
 - (void)runRecipe:(LoginRecipe *)recipe;
+- (void)runRecipe:(LoginRecipe *)recipe fillOnly:(BOOL)fillOnly;
+- (void)runMemo:(FormMemo *)memo;
 - (void)cancelPendingAutoLogin;
 - (void)showRecipeMenuFromButton:(NSButton *)button;
 
 /// 将登录助手相关项追加到工具栏右键菜单（固定/隐藏之后）。
 - (void)appendItemsToToolbarContextMenu:(NSMenu *)menu;
 
+- (void)presentAssistSidebar;
+- (void)presentAssistSidebarRevealingRecipeID:(nullable NSString *)recipeID;
+- (void)presentAssistSidebarRevealingMemoID:(nullable NSString *)memoID;
 - (void)presentSettingsEditingRecipeID:(nullable NSString *)recipeID;
+- (void)presentSettingsEditingMemoID:(nullable NSString *)memoID;
 /// 打开设置并滚到互联状态卡片（工具栏「互联」入口）。
 - (void)presentCompanionSettings;
 - (void)wireLoginButton:(NSButton *)button;

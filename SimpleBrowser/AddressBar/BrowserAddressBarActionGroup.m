@@ -115,6 +115,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
 @property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *companionLinkButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *sendToPhoneButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *phonePolicyButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *notificationInboxButton;
 @property (nonatomic, strong, nullable) NSView *companionLinkStatusDot;
@@ -207,6 +208,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
+        @{@"id": @"sendToPhone", @"symbol": @"iphone.and.arrow.forward", @"tip": @"发送到手机"},
         @{@"id": @"notificationInbox", @"symbol": @"bell", @"tip": @"手机通知"},
         @{@"id": @"phonePolicy", @"symbol": @"phone.badge.waveform", @"tip": @"号码策略"},
         @{@"id": @"captchaAssist", @"symbol": @"checkerboard.rectangle", @"tip": @"验证码助手"},
@@ -257,7 +259,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         if ([seen containsObject:item.itemID]) {
             continue;
         }
-        // 升级迁移：新「互联」键插到登录助手之后，避免落到末尾溢出区
+        // 升级迁移：新键插到邻近项之后，避免落到末尾溢出区
         if ([item.itemID isEqualToString:@"companionLink"]) {
             NSUInteger loginIdx = NSNotFound;
             for (NSUInteger i = 0; i < ordered.count; i++) {
@@ -271,16 +273,32 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             } else {
                 [ordered addObject:item];
             }
-        } else if ([item.itemID isEqualToString:@"notificationInbox"]) {
-            NSUInteger linkIdx = NSNotFound;
+        } else if ([item.itemID isEqualToString:@"sendToPhone"]) {
+            NSUInteger anchorIdx = NSNotFound;
             for (NSUInteger i = 0; i < ordered.count; i++) {
                 if ([ordered[i].itemID isEqualToString:@"companionLink"]) {
-                    linkIdx = i;
+                    anchorIdx = i;
                     break;
                 }
             }
-            if (linkIdx != NSNotFound) {
-                [ordered insertObject:item atIndex:linkIdx + 1];
+            if (anchorIdx != NSNotFound) {
+                [ordered insertObject:item atIndex:anchorIdx + 1];
+            } else {
+                [ordered addObject:item];
+            }
+        } else if ([item.itemID isEqualToString:@"notificationInbox"]) {
+            NSUInteger anchorIdx = NSNotFound;
+            for (NSUInteger i = 0; i < ordered.count; i++) {
+                if ([ordered[i].itemID isEqualToString:@"sendToPhone"] ||
+                    [ordered[i].itemID isEqualToString:@"companionLink"]) {
+                    anchorIdx = i;
+                    if ([ordered[i].itemID isEqualToString:@"sendToPhone"]) {
+                        break;
+                    }
+                }
+            }
+            if (anchorIdx != NSNotFound) {
+                [ordered insertObject:item atIndex:anchorIdx + 1];
             } else {
                 [ordered addObject:item];
             }
@@ -353,6 +371,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
     self.feedButton = nil;
     self.findInPageButton = nil;
     self.companionLinkButton = nil;
+    self.sendToPhoneButton = nil;
     self.phonePolicyButton = nil;
     self.notificationInboxButton = nil;
     for (NSUInteger i = 0; i < self.items.count; i++) {
@@ -369,6 +388,8 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             self.findInPageButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"companionLink"]) {
             self.companionLinkButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"sendToPhone"]) {
+            self.sendToPhoneButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"phonePolicy"]) {
             self.phonePolicyButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"notificationInbox"]) {
@@ -405,22 +426,30 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
 }
 
 - (void)updateCompanionLinkAppearance {
+    CompanionLinkUIState state = [CompanionLinkUI stateFromChannel:[CompanionChannel sharedChannel]];
+    NSString *title = [CompanionLinkUI titleForChannel:[CompanionChannel sharedChannel]];
+    BOOL connected = (state == CompanionLinkUIStateConnected);
+
     [self ensureCompanionLinkStatusDot];
     NSButton *button = self.companionLinkButton;
-    if (!button || !self.companionLinkStatusDot) {
-        return;
+    if (button && self.companionLinkStatusDot) {
+        NSColor *dotColor = [CompanionLinkUI dotColorForState:state];
+        self.companionLinkStatusDot.layer.backgroundColor = dotColor.CGColor;
+        if (@available(macOS 10.14, *)) {
+            self.companionLinkStatusDot.layer.borderWidth = 1.0;
+            self.companionLinkStatusDot.layer.borderColor = [NSColor controlBackgroundColor].CGColor;
+        }
+        button.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
+        button.toolTip = [NSString stringWithFormat:@"互联 · %@", title];
+        button.accessibilityLabel = [NSString stringWithFormat:@"互联 · %@", title];
     }
-    CompanionLinkUIState state = [CompanionLinkUI stateFromChannel:[CompanionChannel sharedChannel]];
-    NSColor *dotColor = [CompanionLinkUI dotColorForState:state];
-    self.companionLinkStatusDot.layer.backgroundColor = dotColor.CGColor;
-    if (@available(macOS 10.14, *)) {
-        self.companionLinkStatusDot.layer.borderWidth = 1.0;
-        self.companionLinkStatusDot.layer.borderColor = [NSColor controlBackgroundColor].CGColor;
+
+    NSButton *sendButton = self.sendToPhoneButton;
+    if (sendButton) {
+        sendButton.alphaValue = connected ? 1.0 : 0.7;
+        sendButton.toolTip = connected ? @"发送到手机" : @"发送到手机（未连接）";
+        sendButton.accessibilityLabel = sendButton.toolTip;
     }
-    button.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
-    NSString *title = [CompanionLinkUI titleForChannel:[CompanionChannel sharedChannel]];
-    button.toolTip = [NSString stringWithFormat:@"互联 · %@", title];
-    button.accessibilityLabel = [NSString stringWithFormat:@"互联 · %@", title];
 }
 
 #pragma mark - Buttons

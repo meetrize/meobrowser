@@ -25,6 +25,10 @@ extern NSString * const CompanionWeChatReplyCodeKey;
 extern NSString * const CompanionWeChatReplyMessageKey;
 extern NSString * const CompanionWeChatReplyElapsedMsKey;
 
+/// Mac → 手机 open_url 确认（userInfo: url 可选）。
+extern NSNotificationName const CompanionOpenURLToPhoneDidFinishNotification;
+extern NSString * const CompanionOpenURLToPhoneURLKey;
+
 /// Bonjour 收码通道：hello 配对 → otp / phone_notification → OTPInbox / 系统通知。
 @interface CompanionChannel : NSObject
 
@@ -61,6 +65,9 @@ extern NSString * const CompanionWeChatReplyElapsedMsKey;
                                 contact:(NSString *)contact
                                    text:(NSString *)text
                          notificationId:(nullable NSString *)notificationId;
+
+/// 将当前页 URL 推到已连接手机新开标签。仅允许 http/https；未连接或参数非法返回 NO。
+- (BOOL)sendOpenURLToPhone:(NSURL *)url title:(nullable NSString *)title;
 
 /// 已配对且未连接时：浏览 `_meocompanion._tcp` 并向手机发 `invite`。
 - (void)invitePairedPhones;

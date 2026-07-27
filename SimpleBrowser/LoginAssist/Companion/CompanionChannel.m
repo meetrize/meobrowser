@@ -36,6 +36,9 @@ NSString * const CompanionWeChatReplyCodeKey = @"code";
 NSString * const CompanionWeChatReplyMessageKey = @"message";
 NSString * const CompanionWeChatReplyElapsedMsKey = @"elapsedMs";
 
+NSNotificationName const CompanionOpenURLToPhoneDidFinishNotification = @"CompanionOpenURLToPhoneDidFinishNotification";
+NSString * const CompanionOpenURLToPhoneURLKey = @"url";
+
 @interface CompanionChannel () <CompanionBonjourServerDelegate>
 @property (nonatomic, strong) CompanionBonjourServer *server;
 @property (nonatomic, strong) CompanionPhoneDiscovery *phoneDiscovery;
@@ -343,6 +346,10 @@ NSString * const CompanionWeChatReplyElapsedMsKey = @"elapsedMs";
         [self handleOpenURL:json connectionID:connectionID server:server];
         return;
     }
+    if ([type isEqualToString:@"open_url_ok"]) {
+        [self handleOpenURLToPhoneOK:json];
+        return;
+    }
     if ([type hasPrefix:@"sync_"]) {
         [self handleSyncMessage:json connectionID:connectionID server:server];
         return;
@@ -627,6 +634,52 @@ NSString * const CompanionWeChatReplyElapsedMsKey = @"elapsedMs";
         [self.server sendJSON:json toConnectionID:connectionID];
     }
     return YES;
+}
+
+- (BOOL)sendOpenURLToPhone:(NSURL *)url title:(NSString *)title {
+    if (self.state != CompanionChannelStateConnected || self.activeConnectionIDs.count == 0) {
+        return NO;
+    }
+    if (!url || url.absoluteString.length == 0) {
+        return NO;
+    }
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        return NO;
+    }
+    NSString *deviceToken = [self resolvedDeviceToken];
+    if (deviceToken.length == 0) {
+        return NO;
+    }
+    NSMutableDictionary *json = [@{
+        @"v": @1,
+        @"type": @"open_url",
+        @"deviceToken": deviceToken,
+        @"url": url.absoluteString,
+        @"ts": @((NSInteger)[[NSDate date] timeIntervalSince1970]),
+    } mutableCopy];
+    NSString *trimmedTitle = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmedTitle.length > 0) {
+        json[@"title"] = trimmedTitle;
+    }
+    for (NSString *connectionID in [self.activeConnectionIDs copy]) {
+        [self.server sendJSON:json toConnectionID:connectionID];
+    }
+    return YES;
+}
+
+- (void)handleOpenURLToPhoneOK:(NSDictionary *)json {
+    (void)json;
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    NSString *urlString = [json[@"url"] isKindOfClass:[NSString class]] ? json[@"url"] : @"";
+    if (urlString.length > 0) {
+        info[CompanionOpenURLToPhoneURLKey] = urlString;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:CompanionOpenURLToPhoneDidFinishNotification
+                                                            object:self
+                                                          userInfo:info];
+    });
 }
 
 - (void)handleWeChatReplyResult:(NSDictionary *)json {

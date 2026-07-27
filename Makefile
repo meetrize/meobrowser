@@ -16,6 +16,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
                    $(BROWSER_SRC_DIR)/BrowserAppInfo.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
+                   $(BROWSER_SRC_DIR)/BrowserTrailingSidebarSlot.m \
                    $(BROWSER_SRC_DIR)/BrowserLoadingProgressView.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserUserAgent.m \
@@ -68,6 +69,16 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipeStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginCredentialStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRunner.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemo.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemoStore.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemoRunner.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemoPreferences.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemoInlineDetector.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/FormMemo/FormMemoPageSaveCoordinator.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar/AssistSidebarSettings.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar/AssistSidebarController.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar/AssistSidebarMemoEditor.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar/AssistSidebarRecipeEditor.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/OTPInbox.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionPairingStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/Companion/CompanionBonjourServer.m \
@@ -129,7 +140,7 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications
 
@@ -212,6 +223,7 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
 	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
 	cp "$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html" "$(BROWSER_RES_DIR)/login-assist-test.html"
+	cp "$(BROWSER_SRC_DIR)/LoginAssist/FormMemo/form-memo-test.html" "$(BROWSER_RES_DIR)/form-memo-test.html"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/captcha-assist-test.html" "$(BROWSER_RES_DIR)/captcha-assist-test.html"
 	cp "$(BROWSER_SRC_DIR)/FindInPage/Resources/find-in-page.js" "$(BROWSER_RES_DIR)/find-in-page.js"
 	mkdir -p "$(BROWSER_RES_DIR)/PhoneRules"

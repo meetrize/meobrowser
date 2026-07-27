@@ -318,6 +318,9 @@ class CompanionConnectionService : Service() {
                 CompanionSession.lastSmsEvent = "已发送到 Mac"
                 CompanionSession.notifyStatus()
             }
+            "open_url" -> {
+                handleInboundOpenUrl(json)
+            }
             "phone_notification_ok" -> {
                 val id = json.optString("id")
                 CompanionSession.lastSmsEvent =
@@ -391,6 +394,51 @@ class CompanionConnectionService : Service() {
         }
     }
 
+    /** Mac → 手机：在浏览器新开标签。 */
+    private fun handleInboundOpenUrl(json: JSONObject) {
+        val token = json.optString("deviceToken")
+        val url = json.optString("url").trim()
+        val localToken = prefs.deviceToken
+        if (localToken.isNullOrBlank() || token != localToken) {
+            sendOpenUrlError("unauthorized")
+            return
+        }
+        val lower = url.lowercase()
+        if (url.isBlank() || (!lower.startsWith("http://") && !lower.startsWith("https://"))) {
+            sendOpenUrlError("bad url")
+            return
+        }
+        try {
+            val ok = JSONObject().apply {
+                put("v", 1)
+                put("type", "open_url_ok")
+                put("url", url)
+            }
+            client.send(ok)
+        } catch (e: Exception) {
+            Log.e(TAG, "send open_url_ok failed", e)
+        }
+        CompanionSession.lastSmsEvent = "已从 Mac 打开"
+        CompanionSession.notifyStatus()
+        CompanionSession.deliverOpenUrlFromMac(applicationContext, url)
+        updateNotification("Mac 发来链接")
+    }
+
+    private fun sendOpenUrlError(message: String) {
+        try {
+            if (!client.isConnected) return
+            client.send(
+                JSONObject().apply {
+                    put("v", 1)
+                    put("type", "error")
+                    put("message", message)
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "send open_url error failed", e)
+        }
+    }
+
     fun onPeerClosed() {
         CompanionSession.clearSessionIconState()
         if (CompanionSession.userRequestedDisconnect) {
@@ -415,10 +463,16 @@ class CompanionConnectionService : Service() {
 
     private fun buildNotification(text: String): Notification {
         ensureChannel()
+        val openIntent = Intent(this, BrowserActivity::class.java).apply {
+            CompanionSession.pendingOpenUrlFromMac?.let {
+                putExtra(BrowserActivity.EXTRA_OPEN_URL, it)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
         val open = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, BrowserActivity::class.java),
+            openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -534,6 +588,10 @@ object CompanionSession {
     @Volatile
     var lastSmsEvent: String = ""
 
+    /** Mac 发来、尚未被 BrowserActivity 消费的 URL（通知点击兜底）。 */
+    @Volatile
+    var pendingOpenUrlFromMac: String? = null
+
     @Volatile
     var userRequestedDisconnect: Boolean = false
 
@@ -586,6 +644,7 @@ object CompanionSession {
     private var lastIconPushPackage: String = ""
 
     private val statusListeners = java.util.concurrent.CopyOnWriteArraySet<(String, String) -> Unit>()
+    private val openUrlListeners = java.util.concurrent.CopyOnWriteArraySet<(String) -> Unit>()
 
     fun clearSessionIconState() {
         sessionIconPushed.clear()
@@ -622,6 +681,50 @@ object CompanionSession {
 
     fun removeStatusListener(listener: (String, String) -> Unit) {
         statusListeners.remove(listener)
+    }
+
+    fun addOpenUrlListener(listener: (String) -> Unit) {
+        openUrlListeners.add(listener)
+    }
+
+    fun removeOpenUrlListener(listener: (String) -> Unit) {
+        openUrlListeners.remove(listener)
+    }
+
+    /**
+     * Mac 下发的 open_url：若浏览器在前台则回调开标签，否则拉起 BrowserActivity。
+     */
+    fun deliverOpenUrlFromMac(context: Context, url: String) {
+        pendingOpenUrlFromMac = url
+        if (openUrlListeners.isNotEmpty()) {
+            for (listener in openUrlListeners) {
+                try {
+                    listener(url)
+                } catch (_: Exception) {
+                }
+            }
+            pendingOpenUrlFromMac = null
+            return
+        }
+        try {
+            val intent = Intent(context, BrowserActivity::class.java).apply {
+                putExtra(BrowserActivity.EXTRA_OPEN_URL, url)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("MeoCompanion", "launch BrowserActivity for open_url failed", e)
+        }
+    }
+
+    fun consumePendingOpenUrlFromMac(): String? {
+        val url = pendingOpenUrlFromMac
+        pendingOpenUrlFromMac = null
+        return url
     }
 
     fun displayOtpLine(): String {

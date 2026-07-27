@@ -34,9 +34,19 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openURLsFromExternalSource:(NSArray<NSURL *> *)urls;
 - (void)showLoginAssistSettings:(nullable id)sender;
 - (void)showCompanionLinkSettings:(nullable id)sender;
+- (void)showFormMemoSettings:(nullable id)sender;
+- (void)toggleAssistSidebar:(nullable id)sender;
+- (void)showAssistSidebar:(nullable id)sender;
 - (void)toggleNotificationInboxSidebar:(nullable id)sender;
 - (void)oneClickLogin:(nullable id)sender;
+- (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;
+
+/// 供 LoginAssistController 打开助手侧栏。
+- (void)setAssistSidebarVisible:(BOOL)visible
+              revealingRecipeID:(nullable NSString *)recipeID
+                         memoID:(nullable NSString *)memoID;
+- (void)reloadAssistSidebarIfVisible;
 @end
 
 NS_ASSUME_NONNULL_END

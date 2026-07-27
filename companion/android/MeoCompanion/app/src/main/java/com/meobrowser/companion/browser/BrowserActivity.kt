@@ -90,6 +90,9 @@ class BrowserActivity : AppCompatActivity() {
     private val linkStatusListener: (String, String) -> Unit = { status, _ ->
         runOnUiThread { updateLinkStatusDot(status) }
     }
+    private val openUrlFromMacListener: (String) -> Unit = { url ->
+        runOnUiThread { openUrlFromMac(url) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,6 +185,7 @@ class BrowserActivity : AppCompatActivity() {
         super.onStart()
         SyncEngine.addShortcutChangeListener(shortcutSyncListener)
         CompanionSession.addStatusListener(linkStatusListener)
+        CompanionSession.addOpenUrlListener(openUrlFromMacListener)
         maybeAutoConnect()
         SyncEngine.onAppForeground(this)
         refreshShortcutGrid()
@@ -190,6 +194,7 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        CompanionSession.removeOpenUrlListener(openUrlFromMacListener)
         CompanionSession.removeStatusListener(linkStatusListener)
         SyncEngine.removeShortcutChangeListener(shortcutSyncListener)
         persistSession()
@@ -266,10 +271,31 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
-        val data = intent?.dataString ?: return
+        if (intent == null) return
+        val openUrl = intent.getStringExtra(EXTRA_OPEN_URL)
+            ?: CompanionSession.consumePendingOpenUrlFromMac()
+        if (!openUrl.isNullOrBlank()) {
+            intent.removeExtra(EXTRA_OPEN_URL)
+            openUrlFromMac(openUrl)
+            return
+        }
+        val data = intent.dataString ?: return
         if (data.isBlank()) return
         navigate(data)
         intent.data = null
+    }
+
+    private fun openUrlFromMac(url: String) {
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return
+        CompanionSession.pendingOpenUrlFromMac = null
+        val tab = tabManager.addTab(trimmed)
+        if (tab == null) {
+            Toast.makeText(this, "标签数已达上限（${browserPrefs.maxTabs}）", Toast.LENGTH_SHORT).show()
+            return
+        }
+        showActiveTab()
+        Toast.makeText(this, "已从 Mac 打开", Toast.LENGTH_SHORT).show()
     }
 
     private fun maybeAutoConnect() {
@@ -1011,5 +1037,6 @@ class BrowserActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MeoBrowser"
         private const val EXIT_FULLSCREEN_CHIP_MS = 3000L
+        const val EXTRA_OPEN_URL = "extra_open_url"
     }
 }

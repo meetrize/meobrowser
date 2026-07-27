@@ -1,6 +1,6 @@
 # Meo Companion 协议（V2 / V2.1 / V2.2 / V2.3 / V3）
 
-> MeoBrowser（Mac）↔ MeoCompanion / Android MeoBrowser：局域网 OTP、通知镜像、来电提醒、App 图标、可选微信侧栏回复（WR）与数据同步。  
+> MeoBrowser（Mac）↔ MeoCompanion / Android MeoBrowser：局域网 OTP、通知镜像、来电提醒、App 图标、可选微信侧栏回复（WR）、双向 Send Tab（`open_url`）与数据同步。  
 > 传输：Bonjour `_meologin._tcp` + 长度前缀 JSON。  
 > 同步设计：[companion-sync-design.md](companion-sync-design.md) · 通知镜像：[companion-notification-mirror-design.md](companion-notification-mirror-design.md) · 来电提醒：[companion-call-alert-feasibility-and-design.md](companion-call-alert-feasibility-and-design.md) · App 图标：[companion-notification-app-icon-design.md](companion-notification-app-icon-design.md) · 微信回复：[companion-wechat-sidebar-reply-design.md](companion-wechat-sidebar-reply-design.md)
 
@@ -77,6 +77,41 @@ UTF-8 JSON payload（length 字节）
 ```json
 { "v": 1, "type": "error", "message": "invalid pairing" }
 ```
+
+### open_url（双向 Send Tab）
+
+任一方在已连接且鉴权通过后，可向对端推送 URL，对端新开标签。方向靠「谁发谁收」区分。
+
+```json
+{
+  "v": 1,
+  "type": "open_url",
+  "deviceToken": "long-token",
+  "url": "https://example.com",
+  "title": "可选页面标题",
+  "ts": 1710000000
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `deviceToken` | ✅ | 配对令牌 |
+| `url` | ✅ | 仅 `http` / `https` |
+| `title` | 可选 | 展示用 |
+| `ts` | 推荐 | Unix 秒 |
+
+确认：
+
+```json
+{ "v": 1, "type": "open_url_ok", "url": "https://example.com" }
+```
+
+`url` 在确认帧中可选。非法 URL / 未授权回 `error`（`bad url` / `unauthorized` / `invalid open_url`）。
+
+| 方向 | 发送方 UI | 接收方行为 |
+|------|-----------|------------|
+| Android → Mac | ⋮「发送到 Mac」 | Mac 前台窗口新开标签 |
+| Mac → Android | 「标签页」→「发送到手机」或地址栏「发送到手机」图标 | 手机浏览器新开标签（后台则拉起） |
 
 ### invite（V2.4，Mac → Android，唤醒用）
 
@@ -328,7 +363,7 @@ Android：未知/关闭实验开关/无障碍未就绪时回 `wechat_reply_err`�
 
 1. **临时配对码**：Mac 生成 6 位数字 `pairingToken`，默认有效 5 分钟，可刷新；校验通过后签发长期 `deviceToken` 并清除 pending 码。  
 2. **固定安全码**：用户在 Mac / Android 设定相同安全码；`pairingToken` 与安全码匹配即签发/更新 `deviceToken`，**安全码不清除**。Android 在安全码模式下打开 App 应默认自动连接。  
-3. 之后 `otp` / `phone_notification` / `call_event` / `app_icon` / `wechat_reply` 必须带有效 `deviceToken`。  
+3. 之后 `otp` / `phone_notification` / `call_event` / `app_icon` / `wechat_reply` / `open_url` 必须带有效 `deviceToken`。  
 4. Mac「注销设备」删除 token；临时配对码需重新配对，安全码模式可用同一安全码再次连接。
 
 ## OTP 接受规则（Mac `OTPInbox`）
