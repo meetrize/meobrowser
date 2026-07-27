@@ -57,6 +57,10 @@
         return;
     }
     [webView stopLoading];
+    // 关闭标签 / 休眠前退出 HTML5 全屏与 PiP，避免残留全屏窗口。
+    if (@available(macOS 11.3, *)) {
+        [webView closeAllMediaPresentationsWithCompletionHandler:^{}];
+    }
     webView.navigationDelegate = nil;
     webView.UIDelegate = nil;
     if ([webView isKindOfClass:[BrowserWebView class]]) {

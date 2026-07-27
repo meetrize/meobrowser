@@ -38,6 +38,7 @@
 #import <Security/Security.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
+static void *kBrowserFullscreenStateContext = &kBrowserFullscreenStateContext;
 
 static NSString * const kBrowserSecurityBadgeTitle = @"连接不安全";
 
@@ -100,6 +101,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
 @property (nonatomic, weak) WKWebView *observedProgressWebView;
+@property (nonatomic, weak) WKWebView *observedFullscreenWebView;
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
@@ -206,6 +208,10 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     // UA 由 BrowserUserAgent + WebView.customUserAgent 对齐本机 Safari；此处不再写死 Version。
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    // WebKit 默认关闭 Element Fullscreen；YouTube / 抖音等会检测 document.fullscreenEnabled。
+    if (@available(macOS 12.3, *)) {
+        configuration.preferences.elementFullscreenEnabled = YES;
+    }
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
@@ -412,6 +418,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         self.pendingPersistBlock = nil;
     }
     [self stopObservingLoadingProgress];
+    [self stopObservingFullscreenState];
     [self.addressAutocompleteController uninstall];
     [self.downloadManager removeObserver:self];
     self.downloadPanel.panelDelegate = nil;
@@ -1202,9 +1209,42 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     [self cancelPendingSSLAuthForWebView:webView];
+    // 切走标签时若仍在 HTML5 全屏，先退出，避免全屏窗口孤儿化。
+    if (@available(macOS 13.0, *)) {
+        if (webView.fullscreenState != WKFullscreenStateNotInFullscreen) {
+            [webView closeAllMediaPresentationsWithCompletionHandler:^{}];
+        }
+    }
+    if (webView == self.observedFullscreenWebView) {
+        [self stopObservingFullscreenState];
+    }
     if (webView.superview == self.contentContainer) {
         [webView removeFromSuperview];
     }
+}
+
+/// 用 autoresizing 铺满 contentContainer。
+/// Element Fullscreen 时 WebKit 会移走 WKWebView 并剥掉 Auto Layout 约束；
+/// 若 translatesAutoresizingMaskIntoConstraints=NO 且无约束，视图尺寸为 0 → 黑/白屏（抖音等用 div 全屏时尤甚）。
+- (void)pinWebViewLayoutInSuperview:(WKWebView *)webView {
+    if (webView == nil || webView.superview == nil) {
+        return;
+    }
+    NSView *superview = webView.superview;
+    if (superview == self.contentContainer) {
+        NSMutableArray<NSLayoutConstraint *> *owned = [NSMutableArray array];
+        for (NSLayoutConstraint *constraint in self.contentContainer.constraints) {
+            if (constraint.firstItem == webView || constraint.secondItem == webView) {
+                [owned addObject:constraint];
+            }
+        }
+        if (owned.count > 0) {
+            [NSLayoutConstraint deactivateConstraints:owned];
+        }
+    }
+    webView.translatesAutoresizingMaskIntoConstraints = YES;
+    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    webView.frame = superview.bounds;
 }
 
 - (void)attachWebViewForTab:(BrowserTab *)tab {
@@ -1244,23 +1284,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         };
     }
 
-    if (webView.superview == self.contentContainer) {
-        webView.hidden = tab.isNewTabPage;
-        return;
-    }
-
-    webView.translatesAutoresizingMaskIntoConstraints = NO;
     webView.navigationDelegate = self;
     webView.UIDelegate = self;
     webView.hidden = tab.isNewTabPage;
-    [self.contentContainer addSubview:webView];
 
-    [NSLayoutConstraint activateConstraints:@[
-        [webView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
-        [webView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
-        [webView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
-        [webView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
-    ]];
+    if (webView.superview != self.contentContainer) {
+        [self.contentContainer addSubview:webView];
+    }
+    [self pinWebViewLayoutInSuperview:webView];
+    [self observeFullscreenStateForSelectedTab];
 }
 
 - (void)refreshTabsUI {
@@ -1332,6 +1364,64 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.observedProgressWebView = nil;
 }
 
+- (void)stopObservingFullscreenState {
+    WKWebView *webView = self.observedFullscreenWebView;
+    if (!webView) {
+        return;
+    }
+    if (@available(macOS 13.0, *)) {
+        @try {
+            [webView removeObserver:self
+                         forKeyPath:@"fullscreenState"
+                            context:kBrowserFullscreenStateContext];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+    self.observedFullscreenWebView = nil;
+}
+
+- (void)observeFullscreenStateForSelectedTab {
+    if (@available(macOS 13.0, *)) {
+        WKWebView *webView = self.webView;
+        BrowserTab *tab = self.tabController.selectedTab;
+        if (webView == self.observedFullscreenWebView) {
+            return;
+        }
+        [self stopObservingFullscreenState];
+        if (!webView || tab.isNewTabPage) {
+            return;
+        }
+        self.observedFullscreenWebView = webView;
+        [webView addObserver:self
+                  forKeyPath:@"fullscreenState"
+                     options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial
+                     context:kBrowserFullscreenStateContext];
+    }
+}
+
+- (void)handleWebViewFullscreenStateChange:(WKWebView *)webView {
+    if (@available(macOS 13.0, *)) {
+        // 全屏过程中 WebKit 会把 WKWebView 挪到自有窗口并清约束；立即用 autoresizing 铺满，避免 0 尺寸空白。
+        switch (webView.fullscreenState) {
+            case WKFullscreenStateEnteringFullscreen:
+            case WKFullscreenStateInFullscreen:
+            case WKFullscreenStateExitingFullscreen:
+                [self pinWebViewLayoutInSuperview:webView];
+                break;
+            case WKFullscreenStateNotInFullscreen:
+                if (webView.superview == self.contentContainer) {
+                    [self pinWebViewLayoutInSuperview:webView];
+                } else if (webView.superview == nil &&
+                           self.tabController.selectedTab.webView == webView &&
+                           !self.tabController.selectedTab.isNewTabPage) {
+                    [self.contentContainer addSubview:webView];
+                    [self pinWebViewLayoutInSuperview:webView];
+                }
+                break;
+        }
+    }
+}
+
 - (void)observeLoadingProgressForSelectedTab {
     WKWebView *webView = self.webView;
     BrowserTab *tab = self.tabController.selectedTab;
@@ -1380,6 +1470,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                        context:(void *)context {
+    if (context == kBrowserFullscreenStateContext) {
+        if ([keyPath isEqualToString:@"fullscreenState"] && [object isKindOfClass:[WKWebView class]]) {
+            [self handleWebViewFullscreenStateChange:(WKWebView *)object];
+        }
+        return;
+    }
     if (context != kBrowserEstimatedProgressContext) {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
         return;
