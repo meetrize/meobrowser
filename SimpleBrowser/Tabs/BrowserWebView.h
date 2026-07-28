@@ -31,7 +31,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// 对 http: 主文档导航应剥离 fragment，经查询参数在 document-start 写回 hash。
 + (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller;
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView;
-/// 同文档改 hash：replaceState + hashchange，避免 http+# 经代理发网。
++ (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView
+                              completion:(void (^ _Nullable)(NSString * _Nullable href))completion;
+/// 同文档改 hash：replaceState + hashchange + 滚到锚点，避免 http+# 经代理发网。
+/// completion 返回页面最终 location.href（含 #），供地址栏同步；失败时传 nil。
++ (void)applySameDocumentFragment:(nullable NSString *)fragment
+                        inWebView:(WKWebView *)webView
+                       completion:(void (^ _Nullable)(NSString * _Nullable href))completion;
 + (void)applySameDocumentFragment:(nullable NSString *)fragment inWebView:(WKWebView *)webView;
 + (BOOL)shouldStripFragmentForNetworkLoadOfURL:(nullable NSURL *)url;
 + (BOOL)URL:(nullable NSURL *)url isSameDocumentAsURL:(nullable NSURL *)otherURL;

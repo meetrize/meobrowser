@@ -2738,6 +2738,54 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NS
                             completionHandler:completionHandler
                             fallbackReloadURL:fallbackURL];
 }
+
+/// 同文档 #锚点：页面已 replaceState，但取消导航不会走 didCommit，须手写地址栏（含 #）。
+- (void)applySameDocumentFragmentNavigation:(NSURL *)requestURL inWebView:(WKWebView *)webView {
+    NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:requestURL] ?: requestURL;
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (tab && [BrowsingPreferences isPersistableURL:publicURL]) {
+        tab.restorableURL = publicURL;
+        tab.addressBarDraft = nil;
+    }
+    // 先按目标 URL 立刻刷新，避免等 JS 回调期间地址栏仍无 #。
+    if (tab && webView == self.webView && !self.addressFieldIsEditing) {
+        self.addressField.stringValue = publicURL.absoluteString ?: @"";
+        self.lastAddressBarTab = tab;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    [BrowserWebView applySameDocumentFragment:requestURL.fragment
+                                    inWebView:webView
+                                   completion:^(NSString *href) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        if (!strongSelf || !strongWebView) {
+            return;
+        }
+        BrowserTab *current = [strongSelf.tabController tabForWebView:strongWebView];
+        if (!current) {
+            return;
+        }
+        NSURL *hrefURL = nil;
+        if (href.length > 0) {
+            hrefURL = [BrowserWebView publicURLFromInternalURL:[NSURL URLWithString:href]];
+        }
+        if (!hrefURL) {
+            hrefURL = publicURL;
+        }
+        if ([BrowsingPreferences isPersistableURL:hrefURL]) {
+            current.restorableURL = hrefURL;
+        }
+        current.addressBarDraft = nil;
+        if (strongWebView == strongSelf.webView && !strongSelf.addressFieldIsEditing) {
+            strongSelf.addressField.stringValue = hrefURL.absoluteString ?: @"";
+            strongSelf.lastAddressBarTab = current;
+        }
+        [strongSelf schedulePersistTabSession];
+    }];
+}
+
 - (void)webView:(WKWebView *)webView
 decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
@@ -2763,7 +2811,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         && [webView isKindOfClass:[BrowserWebView class]]) {
         if (sameDocument) {
             decisionHandler(WKNavigationActionPolicyCancel);
-            [BrowserWebView applySameDocumentFragment:requestURL.fragment inWebView:webView];
+            // 取消后不会走 didCommit；须主动把地址栏写成带 # 的 URL。
+            [self applySameDocumentFragmentNavigation:requestURL inWebView:webView];
             return;
         }
         decisionHandler(WKNavigationActionPolicyCancel);
@@ -2842,24 +2891,45 @@ didBecomeDownload:(WKDownload *)download {
     if (![tab isMainFrameNavigation:navigation]) {
         return;
     }
-    [BrowserWebView cleanupHashRestoreQueryInWebView:webView];
     [self.findBarController noteNavigationCommittedInWebView:webView];
+
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    // 先按 publicURL（含从 __meo_hf 还原的 #）写入 restorable，避免后续 sync 丢锚点。
+    if (tab.addressBarDraft == nil) {
+        NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:webView.URL];
+        if ([BrowsingPreferences isPersistableURL:publicURL]) {
+            tab.restorableURL = publicURL;
+        }
+    }
+    [BrowserWebView cleanupHashRestoreQueryInWebView:webView completion:^(NSString *href) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        if (!strongSelf || !strongWebView) {
+            return;
+        }
+        BrowserTab *current = [strongSelf.tabController tabForWebView:strongWebView];
+        if (!current || current.addressBarDraft != nil) {
+            return;
+        }
+        NSURL *hrefURL = nil;
+        if (href.length > 0) {
+            hrefURL = [BrowserWebView publicURLFromInternalURL:[NSURL URLWithString:href]];
+        }
+        if (!hrefURL) {
+            hrefURL = [BrowserWebView publicURLFromInternalURL:strongWebView.URL];
+        }
+        if ([BrowsingPreferences isPersistableURL:hrefURL]) {
+            current.restorableURL = hrefURL;
+        }
+        if (strongWebView == strongSelf.webView && !strongSelf.addressFieldIsEditing) {
+            [strongSelf applyAddressBarStringForTab:current];
+        }
+    }];
+
     // URL 在 commit 时已可用；尽早刷新星标，避免等 didFinish。
     if (webView == self.webView) {
         if (tab.addressBarDraft == nil) {
-            // cleanup 是异步 JS；稍后用对外 URL（#hash）刷新地址栏，避免残留 __meo_hf。
-            __weak typeof(self) weakSelf = self;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
-                           dispatch_get_main_queue(), ^{
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (!strongSelf || strongSelf.webView != webView) {
-                    return;
-                }
-                BrowserTab *current = [strongSelf.tabController tabForWebView:webView];
-                if (current.addressBarDraft == nil) {
-                    [strongSelf applyAddressBarStringForTab:current];
-                }
-            });
             [self applyAddressBarStringForTab:tab];
         }
         self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
@@ -2872,8 +2942,6 @@ didBecomeDownload:(WKDownload *)download {
 
     // hash 恢复脚本里的 window.stop() 可能让 isLoading 变 NO 却不回调 didFinish；
     // 轮询几次，避免标签/进度条一直转圈。
-    __weak typeof(self) weakSelf = self;
-    __weak WKWebView *weakWebView = webView;
     for (NSInteger i = 1; i <= 8; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 200 * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{

@@ -14,6 +14,31 @@ static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 
 @implementation BrowserWebView
 
+/// replaceState 不会像原生 #锚点导航那样滚动；补上 id/name 定位（与浏览器行为对齐）。
+/// 使用 behavior:'instant'，避免站点 html{scroll-behavior:smooth} 把跳转拖成动画、与后续脚本抢滚动。
+static NSString *MeoScrollToFragmentJS(void) {
+    return
+        @"function __meoScrollToFragment(h){"
+        @"if(!h){try{window.scrollTo(0,0);}catch(e){}return true;}"
+        @"var el=document.getElementById(h);"
+        @"if(!el){var list=document.getElementsByName(h);if(list&&list.length)el=list[0];}"
+        @"if(!el)return false;"
+        @"try{el.scrollIntoView({block:'start',inline:'nearest',behavior:'instant'});}"
+        @"catch(e){try{el.scrollIntoView(true);}catch(e2){}}"
+        @"try{if(el.tabIndex<0)el.tabIndex=-1;el.focus({preventScroll:true});}catch(e3){"
+        @"try{el.focus();}catch(e4){}"
+        @"}"
+        @"return true;"
+        @"}"
+        @"function __meoScrollToFragmentWhenReady(h){"
+        @"if(__meoScrollToFragment(h))return;"
+        @"var left=40;"
+        @"var timer=setInterval(function(){"
+        @"if(__meoScrollToFragment(h)||--left<=0)clearInterval(timer);"
+        @"},50);"
+        @"}";
+}
+
 + (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller {
     if (controller == nil) {
         return;
@@ -22,20 +47,30 @@ static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
     // 或加载后再改 hash——代理下会变成带 # 的真实导航 → 404）。
     // replaceState 含 # 时 WebKit 可能一直 isLoading；DOMContentLoaded 后稍延迟 window.stop()
     // 结束幽灵加载，又给 SPA 留出发起接口请求的时间（过早 stop 会出现「连接服务器超时」）。
-    NSString *restoreJS =
+    // replaceState 不会滚到锚点，须在 DOM 就绪后补 scrollIntoView。
+    NSString *restoreJS = [NSString stringWithFormat:
         @"(function(){"
         @"try{"
+        @"%@;"
         @"var qs=new URLSearchParams(location.search);"
         @"if(!qs.has('__meo_hf'))return;"
         @"var h=qs.get('__meo_hf')||'';"
         @"qs.delete('__meo_hf');"
         @"var q=qs.toString();"
         @"history.replaceState(null,'',location.pathname+(q?('?'+q):'')+'#'+h);"
+        @"var scroll=function(){__meoScrollToFragmentWhenReady(h);};"
+        @"if(document.readyState==='loading'){"
         @"document.addEventListener('DOMContentLoaded',function(){"
+        @"scroll();"
         @"setTimeout(function(){try{window.stop();}catch(e){}},150);"
         @"});"
+        @"}else{"
+        @"scroll();"
+        @"setTimeout(function(){try{window.stop();}catch(e){}},150);"
+        @"}"
         @"}catch(e){}"
-        @"})();";
+        @"})();",
+        MeoScrollToFragmentJS()];
     [controller addUserScript:[[WKUserScript alloc] initWithSource:restoreJS
                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                   forMainFrameOnly:YES]];
@@ -43,47 +78,93 @@ static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 
 /// 页面 commit 后清掉残留 __meo_hf；写回 hash 只用 replaceState，避免触发联网导航。
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView {
+    [self cleanupHashRestoreQueryInWebView:webView completion:nil];
+}
+
++ (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView
+                              completion:(void (^)(NSString *href))completion {
     if (webView == nil) {
+        if (completion) {
+            completion(nil);
+        }
         return;
     }
-    NSString *js =
+    NSString *js = [NSString stringWithFormat:
         @"(function(){"
         @"try{"
+        @"%@;"
         @"var qs=new URLSearchParams(location.search);"
-        @"if(!qs.has('__meo_hf'))return;"
+        @"if(!qs.has('__meo_hf'))return location.href;"
         @"var h=qs.get('__meo_hf')||'';"
         @"qs.delete('__meo_hf');"
         @"var q=qs.toString();"
         @"var path=location.pathname+(q?('?'+q):'');"
         @"var hash=(location.hash&&location.hash.length>1)?location.hash:('#'+h);"
         @"history.replaceState(null,'',path+hash);"
+        @"var frag=hash.length>1?hash.substring(1):h;"
+        @"__meoScrollToFragmentWhenReady(frag);"
         @"setTimeout(function(){try{window.stop();}catch(e){}},150);"
-        @"}catch(e){}"
-        @"})();";
-    [webView evaluateJavaScript:js completionHandler:nil];
+        @"return location.href;"
+        @"}catch(e){return null;}"
+        @"})();",
+        MeoScrollToFragmentJS()];
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (!completion) {
+            return;
+        }
+        if (error || ![result isKindOfClass:[NSString class]]) {
+            completion(nil);
+            return;
+        }
+        completion((NSString *)result);
+    }];
 }
 
-/// 同文档仅改 hash：用 replaceState，避免 http+# 经代理发网 404。
+/// 同文档仅改 hash：用 replaceState，避免 http+# 经代理发网 404；并滚到锚点。
 + (void)applySameDocumentFragment:(NSString *)fragment inWebView:(WKWebView *)webView {
+    [self applySameDocumentFragment:fragment inWebView:webView completion:nil];
+}
+
++ (void)applySameDocumentFragment:(NSString *)fragment
+                        inWebView:(WKWebView *)webView
+                       completion:(void (^)(NSString *href))completion {
     if (webView == nil) {
+        if (completion) {
+            completion(nil);
+        }
         return;
     }
     NSString *frag = fragment ?: @"";
     NSString *escaped = [[[frag stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
         stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]
         stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    // 返回 location.href，便于原生侧立刻把地址栏写成带 # 的对外 URL。
     NSString *js = [NSString stringWithFormat:
         @"(function(){try{"
+        @"%@;"
         @"var h='%@';"
         @"var want=h.length?('#'+h):'';"
-        @"if(location.hash===want)return;"
+        @"var changed=location.hash!==want;"
+        @"if(changed){"
         @"history.replaceState(null,'',location.pathname+location.search+want);"
         @"try{window.dispatchEvent(new HashChangeEvent('hashchange'));}catch(e){"
         @"try{window.dispatchEvent(new Event('hashchange'));}catch(e2){}"
         @"}"
-        @"}catch(e){}})();",
-        escaped];
-    [webView evaluateJavaScript:js completionHandler:nil];
+        @"}"
+        @"__meoScrollToFragmentWhenReady(h);"
+        @"return location.href;"
+        @"}catch(e){return null;}})();",
+        MeoScrollToFragmentJS(), escaped];
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (!completion) {
+            return;
+        }
+        if (error || ![result isKindOfClass:[NSString class]]) {
+            completion(nil);
+            return;
+        }
+        completion((NSString *)result);
+    }];
 }
 
 + (NSURL *)URLByNormalizingEmbeddedFragment:(NSURL *)url {

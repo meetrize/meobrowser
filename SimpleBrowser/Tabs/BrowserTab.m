@@ -36,10 +36,22 @@
     }
     NSURL *liveURL = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
     liveURL = [BrowserWebView publicURLFromInternalURL:liveURL];
+    NSURL *restored = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
+
+    // 同文档锚点经 replaceState 后，WKWebView.URL 有时尚未带上 #；保留 restorable 中的 fragment。
+    if (liveURL != nil && restored.fragment.length > 0 && liveURL.fragment.length == 0
+        && [BrowserWebView URL:liveURL isSameDocumentAsURL:restored]) {
+        NSURLComponents *components = [NSURLComponents componentsWithURL:liveURL resolvingAgainstBaseURL:NO];
+        components.fragment = restored.fragment;
+        NSURL *merged = components.URL;
+        if ([BrowsingPreferences isPersistableURL:merged]) {
+            return merged;
+        }
+    }
+
     if ([BrowsingPreferences isPersistableURL:liveURL]) {
         return liveURL;
     }
-    NSURL *restored = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     if ([BrowsingPreferences isPersistableURL:restored]) {
         return restored;
     }
