@@ -18,6 +18,8 @@ FOUNDATION_EXPORT NSNotificationName const FormMemoStoreDidChangeNotification;
 - (BOOL)upsertMemo:(FormMemo *)memo error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)deleteMemoWithID:(NSString *)memoID error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)setDefaultMemoID:(NSString *)memoID error:(NSError * _Nullable * _Nullable)error;
+/// 云同步写回：整表替换，保留各 memo.updatedAt，不强制刷新时间戳。
+- (BOOL)replaceAllMemos:(NSArray<FormMemo *> *)memos error:(NSError * _Nullable * _Nullable)error;
 
 @end
 

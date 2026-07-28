@@ -201,4 +201,19 @@ NSNotificationName const FormMemoStoreDidChangeNotification = @"FormMemoStoreDid
     return [self persist:error];
 }
 
+- (BOOL)replaceAllMemos:(NSArray<FormMemo *> *)memos error:(NSError **)error {
+    NSMutableArray<FormMemo *> *copied = [NSMutableArray array];
+    for (FormMemo *memo in memos) {
+        if (![memo isKindOfClass:[FormMemo class]] || memo.memoID.length == 0 || memo.host.length == 0) {
+            continue;
+        }
+        FormMemo *stored = [memo copy];
+        stored.host = stored.host.lowercaseString;
+        [copied addObject:stored];
+    }
+    [self.memos removeAllObjects];
+    [self.memos addObjectsFromArray:copied];
+    return [self persist:error];
+}
+
 @end

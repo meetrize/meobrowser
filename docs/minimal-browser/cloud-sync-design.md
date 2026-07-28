@@ -1,8 +1,9 @@
 # MeoBrowser 云端同步 — 设计方案
 
 > 目标：在**零自建服务端**前提下，为多台 Mac（及未来同 Apple ID 设备）同步「个人工作区」核心数据；与现有 Companion 局域网同步共用记录模型，互不替代。  
-> 状态：设计草案（未实现）  
-> 关联：[companion-sync-design.md](companion-sync-design.md) · [companion-protocol.md](companion-protocol.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [auto-login-design.md](auto-login-design.md) · [site-form-memo-design.md](site-form-memo-design.md)
+> 状态：**MVP 已实现（2026-07-28）** — SyncCore + CloudKit 私有库同步 shortcut / form_memo；设置页可开关。  
+> 开发计划：[cloud-sync-development-plan.md](cloud-sync-development-plan.md) · Cursor：[.cursor/plans/cloud-sync.plan.md](../../.cursor/plans/cloud-sync.plan.md)  
+> 关联：[companion-sync-design.md](companion-sync-design.md) · [companion-protocol.md](companion-protocol.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [auto-login-design.md](auto-login-design.md) · [site-form-memo-design.md](site-form-memo-design.md) · [server-sync-design.md](server-sync-design.md)（自建多应用 / 无 CloudKit 签名替代）
 
 ---
 
@@ -415,4 +416,4 @@ SimpleBrowser/SyncCore/
 | 和手机怎么协同？ | **继续 Companion LAN**；云端不替代局域网互联；Memo 首版仅 iCloud |
 | 怎么简化运维？ | 无服务器、无 Meo 账号后端；仅需 Apple 开发者 CloudKit 容器 |
 
-下一步实现入口：**CS-0 抽出 SyncCore → CS-1 打通 shortcut + form_memo**。
+下一步实现入口：**按 [cloud-sync-development-plan.md](cloud-sync-development-plan.md) / [.cursor/plans/cloud-sync.plan.md](../../.cursor/plans/cloud-sync.plan.md) 执行 CS-0 → CS-1 → CS-3。**
