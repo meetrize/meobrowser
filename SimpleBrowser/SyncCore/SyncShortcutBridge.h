@@ -4,7 +4,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface CloudSyncShortcutBridge : NSObject
+@interface SyncShortcutBridge : NSObject
 
 + (instancetype)sharedBridge;
 

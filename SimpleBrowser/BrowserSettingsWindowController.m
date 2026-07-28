@@ -3,9 +3,11 @@
 #import "BrowserUserAgent.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
-#import "CloudSyncSettings.h"
-#import "CloudSyncEngine.h"
-#import "CloudSyncAccountObserver.h"
+#import "ServerSyncSettings.h"
+#import "ServerSyncEngine.h"
+#import "ServerSyncAuth.h"
+#import "SBTextField.h"
+#import "SBSecureTextField.h"
 #import <WebKit/WebKit.h>
 
 @interface BrowserSettingsWindowController ()
@@ -16,20 +18,28 @@
 @property (nonatomic, strong) NSButton *userAgentCopyButton;
 @property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
 @property (nonatomic, strong) NSTextField *privacyHintLabel;
-@property (nonatomic, strong) NSTextField *iCloudStatusLabel;
-@property (nonatomic, strong) NSButton *iCloudEnabledCheckbox;
-@property (nonatomic, strong) NSButton *iCloudShortcutCheckbox;
-@property (nonatomic, strong) NSButton *iCloudFormMemoCheckbox;
-@property (nonatomic, strong) NSTextField *iCloudLastSyncLabel;
-@property (nonatomic, strong) NSButton *iCloudSyncNowButton;
-@property (nonatomic, strong) NSButton *iCloudDeleteButton;
-@property (nonatomic, strong) NSTextField *iCloudHintLabel;
+
+@property (nonatomic, strong) SBTextField *serverURLField;
+@property (nonatomic, strong) SBTextField *serverEmailField;
+@property (nonatomic, strong) SBSecureTextField *serverPasswordField;
+@property (nonatomic, strong) NSBox *serverLoginBadge;
+@property (nonatomic, strong) NSTextField *serverLoginBadgeLabel;
+@property (nonatomic, strong) NSTextField *serverStatusLabel;
+@property (nonatomic, strong) NSButton *serverRegisterButton;
+@property (nonatomic, strong) NSButton *serverLoginButton;
+@property (nonatomic, strong) NSButton *serverLogoutButton;
+@property (nonatomic, strong) NSButton *serverEnabledCheckbox;
+@property (nonatomic, strong) NSButton *serverShortcutCheckbox;
+@property (nonatomic, strong) NSButton *serverFormMemoCheckbox;
+@property (nonatomic, strong) NSTextField *serverLastSyncLabel;
+@property (nonatomic, strong) NSButton *serverSyncNowButton;
+@property (nonatomic, strong) NSTextField *serverHintLabel;
 @end
 
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 640)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 760)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -40,12 +50,12 @@
     if (self) {
         [self buildUI];
         [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(cloudSyncUINeedsRefresh:)
-                                                     name:CloudSyncSettingsDidChangeNotification
+                                                 selector:@selector(serverSyncUINeedsRefresh:)
+                                                     name:ServerSyncSettingsDidChangeNotification
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(cloudSyncUINeedsRefresh:)
-                                                     name:CloudSyncEngineStateDidChangeNotification
+                                                 selector:@selector(serverSyncUINeedsRefresh:)
+                                                     name:ServerSyncEngineStateDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -55,172 +65,149 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-- (void)buildUI {
-    NSTextField *searchCaption = [NSTextField labelWithString:@"默认搜索引擎"];
-    searchCaption.font = [NSFont systemFontOfSize:13];
+- (NSTextField *)makeCaption:(NSString *)text {
+    NSTextField *label = [NSTextField labelWithString:text];
+    label.font = [NSFont systemFontOfSize:13];
+    return label;
+}
 
+- (NSBox *)makeSeparator {
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSZeroRect];
+    separator.boxType = NSBoxSeparator;
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    return separator;
+}
+
+- (void)buildUI {
+    NSTextField *searchCaption = [self makeCaption:@"默认搜索引擎"];
     self.searchEnginePopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.searchEnginePopUp.translatesAutoresizingMaskIntoConstraints = NO;
-    self.searchEnginePopUp.controlSize = NSControlSizeRegular;
     self.searchEnginePopUp.target = self;
     self.searchEnginePopUp.action = @selector(searchEngineChanged:);
-
     for (NSDictionary *engine in [BrowsingPreferences availableSearchEngines]) {
         [self.searchEnginePopUp addItemWithTitle:engine[@"name"]];
-        NSMenuItem *item = self.searchEnginePopUp.lastItem;
-        item.representedObject = engine[@"id"];
+        self.searchEnginePopUp.lastItem.representedObject = engine[@"id"];
     }
     [self selectCurrentSearchEngineInPopUp];
-
     NSGridView *searchGrid = [NSGridView gridViewWithViews:@[@[searchCaption, self.searchEnginePopUp]]];
     searchGrid.columnSpacing = 12;
-    searchGrid.rowSpacing = 8;
-    [searchGrid columnAtIndex:0].xPlacement = NSGridCellPlacementLeading;
     [searchGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
     NSTextField *searchHint = [NSTextField labelWithString:@"在地址栏输入非网址内容时将使用所选搜索引擎。"];
     searchHint.font = [NSFont systemFontOfSize:11];
     searchHint.textColor = [NSColor secondaryLabelColor];
 
-    NSBox *separator = [[NSBox alloc] initWithFrame:NSZeroRect];
-    separator.boxType = NSBoxSeparator;
-    separator.translatesAutoresizingMaskIntoConstraints = NO;
-
-    NSTextField *browserCaption = [NSTextField labelWithString:@"默认浏览器"];
-    browserCaption.font = [NSFont systemFontOfSize:13];
-
+    NSBox *separator = [self makeSeparator];
+    NSTextField *browserCaption = [self makeCaption:@"默认浏览器"];
     self.defaultBrowserStatusLabel = [NSTextField labelWithString:@""];
     self.defaultBrowserStatusLabel.font = [NSFont systemFontOfSize:12];
     self.defaultBrowserStatusLabel.textColor = [NSColor secondaryLabelColor];
-
-    self.setDefaultBrowserButton = [NSButton buttonWithTitle:@"设为默认浏览器"
-                                                      target:self
-                                                      action:@selector(setDefaultBrowserClicked:)];
+    self.setDefaultBrowserButton = [NSButton buttonWithTitle:@"设为默认浏览器" target:self action:@selector(setDefaultBrowserClicked:)];
     self.setDefaultBrowserButton.bezelStyle = NSBezelStyleRounded;
-    self.setDefaultBrowserButton.controlSize = NSControlSizeRegular;
-
     NSStackView *browserRow = [NSStackView stackViewWithViews:@[self.defaultBrowserStatusLabel, self.setDefaultBrowserButton]];
     browserRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    browserRow.alignment = NSLayoutAttributeCenterY;
     browserRow.spacing = 12;
-    browserRow.distribution = NSStackViewDistributionFill;
-
-    NSTextField *browserHint = [NSTextField wrappingLabelWithString:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。更改时系统可能会弹出确认对话框。"];
+    NSTextField *browserHint = [NSTextField wrappingLabelWithString:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。"];
     browserHint.font = [NSFont systemFontOfSize:11];
     browserHint.textColor = [NSColor secondaryLabelColor];
-    browserHint.preferredMaxLayoutWidth = 428;
+    browserHint.preferredMaxLayoutWidth = 448;
 
-    NSBox *separator2 = [[NSBox alloc] initWithFrame:NSZeroRect];
-    separator2.boxType = NSBoxSeparator;
-    separator2.translatesAutoresizingMaskIntoConstraints = NO;
+    NSBox *separator2 = [self makeSeparator];
+    NSTextField *syncCaption = [self makeCaption:@"Meo 云同步"];
 
-    NSTextField *iCloudCaption = [NSTextField labelWithString:@"iCloud 同步"];
-    iCloudCaption.font = [NSFont systemFontOfSize:13];
+    // 登录状态徽标（显著）
+    self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
+    self.serverLoginBadge.boxType = NSBoxCustom;
+    self.serverLoginBadge.borderType = NSLineBorder;
+    self.serverLoginBadge.borderWidth = 1;
+    self.serverLoginBadge.cornerRadius = 8;
+    self.serverLoginBadge.titlePosition = NSNoTitle;
+    self.serverLoginBadge.translatesAutoresizingMaskIntoConstraints = NO;
+    self.serverLoginBadgeLabel = [NSTextField labelWithString:@""];
+    self.serverLoginBadgeLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    self.serverLoginBadgeLabel.alignment = NSTextAlignmentCenter;
+    self.serverLoginBadgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.serverLoginBadge.contentView addSubview:self.serverLoginBadgeLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.serverLoginBadge.heightAnchor constraintEqualToConstant:36],
+        [self.serverLoginBadgeLabel.centerYAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.centerYAnchor],
+        [self.serverLoginBadgeLabel.leadingAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.leadingAnchor constant:12],
+        [self.serverLoginBadgeLabel.trailingAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.trailingAnchor constant:-12],
+    ]];
 
-    self.iCloudStatusLabel = [NSTextField labelWithString:@""];
-    self.iCloudStatusLabel.font = [NSFont systemFontOfSize:12];
-    self.iCloudStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.serverStatusLabel = [NSTextField labelWithString:@""];
+    self.serverStatusLabel.font = [NSFont systemFontOfSize:12];
+    self.serverStatusLabel.textColor = [NSColor secondaryLabelColor];
 
-    self.iCloudEnabledCheckbox = [NSButton checkboxWithTitle:@"使用 iCloud 同步浏览数据"
-                                                      target:self
-                                                      action:@selector(iCloudEnabledToggled:)];
+    self.serverURLField = [SBTextField standardField];
+    self.serverURLField.placeholderString = @"http://117.72.44.160:8090";
+    self.serverURLField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.serverURLField.widthAnchor constraintGreaterThanOrEqualToConstant:320].active = YES;
 
-    self.iCloudShortcutCheckbox = [NSButton checkboxWithTitle:@"快捷方式（Launchpad）"
-                                                       target:self
-                                                       action:@selector(iCloudShortcutToggled:)];
-    self.iCloudFormMemoCheckbox = [NSButton checkboxWithTitle:@"站点表单备忘"
-                                                       target:self
-                                                       action:@selector(iCloudFormMemoToggled:)];
+    self.serverEmailField = [SBTextField standardField];
+    self.serverEmailField.placeholderString = @"邮箱";
+    self.serverPasswordField = [SBSecureTextField standardField];
+    self.serverPasswordField.placeholderString = @"密码（至少 8 位）";
 
-    self.iCloudLastSyncLabel = [NSTextField labelWithString:@""];
-    self.iCloudLastSyncLabel.font = [NSFont systemFontOfSize:11];
-    self.iCloudLastSyncLabel.textColor = [NSColor secondaryLabelColor];
+    NSGridView *syncGrid = [NSGridView gridViewWithViews:@[
+        @[[NSTextField labelWithString:@"服务器"], self.serverURLField],
+        @[[NSTextField labelWithString:@"邮箱"], self.serverEmailField],
+        @[[NSTextField labelWithString:@"密码"], self.serverPasswordField],
+    ]];
+    syncGrid.columnSpacing = 12;
+    syncGrid.rowSpacing = 8;
+    [syncGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
-    self.iCloudSyncNowButton = [NSButton buttonWithTitle:@"立即同步"
-                                                  target:self
-                                                  action:@selector(iCloudSyncNowClicked:)];
-    self.iCloudSyncNowButton.bezelStyle = NSBezelStyleRounded;
-    self.iCloudSyncNowButton.controlSize = NSControlSizeRegular;
+    self.serverRegisterButton = [NSButton buttonWithTitle:@"注册" target:self action:@selector(serverRegisterClicked:)];
+    self.serverLoginButton = [NSButton buttonWithTitle:@"登录" target:self action:@selector(serverLoginClicked:)];
+    self.serverLogoutButton = [NSButton buttonWithTitle:@"退出登录" target:self action:@selector(serverLogoutClicked:)];
+    for (NSButton *b in @[self.serverRegisterButton, self.serverLoginButton, self.serverLogoutButton]) {
+        b.bezelStyle = NSBezelStyleRounded;
+    }
+    NSStackView *authRow = [NSStackView stackViewWithViews:@[self.serverRegisterButton, self.serverLoginButton, self.serverLogoutButton]];
+    authRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    authRow.spacing = 8;
 
-    self.iCloudDeleteButton = [NSButton buttonWithTitle:@"从 iCloud 删除同步数据…"
-                                                 target:self
-                                                 action:@selector(iCloudDeleteClicked:)];
-    self.iCloudDeleteButton.bezelStyle = NSBezelStyleRounded;
-    self.iCloudDeleteButton.controlSize = NSControlSizeRegular;
+    self.serverEnabledCheckbox = [NSButton checkboxWithTitle:@"启用云同步" target:self action:@selector(serverEnabledToggled:)];
+    self.serverShortcutCheckbox = [NSButton checkboxWithTitle:@"快捷方式（Launchpad）" target:self action:@selector(serverShortcutToggled:)];
+    self.serverFormMemoCheckbox = [NSButton checkboxWithTitle:@"站点表单备忘" target:self action:@selector(serverFormMemoToggled:)];
+    self.serverLastSyncLabel = [NSTextField labelWithString:@""];
+    self.serverLastSyncLabel.font = [NSFont systemFontOfSize:11];
+    self.serverLastSyncLabel.textColor = [NSColor secondaryLabelColor];
+    self.serverSyncNowButton = [NSButton buttonWithTitle:@"立即同步" target:self action:@selector(serverSyncNowClicked:)];
+    self.serverSyncNowButton.bezelStyle = NSBezelStyleRounded;
 
-    NSStackView *iCloudButtons = [NSStackView stackViewWithViews:@[self.iCloudSyncNowButton, self.iCloudDeleteButton]];
-    iCloudButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    iCloudButtons.spacing = 12;
+    self.serverHintLabel = [NSTextField wrappingLabelWithString:
+        @"数据保存在你自己的 PocketBase 服务器，无需 Apple 开发者账号。"
+        @"密码、Cookie、Companion 通知不会上传。表单备忘字段为明文。"];
+    self.serverHintLabel.font = [NSFont systemFontOfSize:11];
+    self.serverHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.serverHintLabel.preferredMaxLayoutWidth = 448;
 
-    self.iCloudHintLabel = [NSTextField wrappingLabelWithString:
-        @"数据保存在你自己的 iCloud 私有库，MeoBrowser 无自建同步服务器。"
-        @"密码、Cookie、Companion 通知不会上传。"
-        @"开启「站点表单备忘」时字段明文会进入你的 iCloud。"
-        @"本地 adhoc 构建通常没有 CloudKit 签名 entitlement，打开本页不会调用 CloudKit；"
-        @"真机双向同步需开发者证书签名并配置容器 iCloud.com.example.MeoBrowser。"];
-    self.iCloudHintLabel.font = [NSFont systemFontOfSize:11];
-    self.iCloudHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.iCloudHintLabel.preferredMaxLayoutWidth = 428;
-
-    NSBox *separator3 = [[NSBox alloc] initWithFrame:NSZeroRect];
-    separator3.boxType = NSBoxSeparator;
-    separator3.translatesAutoresizingMaskIntoConstraints = NO;
-
-    NSTextField *privacyCaption = [NSTextField labelWithString:@"隐私与数据"];
-    privacyCaption.font = [NSFont systemFontOfSize:13];
-
-    self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…"
-                                                     target:self
-                                                     action:@selector(clearWebsiteDataClicked:)];
+    NSBox *separator3 = [self makeSeparator];
+    NSTextField *privacyCaption = [self makeCaption:@"隐私与数据"];
+    self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…" target:self action:@selector(clearWebsiteDataClicked:)];
     self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
-    self.clearWebsiteDataButton.controlSize = NSControlSizeRegular;
-
-    self.userAgentCopyButton = [NSButton buttonWithTitle:@"复制 User-Agent"
-                                                  target:self
-                                                  action:@selector(copyUserAgentClicked:)];
+    self.userAgentCopyButton = [NSButton buttonWithTitle:@"复制 User-Agent" target:self action:@selector(copyUserAgentClicked:)];
     self.userAgentCopyButton.bezelStyle = NSBezelStyleRounded;
-    self.userAgentCopyButton.controlSize = NSControlSizeRegular;
-
     self.clearWebsiteDataStatusLabel = [NSTextField labelWithString:@"缓存、Cookie 与网站本地存储"];
     self.clearWebsiteDataStatusLabel.font = [NSFont systemFontOfSize:11];
     self.clearWebsiteDataStatusLabel.textColor = [NSColor secondaryLabelColor];
-
-    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[
-        self.clearWebsiteDataButton,
-        self.userAgentCopyButton,
-        self.clearWebsiteDataStatusLabel
-    ]];
+    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[self.clearWebsiteDataButton, self.userAgentCopyButton, self.clearWebsiteDataStatusLabel]];
     privacyRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    privacyRow.alignment = NSLayoutAttributeCenterY;
     privacyRow.spacing = 12;
-
-    self.privacyHintLabel = [NSTextField wrappingLabelWithString:
-        @"频繁清除 Cookie 可能导致 Google 等站点反复要求人机验证。"
-        @"若使用 VPN/共享网络仍频繁验证，可先关闭 VPN 用本机网络重试。"];
+    self.privacyHintLabel = [NSTextField wrappingLabelWithString:@"频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
     self.privacyHintLabel.font = [NSFont systemFontOfSize:11];
     self.privacyHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.privacyHintLabel.preferredMaxLayoutWidth = 428;
+    self.privacyHintLabel.preferredMaxLayoutWidth = 448;
 
     NSStackView *root = [NSStackView stackViewWithViews:@[
-        searchGrid,
-        searchHint,
-        separator,
-        browserCaption,
-        browserRow,
-        browserHint,
-        separator2,
-        iCloudCaption,
-        self.iCloudStatusLabel,
-        self.iCloudEnabledCheckbox,
-        self.iCloudShortcutCheckbox,
-        self.iCloudFormMemoCheckbox,
-        self.iCloudLastSyncLabel,
-        iCloudButtons,
-        self.iCloudHintLabel,
-        separator3,
-        privacyCaption,
-        privacyRow,
-        self.privacyHintLabel,
+        searchGrid, searchHint, separator,
+        browserCaption, browserRow, browserHint, separator2,
+        syncCaption, self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
+        self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
+        self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel, separator3,
+        privacyCaption, privacyRow, self.privacyHintLabel,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
@@ -238,128 +225,174 @@
         [separator.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [separator2.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [separator3.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [browserRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [privacyRow.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.serverLoginBadge.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.serverHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.privacyHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.iCloudHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
     ]];
 
     [self refreshDefaultBrowserStatus];
-    [self refreshICloudSyncUI];
+    [self refreshServerSyncUI];
 }
 
-- (void)cloudSyncUINeedsRefresh:(NSNotification *)note {
+- (void)serverSyncUINeedsRefresh:(NSNotification *)note {
     (void)note;
-    [self refreshICloudSyncUI];
+    [self refreshServerSyncUI];
 }
 
-- (void)refreshICloudSyncUI {
-    CloudSyncSettings *settings = CloudSyncSettings.sharedSettings;
-    CloudSyncEngine *engine = CloudSyncEngine.sharedEngine;
-    CloudSyncAccountObserver *account = CloudSyncAccountObserver.sharedObserver;
+- (void)persistServerFields {
+    ServerSyncSettings.sharedSettings.baseURL = self.serverURLField.stringValue ?: @"";
+    ServerSyncSettings.sharedSettings.email = self.serverEmailField.stringValue ?: @"";
+}
 
-    NSString *status = engine.statusText.length > 0 ? engine.statusText : account.statusMessage;
-    if (settings.lastErrorMessage.length > 0 && engine.state == CloudSyncEngineStateError) {
+- (void)refreshServerSyncUI {
+    ServerSyncSettings *settings = ServerSyncSettings.sharedSettings;
+    ServerSyncEngine *engine = ServerSyncEngine.sharedEngine;
+    BOOL loggedIn = ServerSyncAuth.sharedAuth.isLoggedIn;
+
+    if (self.serverURLField.currentEditor == nil) {
+        self.serverURLField.stringValue = settings.baseURL.length ? settings.baseURL : @"http://117.72.44.160:8090";
+    }
+    if (self.serverEmailField.currentEditor == nil) {
+        self.serverEmailField.stringValue = settings.email ?: @"";
+    }
+
+    // 登录徽标
+    if (loggedIn) {
+        NSString *email = settings.email.length ? settings.email : @"已登录";
+        self.serverLoginBadgeLabel.stringValue = [NSString stringWithFormat:@"● 已登录  ·  %@", email];
+        self.serverLoginBadgeLabel.textColor = [NSColor colorWithCalibratedRed:0.10 green:0.45 blue:0.20 alpha:1.0];
+        self.serverLoginBadge.fillColor = [NSColor colorWithCalibratedRed:0.82 green:0.94 blue:0.86 alpha:1.0];
+        self.serverLoginBadge.borderColor = [NSColor colorWithCalibratedRed:0.35 green:0.70 blue:0.45 alpha:1.0];
+    } else {
+        self.serverLoginBadgeLabel.stringValue = @"○ 未登录  ·  请先注册或登录";
+        self.serverLoginBadgeLabel.textColor = [NSColor colorWithCalibratedRed:0.55 green:0.25 blue:0.10 alpha:1.0];
+        self.serverLoginBadge.fillColor = [NSColor colorWithCalibratedRed:0.98 green:0.92 blue:0.86 alpha:1.0];
+        self.serverLoginBadge.borderColor = [NSColor colorWithCalibratedRed:0.85 green:0.55 blue:0.30 alpha:1.0];
+    }
+
+    NSString *status = engine.statusText.length ? engine.statusText : (loggedIn ? @"就绪" : @"等待登录");
+    if (settings.lastErrorMessage.length > 0 && engine.state == ServerSyncEngineStateError) {
         status = settings.lastErrorMessage;
     }
-    self.iCloudStatusLabel.stringValue = [NSString stringWithFormat:@"状态：%@", status ?: @"—"];
+    self.serverStatusLabel.stringValue = [NSString stringWithFormat:@"同步：%@", status];
 
-    self.iCloudEnabledCheckbox.state = settings.enabled ? NSControlStateValueOn : NSControlStateValueOff;
-    self.iCloudShortcutCheckbox.state = settings.shortcutEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    self.iCloudFormMemoCheckbox.state = settings.formMemoEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.serverEnabledCheckbox.state = settings.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.serverShortcutCheckbox.state = settings.shortcutEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.serverFormMemoCheckbox.state = settings.formMemoEnabled ? NSControlStateValueOn : NSControlStateValueOff;
 
-    BOOL osOK = YES;
-    if (@available(macOS 14.0, *)) {
-        osOK = YES;
-    } else {
-        osOK = NO;
-    }
-    BOOL canUse = osOK;
-    self.iCloudEnabledCheckbox.enabled = canUse;
-    BOOL kindsEnabled = canUse && settings.enabled;
-    self.iCloudShortcutCheckbox.enabled = kindsEnabled;
-    self.iCloudFormMemoCheckbox.enabled = kindsEnabled;
-    self.iCloudSyncNowButton.enabled = kindsEnabled;
-    self.iCloudDeleteButton.enabled = kindsEnabled;
+    // 未登录时仍可勾选「启用」，但会提示先登录；分项随总开关
+    self.serverEnabledCheckbox.enabled = YES;
+    self.serverEnabledCheckbox.toolTip = loggedIn ? nil : @"勾选后需登录才会开始同步";
+    self.serverShortcutCheckbox.enabled = settings.enabled;
+    self.serverFormMemoCheckbox.enabled = settings.enabled;
+    self.serverSyncNowButton.enabled = settings.enabled && loggedIn;
+    self.serverLogoutButton.enabled = loggedIn;
+    self.serverRegisterButton.enabled = !loggedIn;
+    self.serverLoginButton.enabled = !loggedIn;
 
     if (settings.lastSyncAt > 0) {
-        NSDate *date = [NSDate dateWithTimeIntervalSince1970:settings.lastSyncAt];
         NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
         fmt.dateStyle = NSDateFormatterMediumStyle;
         fmt.timeStyle = NSDateFormatterShortStyle;
-        self.iCloudLastSyncLabel.stringValue = [NSString stringWithFormat:@"上次同步：%@", [fmt stringFromDate:date]];
+        self.serverLastSyncLabel.stringValue = [NSString stringWithFormat:@"上次同步：%@", [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:settings.lastSyncAt]]];
     } else {
-        self.iCloudLastSyncLabel.stringValue = @"上次同步：—";
+        self.serverLastSyncLabel.stringValue = @"上次同步：—";
     }
 }
 
-- (void)iCloudEnabledToggled:(id)sender {
+- (void)serverRegisterClicked:(id)sender {
     (void)sender;
-    CloudSyncSettings.sharedSettings.enabled = (self.iCloudEnabledCheckbox.state == NSControlStateValueOn);
-    if (CloudSyncSettings.sharedSettings.enabled) {
-        [[CloudSyncEngine sharedEngine] startIfNeeded];
-    } else {
-        [[CloudSyncEngine sharedEngine] stop];
-    }
-    [self refreshICloudSyncUI];
-}
-
-- (void)iCloudShortcutToggled:(id)sender {
-    (void)sender;
-    CloudSyncSettings.sharedSettings.shortcutEnabled = (self.iCloudShortcutCheckbox.state == NSControlStateValueOn);
-}
-
-- (void)iCloudFormMemoToggled:(id)sender {
-    (void)sender;
-    CloudSyncSettings.sharedSettings.formMemoEnabled = (self.iCloudFormMemoCheckbox.state == NSControlStateValueOn);
-}
-
-- (void)iCloudSyncNowClicked:(id)sender {
-    (void)sender;
-    [[CloudSyncEngine sharedEngine] syncNow];
-    [self refreshICloudSyncUI];
-}
-
-- (void)iCloudDeleteClicked:(id)sender {
-    (void)sender;
-    NSAlert *confirm = [[NSAlert alloc] init];
-    confirm.messageText = @"从 iCloud 删除 Meo 同步数据？";
-    confirm.informativeText = @"将删除 iCloud 中的快捷方式与表单备忘同步副本，不会删除本机数据。";
-    confirm.alertStyle = NSAlertStyleWarning;
-    [confirm addButtonWithTitle:@"删除"];
-    [confirm addButtonWithTitle:@"取消"];
+    [self persistServerFields];
+    NSString *email = self.serverEmailField.stringValue;
+    NSString *password = self.serverPasswordField.stringValue;
     __weak typeof(self) weakSelf = self;
-    [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
-        if (returnCode != NSAlertFirstButtonReturn) {
-            return;
+    [[ServerSyncAuth sharedAuth] registerWithEmail:email password:password completion:^(NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        if (error) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"注册失败";
+            alert.informativeText = error.localizedDescription ?: @"";
+            [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        } else {
+            self.serverPasswordField.stringValue = @"";
+            // 注册成功后自动打开云同步
+            ServerSyncSettings.sharedSettings.enabled = YES;
+            [[ServerSyncEngine sharedEngine] startIfNeeded];
         }
-        [[CloudSyncEngine sharedEngine] deleteCloudDataWithCompletion:^(NSError *error) {
-            typeof(self) self = weakSelf;
-            if (!self) {
-                return;
-            }
-            if (error) {
-                NSAlert *alert = [[NSAlert alloc] init];
-                alert.messageText = @"无法删除 iCloud 数据";
-                alert.informativeText = error.localizedDescription ?: @"未知错误";
-                alert.alertStyle = NSAlertStyleWarning;
-                [alert beginSheetModalForWindow:self.window completionHandler:nil];
-            }
-            [self refreshICloudSyncUI];
-        }];
+        [self refreshServerSyncUI];
     }];
+}
+
+- (void)serverLoginClicked:(id)sender {
+    (void)sender;
+    [self persistServerFields];
+    NSString *email = self.serverEmailField.stringValue;
+    NSString *password = self.serverPasswordField.stringValue;
+    __weak typeof(self) weakSelf = self;
+    [[ServerSyncAuth sharedAuth] loginWithEmail:email password:password completion:^(NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        if (error) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"登录失败";
+            alert.informativeText = error.localizedDescription ?: @"";
+            [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        } else {
+            self.serverPasswordField.stringValue = @"";
+            if (!ServerSyncSettings.sharedSettings.enabled) {
+                ServerSyncSettings.sharedSettings.enabled = YES;
+            }
+            [[ServerSyncEngine sharedEngine] startIfNeeded];
+        }
+        [self refreshServerSyncUI];
+    }];
+}
+
+- (void)serverLogoutClicked:(id)sender {
+    (void)sender;
+    [[ServerSyncAuth sharedAuth] logout];
+    [[ServerSyncEngine sharedEngine] stop];
+    [self refreshServerSyncUI];
+}
+
+- (void)serverEnabledToggled:(id)sender {
+    (void)sender;
+    // 必须先读 checkbox 状态：persist 可能触发 refresh，会把状态写回旧值
+    BOOL turnOn = (self.serverEnabledCheckbox.state == NSControlStateValueOn);
+    [self persistServerFields];
+    ServerSyncSettings.sharedSettings.enabled = turnOn;
+    if (turnOn) {
+        [[ServerSyncEngine sharedEngine] startIfNeeded];
+    } else {
+        [[ServerSyncEngine sharedEngine] stop];
+    }
+    [self refreshServerSyncUI];
+}
+
+- (void)serverShortcutToggled:(id)sender {
+    (void)sender;
+    ServerSyncSettings.sharedSettings.shortcutEnabled = (self.serverShortcutCheckbox.state == NSControlStateValueOn);
+}
+
+- (void)serverFormMemoToggled:(id)sender {
+    (void)sender;
+    ServerSyncSettings.sharedSettings.formMemoEnabled = (self.serverFormMemoCheckbox.state == NSControlStateValueOn);
+}
+
+- (void)serverSyncNowClicked:(id)sender {
+    (void)sender;
+    [self persistServerFields];
+    [[ServerSyncEngine sharedEngine] syncNow];
+    [self refreshServerSyncUI];
 }
 
 - (nullable NSString *)currentBrowserPageHost {
     id delegate = NSApp.delegate;
-    if (![delegate isKindOfClass:[AppDelegate class]]) {
-        return nil;
-    }
+    if (![delegate isKindOfClass:[AppDelegate class]]) return nil;
     BrowserWindowController *browser = [(AppDelegate *)delegate keyBrowserWindowController];
     NSURL *url = browser.webView.URL;
-    if (![BrowsingPreferences isPersistableURL:url]) {
-        return nil;
-    }
+    if (![BrowsingPreferences isPersistableURL:url]) return nil;
     return url.host;
 }
 
@@ -389,37 +422,30 @@
 
 - (void)searchEngineChanged:(id)sender {
     (void)sender;
-    NSMenuItem *item = self.searchEnginePopUp.selectedItem;
-    NSString *engineID = item.representedObject;
-    if (![engineID isKindOfClass:[NSString class]]) {
-        return;
+    NSString *engineID = self.searchEnginePopUp.selectedItem.representedObject;
+    if ([engineID isKindOfClass:[NSString class]]) {
+        [BrowsingPreferences setDefaultSearchEngineID:engineID];
     }
-    [BrowsingPreferences setDefaultSearchEngineID:engineID];
 }
 
 - (void)setDefaultBrowserClicked:(id)sender {
     (void)sender;
     self.setDefaultBrowserButton.enabled = NO;
     __weak typeof(self) weakSelf = self;
-    [BrowsingPreferences requestSetAsDefaultBrowserWithCompletion:^(NSError * _Nullable error) {
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
+    [BrowsingPreferences requestSetAsDefaultBrowserWithCompletion:^(NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self) return;
         if (error) {
             BOOL cancelled = ([error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSUserCancelledError)
                 || ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled);
             if (!cancelled) {
                 NSAlert *alert = [[NSAlert alloc] init];
                 alert.messageText = @"无法设为默认浏览器";
-                alert.informativeText = error.localizedDescription.length > 0
-                    ? error.localizedDescription
-                    : @"请在「系统设置 › 桌面与 Dock › 默认网页浏览器」中手动选择 MeoBrowser。";
-                alert.alertStyle = NSAlertStyleWarning;
-                [alert beginSheetModalForWindow:strongSelf.window completionHandler:nil];
+                alert.informativeText = error.localizedDescription ?: @"";
+                [alert beginSheetModalForWindow:self.window completionHandler:nil];
             }
         }
-        [strongSelf refreshDefaultBrowserStatus];
+        [self refreshDefaultBrowserStatus];
     }];
 }
 
@@ -430,7 +456,7 @@
         self.clearWebsiteDataStatusLabel.stringValue = @"无法读取 User-Agent";
         return;
     }
-    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
     [pb clearContents];
     [pb setString:ua forType:NSPasteboardTypeString];
     self.clearWebsiteDataStatusLabel.stringValue = @"已复制 User-Agent";
@@ -439,66 +465,41 @@
 - (void)clearWebsiteDataClicked:(id)sender {
     (void)sender;
     NSString *currentHost = [self currentBrowserPageHost];
-
     NSAlert *confirm = [[NSAlert alloc] init];
     confirm.messageText = @"清除网站数据？";
-    confirm.informativeText =
-        @"将删除 Cookie、缓存与网站本地存储。已打开的标签页不会关闭，但登录状态可能会失效。"
-        @"不会删除「登录助手」中保存的账号配置。\n\n"
-        @"频繁清除全部数据可能导致 Google 等站点反复要求人机验证。";
+    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。不会删除登录助手与站点备忘。";
     confirm.alertStyle = NSAlertStyleWarning;
     [confirm addButtonWithTitle:@"清除全部"];
     NSButton *currentButton = [confirm addButtonWithTitle:@"清除当前站点"];
     currentButton.enabled = (currentHost.length > 0);
     [confirm addButtonWithTitle:@"取消"];
-
     __weak typeof(self) weakSelf = self;
     [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        if (returnCode == NSAlertThirdButtonReturn) {
-            return;
-        }
+        typeof(self) self = weakSelf;
+        if (!self || returnCode == NSAlertThirdButtonReturn) return;
         BOOL clearAll = (returnCode == NSAlertFirstButtonReturn);
         BOOL clearCurrent = (returnCode == NSAlertSecondButtonReturn);
-        if (!clearAll && !clearCurrent) {
-            return;
-        }
-        if (clearCurrent && currentHost.length == 0) {
-            return;
-        }
-
-        strongSelf.clearWebsiteDataButton.enabled = NO;
-        strongSelf.clearWebsiteDataStatusLabel.stringValue = @"正在清除…";
-
-        void (^finishUI)(NSError * _Nullable, NSString *) = ^(NSError * _Nullable error, NSString *okText) {
-            typeof(self) innerSelf = weakSelf;
-            if (!innerSelf) {
-                return;
-            }
-            innerSelf.clearWebsiteDataButton.enabled = YES;
+        if (!clearAll && !clearCurrent) return;
+        if (clearCurrent && currentHost.length == 0) return;
+        self.clearWebsiteDataButton.enabled = NO;
+        self.clearWebsiteDataStatusLabel.stringValue = @"正在清除…";
+        void (^finish)(NSError *, NSString *) = ^(NSError *error, NSString *ok) {
+            typeof(self) inner = weakSelf;
+            if (!inner) return;
+            inner.clearWebsiteDataButton.enabled = YES;
+            inner.clearWebsiteDataStatusLabel.stringValue = error ? @"清除失败" : ok;
             if (error) {
-                innerSelf.clearWebsiteDataStatusLabel.stringValue = @"清除失败";
                 NSAlert *alert = [[NSAlert alloc] init];
                 alert.messageText = @"无法清除网站数据";
-                alert.informativeText = error.localizedDescription ?: @"未知错误";
-                alert.alertStyle = NSAlertStyleWarning;
-                [alert beginSheetModalForWindow:innerSelf.window completionHandler:nil];
-            } else {
-                innerSelf.clearWebsiteDataStatusLabel.stringValue = okText;
+                alert.informativeText = error.localizedDescription ?: @"";
+                [alert beginSheetModalForWindow:inner.window completionHandler:nil];
             }
         };
-
         if (clearAll) {
-            [BrowsingPreferences clearWebsiteDataWithCompletion:^(NSError * _Nullable error) {
-                finishUI(error, @"已清除全部");
-            }];
+            [BrowsingPreferences clearWebsiteDataWithCompletion:^(NSError *error) { finish(error, @"已清除全部"); }];
         } else {
-            [BrowsingPreferences clearWebsiteDataForHost:currentHost completion:^(NSError * _Nullable error) {
-                NSString *ok = [NSString stringWithFormat:@"已清除 %@", currentHost];
-                finishUI(error, ok);
+            [BrowsingPreferences clearWebsiteDataForHost:currentHost completion:^(NSError *error) {
+                finish(error, [NSString stringWithFormat:@"已清除 %@", currentHost]);
             }];
         }
     }];
@@ -508,8 +509,7 @@
     [self selectCurrentSearchEngineInPopUp];
     [self refreshDefaultBrowserStatus];
     self.clearWebsiteDataStatusLabel.stringValue = @"缓存、Cookie 与网站本地存储";
-    [[CloudSyncAccountObserver sharedObserver] refreshWithCompletion:nil];
-    [self refreshICloudSyncUI];
+    [self refreshServerSyncUI];
     [super showWindow:sender];
 }
 

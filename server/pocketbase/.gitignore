@@ -1,0 +1,5 @@
+# PocketBase 运行时数据（勿提交）
+pb_data/
+backups/
+bin/
+*.zip

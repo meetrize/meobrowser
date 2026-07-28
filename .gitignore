@@ -4,6 +4,9 @@
 # AI 一键提交本地密钥（勿提交）
 .git-ai.env
 
+# 本地私密文档（含部署 IP / 口令等，勿推远程）
+/docs/local/
+
 # MeoBrowser / AppKit 构建产物
 /build/
 

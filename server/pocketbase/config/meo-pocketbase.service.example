@@ -1,0 +1,15 @@
+[Unit]
+Description=Meo PocketBase sync server
+After=network.target
+
+[Service]
+Type=simple
+User=meo
+WorkingDirectory=/opt/meo-pocketbase
+ExecStart=/opt/meo-pocketbase/bin/pocketbase serve --http=127.0.0.1:8090
+Restart=on-failure
+RestartSec=5
+# 限制文件权限；pb_data 放在 WorkingDirectory 下
+
+[Install]
+WantedBy=multi-user.target

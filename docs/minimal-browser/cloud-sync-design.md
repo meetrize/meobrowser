@@ -1,7 +1,7 @@
 # MeoBrowser 云端同步 — 设计方案
 
 > 目标：在**零自建服务端**前提下，为多台 Mac（及未来同 Apple ID 设备）同步「个人工作区」核心数据；与现有 Companion 局域网同步共用记录模型，互不替代。  
-> 状态：**MVP 已实现（2026-07-28）** — SyncCore + CloudKit 私有库同步 shortcut / form_memo；设置页可开关。  
+> 状态：**客户端已下线（2026-07-28）** — CloudKit 模块已移除；多设备同步改走 [server-sync-design.md](server-sync-design.md)（PocketBase）。本文档保留作历史方案参考。  
 > 开发计划：[cloud-sync-development-plan.md](cloud-sync-development-plan.md) · Cursor：[.cursor/plans/cloud-sync.plan.md](../../.cursor/plans/cloud-sync.plan.md)  
 > 关联：[companion-sync-design.md](companion-sync-design.md) · [companion-protocol.md](companion-protocol.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [auto-login-design.md](auto-login-design.md) · [site-form-memo-design.md](site-form-memo-design.md) · [server-sync-design.md](server-sync-design.md)（自建多应用 / 无 CloudKit 签名替代）
 

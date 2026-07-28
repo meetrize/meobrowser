@@ -9,8 +9,9 @@
 #import "BrowserTab.h"
 #import "BrowserTabStripView.h"
 #import "CompanionChannel.h"
-#import "CloudSyncEngine.h"
-#import "CloudSyncSettings.h"
+#import "ServerSyncEngine.h"
+#import "ServerSyncSettings.h"
+#import "ServerSyncAuth.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -36,8 +37,8 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     [[CompanionChannel sharedChannel] start];
-    if (CloudSyncSettings.sharedSettings.enabled) {
-        [[CloudSyncEngine sharedEngine] startIfNeeded];
+    if (ServerSyncSettings.sharedSettings.enabled && ServerSyncAuth.sharedAuth.isLoggedIn) {
+        [[ServerSyncEngine sharedEngine] startIfNeeded];
     }
     NSArray<NSDictionary *> *sessions = [BrowsingPreferences savedWindowSessions];
     if (sessions.count == 0) {

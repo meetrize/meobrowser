@@ -1,16 +1,16 @@
-#import "CloudSyncFormMemoBridge.h"
+#import "SyncFormMemoBridge.h"
 #import "SyncRecord.h"
 #import "SyncKind.h"
 #import "SyncDevice.h"
 #import "FormMemo.h"
 #import "FormMemoStore.h"
 
-static NSString * const kICloudFormMemoMetaKey = @"meo.icloud.formMemoMeta";
+static NSString * const kSyncFormMemoMetaKey = @"meo.sync.formMemoMeta";
 
-@implementation CloudSyncFormMemoBridge
+@implementation SyncFormMemoBridge
 
 + (instancetype)sharedBridge {
-    static CloudSyncFormMemoBridge *s;
+    static SyncFormMemoBridge *s;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s = [[self alloc] init];
@@ -19,12 +19,12 @@ static NSString * const kICloudFormMemoMetaKey = @"meo.icloud.formMemoMeta";
 }
 
 - (NSMutableDictionary *)loadMeta {
-    NSDictionary *d = [NSUserDefaults.standardUserDefaults dictionaryForKey:kICloudFormMemoMetaKey];
+    NSDictionary *d = [NSUserDefaults.standardUserDefaults dictionaryForKey:kSyncFormMemoMetaKey];
     return d ? [d mutableCopy] : [NSMutableDictionary dictionary];
 }
 
 - (void)saveMeta:(NSDictionary *)meta {
-    [NSUserDefaults.standardUserDefaults setObject:meta forKey:kICloudFormMemoMetaKey];
+    [NSUserDefaults.standardUserDefaults setObject:meta forKey:kSyncFormMemoMetaKey];
 }
 
 - (NSDictionary *)payloadFromMemo:(FormMemo *)memo {
@@ -184,7 +184,7 @@ static NSString * const kICloudFormMemoMetaKey = @"meo.icloud.formMemoMeta";
     NSError *error = nil;
     [[FormMemoStore sharedStore] replaceAllMemos:active error:&error];
     if (error) {
-        NSLog(@"[CloudSync] form_memo apply failed: %@", error.localizedDescription);
+        NSLog(@"[Sync] form_memo apply failed: %@", error.localizedDescription);
     }
     [self saveMeta:newMeta];
 }

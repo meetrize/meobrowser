@@ -5,14 +5,5 @@
 	<!-- 受限 entitlement：须向 Apple 申请并在 Provisioning Profile 中启用后，WKWebView 才会出现系统密码自动填充。 -->
 	<key>com.apple.developer.web-browser</key>
 	<true/>
-	<!-- iCloud / CloudKit：真机双向同步需 Developer Portal 创建同名容器，并用 CODESIGN_IDENTITY 正式签名。adhoc 本地可编译，同步会降级提示。 -->
-	<key>com.apple.developer.icloud-services</key>
-	<array>
-		<string>CloudKit</string>
-	</array>
-	<key>com.apple.developer.icloud-container-identifiers</key>
-	<array>
-		<string>iCloud.com.example.MeoBrowser</string>
-	</array>
 </dict>
 </plist>

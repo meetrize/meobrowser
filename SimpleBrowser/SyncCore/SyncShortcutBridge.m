@@ -1,16 +1,16 @@
-#import "CloudSyncShortcutBridge.h"
+#import "SyncShortcutBridge.h"
 #import "SyncRecord.h"
 #import "SyncKind.h"
 #import "SyncDevice.h"
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
 
-static NSString * const kICloudShortcutMetaKey = @"meo.icloud.shortcutMeta";
+static NSString * const kSyncShortcutMetaKey = @"meo.sync.shortcutMeta";
 
-@implementation CloudSyncShortcutBridge
+@implementation SyncShortcutBridge
 
 + (instancetype)sharedBridge {
-    static CloudSyncShortcutBridge *s;
+    static SyncShortcutBridge *s;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s = [[self alloc] init];
@@ -19,12 +19,12 @@ static NSString * const kICloudShortcutMetaKey = @"meo.icloud.shortcutMeta";
 }
 
 - (NSMutableDictionary *)loadMeta {
-    NSDictionary *d = [NSUserDefaults.standardUserDefaults dictionaryForKey:kICloudShortcutMetaKey];
+    NSDictionary *d = [NSUserDefaults.standardUserDefaults dictionaryForKey:kSyncShortcutMetaKey];
     return d ? [d mutableCopy] : [NSMutableDictionary dictionary];
 }
 
 - (void)saveMeta:(NSDictionary *)meta {
-    [NSUserDefaults.standardUserDefaults setObject:meta forKey:kICloudShortcutMetaKey];
+    [NSUserDefaults.standardUserDefaults setObject:meta forKey:kSyncShortcutMetaKey];
 }
 
 - (SyncRecord *)recordFromItem:(BrowserShortcutItem *)item meta:(NSDictionary *)meta {

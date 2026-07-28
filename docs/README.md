@@ -24,9 +24,11 @@
 | [minimal-browser/new-tab-launchpad-development-plan.md](minimal-browser/new-tab-launchpad-development-plan.md) | Launchpad 新标签页分阶段开发计划 |
 | [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | MeoBrowser L1 + Launchpad 新标签页验收记录 |
 | [minimal-browser/professional-features-roadmap.md](minimal-browser/professional-features-roadmap.md) | 面向技术/专业用户的功能规划与路线图 |
-| [minimal-browser/cloud-sync-design.md](minimal-browser/cloud-sync-design.md) | 云端同步 — CloudKit 零自建服务端方案（与 Companion LAN 并行） |
+| [minimal-browser/server-sync-design.md](minimal-browser/server-sync-design.md) | 云端同步 — PocketBase 自建（shortcut / form_memo；当前主方案） |
+| [minimal-browser/cloud-sync-design.md](minimal-browser/cloud-sync-design.md) | （归档）CloudKit 零自建方案；客户端已移除，改走 ServerSync |
 | [minimal-browser/cloud-sync-development-plan.md](minimal-browser/cloud-sync-development-plan.md) | 云端同步 — 分阶段开发计划（CS-0 / CS-1 / CS-3 MVP） |
-| [minimal-browser/server-sync-design.md](minimal-browser/server-sync-design.md) | 自建多应用云同步 — PocketBase 最低预算方案（先 MeoBrowser） |
+| [minimal-browser/server-sync-design.md](minimal-browser/server-sync-design.md) | 自建多应用云同步 — PocketBase 完整方案（服务端部署 + MeoBrowser） |
+| [minimal-browser/server-sync-development-plan.md](minimal-browser/server-sync-development-plan.md) | PocketBase 云同步 — 分阶段开发计划（SS-0～SS-3） |
 | [minimal-browser/companion-sync-design.md](minimal-browser/companion-sync-design.md) | Companion 局域网同步（V3）— 快捷方式 / 历史 / 书签 |
 | [minimal-browser/multi-window-design.md](minimal-browser/multi-window-design.md) | 多窗口 — 实现方案（⌘N、窗口级会话、性能约束） |
 | [minimal-browser/multi-window-development-plan.md](minimal-browser/multi-window-development-plan.md) | 多窗口 — 分阶段开发计划（MW-0～MW-4） |

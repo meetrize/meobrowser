@@ -1,0 +1,6 @@
+# VPS 上 Caddy 反代示例（自动 HTTPS）
+# 将 sync.example.com 换成你的域名，并保证 DNS 指向本机。
+
+sync.example.com {
+	reverse_proxy 127.0.0.1:8090
+}

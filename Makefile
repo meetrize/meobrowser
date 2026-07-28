@@ -112,14 +112,14 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncRecord.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncDevice.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncMerger.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncSettings.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncCapability.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncRecordCoder.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncAccountObserver.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncTransport.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncShortcutBridge.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncFormMemoBridge.m \
-                   $(BROWSER_SRC_DIR)/CloudSync/CloudSyncEngine.m \
+                   $(BROWSER_SRC_DIR)/SyncCore/SyncShortcutBridge.m \
+                   $(BROWSER_SRC_DIR)/SyncCore/SyncFormMemoBridge.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncSettings.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncKeychain.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncAPIClient.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncAuth.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncTransport.m \
+                   $(BROWSER_SRC_DIR)/ServerSync/ServerSyncEngine.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistScriptMessageProxy.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginElementPicker.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistController.m \
@@ -156,9 +156,9 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/CloudSync -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CloudKit
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool
@@ -205,9 +205,10 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '      <array><string>http</string><string>https</string></array>' >> $(1)/Contents/Info.plist
 	@echo '    </dict>' >> $(1)/Contents/Info.plist
 	@echo '  </array>' >> $(1)/Contents/Info.plist
+	@# ATS：不要同时写 NSAllowsArbitraryLoadsInWebContent，否则 macOS 会忽略 NSAllowsArbitraryLoads，原生 http 注册会失败
 	@echo '  <key>NSAppTransportSecurity</key>' >> $(1)/Contents/Info.plist
 	@echo '  <dict>' >> $(1)/Contents/Info.plist
-	@echo '    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>' >> $(1)/Contents/Info.plist
+	@echo '    <key>NSAllowsArbitraryLoads</key><true/>' >> $(1)/Contents/Info.plist
 	@echo '  </dict>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSLocalNetworkUsageDescription</key>' >> $(1)/Contents/Info.plist
 	@echo '  <string>登录助手通过局域网与手机 Companion 配对，以自动填入短信验证码。</string>' >> $(1)/Contents/Info.plist

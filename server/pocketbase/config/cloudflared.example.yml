@@ -1,0 +1,13 @@
+# Cloudflare Tunnel 示例：把本机 PocketBase 暴露为 HTTPS
+# 1. cloudflared tunnel login
+# 2. cloudflared tunnel create meo-sync
+# 3. 填写下方 tunnel id 与 credentials 路径后：
+#    cloudflared tunnel --config cloudflared.yml run
+
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /path/to/REPLACE_WITH_TUNNEL_ID.json
+
+ingress:
+  - hostname: sync.example.com
+    service: http://127.0.0.1:8090
+  - service: http_status:404
