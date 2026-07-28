@@ -11,6 +11,7 @@ static const CGFloat kReorderDragThreshold = 4.0;
 static const CGFloat kPinIconSize = 12.0;
 static const CGFloat kLeadingPadding = 8.0;
 static const CGFloat kTitleAfterPinGap = 4.0;
+static const NSTimeInterval kTabHoverTipDelay = 0.65;
 
 /// 标题不参与命中，全部由标签本身接收拖拽
 @interface BrowserTabTitleLabel : NSTextField
@@ -39,6 +40,190 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
     return [NSColor whiteColor];
 }
+
+/// 标题栏 accessory 内系统 toolTip 基本不弹出；用共享浮层模拟 Chrome 悬停提示。
+@interface BrowserTabHoverTipWindow : NSObject
+@property (nonatomic, strong) NSPanel *panel;
+@property (nonatomic, strong) NSTextField *label;
+@property (nonatomic, weak) NSView *anchorView;
+@property (nonatomic, copy, nullable) NSString *pendingText;
+@property (nonatomic, strong, nullable) NSTimer *delayTimer;
++ (instancetype)shared;
+- (void)scheduleText:(NSString *)text fromView:(NSView *)view;
+- (void)cancelForView:(nullable NSView *)view;
+- (void)hide;
+@end
+
+@implementation BrowserTabHoverTipWindow
+
++ (instancetype)shared {
+    static BrowserTabHoverTipWindow *instance = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        instance = [[BrowserTabHoverTipWindow alloc] init];
+    });
+    return instance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 10, 10)
+                                            styleMask:NSWindowStyleMaskBorderless
+                                              backing:NSBackingStoreBuffered
+                                                defer:YES];
+        _panel.opaque = NO;
+        _panel.backgroundColor = [NSColor clearColor];
+        _panel.hasShadow = YES;
+        _panel.level = NSFloatingWindowLevel;
+        _panel.ignoresMouseEvents = YES;
+        _panel.hidesOnDeactivate = YES;
+        _panel.releasedWhenClosed = NO;
+
+        NSView *root = [[NSView alloc] initWithFrame:NSZeroRect];
+        root.wantsLayer = YES;
+        root.layer.cornerRadius = 6.0;
+        if (@available(macOS 10.15, *)) {
+            root.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+
+        _label = [[NSTextField alloc] initWithFrame:NSZeroRect];
+        _label.editable = NO;
+        _label.selectable = NO;
+        _label.bordered = NO;
+        _label.drawsBackground = NO;
+        _label.font = [NSFont systemFontOfSize:11];
+        _label.maximumNumberOfLines = 6;
+        _label.lineBreakMode = NSLineBreakByWordWrapping;
+        _label.translatesAutoresizingMaskIntoConstraints = NO;
+        [root addSubview:_label];
+        [NSLayoutConstraint activateConstraints:@[
+            [_label.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:8],
+            [_label.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-8],
+            [_label.topAnchor constraintEqualToAnchor:root.topAnchor constant:6],
+            [_label.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-6],
+        ]];
+        _panel.contentView = root;
+    }
+    return self;
+}
+
+- (void)applyAppearance {
+    BOOL dark = NO;
+    NSAppearance *appearance = self.anchorView.effectiveAppearance ?: NSApp.effectiveAppearance;
+    if ([appearance.name containsString:@"Dark"]) {
+        dark = YES;
+    }
+    NSView *root = self.panel.contentView;
+    if (dark) {
+        root.layer.backgroundColor = [[NSColor colorWithCalibratedWhite:0.18 alpha:0.96] CGColor];
+        self.label.textColor = [NSColor whiteColor];
+    } else {
+        root.layer.backgroundColor = [[NSColor colorWithCalibratedRed:1.0 green:1.0 blue:0.88 alpha:0.98] CGColor];
+        self.label.textColor = [NSColor blackColor];
+    }
+    self.panel.appearance = appearance;
+}
+
+- (void)scheduleText:(NSString *)text fromView:(NSView *)view {
+    if (text.length == 0 || view == nil || view.window == nil) {
+        if (self.anchorView == view) {
+            [self hide];
+            self.anchorView = nil;
+            self.pendingText = nil;
+        }
+        return;
+    }
+
+    // 同一锚点、同一文案：已显示或已在倒计时则不重置，避免 mouseMoved 抖掉 tip。
+    if (self.anchorView == view && [self.pendingText isEqualToString:text]) {
+        if (self.panel.isVisible || self.delayTimer != nil) {
+            return;
+        }
+    }
+
+    // 文案变化但 tip 已显示：立即更新内容。
+    if (self.anchorView == view && self.panel.isVisible && self.delayTimer == nil) {
+        self.pendingText = [text copy];
+        [self displayText:text fromView:view];
+        return;
+    }
+
+    [self cancelTimer];
+    self.anchorView = view;
+    self.pendingText = [text copy];
+    __weak typeof(self) weakSelf = self;
+    __weak NSView *weakView = view;
+    NSString *payload = [text copy];
+    self.delayTimer = [NSTimer timerWithTimeInterval:kTabHoverTipDelay
+                                             repeats:NO
+                                               block:^(NSTimer *timer) {
+                                                   (void)timer;
+                                                   [weakSelf displayText:payload fromView:weakView];
+                                               }];
+    [[NSRunLoop mainRunLoop] addTimer:self.delayTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)displayText:(NSString *)text fromView:(NSView *)view {
+    if (view == nil || view != self.anchorView || view.window == nil || text.length == 0) {
+        return;
+    }
+    NSPoint windowPoint = [view.window mouseLocationOutsideOfEventStream];
+    NSPoint local = [view convertPoint:windowPoint fromView:nil];
+    if (![view mouse:local inRect:view.bounds]) {
+        [self hide];
+        return;
+    }
+
+    self.label.stringValue = text;
+    self.label.preferredMaxLayoutWidth = 420.0;
+    [self applyAppearance];
+    [self.label invalidateIntrinsicContentSize];
+    NSSize labelSize = [self.label sizeThatFits:NSMakeSize(420.0, CGFLOAT_MAX)];
+    CGFloat width = MIN(436.0, MAX(80.0, ceil(labelSize.width) + 16.0));
+    CGFloat height = ceil(labelSize.height) + 12.0;
+    [self.panel setContentSize:NSMakeSize(width, height)];
+
+    NSRect viewRect = [view convertRect:view.bounds toView:nil];
+    NSRect screenRect = [view.window convertRectToScreen:viewRect];
+    CGFloat tipX = NSMidX(screenRect) - width * 0.5;
+    CGFloat tipY = NSMinY(screenRect) - height - 6.0;
+    NSScreen *screen = view.window.screen ?: NSScreen.mainScreen;
+    NSRect visible = screen.visibleFrame;
+    if (tipX < NSMinX(visible) + 4) {
+        tipX = NSMinX(visible) + 4;
+    }
+    if (tipX + width > NSMaxX(visible) - 4) {
+        tipX = NSMaxX(visible) - width - 4;
+    }
+    if (tipY < NSMinY(visible) + 4) {
+        tipY = NSMaxY(screenRect) + 6.0;
+    }
+    [self.panel setFrameOrigin:NSMakePoint(tipX, tipY)];
+    [self.panel orderFront:nil];
+}
+
+- (void)cancelTimer {
+    [self.delayTimer invalidate];
+    self.delayTimer = nil;
+}
+
+- (void)cancelForView:(NSView *)view {
+    if (view != nil && self.anchorView != view) {
+        return;
+    }
+    [self cancelTimer];
+    [self hide];
+    self.anchorView = nil;
+    self.pendingText = nil;
+}
+
+- (void)hide {
+    [self cancelTimer];
+    [self.panel orderOut:nil];
+}
+
+@end
 
 @interface BrowserTabItemView ()
 @property (nonatomic, strong) NSTextField *titleLabel;
@@ -165,6 +350,10 @@ NSColor *BrowserTabActiveFillColor(void) {
     return self;
 }
 
+- (void)dealloc {
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
+}
+
 - (void)setTabSelected:(BOOL)tabSelected {
     _tabSelected = tabSelected;
     [self updateChromeAppearance];
@@ -190,6 +379,17 @@ NSColor *BrowserTabActiveFillColor(void) {
     _tabTitle = [normalized copy];
     self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
     [self invalidateIntrinsicContentSize];
+}
+
+- (void)setTabToolTip:(NSString *)tabToolTip {
+    NSString *normalized = tabToolTip.length > 0 ? [tabToolTip copy] : nil;
+    if ((_tabToolTip == nil && normalized == nil) || [_tabToolTip isEqualToString:normalized]) {
+        return;
+    }
+    _tabToolTip = normalized;
+    if (self.pointerInside) {
+        [self scheduleHoverTipIfNeeded];
+    }
 }
 
 - (void)applyAvailableWidth:(CGFloat)width {
@@ -270,7 +470,11 @@ NSColor *BrowserTabActiveFillColor(void) {
     for (NSTrackingArea *area in [self.trackingAreas copy]) {
         [self removeTrackingArea:area];
     }
-    NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
+    // 需要 MouseMoved：在标题区与关闭按钮之间移动时切换 tip 文案。
+    NSTrackingAreaOptions options = NSTrackingMouseEnteredAndExited
+        | NSTrackingMouseMoved
+        | NSTrackingActiveInKeyWindow
+        | NSTrackingInVisibleRect;
     NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:self.bounds
                                                         options:options
                                                           owner:self
@@ -278,16 +482,52 @@ NSColor *BrowserTabActiveFillColor(void) {
     [self addTrackingArea:area];
 }
 
+- (nullable NSString *)hoverTipTextForCurrentPointer {
+    if (!self.window) {
+        return nil;
+    }
+    NSPoint windowPoint = [self.window mouseLocationOutsideOfEventStream];
+    NSPoint local = [self convertPoint:windowPoint fromView:nil];
+    if (![self mouse:local inRect:self.bounds]) {
+        return nil;
+    }
+    if (!self.closeButton.hidden) {
+        NSPoint inClose = [self.closeButton convertPoint:local fromView:self];
+        if ([self.closeButton mouse:inClose inRect:self.closeButton.bounds]) {
+            return @"关闭标签页";
+        }
+    }
+    return self.tabToolTip;
+}
+
+- (void)scheduleHoverTipIfNeeded {
+    NSString *text = [self hoverTipTextForCurrentPointer];
+    if (text.length == 0) {
+        [[BrowserTabHoverTipWindow shared] cancelForView:self];
+        return;
+    }
+    [[BrowserTabHoverTipWindow shared] scheduleText:text fromView:self];
+}
+
 - (void)mouseEntered:(NSEvent *)event {
     (void)event;
     self.pointerInside = YES;
     [self updateCloseButtonVisibility];
+    [self scheduleHoverTipIfNeeded];
 }
 
 - (void)mouseExited:(NSEvent *)event {
     (void)event;
     self.pointerInside = NO;
     [self updateCloseButtonVisibility];
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    (void)event;
+    if (self.pointerInside) {
+        [self scheduleHoverTipIfNeeded];
+    }
 }
 
 - (BOOL)mouseDownCanMoveWindow {
@@ -321,6 +561,8 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
+
     if (event.type == NSEventTypeLeftMouseDown && event.clickCount >= 2) {
         if (!self.tabPinned && self.onClose) {
             self.onClose();
@@ -378,6 +620,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (void)onClose:(id)sender {
     (void)sender;
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
     if (self.tabPinned) {
         return;
     }
@@ -392,13 +635,12 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (NSMenu *)menuForEvent:(NSEvent *)event {
+    (void)event;
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
     if (self.contextMenuProvider) {
-        NSMenu *menu = self.contextMenuProvider();
-        if (menu) {
-            return menu;
-        }
+        return self.contextMenuProvider();
     }
-    return [super menuForEvent:event];
+    return nil;
 }
 
 @end

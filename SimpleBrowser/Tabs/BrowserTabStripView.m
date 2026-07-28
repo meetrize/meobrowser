@@ -18,6 +18,23 @@ static const CGFloat kAddButtonWidth = 24.0;
 static const CGFloat kAddButtonHeight = 24.0;
 static const CGFloat kChromeGap = 4.0;
 
+static NSString *BrowserTabToolTipString(BrowserTab *tab) {
+    NSString *title = [tab displayTitle];
+    if (title.length == 0) {
+        title = @"新标签页";
+    }
+    if (tab.isNewTabPage) {
+        return title;
+    }
+    NSURL *url = [tab currentOrRestorableURL];
+    NSString *urlString = url.absoluteString;
+    if (urlString.length == 0) {
+        return title;
+    }
+    // Chrome 式：完整标题 + 完整网址（两行）
+    return [NSString stringWithFormat:@"%@\n%@", title, urlString];
+}
+
 @class BrowserTabStripView;
 
 @interface BrowserTabStripView (TitleBarInteraction)
@@ -1188,6 +1205,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         item.tabTitle = [tab displayTitle];
         item.tabPinned = tab.isPinned;
         item.tabSelected = selected;
+        item.tabToolTip = BrowserTabToolTipString(tab);
 
         __weak typeof(self) weakSelf = self;
         __weak BrowserTabItemView *weakItem = item;
@@ -1439,6 +1457,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         NSString *title = [tab displayTitle];
         if (![item.tabTitle isEqualToString:title]) {
             item.tabTitle = title;
+        }
+
+        NSString *toolTip = BrowserTabToolTipString(tab);
+        if (item.tabToolTip != toolTip && ![item.tabToolTip isEqualToString:toolTip]) {
+            item.tabToolTip = toolTip;
         }
 
         if (item.tabPinned != tab.isPinned) {

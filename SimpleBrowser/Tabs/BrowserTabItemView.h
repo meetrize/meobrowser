@@ -15,6 +15,8 @@ FOUNDATION_EXPORT const CGFloat BrowserTabPinnedWidth;
 @property (nonatomic, assign) BOOL tabSelected;
 @property (nonatomic, assign) BOOL tabPinned;
 @property (nonatomic, copy) NSString *tabTitle;
+/// 悬停完整提示（标题 + 网址）；标题栏 accessory 内系统 toolTip 不可靠，由自定义浮层展示。
+@property (nonatomic, copy, nullable) NSString *tabToolTip;
 @property (nonatomic, copy, nullable) void (^onSelect)(void);
 @property (nonatomic, copy, nullable) void (^onClose)(void);
 /// Option+点击关闭按钮时调用；未设置时退回 onClose
