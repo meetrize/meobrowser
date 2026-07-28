@@ -22,6 +22,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 /// 固定标签：始终排在标签条左侧，紧凑显示，避免误关。
 @property (nonatomic, assign, getter=isPinned) BOOL pinned;
 @property (nonatomic, assign, readonly) NSInteger titleUpdateGeneration;
+/// WebView document.title / WKWebView.title 变化时回调（用于刷新标签条）。
+@property (nonatomic, copy, nullable) void (^titleDidChangeHandler)(BrowserTab *tab);
 /// 地址栏未提交输入草稿；nil 表示使用规范展示（新标签页为空，普通页为当前 URL）。
 @property (nonatomic, copy, nullable) NSString *addressBarDraft;
 /// 休眠 / 懒恢复用：无 WebView 时记住应加载的 URL。
@@ -52,6 +54,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)loadNewTabPage;
 - (void)loadURL:(NSURL *)url;
 - (NSString *)displayTitle;
+/// 从 WKWebView.title 与 document.title 拉取页面标题并写回 tab.title。
+- (void)pullDocumentTitleFromWebView;
 
 - (void)notePendingMainFrameNavigation;
 - (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation;

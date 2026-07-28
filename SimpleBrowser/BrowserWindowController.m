@@ -1398,6 +1398,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     webView.UIDelegate = self;
     webView.hidden = tab.isNewTabPage;
 
+    __weak typeof(self) weakSelf = self;
+    tab.titleDidChangeHandler = ^(BrowserTab *changedTab) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf updateTabStripDisplay];
+        if (changedTab.webView == strongSelf.webView) {
+            [strongSelf setDisplayedWindowTitle:changedTab.displayTitle];
+        }
+        [strongSelf schedulePersistTabSession];
+    };
+    // 挂上时立刻拉一次，避免错过 Initial KVO 之前的 title。
+    [tab pullDocumentTitleFromWebView];
+
     if (webView.superview != self.contentContainer) {
         [self.contentContainer addSubview:webView];
     }
@@ -1814,6 +1829,7 @@ didRequestTransferTabID:(NSUUID *)tabID
     if (tab == self.tabController.selectedTab) {
         [self stopObservingLoadingProgress];
     }
+    tab.titleDidChangeHandler = nil;
     [self detachWebViewIfNeeded:tab.webView];
 
     BOOL wasLastTab = (self.tabController.tabs.count <= 1);
@@ -1880,6 +1896,7 @@ didRequestTransferTabID:(NSUUID *)tabID
     if (tab == self.tabController.selectedTab) {
         [self stopObservingLoadingProgress];
     }
+    tab.titleDidChangeHandler = nil;
     [self detachWebViewIfNeeded:tab.webView];
 
     BOOL wasLastTab = (self.tabController.tabs.count <= 1);
@@ -2823,7 +2840,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     }
 
     // 同文档 hash 变更不会走 provisional 回调；若仍 notePending 会扰乱 isLoading / didFinish。
-    if (navigationAction.targetFrame.isMainFrame && !sameDocument) {
+    // targetFrame 在 loadRequest / 部分主框架导航时可能为 nil，须与上方 isMainFrame 判定一致，
+    // 否则地址栏打开的页面不会进入主框架跟踪，标签标题一直停在 host。
+    if (isMainFrame && !sameDocument) {
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         [tab notePendingMainFrameNavigation];
     }
@@ -2940,6 +2959,15 @@ didBecomeDownload:(WKDownload *)download {
         [self updateSecurityBadgeVisibility];
     }
 
+    // commit 时 title 可能已有；先刷一次标签，后续 sync / 延迟再补全。
+    if (!tab.isNewTabPage && webView.title.length > 0 && ![tab.title isEqualToString:webView.title]) {
+        tab.title = webView.title;
+        [self updateTabStripDisplay];
+        if (webView == self.webView) {
+            [self setDisplayedWindowTitle:tab.displayTitle];
+        }
+    }
+
     // hash 恢复脚本里的 window.stop() 可能让 isLoading 变 NO 却不回调 didFinish；
     // 轮询几次，避免标签/进度条一直转圈。
     for (NSInteger i = 1; i <= 8; i++) {
@@ -3021,10 +3049,24 @@ didFailNavigation:(WKNavigation *)navigation
 
     NSInteger generation = tab.titleUpdateGeneration;
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(200 * NSEC_PER_MSEC)),
-                   dispatch_get_main_queue(), ^{
-        [weakSelf applyTitleFromWebView:webView generation:generation];
-    });
+    // 立刻拉取 document.title；SPA 可能晚到，再延迟补几次。
+    [tab pullDocumentTitleFromWebView];
+    [self applyTitleFromWebView:webView generation:generation];
+    for (NSNumber *delayMs in @[ @200, @600, @1500, @3000 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs.doubleValue * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            BrowserTab *current = [strongSelf.tabController tabForWebView:webView];
+            if (!current || current.titleUpdateGeneration != generation) {
+                return;
+            }
+            [current pullDocumentTitleFromWebView];
+            [strongSelf applyTitleFromWebView:webView generation:generation];
+        });
+    }
 }
 
 - (void)applyTitleFromWebView:(WKWebView *)webView generation:(NSInteger)generation {

@@ -4,6 +4,8 @@
 #import "BrowsingPreferences.h"
 #import "BrowserFeedReader.h"
 
+static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
+
 @interface BrowserTab ()
 @property (nonatomic, strong) WKWebViewConfiguration *configuration;
 @property (nonatomic, strong, nullable, readwrite) WKWebView *webView;
@@ -12,6 +14,7 @@
 @property (nonatomic, assign, readwrite) NSInteger titleUpdateGeneration;
 /// 已创建 WebView、待 navigationDelegate 挂上后再加载 restorableURL。
 @property (nonatomic, assign) BOOL pendingRestorableLoad;
+@property (nonatomic, assign) BOOL observingWebViewTitle;
 @end
 
 @implementation BrowserTab
@@ -64,7 +67,91 @@
     }
     self.webView = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:self.configuration];
     self.webView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
+    [self startObservingWebViewTitle];
     return self.webView;
+}
+
+- (void)startObservingWebViewTitle {
+    if (self.observingWebViewTitle || self.webView == nil) {
+        return;
+    }
+    [self.webView addObserver:self
+                   forKeyPath:@"title"
+                      options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial
+                      context:kBrowserTabWebViewTitleContext];
+    self.observingWebViewTitle = YES;
+}
+
+- (void)stopObservingWebViewTitle {
+    if (!self.observingWebViewTitle || self.webView == nil) {
+        self.observingWebViewTitle = NO;
+        return;
+    }
+    @try {
+        [self.webView removeObserver:self
+                          forKeyPath:@"title"
+                             context:kBrowserTabWebViewTitleContext];
+    } @catch (__unused NSException *exception) {
+    }
+    self.observingWebViewTitle = NO;
+}
+
+- (void)applyPageTitle:(NSString *)pageTitle {
+    if (self.isNewTabPage) {
+        return;
+    }
+    NSString *trimmed = [pageTitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return;
+    }
+    if ([self.title isEqualToString:trimmed]) {
+        return;
+    }
+    self.title = trimmed;
+    void (^handler)(BrowserTab *) = self.titleDidChangeHandler;
+    if (handler) {
+        handler(self);
+    }
+}
+
+- (void)pullDocumentTitleFromWebView {
+    WKWebView *webView = self.webView;
+    if (webView == nil || self.isNewTabPage) {
+        return;
+    }
+
+    // 先用 WKWebView.title（与 <title> / document.title 同步）。
+    [self applyPageTitle:webView.title];
+
+    // 再读 document.title，覆盖 SPA 晚到或 KVO 偶发漏报。
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    [webView evaluateJavaScript:@"document.title || ''"
+              completionHandler:^(id result, NSError *error) {
+        (void)error;
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        if (!strongSelf || !strongWebView || strongSelf.webView != strongWebView) {
+            return;
+        }
+        if (![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        [strongSelf applyPageTitle:(NSString *)result];
+    }];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context {
+    if (context == kBrowserTabWebViewTitleContext) {
+        if (object == self.webView && [keyPath isEqualToString:@"title"]) {
+            [self applyPageTitle:self.webView.title];
+        }
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
 - (void)discardWebView {
@@ -72,6 +159,8 @@
     if (webView == nil) {
         return;
     }
+    [self stopObservingWebViewTitle];
+    self.titleDidChangeHandler = nil;
     [webView stopLoading];
     // 关闭标签 / 休眠前退出 HTML5 全屏与 PiP，避免残留全屏窗口。
     if (@available(macOS 11.3, *)) {
@@ -185,9 +274,8 @@
 }
 
 - (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation {
-    if (!self.hasPendingMainFrameNavigation) {
-        return NO;
-    }
+    // WebKit 仅对主框架调用 didStartProvisionalNavigation；即使 decidePolicy 漏记 pending
+    //（如 targetFrame == nil 的 loadRequest），也必须接纳，否则标题/进度永远不同步。
     self.hasPendingMainFrameNavigation = NO;
     if (!self.mainFrameNavigations) {
         self.mainFrameNavigations = [NSMutableSet set];
@@ -203,6 +291,10 @@
 
 - (void)endMainFrameNavigation:(WKNavigation *)navigation {
     [self.mainFrameNavigations removeObject:navigation];
+}
+
+- (void)dealloc {
+    [self stopObservingWebViewTitle];
 }
 
 @end
