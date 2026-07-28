@@ -113,6 +113,8 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
 @property (nonatomic, copy, nullable) NSString *pickingTarget;
 @property (nonatomic, copy, nullable) NSString *displayedPairingCode;
 @property (nonatomic, copy, nullable) NSString *displayedEndpoint;
+@property (nonatomic, strong, nullable) NSTimer *companionStatusTimer;
+@property (nonatomic, assign) BOOL refreshingCompanionUI;
 @end
 
 @implementation BrowserLoginAssistSettingsWindowController
@@ -144,11 +146,20 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
                                                  selector:@selector(companionStateDidChange:)
                                                      name:CompanionChannelStateDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(settingsWindowDidBecomeKey:)
+                                                     name:NSWindowDidBecomeKeyNotification
+                                                   object:window];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(settingsWindowWillClose:)
+                                                     name:NSWindowWillCloseNotification
+                                                   object:window];
     }
     return self;
 }
 
 - (void)dealloc {
+    [self stopCompanionStatusPolling];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -1250,18 +1261,70 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     [self reloadMemos];
     [self refreshCompanionUI];
     [super showWindow:sender];
+    [self startCompanionStatusPollingIfNeeded];
+}
+
+- (void)settingsWindowDidBecomeKey:(NSNotification *)note {
+    (void)note;
+    [self refreshCompanionUI];
+    [self startCompanionStatusPollingIfNeeded];
+}
+
+- (void)settingsWindowWillClose:(NSNotification *)note {
+    (void)note;
+    [self stopCompanionStatusPolling];
+}
+
+- (void)startCompanionStatusPollingIfNeeded {
+    if (self.companionStatusTimer) {
+        return;
+    }
+    if (!self.window.isVisible) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    NSTimer *timer = [NSTimer timerWithTimeInterval:2.0
+                                            repeats:YES
+                                              block:^(NSTimer * _Nonnull t) {
+        (void)t;
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (!strongSelf.window.isVisible) {
+            [strongSelf stopCompanionStatusPolling];
+            return;
+        }
+        [strongSelf refreshCompanionUI];
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+    self.companionStatusTimer = timer;
+}
+
+- (void)stopCompanionStatusPolling {
+    [self.companionStatusTimer invalidate];
+    self.companionStatusTimer = nil;
 }
 
 - (void)companionStateDidChange:(NSNotification *)note {
     (void)note;
+    if (self.refreshingCompanionUI) {
+        return;
+    }
     [self refreshCompanionUI];
 }
 
 - (void)refreshCompanionUI {
+    if (self.refreshingCompanionUI) {
+        return;
+    }
+    self.refreshingCompanionUI = YES;
+
     CompanionChannel *channel = [CompanionChannel sharedChannel];
     if (channel.state == CompanionChannelStateStopped) {
         [channel start];
     }
+    [channel reconcileConnectionState];
 
     CompanionPairingStore *store = [CompanionPairingStore sharedStore];
     BOOL securityMode = (store.authMode == CompanionAuthModeSecurityCode);
@@ -1314,6 +1377,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
 
     if (securityMode) {
         self.displayedPairingCode = store.securityCode;
+        self.refreshingCompanionUI = NO;
         return;
     }
 
@@ -1371,6 +1435,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.syncHistoryCheck.state = syncSettings.syncHistory ? NSControlStateValueOn : NSControlStateValueOff;
     self.syncBookmarksCheck.state = syncSettings.syncBookmarks ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshNotificationPermissionHint];
+    self.refreshingCompanionUI = NO;
 }
 
 - (void)mirrorSettingsChanged:(id)sender {

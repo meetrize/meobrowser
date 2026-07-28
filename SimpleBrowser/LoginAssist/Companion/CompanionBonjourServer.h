@@ -23,6 +23,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)startWithError:(NSError * _Nullable * _Nullable)error;
 - (void)stop;
 - (void)sendJSON:(NSDictionary *)json toConnectionID:(NSString *)connectionID;
+/// 连接是否仍在表中且处于 ready（用于校正「已连接」假阳性）。
+- (BOOL)isConnectionLive:(NSString *)connectionID;
 
 @end
 

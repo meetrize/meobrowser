@@ -5,6 +5,8 @@
 @property (nonatomic, copy) NSString *connectionID;
 @property (nonatomic, strong) nw_connection_t connection;
 @property (nonatomic, strong) NSMutableData *buffer;
+@property (nonatomic, assign) nw_connection_state_t lastState;
+@property (nonatomic, assign) BOOL hasSeenState;
 @end
 
 @implementation CompanionBonjourConnection
@@ -44,6 +46,15 @@
     nw_parameters_t parameters = nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL,
                                                                NW_PARAMETERS_DEFAULT_CONFIGURATION);
     nw_parameters_set_include_peer_to_peer(parameters, true);
+    // 缩短半开连接存活时间，避免 UI 长期显示「已连接到手机」。
+    nw_protocol_stack_t stack = nw_parameters_copy_default_protocol_stack(parameters);
+    nw_protocol_options_t tcpOptions = nw_protocol_stack_copy_transport_protocol(stack);
+    if (tcpOptions) {
+        nw_tcp_options_set_enable_keepalive(tcpOptions, true);
+        nw_tcp_options_set_keepalive_idle_time(tcpOptions, 10);
+        nw_tcp_options_set_keepalive_interval(tcpOptions, 3);
+        nw_tcp_options_set_keepalive_count(tcpOptions, 4);
+    }
 
     self.preferredPort = preferredPort;
     nw_listener_t listener = nil;
@@ -131,12 +142,33 @@
     __weak typeof(self) weakSelf = self;
     nw_connection_set_state_changed_handler(connection, ^(nw_connection_state_t state, nw_error_t error) {
         (void)error;
+        CompanionBonjourConnection *conn = weakSelf.connections[connectionID];
+        if (conn) {
+            conn.lastState = state;
+            conn.hasSeenState = YES;
+        }
         if (state == nw_connection_state_failed || state == nw_connection_state_cancelled) {
             [weakSelf removeConnectionID:connectionID];
         }
     });
     nw_connection_start(connection);
     [self receiveMoreOnConnection:wrapper];
+}
+
+- (BOOL)isConnectionLive:(NSString *)connectionID {
+    if (connectionID.length == 0) {
+        return NO;
+    }
+    CompanionBonjourConnection *conn = self.connections[connectionID];
+    if (!conn) {
+        return NO;
+    }
+    if (!conn.hasSeenState) {
+        return YES;
+    }
+    // preparing / waiting / ready 仍视为存活；仅 failed / cancelled 判死。
+    return conn.lastState != nw_connection_state_failed
+        && conn.lastState != nw_connection_state_cancelled;
 }
 
 - (void)removeConnectionID:(NSString *)connectionID {
@@ -229,9 +261,12 @@
                                                 frameCopy.length,
                                                 dispatch_get_main_queue(),
                                                 ^{ (void)frameCopy; });
+    __weak typeof(self) weakSelf = self;
+    NSString *cid = [connectionID copy];
     nw_connection_send(wrapper.connection, data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t error) {
         if (error) {
-            NSLog(@"[Companion] send failed");
+            NSLog(@"[Companion] send failed, dropping connection");
+            [weakSelf removeConnectionID:cid];
         }
     });
 }

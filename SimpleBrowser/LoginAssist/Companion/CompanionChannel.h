@@ -72,6 +72,9 @@ extern NSString * const CompanionOpenURLToPhoneURLKey;
 /// 已配对且未连接时：浏览 `_meocompanion._tcp` 并向手机发 `invite`。
 - (void)invitePairedPhones;
 
+/// 按实际存活连接校正状态（设置页打开 / 定时刷新时调用）。
+- (void)reconcileConnectionState;
+
 @end
 
 NS_ASSUME_NONNULL_END

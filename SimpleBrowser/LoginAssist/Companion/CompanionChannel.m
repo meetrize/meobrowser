@@ -252,12 +252,28 @@ NSString * const CompanionOpenURLToPhoneURLKey = @"url";
     [self.phoneDiscovery inviteNow];
 }
 
+- (void)reconcileConnectionState {
+    NSMutableArray<NSString *> *stale = [NSMutableArray array];
+    for (NSString *connectionID in self.activeConnectionIDs) {
+        if (![self.server isConnectionLive:connectionID]) {
+            [stale addObject:connectionID];
+        }
+    }
+    for (NSString *connectionID in stale) {
+        [self.activeConnectionIDs removeObject:connectionID];
+    }
+    [self refreshConnectedState];
+}
+
 - (void)postStateChange {
     [[NSNotificationCenter defaultCenter] postNotificationName:CompanionChannelStateDidChangeNotification
                                                         object:self];
 }
 
 - (void)refreshConnectedState {
+    CompanionChannelState previousState = self.state;
+    NSString *previousText = [self.statusText copy] ?: @"";
+
     if (self.activeConnectionIDs.count > 0) {
         self.state = CompanionChannelStateConnected;
         NSString *device = self.lastConnectedDeviceId.length > 0 ? self.lastConnectedDeviceId : @"已配对设备";
@@ -272,7 +288,11 @@ NSString * const CompanionOpenURLToPhoneURLKey = @"url";
         self.statusText = @"未启动";
         [self.phoneDiscovery stop];
     }
-    [self postStateChange];
+
+    NSString *newText = self.statusText ?: @"";
+    if (previousState != self.state || ![previousText isEqualToString:newText]) {
+        [self postStateChange];
+    }
 }
 
 #pragma mark - CompanionBonjourServerDelegate
