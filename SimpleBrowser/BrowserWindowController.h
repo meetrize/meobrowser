@@ -42,6 +42,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;
 
+/// 标签概览 overlay。
+- (void)toggleTabOverview:(nullable id)sender;
+- (void)showTabOverview;
+- (void)hideTabOverview;
+- (BOOL)isTabOverviewVisible;
+- (void)updateTabOverviewButtonAppearance;
+
 /// 供 LoginAssistController 打开助手侧栏。
 - (void)setAssistSidebarVisible:(BOOL)visible
               revealingRecipeID:(nullable NSString *)recipeID

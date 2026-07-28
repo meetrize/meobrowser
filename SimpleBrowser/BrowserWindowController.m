@@ -20,6 +20,8 @@
 #import "BrowserDownloadProgressRingView.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
+#import "BrowserTabOverviewController.h"
+#import "BrowserTabThumbnailCache.h"
 #import "CallAlertBannerController.h"
 #import "PhonePolicyPanelController.h"
 #import "BrowserFaviconService.h"
@@ -131,6 +133,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) CaptchaAssistController *captchaAssistController;
 @property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
 @property (nonatomic, strong) BrowserFindBarController *findBarController;
+@property (nonatomic, strong) BrowserTabOverviewController *tabOverviewController;
+@property (nonatomic, strong, nullable) NSTextField *tabOverviewBadgeLabel;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
@@ -195,6 +199,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _captchaAssistController = [[CaptchaAssistController alloc] initWithWindowController:self];
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
+        _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -529,6 +534,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireTabOverviewButton];
     [self wireCompanionLinkButton];
     [self wireSendToPhoneButton];
     [self wirePhonePolicyButton];
@@ -679,9 +685,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     ]];
 
     [self.findBarController installInContentContainer:self.contentContainer];
+    [self.tabOverviewController installInContentContainer:self.contentContainer];
     [[CallAlertBannerController sharedController] installInContentContainer:self.contentContainer
                                                          forWindowController:self];
     [self updateNotificationInboxButtonAppearance];
+    [self updateTabOverviewButtonAppearance];
 }
 
 - (NSImage *)toolbarSymbolImageNamed:(NSString *)symbolName {
@@ -765,6 +773,76 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     button.action = @selector(toggleFindBar:);
 }
 
+- (void)wireTabOverviewButton {
+    NSButton *button = self.addressBarActionGroup.tabOverviewButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(toggleTabOverview:);
+    [self installTabOverviewBadgeOnButton:button];
+    [self updateTabOverviewButtonAppearance];
+}
+
+- (void)installTabOverviewBadgeOnButton:(NSButton *)button {
+    if (!button) {
+        return;
+    }
+    [self.tabOverviewBadgeLabel removeFromSuperview];
+    NSTextField *badge = self.tabOverviewBadgeLabel;
+    if (!badge) {
+        badge = [NSTextField labelWithString:@"0"];
+        badge.editable = NO;
+        badge.bezeled = NO;
+        badge.drawsBackground = YES;
+        badge.backgroundColor = [NSColor systemRedColor];
+        badge.textColor = [NSColor whiteColor];
+        badge.font = [NSFont systemFontOfSize:9 weight:NSFontWeightBold];
+        badge.alignment = NSTextAlignmentCenter;
+        badge.wantsLayer = YES;
+        badge.layer.cornerRadius = 7.0;
+        badge.layer.masksToBounds = YES;
+        badge.hidden = YES;
+        badge.translatesAutoresizingMaskIntoConstraints = NO;
+        self.tabOverviewBadgeLabel = badge;
+    }
+    [button addSubview:badge];
+    [NSLayoutConstraint activateConstraints:@[
+        [badge.widthAnchor constraintGreaterThanOrEqualToConstant:14],
+        [badge.heightAnchor constraintEqualToConstant:14],
+        [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:1],
+        [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-1],
+    ]];
+}
+
+- (void)updateTabOverviewButtonAppearance {
+    NSButton *button = self.addressBarActionGroup.tabOverviewButton;
+    BOOL visible = self.tabOverviewController.isVisible;
+    if (button) {
+        if (@available(macOS 10.14, *)) {
+            button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+        }
+        if (@available(macOS 11.0, *)) {
+            NSString *symbol = visible ? @"square.grid.2x2.fill" : @"square.grid.2x2";
+            NSImageSymbolConfiguration *config =
+                [NSImageSymbolConfiguration configurationWithPointSize:15
+                                                                weight:NSFontWeightSemibold
+                                                                 scale:NSImageSymbolScaleMedium];
+            NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"标签概览"];
+            button.image = [image imageWithSymbolConfiguration:config];
+        }
+    }
+    NSUInteger count = self.tabController.tabs.count;
+    if (self.tabOverviewBadgeLabel) {
+        if (count >= 2) {
+            self.tabOverviewBadgeLabel.stringValue = count > 99 ? @"99+" : [NSString stringWithFormat:@"%lu", (unsigned long)count];
+            self.tabOverviewBadgeLabel.hidden = NO;
+        } else {
+            self.tabOverviewBadgeLabel.hidden = YES;
+        }
+    }
+}
+
 - (void)addressBarActionOrderDidChange:(NSNotification *)notification {
     (void)notification;
     // 重排后 downloadButton 可能仍是同一实例；角标在该按钮上。刷新引用与外观即可。
@@ -795,6 +873,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireTabOverviewButton];
     [self wireCompanionLinkButton];
     [self wireSendToPhoneButton];
     [self wirePhonePolicyButton];
@@ -1424,11 +1503,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BrowserTab *selectedTab = self.tabController.selectedTab;
 
     // 仅挂载当前标签的 WebView；其余离屏但仍可常驻（休眠由 TabController 销毁）。
+    // 即将 detach 的存活页先写入缩略图缓存（异步，不阻塞切页）。
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
         }
-        [self detachWebViewIfNeeded:tab.webView];
+        WKWebView *wv = tab.webView;
+        if (wv != nil && wv.superview == self.contentContainer && !tab.isNewTabPage) {
+            [self.tabOverviewController.thumbnailCache captureFromWebView:wv
+                                                                 forTabID:tab.tabID
+                                                               completion:nil];
+        }
+        [self detachWebViewIfNeeded:wv];
     }
 
     if (selectedTab != nil && !selectedTab.isNewTabPage) {
@@ -1455,6 +1541,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.findBarController.isVisible) {
         [self.contentContainer addSubview:self.findBarController.findBarView positioned:NSWindowAbove relativeTo:nil];
     }
+    if (self.tabOverviewController.isVisible) {
+        [self.tabOverviewController bringToFront];
+        [self.tabOverviewController reloadFromTabController];
+    }
     [self.findBarController syncWithSelectedTab];
     [self observeLoadingProgressForSelectedTab];
 
@@ -1466,6 +1556,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
     [self syncCertificateWarningVisibilityForSelectedTab];
+    [self updateTabOverviewButtonAppearance];
 
     NSUUID *selectedID = selectedTab.tabID;
     BOOL selectionChanged = selectedID != nil
@@ -1776,6 +1867,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)tabStripViewDidRequestNewTab:(id)stripView {
     (void)stripView;
     [self.tabController addNewTab];
+}
+
+- (void)tabStripViewDidRequestShowTabOverview:(id)stripView {
+    (void)stripView;
+    [self showTabOverview];
 }
 
 - (void)tabStripView:(id)stripView didMoveTabID:(NSUUID *)tabID toIndex:(NSUInteger)toIndex {
@@ -2177,6 +2273,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(toggleNotificationInboxSidebar:)) {
         return YES;
     }
+    if (action == @selector(toggleTabOverview:) || action == @selector(showTabOverview)) {
+        return YES;
+    }
     return YES;
 }
 
@@ -2186,6 +2285,30 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (void)toggleFindBar:(id)sender {
     [self.findBarController toggleFindBar:sender];
+}
+
+- (void)toggleTabOverview:(id)sender {
+    (void)sender;
+    if (self.tabOverviewController.isVisible) {
+        [self hideTabOverview];
+    } else {
+        [self showTabOverview];
+    }
+}
+
+- (void)showTabOverview {
+    [self.findBarController hideFindBarClearingHighlights:YES];
+    [self.tabOverviewController showOverview];
+    [self updateTabOverviewButtonAppearance];
+}
+
+- (void)hideTabOverview {
+    [self.tabOverviewController hideOverview];
+    [self updateTabOverviewButtonAppearance];
+}
+
+- (BOOL)isTabOverviewVisible {
+    return self.tabOverviewController.isVisible;
 }
 
 - (void)findNext:(id)sender {
@@ -3004,6 +3127,7 @@ didBecomeDownload:(WKDownload *)download {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.findBarController noteNavigationFinishedInWebView:webView];
+        [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
     }
 }
 

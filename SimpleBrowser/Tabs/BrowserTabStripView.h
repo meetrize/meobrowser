@@ -36,6 +36,8 @@ didRequestMoveTabIDToNewWindow:(NSUUID *)tabID
 didRequestTransferTabID:(NSUUID *)tabID
            toWindow:(BrowserWindowController *)destination
             atIndex:(NSUInteger)index;
+/// 标签条溢出菜单请求打开标签概览。
+- (void)tabStripViewDidRequestShowTabOverview:(id)stripView;
 @end
 
 @interface BrowserTabStripView : NSView

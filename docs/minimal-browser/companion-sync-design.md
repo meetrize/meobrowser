@@ -2,7 +2,7 @@
 
 > 目标：MeoBrowser（macOS）↔ MeoBrowser（Android）在已配对 LAN 通道上同步快捷方式 / 历史 / 书签。  
 > 状态：骨架 + shortcut 专章（AB-0 / AB-4）  
-> 关联：[companion-protocol.md](companion-protocol.md) · [android-browser-feasibility-and-plan.md](android-browser-feasibility-and-plan.md) · [android-browser-development-plan.md](android-browser-development-plan.md)
+> 关联：[companion-protocol.md](companion-protocol.md) · [android-browser-feasibility-and-plan.md](android-browser-feasibility-and-plan.md) · [android-browser-development-plan.md](android-browser-development-plan.md) · [cloud-sync-design.md](cloud-sync-design.md)（异地 / 多 Mac：CloudKit；记录模型建议抽 SyncCore 共用）
 
 ---
 

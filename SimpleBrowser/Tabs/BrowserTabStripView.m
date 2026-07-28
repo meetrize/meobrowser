@@ -673,9 +673,25 @@ NSColor *BrowserTabStripFillColor(void) {
         [menu addItem:item];
     }
 
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *overviewItem = [[NSMenuItem alloc] initWithTitle:@"显示全部标签…"
+                                                          action:@selector(showAllTabsFromOverflow:)
+                                                   keyEquivalent:@""];
+    overviewItem.target = self;
+    overviewItem.enabled = YES;
+    [menu addItem:overviewItem];
+
     NSRect bounds = self.overflowButton.bounds;
     NSPoint point = NSMakePoint(NSMinX(bounds), NSMaxY(bounds) + 2.0);
     [menu popUpMenuPositioningItem:nil atLocation:point inView:self.overflowButton];
+}
+
+- (void)showAllTabsFromOverflow:(id)sender {
+    (void)sender;
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripViewDidRequestShowTabOverview:)]) {
+        [delegate tabStripViewDidRequestShowTabOverview:self];
+    }
 }
 
 - (void)selectOverflowTab:(NSMenuItem *)sender {

@@ -201,6 +201,14 @@
 
             [tabMenu addItem:[NSMenuItem separatorItem]];
 
+            NSMenuItem *overview = [tabMenu addItemWithTitle:@"显示标签概览"
+                                                      action:@selector(toggleTabOverview:)
+                                               keyEquivalent:@"\\"];
+            overview.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            overview.target = nil;
+
+            [tabMenu addItem:[NSMenuItem separatorItem]];
+
             NSMenuItem *sendToPhone = [tabMenu addItemWithTitle:@"发送到手机"
                                                          action:@selector(sendCurrentTabToPhone:)
                                                   keyEquivalent:@""];

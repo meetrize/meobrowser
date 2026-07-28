@@ -4,7 +4,7 @@
 > 状态：**P1 已实现**（多字段填入 · 2026-07-27）；**P2-0 内联保存已实现**（聚焦＋备忘 · 2026-07-27）  
 > 前置：登录助手 V1 已落地（[auto-login-design.md](auto-login-design.md) · 点选拾取 `LoginElementPicker` · 填充引擎 `LoginRunner`）  
 > 范围：本文件定稿 **P1**；P0 焦点粘贴仅作可选降级路径，不单独交付。后续可选 P2 见 §7。  
-> 关联：[site-form-memo-development-plan.md](site-form-memo-development-plan.md) · [assist-sidebar-design.md](assist-sidebar-design.md) · [login-form-inline-design.md](login-form-inline-design.md) · [anti-bot-session-design.md](anti-bot-session-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [design.md](design.md)
+> 关联：[site-form-memo-development-plan.md](site-form-memo-development-plan.md) · [assist-sidebar-design.md](assist-sidebar-design.md) · [login-form-inline-design.md](login-form-inline-design.md) · [anti-bot-session-design.md](anti-bot-session-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [cloud-sync-design.md](cloud-sync-design.md) · [design.md](design.md)
 
 ---
 
@@ -51,7 +51,7 @@
 3. **与登录助手解耦**：平行数据面与执行 API；共享 chrome 入口，不污染帐密语义。  
 4. **失败可解释**：某字段选择器未命中时说明哪一项失败，其余可继续填（见 §4.3）。  
 5. **只填不交**：备忘场景默认 `shouldSubmit = NO`，避免误提交工单。  
-6. **本地优先**：不云同步；清除网站数据不删 Memo。
+6. **本地优先、可云同步**：本机 JSON 为权威读写；可选经 iCloud 同步整份 Memo（见 [cloud-sync-design.md](cloud-sync-design.md) `form_memo`）；清除网站数据不删 Memo。
 
 ### 1.5 可行性总评
 
@@ -168,7 +168,8 @@ MemoField
 
 | 数据 | 存储 |
 |------|------|
-| Memo 元数据 + 全部字段 value | `~/Library/Application Support/MeoBrowser/FormMemo/memos.json` |
+| Memo 元数据 + 全部字段 value | `~/Library/Application Support/MeoBrowser/FormMemo/memos.json`（本机权威） |
+| iCloud 副本（可选） | CloudKit `form_memo` SyncRecord；见 [cloud-sync-design.md](cloud-sync-design.md) |
 | 密码 / OTP | **不存**；敏感登录继续走 LoginAssist Keychain |
 
 JSON 示意：
@@ -313,8 +314,8 @@ BrowserLoginAssistSettingsWC
 1. Memo 默认视为**非高敏感**工作文本，明文 JSON 本地存储；设置文案提示「勿存放密码，密码请用登录助手」。  
 2. 若用户把密码写入 Memo value：不阻止，但 UI 引导改用登录助手。  
 3. 日志禁止打印字段 value 全文（可打 label / fieldID / host）。  
-4. 不上传、不云同步、不进 Companion 通道。  
-5. 与「清除网站数据」边界写入设置说明。  
+4. **不进 Companion 通道**；云端同步走 iCloud（`form_memo`，见 [cloud-sync-design.md](cloud-sync-design.md)），总开关开后默认同步，可单独关闭。  
+5. 与「清除网站数据」边界写入设置说明（清站点数据不删 Memo；删 iCloud 同步数据为独立操作）。  
 6. 填充仍受风险域策略约束时，与登录助手一致，避免在强风控页乱注值。
 
 ---
@@ -477,7 +478,7 @@ AssistSidebarController（已有，监听 store 变更）
 
 - 全网 Autofill 启发式  
 - 与 iCloud 密码 / 系统通讯录合并  
-- 云同步 Memo 库  
+- 经 Companion LAN 同步 Memo（云同步见 [cloud-sync-design.md](cloud-sync-design.md)）  
 - 默认进页自动填充  
 
 ---
@@ -511,6 +512,7 @@ AssistSidebarController（已有，监听 store 变更）
 | 0.1 | 2026-07-27 | 初稿：定位、与登录助手解耦、P1 多字段模型/执行/架构/验收 |
 | 0.2 | 2026-07-27 | P1 落地：FormMemo Store/Runner、设置分区、⌘⇧M、测试页 |
 | 0.3 | 2026-07-27 | P2 内联保存定稿：聚焦+有内容「＋备忘」、FormMemoInlineDetector |
+| 0.4 | 2026-07-28 | 支持可选 iCloud 同步（`form_memo`）；本地优先原则与 privacy 条款对齐 cloud-sync-design |
 | 0.4 | 2026-07-27 | P2-0 落地：InlineDetector + PageSaveCoordinator + 偏好开关 |
 
 开发计划见 [site-form-memo-development-plan.md](site-form-memo-development-plan.md)。
