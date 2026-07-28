@@ -370,13 +370,14 @@
                     android:textColor="#FF636366"
                     android:textSize="12sp" />
 
-                <com.google.android.material.button.MaterialButton
+                <Button
                     android:id="@+id/callScreeningButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="?attr/materialButtonOutlinedStyle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="授予来电筛选（获取号码）" />
+                    android:text="授予来电筛选（获取号码）"
+                    android:textSize="14sp" />
             </LinearLayout>
 
             <!-- 微信回复（实验） -->
@@ -420,21 +421,23 @@
                     android:textColor="#FF636366"
                     android:textSize="12sp" />
 
-                <com.google.android.material.button.MaterialButton
+                <Button
                     android:id="@+id/wechatReplyA11yButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="?attr/materialButtonOutlinedStyle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="开启无障碍（微信回复）" />
+                    android:text="开启无障碍（微信回复）"
+                    android:textSize="14sp" />
 
-                <com.google.android.material.button.MaterialButton
+                <Button
                     android:id="@+id/wechatReplyBgPopupButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="?attr/materialButtonOutlinedStyle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="允许后台弹出界面（小米/红米）" />
+                    android:text="允许后台弹出界面（小米/红米）"
+                    android:textSize="14sp" />
             </LinearLayout>
 
             <!-- 最近验证码 -->
