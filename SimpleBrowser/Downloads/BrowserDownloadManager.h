@@ -16,6 +16,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 
 + (instancetype)sharedManager;
 
+/// 在创建 WKWebView 前注入：缓存 createObjectURL(Blob) 与 get_play_info 等媒体地址。
++ (void)installMediaCaptureScriptOnConfiguration:(WKWebViewConfiguration *)configuration;
+
 @property (nonatomic, copy, readonly) NSArray<BrowserDownloadItem *> *items;
 @property (nonatomic, assign, readonly) NSUInteger activeCount;
 @property (nonatomic, assign, readonly) NSUInteger unreadCompletedCount;

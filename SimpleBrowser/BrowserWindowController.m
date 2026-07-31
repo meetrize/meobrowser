@@ -174,6 +174,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 + (BOOL)shouldHandOffURLToExternalApplication:(nullable NSURL *)url;
 - (BOOL)openURLInExternalApplicationIfNeeded:(nullable NSURL *)url;
 - (void)openURLInExternalApplication:(NSURL *)url;
+- (void)beginBlobDownloadFromURL:(nullable NSURL *)url inWebView:(nullable WKWebView *)webView;
 @end
 
 @implementation BrowserWindowController
@@ -315,6 +316,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     }
     // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
+    [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
@@ -3283,7 +3285,20 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         return;
     }
 
+    // blob: 点击下载 / 主框架导航：勿整页打开（会失败并显示 Plug-in handled load），改走下载。
+    if ([requestURL.scheme.lowercaseString isEqualToString:@"blob"]) {
+        BOOL treatAsDownload = isMainFrame
+            || navigationAction.targetFrame == nil
+            || navigationAction.navigationType == WKNavigationTypeLinkActivated;
+        if (treatAsDownload) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [self beginBlobDownloadFromURL:requestURL inWebView:webView];
+            return;
+        }
+    }
+
     // ⌘+点击链接：在新标签页中打开，取消当前页导航（避免与 createWebView 重复开页）
+    // blob: 已在上方统一改走下载，此处不必再分支。
     if (navigationAction.navigationType == WKNavigationTypeLinkActivated
         && (navigationAction.modifierFlags & NSEventModifierFlagCommand) != 0) {
         NSURL *url = navigationAction.request.URL;
@@ -3585,8 +3600,8 @@ didFailNavigation:(WKNavigation *)navigation
 }
 
 - (void)handleNavigationError:(NSError *)error forWebView:(WKWebView *)webView {
-    // 用户取消、或策略改为下载（WKNavigationResponsePolicyDownload）时，
-    // WebKit 仍会回调失败，文案常为 "Frame load interrupted"；不应弹错误框。
+    // 用户取消、策略改为下载、或 blob 的 Plug-in handled load(204)：不应弹错误页。
+    // blob 下载已在 decidePolicy 拦截，此处勿再 beginBlobDownload，以免重复任务。
     if ([self shouldIgnoreNavigationError:error]) {
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         tab.isLoading = NO;
@@ -3616,8 +3631,8 @@ didFailNavigation:(WKNavigation *)navigation
         return;
     }
 
+    NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
     if ([self isCertificateRelatedError:error]) {
-        NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
         if (![failingURL isKindOfClass:[NSURL class]]) {
             failingURL = webView.URL;
         }
@@ -3641,7 +3656,6 @@ didFailNavigation:(WKNavigation *)navigation
         return;
     }
 
-    NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
     if (![failingURL isKindOfClass:[NSURL class]]) {
         failingURL = webView.URL;
     }
@@ -3665,14 +3679,28 @@ didFailNavigation:(WKNavigation *)navigation
         return YES;
     }
     // WebKitErrorFrameLoadInterruptedByPolicyChange == 102
-    if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) {
+    // WebKitErrorPlugInWillHandleLoad == 204（媒体/blob 被插件接管时的假失败）
+    if ([error.domain isEqualToString:@"WebKitErrorDomain"]
+        && (error.code == 102 || error.code == 204)) {
         return YES;
     }
     NSString *description = error.localizedDescription.lowercaseString;
-    if ([description containsString:@"frame load interrupted"]) {
+    if ([description containsString:@"frame load interrupted"]
+        || [description containsString:@"plug-in handled load"]
+        || [description containsString:@"plugin handled load"]) {
         return YES;
     }
     return NO;
+}
+
+- (void)beginBlobDownloadFromURL:(NSURL *)url inWebView:(WKWebView *)webView {
+    if (!url || !webView) {
+        return;
+    }
+    [self.downloadManager startDownloadWithURL:url fromWebView:webView];
+    if (!self.downloadPanelVisible) {
+        [self showDownloadsPanel];
+    }
 }
 
 #pragma mark - WKUIDelegate
@@ -3710,6 +3738,10 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 
     if (!navigationAction.targetFrame || !navigationAction.targetFrame.isMainFrame) {
         NSURL *url = navigationAction.request.URL;
+        if ([url.scheme.lowercaseString isEqualToString:@"blob"]) {
+            [self beginBlobDownloadFromURL:url inWebView:webView];
+            return nil;
+        }
         if ([self openURLInExternalApplicationIfNeeded:url]) {
             return nil;
         }
