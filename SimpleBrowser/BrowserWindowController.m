@@ -29,6 +29,7 @@
 #import "LoginAssistController.h"
 #import "CaptchaAssistController.h"
 #import "BrowserFeedAssistController.h"
+#import "BrowserFeedReader.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserCertificateWarningView.h"
 #import "BrowserNavigationErrorView.h"
@@ -169,9 +170,67 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, assign) BOOL addressFieldIsEditing;
 /// 上次 refreshTabsUI 时的选中标签，用于判断是否切到新标签页后再聚焦地址栏。
 @property (nonatomic, strong, nullable) NSUUID *lastSelectedTabIDForAddressFocus;
+/// 自定义应用协议（如 OAuth 回调 minimax-hub-cn://）应交系统打开，而非在 WebView 内加载。
++ (BOOL)shouldHandOffURLToExternalApplication:(nullable NSURL *)url;
+- (BOOL)openURLInExternalApplicationIfNeeded:(nullable NSURL *)url;
+- (void)openURLInExternalApplication:(NSURL *)url;
 @end
 
 @implementation BrowserWindowController
+
++ (BOOL)shouldHandOffURLToExternalApplication:(NSURL *)url {
+    if (!url) {
+        return NO;
+    }
+    NSString *scheme = url.scheme.lowercaseString;
+    if (scheme.length == 0) {
+        return NO;
+    }
+    static NSSet<NSString *> *browserHandledSchemes = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        browserHandledSchemes = [NSSet setWithObjects:
+                                 @"http",
+                                 @"https",
+                                 @"about",
+                                 @"blob",
+                                 @"data",
+                                 @"file",
+                                 @"javascript",
+                                 BrowserFeedURLScheme,
+                                 nil];
+    });
+    return ![browserHandledSchemes containsObject:scheme];
+}
+
+- (BOOL)openURLInExternalApplicationIfNeeded:(NSURL *)url {
+    if (![BrowserWindowController shouldHandOffURLToExternalApplication:url]) {
+        return NO;
+    }
+    [self openURLInExternalApplication:url];
+    return YES;
+}
+
+- (void)openURLInExternalApplication:(NSURL *)url {
+    if (!url) {
+        return;
+    }
+    if (@available(macOS 12.0, *)) {
+        NSURL *handlerApp = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:url];
+        if (!handlerApp) {
+            [BrowserTransientToast showMessage:@"未找到可打开此链接的应用"
+                                      inWindow:self.window
+                                      duration:2.4];
+            return;
+        }
+    }
+    BOOL opened = [[NSWorkspace sharedWorkspace] openURL:url];
+    if (!opened) {
+        [BrowserTransientToast showMessage:@"无法打开应用协议链接"
+                                  inWindow:self.window
+                                  duration:2.4];
+    }
+}
 
 - (WKWebView *)webView {
     return self.tabController.selectedTab.webView;
@@ -1485,11 +1544,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         BrowserWebView *browserWebView = (BrowserWebView *)webView;
         __weak BrowserWebView *weakBrowserWebView = browserWebView;
         browserWebView.openURLHandler = ^(NSURL *url) {
-            [weakSelf.tabController addTabWithURL:url];
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if ([strongSelf openURLInExternalApplicationIfNeeded:url]) {
+                return;
+            }
+            [strongSelf.tabController addTabWithURL:url];
         };
         browserWebView.openURLInNewWindowHandler = ^(NSURL *url) {
             typeof(self) strongSelf = weakSelf;
             if (!strongSelf) {
+                return;
+            }
+            if ([strongSelf openURLInExternalApplicationIfNeeded:url]) {
                 return;
             }
             id delegate = NSApp.delegate;
@@ -2098,6 +2167,9 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 - (void)launchpadView:(BrowserLaunchpadView *)view openURL:(NSURL *)url {
     (void)view;
+    if ([self openURLInExternalApplicationIfNeeded:url]) {
+        return;
+    }
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab) {
         [tab loadURL:url];
@@ -2107,6 +2179,9 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 - (void)launchpadView:(BrowserLaunchpadView *)view openURLInNewTab:(NSURL *)url {
     (void)view;
+    if ([self openURLInExternalApplicationIfNeeded:url]) {
+        return;
+    }
     [self.tabController addTabWithURL:url];
 }
 
@@ -2415,6 +2490,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     NSURL *url = [self normalizedURLFromString:input];
     if (!url) {
         [self showErrorWithTitle:@"无效的地址" message:@"请输入有效的网址，例如 example.com 或 https://example.com"];
+        return;
+    }
+    if ([self openURLInExternalApplicationIfNeeded:url]) {
         return;
     }
 
@@ -3189,6 +3267,22 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NS
 - (void)webView:(WKWebView *)webView
 decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *requestURL = [BrowserWebView URLByNormalizingEmbeddedFragment:navigationAction.request.URL];
+    BOOL isMainFrame = navigationAction.targetFrame.isMainFrame
+        || (navigationAction.targetFrame == nil && navigationAction.sourceFrame == nil);
+
+    // 自定义应用协议（OAuth / 浏览器登录回调等）：取消 WebView 加载，改交 Launch Services。
+    if ([BrowserWindowController shouldHandOffURLToExternalApplication:requestURL]) {
+        BOOL shouldOpenExternally = isMainFrame
+            || navigationAction.targetFrame == nil
+            || navigationAction.navigationType == WKNavigationTypeLinkActivated;
+        decisionHandler(WKNavigationActionPolicyCancel);
+        if (shouldOpenExternally) {
+            [self openURLInExternalApplication:requestURL];
+        }
+        return;
+    }
+
     // ⌘+点击链接：在新标签页中打开，取消当前页导航（避免与 createWebView 重复开页）
     if (navigationAction.navigationType == WKNavigationTypeLinkActivated
         && (navigationAction.modifierFlags & NSEventModifierFlagCommand) != 0) {
@@ -3202,9 +3296,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
     // http: + fragment：经系统代理时 WebKit 可能把 # 编成 %23 打进路径 → 站点 404。
     // 同文档仅改 hash：取消联网导航，改用 replaceState；跨文档则剥离后加载。
-    NSURL *requestURL = [BrowserWebView URLByNormalizingEmbeddedFragment:navigationAction.request.URL];
-    BOOL isMainFrame = navigationAction.targetFrame.isMainFrame
-        || (navigationAction.targetFrame == nil && navigationAction.sourceFrame == nil);
     BOOL sameDocument = [BrowserWebView URL:requestURL isSameDocumentAsURL:webView.URL];
     if (isMainFrame
         && [BrowserWebView shouldStripFragmentForNetworkLoadOfURL:requestURL]
@@ -3605,6 +3696,9 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
         }
         NSURL *newWindowURL = [browserWebView consumePendingContextMenuOpenInNewWindowURL:navigationAction.request.URL];
         if (newWindowURL) {
+            if ([self openURLInExternalApplicationIfNeeded:newWindowURL]) {
+                return nil;
+            }
             if (browserWebView.openURLInNewWindowHandler) {
                 browserWebView.openURLInNewWindowHandler(newWindowURL);
             } else {
@@ -3616,6 +3710,9 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 
     if (!navigationAction.targetFrame || !navigationAction.targetFrame.isMainFrame) {
         NSURL *url = navigationAction.request.URL;
+        if ([self openURLInExternalApplicationIfNeeded:url]) {
+            return nil;
+        }
         if (url) {
             [self.tabController addTabWithURL:url];
         } else {
