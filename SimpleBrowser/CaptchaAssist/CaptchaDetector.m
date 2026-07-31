@@ -1,5 +1,6 @@
 #import "CaptchaDetector.h"
 #import "LoginAssistScriptMessageProxy.h"
+#import "BrowserRiskHostPolicy.h"
 
 NSString * const CaptchaAssistHandlerName = @"captchaAssist";
 
@@ -30,10 +31,20 @@ NSString * const CaptchaAssistHandlerName = @"captchaAssist";
 }
 
 + (NSString *)userScriptSource {
+    NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressCaptchaDetect"];
+    NSString *prefix = [NSString stringWithFormat:
+                        @"(function() {\n"
+                        "  if (window.__meoCaptchaDetectorInstalled) { return; }\n"
+                        "%@"
+                        "  if (meoShouldSuppressCaptchaDetect()) { return; }\n"
+                        "  window.__meoCaptchaDetectorInstalled = true;\n",
+                        suppressFn];
+    NSString *body = [self userScriptSourceBody];
+    return [prefix stringByAppendingString:body];
+}
+
++ (NSString *)userScriptSourceBody {
     return @
-    "(function() {\n"
-    "  if (window.__meoCaptchaDetectorInstalled) { return; }\n"
-    "  window.__meoCaptchaDetectorInstalled = true;\n"
     "\n"
     "  function post(payload) {\n"
     "    try {\n"

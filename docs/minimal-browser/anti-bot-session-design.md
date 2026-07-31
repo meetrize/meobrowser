@@ -28,7 +28,7 @@
 |----|------|
 | 动态对齐系统 Safari 风格 UA（避免写死过期版本） | Canvas / WebRTC / 时区伪造与指纹随机轮换 |
 | 保证 `defaultDataStore` Cookie 不被休眠冲掉；敏感站保护休眠 | 多 Profile / 独立 `WKWebsiteDataStore`（另立项） |
-| 风险域（Google 验证页、Cloudflare 等）抑制登录助手注入与 Runner | 破解 SearchGuard / reCAPTCHA v3 / Turnstile |
+| 风险域（Google 验证页、Cloudflare 等）抑制**所有**页面自动化注入（登录/备忘/验证码检测/Feed/查找）；媒体捕获不在 CF/非媒体站挂钩 | 破解 SearchGuard / reCAPTCHA v3 / Turnstile |
 | 按 host 清除网站数据；设置内 VPN/共享出口提示 | 代用户过验证码（见 Captcha Assist） |
 | 可观测：设置或调试日志打印当前有效 UA | 伪装成 Chrome 的完整 Client Hints 栈 |
 
@@ -37,8 +37,21 @@
 1. **一致性优于伪装**：UA、引擎、JS 环境应对齐同一 WebKit；半伪装比不伪装更危险。  
 2. **少触发优于硬解**：验证码出现后的求解属 [captcha-assist-design.md](captcha-assist-design.md)；本方案只管「别无故触发」。  
 3. **会话连续**：Cookie 进 `WKWebsiteDataStore.defaultDataStore`；休眠不得清 data store。  
-4. **自动化痕迹可控**：登录助手默认可用，但在人机页 / 高风险域必须静默。  
-5. **诚实边界**：出口 IP 被 Google 标记时，Safari 也会中招；App 只能消「MeoBrowser 特有」信号。
+4. **自动化痕迹可控**：登录助手默认可用，但在人机页 / 高风险域必须静默；**禁止**在 Turnstile iframe / CF interstitial 上改写 `fetch`/`XHR`/`createObjectURL`。  
+5. **诚实边界**：出口 IP 被 Google/Cloudflare 标记时，Safari 也会中招；App 只能消「MeoBrowser 特有」信号。
+
+### 1.5 Cloudflare Turnstile（Safari 能过、MeoBrowser 循环）
+
+典型症状：勾选「确认您是真人」后再次回到 checkbox。根因多为 WKUserScript 在挑战帧改写原生 API，而非缺「自动点选」。
+
+| 优先级 | 措施 | 状态 |
+|--------|------|------|
+| P0 | 媒体捕获 UserScript：CF/人机页静默；`fetch`/`XHR`/`createObjectURL` **仅媒体站**（doubao 等） | AB-5 |
+| P1 | `BrowserRiskHostPolicy` 扩展 `__cf_chl` / `cdn-cgi/challenge` / 标题与 DOM 启发式；Captcha/Feed/Find/Login/Memo 统一静默 | AB-5 |
+| P2 | `applicationNameForUserAgent = @""`，避免与 `customUserAgent` 叠 App 名 | AB-5 |
+| — | 自动破解 Turnstile / 伪造 token | **不做** |
+
+对照验收：同网下 Safari 能过的 `linux.do` 等站，MeoBrowser 人手勾选后应进入正文。
 
 ### 1.5 与相关模块的关系
 

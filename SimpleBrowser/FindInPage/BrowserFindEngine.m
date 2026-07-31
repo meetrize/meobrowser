@@ -1,4 +1,5 @@
 #import "BrowserFindEngine.h"
+#import "BrowserRiskHostPolicy.h"
 
 @implementation BrowserFindResult
 @end
@@ -10,17 +11,32 @@
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         NSString *path = [[NSBundle mainBundle] pathForResource:@"find-in-page" ofType:@"js"];
+        NSString *fileSource = nil;
         if (path.length > 0) {
             NSError *error = nil;
-            NSString *fileSource = [NSString stringWithContentsOfFile:path
-                                                             encoding:NSUTF8StringEncoding
-                                                                error:&error];
-            if (fileSource.length > 0 && error == nil) {
-                source = fileSource;
-                return;
+            fileSource = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:&error];
+            if (error != nil || fileSource.length == 0) {
+                fileSource = nil;
             }
         }
-        source = @"(function(){window.__MeoFind=window.__MeoFind||{search:function(){return{matchCount:0,currentIndex:0}},next:function(){return{matchCount:0,currentIndex:0}},prev:function(){return{matchCount:0,currentIndex:0}},clear:function(){return{matchCount:0,currentIndex:0}},selectionText:function(){return'';}};})();";
+        if (fileSource.length == 0) {
+            fileSource = @"(function(){window.__MeoFind=window.__MeoFind||{search:function(){return{matchCount:0,currentIndex:0}},next:function(){return{matchCount:0,currentIndex:0}},prev:function(){return{matchCount:0,currentIndex:0}},clear:function(){return{matchCount:0,currentIndex:0}},selectionText:function(){return'';}};})();";
+        }
+        // 人机页不装查找引擎，避免 MutationObserver / DOM 改写干扰 Cloudflare。
+        // 必须把 suppress 塞进 find IIFE 内部，不能前后拼接（否则仍会执行查找脚本）。
+        NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressFind"];
+        NSString *gate = [NSString stringWithFormat:@"%@\n  if (meoShouldSuppressFind()) { return; }\n", suppressFn];
+        NSString *openA = @"(function () {";
+        NSString *openB = @"(function(){";
+        if ([fileSource hasPrefix:openA]) {
+            source = [openA stringByAppendingString:[gate stringByAppendingString:[fileSource substringFromIndex:openA.length]]];
+        } else if ([fileSource hasPrefix:openB]) {
+            source = [openB stringByAppendingString:[gate stringByAppendingString:[fileSource substringFromIndex:openB.length]]];
+        } else {
+            source = [NSString stringWithFormat:@"(function(){\n%@\nif(meoShouldSuppressFind()){return;}\n%@\n})();", suppressFn, fileSource];
+        }
     });
     return source;
 }

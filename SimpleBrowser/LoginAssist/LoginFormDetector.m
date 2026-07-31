@@ -37,40 +37,16 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 
 + (NSString *)userScriptSource {
     // IF-P：无密码早退 + 按需 scroll + 空闲暂停 MutationObserver（见 login-form-detector-perf-design.md）
-    // AB-2：风险域 / 人机页不注入（与 BrowserRiskHostPolicy 名单对齐）
-    NSArray<NSString *> *suffixes = [BrowserRiskHostPolicy loginAssistSuppressionHostSuffixes];
-    NSMutableArray<NSString *> *quoted = [NSMutableArray arrayWithCapacity:suffixes.count];
-    for (NSString *s in suffixes) {
-        NSString *escaped = [[s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
-                             stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        [quoted addObject:[NSString stringWithFormat:@"'%@'", escaped]];
-    }
-    NSString *suffixLiteral = [quoted componentsJoinedByString:@","];
-
+    // AB-2 / AB-5：风险域 / Cloudflare 人机页不注入
+    NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressLoginAssist"];
     NSString *prefix = [NSString stringWithFormat:
         @"(function() {\n"
         "  if (window.__meoLoginFormInlineInstalled) { return; }\n"
         "  if (window.__meoLoginInlineEnabled === false) { return; }\n"
-        "  function meoShouldSuppressLoginAssist() {\n"
-        "    try {\n"
-        "      const host = (location.hostname || '').toLowerCase();\n"
-        "      const path = (location.pathname || '').toLowerCase();\n"
-        "      const href = (location.href || '').toLowerCase();\n"
-        "      const suffixes = [%@];\n"
-        "      for (let i = 0; i < suffixes.length; i++) {\n"
-        "        const s = suffixes[i];\n"
-        "        if (host === s || host.endsWith('.' + s)) return true;\n"
-        "      }\n"
-        "      if (path.indexOf('/sorry/') >= 0) return true;\n"
-        "      if (path.indexOf('/recaptcha') >= 0) return true;\n"
-        "      if (host.indexOf('challenges.cloudflare') >= 0) return true;\n"
-        "      if (href.indexOf('challenges.cloudflare.com') >= 0) return true;\n"
-        "    } catch (e) {}\n"
-        "    return false;\n"
-        "  }\n"
+        "%@"
         "  if (meoShouldSuppressLoginAssist()) { return; }\n"
         "  window.__meoLoginFormInlineInstalled = true;\n",
-        suffixLiteral];
+        suppressFn];
 
     NSString *body = [self userScriptSourceBody];
     return [prefix stringByAppendingString:body];

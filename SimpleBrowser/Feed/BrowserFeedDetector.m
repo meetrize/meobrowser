@@ -2,6 +2,7 @@
 #import "BrowserFeedItem.h"
 #import "BrowserFeedReader.h"
 #import "LoginAssistScriptMessageProxy.h"
+#import "BrowserRiskHostPolicy.h"
 
 NSString * const BrowserFeedAssistHandlerName = @"meoFeedAssist";
 
@@ -132,8 +133,11 @@ NSString * const BrowserFeedAssistHandlerName = @"meoFeedAssist";
 }
 
 + (NSString *)userScriptSource {
+    NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressFeedDetect"];
     return [NSString stringWithFormat:
             @"(function() {\n"
+            @"%@\n"
+            @"  if (meoShouldSuppressFeedDetect()) { return; }\n"
             @"  function post(payload) {\n"
             @"    try {\n"
             @"      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.meoFeedAssist) {\n"
@@ -160,6 +164,7 @@ NSString * const BrowserFeedAssistHandlerName = @"meoFeedAssist";
             @"    obs.observe(document.documentElement || document, { childList: true, subtree: true });\n"
             @"  } catch (e) {}\n"
             @"})();\n",
+            suppressFn,
             [self scanFeedsJavaScriptBody]];
 }
 

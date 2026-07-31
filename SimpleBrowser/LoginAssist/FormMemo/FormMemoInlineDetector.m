@@ -77,38 +77,14 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 }
 
 + (NSString *)userScriptSource {
-    NSArray<NSString *> *suffixes = [BrowserRiskHostPolicy loginAssistSuppressionHostSuffixes];
-    NSMutableArray<NSString *> *quoted = [NSMutableArray arrayWithCapacity:suffixes.count];
-    for (NSString *s in suffixes) {
-        NSString *escaped = [[s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
-                             stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-        [quoted addObject:[NSString stringWithFormat:@"'%@'", escaped]];
-    }
-    NSString *suffixLiteral = [quoted componentsJoinedByString:@","];
-
+    NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppress"];
     NSString *prefix = [NSString stringWithFormat:
         @"(function() {\n"
         "  if (window.__meoFormMemoInlineInstalled) { return; }\n"
-        "  function meoShouldSuppress() {\n"
-        "    try {\n"
-        "      const host = (location.hostname || '').toLowerCase();\n"
-        "      const path = (location.pathname || '').toLowerCase();\n"
-        "      const href = (location.href || '').toLowerCase();\n"
-        "      const suffixes = [%@];\n"
-        "      for (let i = 0; i < suffixes.length; i++) {\n"
-        "        const s = suffixes[i];\n"
-        "        if (host === s || host.endsWith('.' + s)) return true;\n"
-        "      }\n"
-        "      if (path.indexOf('/sorry/') >= 0) return true;\n"
-        "      if (path.indexOf('/recaptcha') >= 0) return true;\n"
-        "      if (host.indexOf('challenges.cloudflare') >= 0) return true;\n"
-        "      if (href.indexOf('challenges.cloudflare.com') >= 0) return true;\n"
-        "    } catch (e) {}\n"
-        "    return false;\n"
-        "  }\n"
+        "%@"
         "  if (meoShouldSuppress()) { return; }\n"
         "  window.__meoFormMemoInlineInstalled = true;\n",
-        suffixLiteral];
+        suppressFn];
 
     return [prefix stringByAppendingString:[self userScriptSourceBody]];
 }

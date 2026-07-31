@@ -15,7 +15,8 @@
 | UA 来源 | 同进程临时 `WKWebView` 采样默认 UA，再规范为含 `Version/… Safari/…` |
 | 休眠保护 | 空闲计时 **跳过** 保护 host；内存压力下 **最后** 才休眠保护标签 |
 | 默认保护/抑制 host | `google.com`、`googleapis.com`、`gstatic.com`、`recaptcha.net`、`cloudflare.com`、`hcaptcha.com`、`baidu.com`（后缀匹配） |
-| URL 启发式抑制 | path 含 `/sorry/`、host 含 `challenges.cloudflare` 等 → 强制抑制 |
+| URL 启发式抑制 | path 含 `/sorry/`、`/cdn-cgi/challenge`、`__cf_chl`，host 含 `challenges.cloudflare`，或标题/DOM 为人机页 → 强制抑制 |
+| 页面自动化抑制范围 | Login / FormMemo / CaptchaDetector / Feed / Find + 媒体捕获（非媒体站不挂钩） |
 | `accounts.google.com` | V1 **整域 `google.com` 抑制**登录助手 |
 | 清除网站数据 | 确认框：**清除全部** / **清除当前站点**；保留原全清 API |
 | 自定义 UA 设置 UI | **不做**（留给路线图） |
@@ -36,6 +37,7 @@
 | Phase AB-2 | 登录助手抑制 | §4.4 | **完成** | Detector 脚本 + Runner 拒绝 |
 | Phase AB-3 | 按站清除 + 设置提示 | §3.2 / §4.2 | **完成** | Prefs API + Settings UI |
 | Phase AB-4 | 文档与验收 | §7 | **完成** | acceptance / README / verify |
+| Phase AB-5 | Cloudflare Turnstile 会话对齐 | §1.5 | **完成** | 媒体捕获收窄 + 全脚本人机页静默 |
 
 建议节奏：AB-0 → AB-1 → AB-2 可连续交付（风控主路径）；AB-3 独立；AB-4 收尾。每阶段结束执行 `make browser`。
 

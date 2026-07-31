@@ -2,6 +2,7 @@
 #import "BrowserDownloadItem.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserFeedReader.h"
+#import "BrowserRiskHostPolicy.h"
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
 
@@ -92,10 +93,27 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
 }
 
 /// 尽早挂钩：保留 Blob 引用（避免 revoke 后 fetch 失败），并嗅探豆包 get_play_info 的 main_url。
+/// Cloudflare Turnstile 会对「改写 fetch/XHR」极敏感：人机页整段静默；fetch/XHR 仅在媒体站启用。
 + (NSString *)mediaCaptureUserScriptSource {
-    return @
-    "(function() {\n"
+    NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipMediaCapture"];
+    NSString *body = @
     "  if (window.__meoMediaCaptureInstalled) { return; }\n"
+    "  if (meoShouldSkipMediaCapture()) { return; }\n"
+    "\n"
+    "  function hostNeedsPlayInfoHook() {\n"
+    "    try {\n"
+    "      var h = (location.hostname || '').toLowerCase();\n"
+    "      var needles = ['doubao.com', 'jianying.com', 'capcut.com', 'bytedance.com', 'byteintl.com', 'tiktok.com', 'ixigua.com'];\n"
+    "      for (var i = 0; i < needles.length; i++) {\n"
+    "        var n = needles[i];\n"
+    "        if (h === n || h.endsWith('.' + n)) return true;\n"
+    "      }\n"
+    "    } catch (e) {}\n"
+    "    return false;\n"
+    "  }\n"
+    "  // 非媒体站完全不挂钩（含 createObjectURL）：linux.do 等 CF 主站 interstitial 也保持原生环境。\n"
+    "  if (!hostNeedsPlayInfoHook()) { return; }\n"
+    "\n"
     "  window.__meoMediaCaptureInstalled = true;\n"
     "  window.__meoMediaBlobByURL = Object.create(null);\n"
     "  window.__meoMediaHTTPS = [];\n"
@@ -182,7 +200,6 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     "  var origRevoke = URL.revokeObjectURL;\n"
     "  URL.revokeObjectURL = function(url) {\n"
     "    try {\n"
-    "      // 延迟丢弃，便于点击下载后仍能读到 Blob\n"
     "      setTimeout(function() {\n"
     "        try { delete window.__meoMediaBlobByURL[url]; } catch (e) {}\n"
     "      }, 180000);\n"
@@ -246,8 +263,9 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     "      } catch (e3) {}\n"
     "    });\n"
     "    return origSend.apply(this, arguments);\n"
-    "  };\n"
-    "})();";
+    "  };\n";
+
+    return [NSString stringWithFormat:@"(function() {\n%@%@})();", suppressFn, body];
 }
 
 - (instancetype)init {

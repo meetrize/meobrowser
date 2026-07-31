@@ -310,6 +310,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     // UA 由 BrowserUserAgent + WebView.customUserAgent 对齐本机 Safari；此处不再写死 Version。
     // 显式共享默认数据存储，标签间 cookie / localStorage 一致。
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    // 避免 WebKit 再追加 App 名，与 customUserAgent 叠出非 Safari 痕迹。
+    configuration.applicationNameForUserAgent = @"";
     // WebKit 默认关闭 Element Fullscreen；YouTube / 抖音等会检测 document.fullscreenEnabled。
     if (@available(macOS 12.3, *)) {
         configuration.preferences.elementFullscreenEnabled = YES;
