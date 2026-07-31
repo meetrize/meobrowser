@@ -2,6 +2,9 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// 主框架导航超时（秒）。短于 WebKit/NSURLRequest 默认 60s，便于不可达站点更快失败。
+FOUNDATION_EXPORT const NSTimeInterval BrowserMainFrameNavigationTimeout;
+
 /// WKWebView 子类：拦截系统右键菜单中无效的「Search with…」与「Download Image」等项；
 /// 选中文本含 http(s):// 时补充「在新标签中打开」。
 @interface BrowserWebView : WKWebView

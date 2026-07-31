@@ -51,6 +51,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserURLInputClassifier.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
+                   $(BROWSER_SRC_DIR)/Security/BrowserNavigationErrorView.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserHTTPAuthPrompt.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedItem.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedDetector.m \

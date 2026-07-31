@@ -4,6 +4,8 @@
 // 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
 static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 
+const NSTimeInterval BrowserMainFrameNavigationTimeout = 12.0;
+
 @interface BrowserWebView ()
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuDownload;
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuOpenInNewWindow;
@@ -13,6 +15,19 @@ static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 @end
 
 @implementation BrowserWebView
+
++ (NSURLRequest *)requestByApplyingNavigationTimeout:(NSURLRequest *)request {
+    if (!request) {
+        return request;
+    }
+    // 默认 60s；不可达主机（如未代理访问境外站点）会空等到超时才失败。
+    if (request.timeoutInterval <= BrowserMainFrameNavigationTimeout) {
+        return request;
+    }
+    NSMutableURLRequest *timed = [request mutableCopy];
+    timed.timeoutInterval = BrowserMainFrameNavigationTimeout;
+    return timed;
+}
 
 /// replaceState 不会像原生 #锚点导航那样滚动；补上 id/name 定位（与浏览器行为对齐）。
 /// 使用 behavior:'instant'，避免站点 html{scroll-behavior:smooth} 把跳转拖成动画、与后续脚本抢滚动。
@@ -294,13 +309,14 @@ static NSString *MeoScrollToFragmentJS(void) {
 }
 
 - (nullable WKNavigation *)loadRequest:(NSURLRequest *)request {
+    request = [BrowserWebView requestByApplyingNavigationTimeout:request];
     NSURL *url = request.URL;
     // 会话里若仍残留 __meo_hf，先还原成 #hash，再走统一剥离逻辑。
     NSURL *publicURL = [BrowserWebView publicURLFromInternalURL:url];
     if (publicURL != nil && ![publicURL.absoluteString isEqualToString:url.absoluteString]) {
         NSMutableURLRequest *normalized = [request mutableCopy];
         normalized.URL = publicURL;
-        request = normalized;
+        request = [BrowserWebView requestByApplyingNavigationTimeout:normalized];
         url = publicURL;
     }
     if (![BrowserWebView shouldStripFragmentForNetworkLoadOfURL:url]) {
@@ -314,7 +330,7 @@ static NSString *MeoScrollToFragmentJS(void) {
 
     NSMutableURLRequest *mutableRequest = [request mutableCopy];
     mutableRequest.URL = stripped;
-    return [super loadRequest:mutableRequest];
+    return [super loadRequest:[BrowserWebView requestByApplyingNavigationTimeout:mutableRequest]];
 }
 
 - (nullable WKNavigation *)reload {
