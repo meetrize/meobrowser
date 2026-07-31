@@ -118,7 +118,7 @@
     // 登录状态徽标（显著）
     self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
     self.serverLoginBadge.boxType = NSBoxCustom;
-    self.serverLoginBadge.borderType = NSLineBorder;
+    // NSBoxCustom 用 borderWidth/borderColor 即可；borderType 已弃用。
     self.serverLoginBadge.borderWidth = 1;
     self.serverLoginBadge.cornerRadius = 8;
     self.serverLoginBadge.titlePosition = NSNoTitle;
