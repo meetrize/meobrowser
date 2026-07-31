@@ -1,4 +1,5 @@
 #import "CompanionPairingStore.h"
+#import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
 static NSString * const kCompanionKeychainService = @"MeoBrowser.LoginAssist.Companion";
@@ -10,6 +11,35 @@ static NSString * const kSecurityCodeKey = @"CompanionSecurityCode";
 static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
 /// 启动态文案用；避免为「已配对 N 台」在冷启动就读钥匙串。
 static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
+/// 非机密 deviceId 列表；启动邀请发现用，避免为白名单读钥匙串。
+static NSString * const kPairedDeviceIdsKey = @"CompanionPairedDeviceIds";
+/// deviceId → SHA256(token) 指纹；hello 校验用，冷启动不读钥匙串。
+static NSString * const kPairedDeviceTokenFingerprintsKey = @"CompanionPairedDeviceTokenFingerprints";
+/// 旧版钥匙串是否已尝试迁移（成功或确认无数据后置位，避免反复弹窗）。
+static NSString * const kCompanionKeychainMigratedKey = @"CompanionPairedDevicesKeychainMigrated";
+
+static NSString *CompanionTokenFingerprint(NSString *token) {
+    if (token.length == 0) {
+        return @"";
+    }
+    NSData *data = [token dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        [hex appendFormat:@"%02x", digest[i]];
+    }
+    return hex;
+}
+
+static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("meobrowser.companion.keychain-migrate", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
 
 @implementation CompanionPairedDevice
 @end
@@ -19,7 +49,8 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
 @property (nonatomic, assign, readwrite) NSTimeInterval pendingPairingExpiresAt;
 @property (nonatomic, copy, readwrite, nullable) NSString *securityCode;
 @property (nonatomic, copy) NSArray<CompanionPairedDevice *> *pairedDevicesStorage;
-@property (nonatomic, assign) BOOL keychainLoaded;
+@property (nonatomic, assign) BOOL devicesLoaded;
+@property (nonatomic, assign) BOOL keychainMigrationInFlight;
 @end
 
 @implementation CompanionPairingStore
@@ -33,12 +64,21 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
     return store;
 }
 
++ (NSString *)pairedDevicesFilePath {
+    NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    NSString *root = paths.firstObject ?: NSTemporaryDirectory();
+    NSString *dir = [[root stringByAppendingPathComponent:@"MeoBrowser"] stringByAppendingPathComponent:@"LoginAssist"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return [dir stringByAppendingPathComponent:@"companion-paired-devices.json"];
+}
+
 - (instancetype)init {
     self = [super init];
     if (self) {
-        // 冷启动不读钥匙串：端口 / 安全码等在 UserDefaults；配对 token 延后到校验或设置页再取。
+        // 冷启动只读本地文件 / UserDefaults；旧钥匙串迁移放到后台，避免卡住主线程。
         _pairedDevicesStorage = @[];
-        _keychainLoaded = NO;
+        _devicesLoaded = NO;
+        _keychainMigrationInFlight = NO;
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         _pendingPairingCode = [defaults stringForKey:kPendingCodeKey];
         _pendingPairingExpiresAt = [defaults doubleForKey:kPendingExpiresKey];
@@ -48,12 +88,13 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
             _authMode = CompanionAuthModePairingCode;
         }
         _stickyListeningPort = [defaults integerForKey:kStickyPortKey];
+        [self ensureDevicesLoaded];
     }
     return self;
 }
 
 - (NSUInteger)pairedDeviceCountHint {
-    if (self.keychainLoaded) {
+    if (self.devicesLoaded) {
         return self.pairedDevicesStorage.count;
     }
     NSInteger stored = [NSUserDefaults.standardUserDefaults integerForKey:kPairedDeviceCountKey];
@@ -61,21 +102,137 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
 }
 
 - (void)syncPairedDeviceCountHint {
-    [NSUserDefaults.standardUserDefaults setInteger:(NSInteger)self.pairedDevicesStorage.count
-                                             forKey:kPairedDeviceCountKey];
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setInteger:(NSInteger)self.pairedDevicesStorage.count forKey:kPairedDeviceCountKey];
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSString *> *fingerprints = [NSMutableDictionary dictionary];
+    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
+        if (device.deviceId.length > 0) {
+            [ids addObject:device.deviceId];
+            if (device.deviceToken.length > 0) {
+                fingerprints[device.deviceId] = CompanionTokenFingerprint(device.deviceToken);
+            }
+        }
+    }
+    [defaults setObject:ids forKey:kPairedDeviceIdsKey];
+    [defaults setObject:fingerprints forKey:kPairedDeviceTokenFingerprintsKey];
 }
 
-- (void)ensureKeychainLoaded {
-    if (self.keychainLoaded) {
+- (NSDictionary<NSString *, NSString *> *)storedTokenFingerprints {
+    NSDictionary *stored = [NSUserDefaults.standardUserDefaults dictionaryForKey:kPairedDeviceTokenFingerprintsKey];
+    if (![stored isKindOfClass:[NSDictionary class]] || stored.count == 0) {
+        return @{};
+    }
+    NSMutableDictionary<NSString *, NSString *> *out = [NSMutableDictionary dictionary];
+    [stored enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        (void)stop;
+        if ([key isKindOfClass:[NSString class]] && [obj isKindOfClass:[NSString class]] &&
+            [(NSString *)key length] > 0 && [(NSString *)obj length] > 0) {
+            out[key] = obj;
+        }
+    }];
+    return out;
+}
+
+- (BOOL)validateDeviceTokenAgainstFingerprints:(NSString *)deviceToken deviceId:(NSString *)deviceId {
+    NSString *fp = CompanionTokenFingerprint(deviceToken);
+    if (fp.length == 0) {
+        return NO;
+    }
+    NSDictionary<NSString *, NSString *> *fingerprints = [self storedTokenFingerprints];
+    if (fingerprints.count == 0) {
+        return NO;
+    }
+    if (deviceId.length > 0) {
+        return [fingerprints[deviceId] isEqualToString:fp];
+    }
+    for (NSString *stored in fingerprints.allValues) {
+        if ([stored isEqualToString:fp]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (NSArray<NSString *> *)pairedDeviceIdHints {
+    if (self.devicesLoaded) {
+        NSMutableArray<NSString *> *ids = [NSMutableArray array];
+        for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
+            if (device.deviceId.length > 0) {
+                [ids addObject:device.deviceId];
+            }
+        }
+        return ids;
+    }
+    NSArray *stored = [NSUserDefaults.standardUserDefaults arrayForKey:kPairedDeviceIdsKey];
+    if (![stored isKindOfClass:[NSArray class]] || stored.count == 0) {
+        return @[];
+    }
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (id item in stored) {
+        if ([item isKindOfClass:[NSString class]] && [(NSString *)item length] > 0) {
+            [ids addObject:item];
+        }
+    }
+    return ids;
+}
+
+- (NSArray<CompanionPairedDevice *> *)devicesFromJSONData:(NSData *)data {
+    if (data.length == 0) {
+        return @[];
+    }
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:[NSArray class]]) {
+        return @[];
+    }
+    NSMutableArray<CompanionPairedDevice *> *devices = [NSMutableArray array];
+    for (id item in (NSArray *)json) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSDictionary *dict = item;
+        NSString *deviceId = dict[@"deviceId"];
+        NSString *token = dict[@"deviceToken"];
+        if (![deviceId isKindOfClass:[NSString class]] || ![token isKindOfClass:[NSString class]]) {
+            continue;
+        }
+        CompanionPairedDevice *device = [[CompanionPairedDevice alloc] init];
+        device.deviceId = deviceId;
+        device.deviceToken = token;
+        device.displayName = [dict[@"displayName"] isKindOfClass:[NSString class]] ? dict[@"displayName"] : nil;
+        device.pairedAt = [dict[@"pairedAt"] doubleValue];
+        [devices addObject:device];
+    }
+    return devices;
+}
+
+- (void)ensureDevicesLoaded {
+    if (self.devicesLoaded) {
         return;
     }
-    self.keychainLoaded = YES;
-    [self reloadFromKeychain];
-    [self syncPairedDeviceCountHint];
+    self.devicesLoaded = YES;
+    NSString *path = [[self class] pairedDevicesFilePath];
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (data.length > 0) {
+        self.pairedDevicesStorage = [self devicesFromJSONData:data];
+        [self syncPairedDeviceCountHint];
+        // 文件已是权威来源：标记迁移完成，并在后台静默删除旧钥匙串项。
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
+        dispatch_async(CompanionKeychainMigrateQueue(), ^{
+            NSDictionary *del = @{
+                (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                (__bridge id)kSecAttrService: kCompanionKeychainService,
+                (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
+            };
+            SecItemDelete((__bridge CFDictionaryRef)del);
+        });
+        return;
+    }
+    self.pairedDevicesStorage = @[];
 }
 
 - (NSArray<CompanionPairedDevice *> *)pairedDevices {
-    [self ensureKeychainLoaded];
+    [self ensureDevicesLoaded];
     return self.pairedDevicesStorage ?: @[];
 }
 
@@ -100,49 +257,8 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
     }
 }
 
-- (void)reloadFromKeychain {
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kCompanionKeychainService,
-        (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-    };
-    CFTypeRef result = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-    if (status != errSecSuccess || !result) {
-        self.pairedDevicesStorage = @[];
-        return;
-    }
-    NSData *data = CFBridgingRelease(result);
-    NSArray *list = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![list isKindOfClass:[NSArray class]]) {
-        self.pairedDevicesStorage = @[];
-        return;
-    }
-    NSMutableArray<CompanionPairedDevice *> *devices = [NSMutableArray array];
-    for (id item in list) {
-        if (![item isKindOfClass:[NSDictionary class]]) {
-            continue;
-        }
-        NSDictionary *dict = item;
-        NSString *deviceId = dict[@"deviceId"];
-        NSString *token = dict[@"deviceToken"];
-        if (![deviceId isKindOfClass:[NSString class]] || ![token isKindOfClass:[NSString class]]) {
-            continue;
-        }
-        CompanionPairedDevice *device = [[CompanionPairedDevice alloc] init];
-        device.deviceId = deviceId;
-        device.deviceToken = token;
-        device.displayName = [dict[@"displayName"] isKindOfClass:[NSString class]] ? dict[@"displayName"] : nil;
-        device.pairedAt = [dict[@"pairedAt"] doubleValue];
-        [devices addObject:device];
-    }
-    self.pairedDevicesStorage = devices;
-}
-
 - (BOOL)persistDevices:(NSError **)error {
-    [self ensureKeychainLoaded];
+    [self ensureDevicesLoaded];
     NSMutableArray *list = [NSMutableArray array];
     for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         NSMutableDictionary *dict = [@{
@@ -155,34 +271,103 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
         }
         [list addObject:dict];
     }
-    NSData *data = [NSJSONSerialization dataWithJSONObject:list options:0 error:error];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:list options:NSJSONWritingPrettyPrinted error:error];
     if (!data) {
         return NO;
     }
-    NSDictionary *del = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kCompanionKeychainService,
-        (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-    };
-    SecItemDelete((__bridge CFDictionaryRef)del);
-    NSDictionary *add = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kCompanionKeychainService,
-        (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-        (__bridge id)kSecValueData: data,
-        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-    };
-    OSStatus status = SecItemAdd((__bridge CFDictionaryRef)add, NULL);
-    if (status != errSecSuccess) {
-        if (error) {
-            *error = [NSError errorWithDomain:NSOSStatusErrorDomain
-                                         code:status
-                                     userInfo:@{NSLocalizedDescriptionKey: @"无法保存配对信息"}];
-        }
+    NSString *path = [[self class] pairedDevicesFilePath];
+    if (![data writeToFile:path options:NSDataWritingAtomic error:error]) {
         return NO;
     }
+    // 限制为本用户可读，降低明文 token 落盘风险。
+    [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0600}
+                                     ofItemAtPath:path
+                                            error:nil];
     [self syncPairedDeviceCountHint];
     return YES;
+}
+
+#pragma mark - Legacy Keychain migration (background only)
+
+- (void)scheduleKeychainMigrationIfNeeded {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults boolForKey:kCompanionKeychainMigratedKey]) {
+        return;
+    }
+    if (self.keychainMigrationInFlight) {
+        return;
+    }
+    self.keychainMigrationInFlight = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(CompanionKeychainMigrateQueue(), ^{
+        NSDictionary *query = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kCompanionKeychainService,
+            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
+            (__bridge id)kSecReturnData: @YES,
+            (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+        };
+        CFTypeRef result = NULL;
+        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+        NSData *data = nil;
+        if (status == errSecSuccess && result) {
+            data = CFBridgingRelease(result);
+        } else if (result) {
+            CFRelease(result);
+        }
+
+        // 删除旧项：成功读到、或不存在、或用户拒绝后也不再反复弹。
+        NSDictionary *del = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kCompanionKeychainService,
+            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
+        };
+        if (status == errSecSuccess || status == errSecItemNotFound) {
+            SecItemDelete((__bridge CFDictionaryRef)del);
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) self = weakSelf;
+            if (!self) {
+                return;
+            }
+            self.keychainMigrationInFlight = NO;
+            if (data.length > 0) {
+                NSArray<CompanionPairedDevice *> *migrated = [self devicesFromJSONData:data];
+                [self mergeMigratedDevices:migrated];
+            }
+            // 用户取消（interaction not allowed / auth failed）时不置位，下次还可再试；
+            // 无数据或已成功则置位，避免连接路径再碰钥匙串。
+            if (status == errSecSuccess || status == errSecItemNotFound) {
+                [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
+                // 已有文件权威数据时，再删一次钥匙串（后台）。
+                dispatch_async(CompanionKeychainMigrateQueue(), ^{
+                    SecItemDelete((__bridge CFDictionaryRef)del);
+                });
+            }
+        });
+    });
+}
+
+- (void)mergeMigratedDevices:(NSArray<CompanionPairedDevice *> *)migrated {
+    if (migrated.count == 0) {
+        return;
+    }
+    [self ensureDevicesLoaded];
+    NSMutableDictionary<NSString *, CompanionPairedDevice *> *byId = [NSMutableDictionary dictionary];
+    for (CompanionPairedDevice *device in migrated) {
+        if (device.deviceId.length > 0) {
+            byId[device.deviceId] = device;
+        }
+    }
+    // 内存/文件里已有的（例如迁移期间新配对）优先。
+    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
+        if (device.deviceId.length > 0) {
+            byId[device.deviceId] = device;
+        }
+    }
+    self.pairedDevicesStorage = byId.allValues ?: @[];
+    [self persistDevices:nil];
 }
 
 - (NSString *)refreshPendingPairingCode {
@@ -273,7 +458,7 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
     }
 
     NSString *token = [[NSUUID UUID] UUIDString];
-    [self ensureKeychainLoaded];
+    [self ensureDevicesLoaded];
     NSMutableArray<CompanionPairedDevice *> *devices = [self.pairedDevicesStorage mutableCopy] ?: [NSMutableArray array];
     CompanionPairedDevice *existing = nil;
     for (CompanionPairedDevice *device in devices) {
@@ -308,7 +493,11 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
     if (deviceToken.length == 0) {
         return NO;
     }
-    [self ensureKeychainLoaded];
+    // 指纹优先：不读文件/钥匙串也能放行已配对手机。
+    if ([self validateDeviceTokenAgainstFingerprints:deviceToken deviceId:deviceId]) {
+        return YES;
+    }
+    [self ensureDevicesLoaded];
     for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         if (![device.deviceToken isEqualToString:deviceToken]) {
             continue;
@@ -316,22 +505,38 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
         if (deviceId.length > 0 && ![device.deviceId isEqualToString:deviceId]) {
             return NO;
         }
+        [self syncPairedDeviceCountHint];
         return YES;
+    }
+    // 文件尚空且可能仍在后台迁移：触发迁移，本次先拒绝（手机可重试 hello）。
+    if (self.pairedDevicesStorage.count == 0 &&
+        ![NSUserDefaults.standardUserDefaults boolForKey:kCompanionKeychainMigratedKey]) {
+        [self scheduleKeychainMigrationIfNeeded];
     }
     return NO;
 }
 
 - (void)revokeAllDevices {
-    [self ensureKeychainLoaded];
+    [self ensureDevicesLoaded];
     self.pairedDevicesStorage = @[];
     [self persistDevices:nil];
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:kPairedDeviceTokenFingerprintsKey];
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
+    dispatch_async(CompanionKeychainMigrateQueue(), ^{
+        NSDictionary *del = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kCompanionKeychainService,
+            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
+        };
+        SecItemDelete((__bridge CFDictionaryRef)del);
+    });
 }
 
 - (void)revokeDeviceToken:(NSString *)deviceToken {
     if (deviceToken.length == 0) {
         return;
     }
-    [self ensureKeychainLoaded];
+    [self ensureDevicesLoaded];
     NSMutableArray *devices = [NSMutableArray array];
     for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
         if (![device.deviceToken isEqualToString:deviceToken]) {

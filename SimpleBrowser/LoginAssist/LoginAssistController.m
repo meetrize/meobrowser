@@ -26,6 +26,9 @@
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
+/// 冷启动内跳过自动登录读钥匙串，避免与 Companion / 云同步叠弹密码框。
+static const NSTimeInterval kAutoLoginColdStartSuppress = 12.0;
+static NSTimeInterval sLoginAssistProcessStartAt = 0;
 /// kVK_ANSI_V — 模拟 ⌘V 粘贴（多格验证码框等场景比 insertText / JS 赋值更可靠）
 static const unsigned short kOTPCommandVKeyCode = 0x09;
 /// kVK_Return — 粘贴后默认回车提交；多格 OTP（豆包等粘贴即跳转）会跳过
@@ -57,6 +60,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @end
 
 @implementation LoginAssistController
+
++ (void)initialize {
+    if (self == [LoginAssistController class]) {
+        sLoginAssistProcessStartAt = [NSDate date].timeIntervalSince1970;
+    }
+}
 
 - (instancetype)initWithWindowController:(BrowserWindowController *)windowController {
     self = [super init];
@@ -688,6 +697,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         return;
     }
     if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
+        return;
+    }
+    // 冷启动会话恢复会立刻 finish 导航；此时读凭证极易叠出第二把钥匙串密码框。
+    if (sLoginAssistProcessStartAt > 0 &&
+        ([NSDate date].timeIntervalSince1970 - sLoginAssistProcessStartAt) < kAutoLoginColdStartSuppress) {
         return;
     }
     LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url];

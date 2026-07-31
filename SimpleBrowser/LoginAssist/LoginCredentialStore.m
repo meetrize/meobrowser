@@ -3,6 +3,35 @@
 
 static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
 
+/// 钥匙串 I/O 放串行后台队列；主线程用 runloop 等待，避免 SecItem* 同步堵死整窗。
+static dispatch_queue_t LoginCredentialKeychainQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("meobrowser.login-credential.keychain", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static void LoginCredentialPerformKeychain(void (^block)(void)) {
+    if (!block) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_sync(LoginCredentialKeychainQueue(), block);
+        return;
+    }
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(LoginCredentialKeychainQueue(), ^{
+        block();
+        dispatch_semaphore_signal(sem);
+    });
+    while (dispatch_semaphore_wait(sem, DISPATCH_TIME_NOW) != 0) {
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+}
+
 @implementation LoginCredentials
 - (instancetype)init {
     self = [super init];
@@ -13,6 +42,19 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
     }
     return self;
 }
+
+- (instancetype)copyWithZone:(NSZone *)zone {
+    (void)zone;
+    LoginCredentials *copy = [[LoginCredentials alloc] init];
+    copy.username = self.username;
+    copy.password = self.password;
+    copy.phone = self.phone;
+    return copy;
+}
+@end
+
+@interface LoginCredentialStore ()
+@property (nonatomic, strong) NSMutableDictionary<NSString *, LoginCredentials *> *memoryCache;
 @end
 
 @implementation LoginCredentialStore
@@ -24,6 +66,14 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
         store = [[self alloc] init];
     });
     return store;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _memoryCache = [NSMutableDictionary dictionary];
+    }
+    return self;
 }
 
 - (BOOL)saveUsername:(NSString *)username
@@ -52,18 +102,6 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
         return NO;
     }
 
-    if (![NSThread isMainThread]) {
-        __block BOOL ok = NO;
-        __block NSError *localError = nil;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            ok = [self saveCredentials:credentials forRecipeID:recipeID error:&localError];
-        });
-        if (error) {
-            *error = localError;
-        }
-        return ok;
-    }
-
     NSDictionary *payload = @{
         @"username": credentials.username ?: @"",
         @"password": credentials.password ?: @"",
@@ -82,14 +120,17 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
 
     [self deleteCredentialsForRecipeID:recipeID error:nil];
 
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kLoginAssistKeychainService,
-        (__bridge id)kSecAttrAccount: recipeID,
-        (__bridge id)kSecValueData: data,
-        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-    };
-    OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
+    __block OSStatus status = errSecSuccess;
+    LoginCredentialPerformKeychain(^{
+        NSDictionary *query = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kLoginAssistKeychainService,
+            (__bridge id)kSecAttrAccount: recipeID,
+            (__bridge id)kSecValueData: data,
+            (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        };
+        status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
+    });
     if (status != errSecSuccess) {
         if (error) {
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain
@@ -98,6 +139,7 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
         }
         return NO;
     }
+    self.memoryCache[recipeID] = [credentials copy];
     return YES;
 }
 
@@ -111,33 +153,32 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
         return nil;
     }
 
-    // 钥匙串访问必须在主线程，否则常见 errSecInteractionNotAllowed。
-    if (![NSThread isMainThread]) {
-        __block LoginCredentials *credentials = nil;
-        __block NSError *localError = nil;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            credentials = [self loadCredentialsForRecipeID:recipeID error:&localError];
-        });
-        if (error) {
-            *error = localError;
-        }
-        return credentials;
+    LoginCredentials *cached = self.memoryCache[recipeID];
+    if (cached) {
+        return [cached copy];
     }
 
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kLoginAssistKeychainService,
-        (__bridge id)kSecAttrAccount: recipeID,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-    };
-    CFTypeRef result = NULL;
-    OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    __block CFTypeRef result = NULL;
+    __block OSStatus status = errSecSuccess;
+    LoginCredentialPerformKeychain(^{
+        NSDictionary *query = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kLoginAssistKeychainService,
+            (__bridge id)kSecAttrAccount: recipeID,
+            (__bridge id)kSecReturnData: @YES,
+            (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+        };
+        status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    });
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
     if (status == errSecItemNotFound) {
+        self.memoryCache[recipeID] = [credentials copy];
         return credentials;
     }
     if (status != errSecSuccess || !result) {
+        if (result) {
+            CFRelease(result);
+        }
         if (error) {
             NSString *message = [NSString stringWithFormat:@"无法读取钥匙串（代码 %d）", (int)status];
             if (status == errSecInteractionNotAllowed) {
@@ -166,6 +207,7 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
     credentials.username = [username isKindOfClass:[NSString class]] ? username : @"";
     credentials.password = [password isKindOfClass:[NSString class]] ? password : @"";
     credentials.phone = [phone isKindOfClass:[NSString class]] ? phone : @"";
+    self.memoryCache[recipeID] = [credentials copy];
     return credentials;
 }
 
@@ -190,12 +232,16 @@ static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
     if (recipeID.length == 0) {
         return YES;
     }
-    NSDictionary *query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kLoginAssistKeychainService,
-        (__bridge id)kSecAttrAccount: recipeID,
-    };
-    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
+    [self.memoryCache removeObjectForKey:recipeID];
+    __block OSStatus status = errSecSuccess;
+    LoginCredentialPerformKeychain(^{
+        NSDictionary *query = @{
+            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: kLoginAssistKeychainService,
+            (__bridge id)kSecAttrAccount: recipeID,
+        };
+        status = SecItemDelete((__bridge CFDictionaryRef)query);
+    });
     if (status != errSecSuccess && status != errSecItemNotFound) {
         if (error) {
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain

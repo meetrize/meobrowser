@@ -94,6 +94,8 @@ NSString * const CompanionOpenURLToPhoneURLKey = @"url";
     [self applyAdvertisingStatusText];
     [self postStateChange];
     [self refreshPhoneInviteDiscovery];
+    // 故意不在启动时读钥匙串补白名单：会弹「登录」钥匙串密码。
+    // 无 deviceId hint 时仅等待手机主动连接；连接校验 / 设置页会写入 hint。
 }
 
 - (void)stop {
@@ -219,22 +221,13 @@ NSString * const CompanionOpenURLToPhoneURLKey = @"url";
 }
 
 - (NSSet<NSString *> *)pairedDeviceIdSet {
-    NSMutableSet<NSString *> *ids = [NSMutableSet set];
-    for (CompanionPairedDevice *device in [CompanionPairingStore sharedStore].pairedDevices) {
-        if (device.deviceId.length > 0) {
-            [ids addObject:device.deviceId];
-        }
-    }
-    return ids;
+    // 仅用 UserDefaults 白名单，冷启动不读钥匙串（token 在校验连接时再取）。
+    NSArray<NSString *> *hints = [CompanionPairingStore sharedStore].pairedDeviceIdHints;
+    return hints.count > 0 ? [NSSet setWithArray:hints] : [NSSet set];
 }
 
 - (void)refreshPhoneInviteDiscovery {
     if (self.state != CompanionChannelStateAdvertising) {
-        [self.phoneDiscovery stop];
-        return;
-    }
-    // 无配对 hint 时不碰钥匙串；有 hint 再读 deviceId 白名单。
-    if ([CompanionPairingStore sharedStore].pairedDeviceCountHint == 0) {
         [self.phoneDiscovery stop];
         return;
     }

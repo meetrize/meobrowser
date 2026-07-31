@@ -17,6 +17,8 @@
 @property (nonatomic, assign) BOOL started;
 @property (nonatomic, assign) BOOL applyingRemote;
 @property (nonatomic, assign) BOOL syncInFlight;
+/// 冷启动时刻；此前不因 DidBecomeActive 读钥匙串 token。
+@property (nonatomic, assign) NSTimeInterval coldStartAt;
 @end
 
 @implementation ServerSyncEngine
@@ -60,18 +62,24 @@
 
 - (void)startIfNeeded {
     ServerSyncSettings *settings = ServerSyncSettings.sharedSettings;
-    if (!settings.enabled || !ServerSyncAuth.sharedAuth.isLoggedIn) {
+    if (!settings.enabled) {
         [self stop];
-        if (!settings.enabled) {
-            [self setState:ServerSyncEngineStateIdle text:@"未启用"];
-        } else {
-            [self setState:ServerSyncEngineStateUnavailable text:@"未登录"];
-        }
+        [self setState:ServerSyncEngineStateIdle text:@"未启用"];
+        return;
+    }
+    // 冷启动只用 UserDefaults 的 userId 判断「可能已登录」，避免立刻读钥匙串 token 弹密码框。
+    if (settings.userId.length == 0) {
+        [self stop];
+        [self setState:ServerSyncEngineStateUnavailable text:@"未登录"];
         return;
     }
     self.started = YES;
+    if (self.coldStartAt <= 0) {
+        self.coldStartAt = [NSDate date].timeIntervalSince1970;
+    }
     [self setState:ServerSyncEngineStateIdle text:@"已登录"];
-    [self syncNow];
+    // 冷启动不自动 sync：读 auth token 会弹「登录钥匙串」密码框，易与 Companion / 自动登录叠弹。
+    // 本地数据变更、设置变更或稍后回到前台再同步。
 }
 
 - (void)stop {
@@ -117,9 +125,15 @@
 
 - (void)appDidBecomeActive:(NSNotification *)note {
     (void)note;
-    if (self.started && ServerSyncSettings.sharedSettings.enabled) {
-        [self syncNow];
+    if (!self.started || !ServerSyncSettings.sharedSettings.enabled || self.syncInFlight) {
+        return;
     }
+    // 冷启动后 90 秒内忽略；避免与配对校验 / 会话恢复抢钥匙串。
+    NSTimeInterval sinceCold = [NSDate date].timeIntervalSince1970 - self.coldStartAt;
+    if (self.coldStartAt > 0 && sinceCold < 90.0) {
+        return;
+    }
+    [self scheduleDebouncedSync];
 }
 
 - (void)syncNow {

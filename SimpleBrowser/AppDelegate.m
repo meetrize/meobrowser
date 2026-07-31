@@ -11,7 +11,6 @@
 #import "CompanionChannel.h"
 #import "ServerSyncEngine.h"
 #import "ServerSyncSettings.h"
-#import "ServerSyncAuth.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -37,7 +36,8 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     [[CompanionChannel sharedChannel] start];
-    if (ServerSyncSettings.sharedSettings.enabled && ServerSyncAuth.sharedAuth.isLoggedIn) {
+    // startIfNeeded 内部会判登录；此处勿再先读一次钥匙串 token。
+    if (ServerSyncSettings.sharedSettings.enabled) {
         [[ServerSyncEngine sharedEngine] startIfNeeded];
     }
     NSArray<NSDictionary *> *sessions = [BrowsingPreferences savedWindowSessions];

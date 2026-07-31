@@ -16,7 +16,7 @@ typedef NS_ENUM(NSInteger, CompanionAuthMode) {
 @property (nonatomic, assign) NSTimeInterval pairedAt;
 @end
 
-/// Companion 配对状态（Keychain + UserDefaults 元数据）。
+/// Companion 配对状态（Application Support JSON + UserDefaults 元数据；旧 Keychain 仅后台一次性迁移）。
 @interface CompanionPairingStore : NSObject
 
 + (instancetype)sharedStore;
@@ -31,6 +31,9 @@ typedef NS_ENUM(NSInteger, CompanionAuthMode) {
 /// 已配对数量提示（仅 UserDefaults，不触发钥匙串读取；供启动态文案使用）。
 @property (nonatomic, assign, readonly) NSUInteger pairedDeviceCountHint;
 
+/// 已配对 deviceId 白名单（仅 UserDefaults，不含 token；供启动时手机发现，不碰钥匙串）。
+@property (nonatomic, copy, readonly) NSArray<NSString *> *pairedDeviceIdHints;
+
 /// 生成或刷新 6 位配对码（默认 5 分钟有效）。
 - (NSString *)refreshPendingPairingCode;
 
@@ -44,6 +47,7 @@ typedef NS_ENUM(NSInteger, CompanionAuthMode) {
 - (nullable NSString *)issueDeviceTokenForDeviceId:(NSString *)deviceId
                                       pairingCode:(NSString *)pairingCode
                                             error:(NSError * _Nullable * _Nullable)error;
+/// 优先用 UserDefaults 中的 SHA256(token) 指纹校验（冷启动手机重连不读钥匙串）。
 - (BOOL)validateDeviceToken:(NSString *)deviceToken deviceId:(nullable NSString *)deviceId;
 - (void)revokeAllDevices;
 - (void)revokeDeviceToken:(NSString *)deviceToken;
