@@ -1,4 +1,5 @@
 #import "BrowserURLInputClassifier.h"
+#import "BrowserLocalFileSupport.h"
 
 @implementation BrowserURLInputClassifier
 
@@ -6,6 +7,11 @@
     NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (trimmed.length == 0) {
         return NO;
+    }
+
+    // 本地 HTML 路径可含空格，优先于「含空格 = 搜索」规则。
+    if ([BrowserLocalFileSupport previewableFileURLFromUserInput:trimmed] != nil) {
+        return YES;
     }
 
     // 含空格一般是搜索词（合法 URL 中的空格应已编码）。
@@ -34,7 +40,16 @@
 
 + (nullable NSURL *)navigableURLFromInput:(NSString *)input {
     NSString *trimmed = [input stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (trimmed.length == 0 || ![self looksLikeURL:trimmed]) {
+    if (trimmed.length == 0) {
+        return nil;
+    }
+
+    NSURL *localFile = [BrowserLocalFileSupport previewableFileURLFromUserInput:trimmed];
+    if (localFile) {
+        return localFile;
+    }
+
+    if (![self looksLikeURL:trimmed]) {
         return nil;
     }
 

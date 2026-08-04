@@ -4,6 +4,7 @@
 #import "SBTextField.h"
 #import "BrowsingPreferences.h"
 #import "BrowserKeyboardPreferences.h"
+#import "BrowserLocalFileSupport.h"
 #import "BrowserTabController.h"
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
@@ -177,6 +178,65 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 - (BOOL)openURLInExternalApplicationIfNeeded:(nullable NSURL *)url;
 - (void)openURLInExternalApplication:(NSURL *)url;
 - (void)beginBlobDownloadFromURL:(nullable NSURL *)url inWebView:(nullable WKWebView *)webView;
+- (void)openAcceptedURLsInBrowser:(NSArray<NSURL *> *)urls;
+@end
+
+/// 接收本地 HTML 文件拖放的内容区容器。
+@interface BrowserFileDropContentView : NSView
+@property (nonatomic, weak) BrowserWindowController *browserController;
+@end
+
+@implementation BrowserFileDropContentView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    }
+    return self;
+}
+
+- (NSArray<NSURL *> *)previewableFileURLsFromDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSMutableArray<NSURL *> *result = [NSMutableArray array];
+    NSArray<NSPasteboardItem *> *items = sender.draggingPasteboard.pasteboardItems ?: @[];
+    for (NSPasteboardItem *item in items) {
+        NSString *urlString = [item stringForType:NSPasteboardTypeFileURL];
+        if (urlString.length == 0) {
+            continue;
+        }
+        NSURL *url = [NSURL URLWithString:urlString];
+        if (!url.isFileURL) {
+            NSString *path = urlString.stringByRemovingPercentEncoding ?: urlString;
+            url = [NSURL fileURLWithPath:path];
+        }
+        if ([BrowserLocalFileSupport isPreviewableFileURL:url]) {
+            [result addObject:url];
+        }
+    }
+    return [result copy];
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self previewableFileURLsFromDraggingInfo:sender].count > 0 ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self draggingEntered:sender];
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    return [self previewableFileURLsFromDraggingInfo:sender].count > 0;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = [self previewableFileURLsFromDraggingInfo:sender];
+    if (urls.count == 0 || !self.browserController) {
+        return NO;
+    }
+    [self.browserController openAcceptedURLsInBrowser:urls];
+    return YES;
+}
+
 @end
 
 @implementation BrowserWindowController
@@ -667,13 +727,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     toolbar.wantsLayer = YES;
     toolbar.layer.backgroundColor = BrowserTabActiveFillColor().CGColor;
 
-    self.contentContainer = [[NSView alloc] initWithFrame:NSZeroRect];
-    self.contentContainer.wantsLayer = YES;
-    self.contentContainer.clipsToBounds = YES;
-    [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                                    forOrientation:NSLayoutConstraintOrientationVertical];
-    [self.contentContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    BrowserFileDropContentView *dropContainer = [[BrowserFileDropContentView alloc] initWithFrame:NSZeroRect];
+    dropContainer.browserController = self;
+    dropContainer.wantsLayer = YES;
+    dropContainer.clipsToBounds = YES;
+    [dropContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                              forOrientation:NSLayoutConstraintOrientationVertical];
+    [dropContainer setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.contentContainer = dropContainer;
 
     self.notificationSidebarController = [[PhoneNotificationSidebarController alloc] init];
     self.notificationSidebarController.delegate = self;
@@ -2196,18 +2258,44 @@ didRequestTransferTabID:(NSUUID *)tabID
         return;
     }
 
-    [self showWindow:nil];
-    [self.window makeKeyAndOrderFront:nil];
-
-    BOOL openedAny = NO;
+    NSMutableArray<NSURL *> *accepted = [NSMutableArray array];
     for (NSURL *url in urls) {
         NSString *scheme = url.scheme.lowercaseString;
         BOOL isWebURL = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
-        BOOL isFile = url.isFileURL;
-        if (!isWebURL && !isFile) {
+        if (isWebURL) {
+            [accepted addObject:url];
             continue;
         }
-        [self.tabController addTabWithURL:url];
+        NSURL *localFile = [BrowserLocalFileSupport normalizedPreviewableFileURL:url];
+        if (localFile) {
+            [accepted addObject:localFile];
+        }
+    }
+    if (accepted.count == 0) {
+        return;
+    }
+    [self openAcceptedURLsInBrowser:accepted];
+}
+
+- (void)openAcceptedURLsInBrowser:(NSArray<NSURL *> *)urls {
+    if (urls.count == 0) {
+        return;
+    }
+
+    [self showWindow:nil];
+    [self.window makeKeyAndOrderFront:nil];
+
+    // 当前为新标签页且只打开一个文件时，直接落在当前标签。
+    BrowserTab *selected = self.tabController.selectedTab;
+    NSUInteger index = 0;
+    if (urls.count == 1 && selected != nil && selected.isNewTabPage) {
+        [selected loadURL:urls.firstObject];
+        index = 1;
+    }
+
+    BOOL openedAny = (index > 0);
+    for (; index < urls.count; index++) {
+        [self.tabController addTabWithURL:urls[index]];
         openedAny = YES;
     }
 

@@ -89,7 +89,12 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     // 只占位，不在此处 load：等 refreshTabsUI 挂上 navigationDelegate 后再加载。
     tab.isNewTabPage = NO;
     tab.restorableURL = url;
-    tab.title = url.host.length > 0 ? url.host : (url.absoluteString.length > 0 ? url.absoluteString : @"新标签页");
+    if (url.isFileURL) {
+        NSString *name = url.lastPathComponent;
+        tab.title = name.length > 0 ? name : @"本地文件";
+    } else {
+        tab.title = url.host.length > 0 ? url.host : (url.absoluteString.length > 0 ? url.absoluteString : @"新标签页");
+    }
     [self.mutableTabs addObject:tab];
     [self selectTabInternal:tab notify:YES];
     return tab;

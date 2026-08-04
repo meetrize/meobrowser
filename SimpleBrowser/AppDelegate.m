@@ -184,6 +184,36 @@
     [_pendingExternalURLs addObjectsFromArray:urls];
 }
 
+- (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename {
+    (void)sender;
+    if (filename.length == 0) {
+        return NO;
+    }
+    NSURL *url = [NSURL fileURLWithPath:filename];
+    [self application:NSApp openURLs:@[ url ]];
+    return YES;
+}
+
+- (void)application:(NSApplication *)sender openFiles:(NSArray<NSString *> *)filenames {
+    (void)sender;
+    if (filenames.count == 0) {
+        return;
+    }
+    NSMutableArray<NSURL *> *urls = [NSMutableArray arrayWithCapacity:filenames.count];
+    for (NSString *path in filenames) {
+        if (path.length == 0) {
+            continue;
+        }
+        [urls addObject:[NSURL fileURLWithPath:path]];
+    }
+    if (urls.count == 0) {
+        [NSApp replyToOpenOrPrint:NSApplicationDelegateReplyFailure];
+        return;
+    }
+    [self application:NSApp openURLs:urls];
+    [NSApp replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+}
+
 - (void)flushPendingExternalURLs {
     if (_pendingExternalURLs.count == 0) {
         return;

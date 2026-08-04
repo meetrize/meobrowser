@@ -20,6 +20,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserLoadingProgressView.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserKeyboardPreferences.m \
+                   $(BROWSER_SRC_DIR)/BrowserLocalFileSupport.m \
                    $(BROWSER_SRC_DIR)/BrowserUserAgent.m \
                    $(BROWSER_SRC_DIR)/BrowserRiskHostPolicy.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
@@ -205,6 +206,25 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '      <key>CFBundleURLName</key><string>Web site URL</string>' >> $(1)/Contents/Info.plist
 	@echo '      <key>CFBundleURLSchemes</key>' >> $(1)/Contents/Info.plist
 	@echo '      <array><string>http</string><string>https</string></array>' >> $(1)/Contents/Info.plist
+	@echo '    </dict>' >> $(1)/Contents/Info.plist
+	@echo '  </array>' >> $(1)/Contents/Info.plist
+	@echo '  <key>CFBundleDocumentTypes</key>' >> $(1)/Contents/Info.plist
+	@echo '  <array>' >> $(1)/Contents/Info.plist
+	@echo '    <dict>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleTypeName</key><string>HTML Document</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleTypeRole</key><string>Viewer</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>LSHandlerRank</key><string>Default</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>LSItemContentTypes</key>' >> $(1)/Contents/Info.plist
+	@echo '      <array>' >> $(1)/Contents/Info.plist
+	@echo '        <string>public.html</string>' >> $(1)/Contents/Info.plist
+	@echo '        <string>public.xhtml</string>' >> $(1)/Contents/Info.plist
+	@echo '      </array>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleTypeExtensions</key>' >> $(1)/Contents/Info.plist
+	@echo '      <array>' >> $(1)/Contents/Info.plist
+	@echo '        <string>html</string>' >> $(1)/Contents/Info.plist
+	@echo '        <string>htm</string>' >> $(1)/Contents/Info.plist
+	@echo '        <string>xhtml</string>' >> $(1)/Contents/Info.plist
+	@echo '      </array>' >> $(1)/Contents/Info.plist
 	@echo '    </dict>' >> $(1)/Contents/Info.plist
 	@echo '  </array>' >> $(1)/Contents/Info.plist
 	@# ATS：不要同时写 NSAllowsArbitraryLoadsInWebContent，否则 macOS 会忽略 NSAllowsArbitraryLoads，原生 http 注册会失败

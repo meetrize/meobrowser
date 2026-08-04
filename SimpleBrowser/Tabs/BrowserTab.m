@@ -3,6 +3,7 @@
 #import "BrowserUserAgent.h"
 #import "BrowsingPreferences.h"
 #import "BrowserFeedReader.h"
+#import "BrowserLocalFileSupport.h"
 
 static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 
@@ -47,18 +48,29 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         NSURLComponents *components = [NSURLComponents componentsWithURL:liveURL resolvingAgainstBaseURL:NO];
         components.fragment = restored.fragment;
         NSURL *merged = components.URL;
-        if ([BrowsingPreferences isPersistableURL:merged]) {
+        if ([self isAddressBarDisplayableURL:merged]) {
             return merged;
         }
     }
 
-    if ([BrowsingPreferences isPersistableURL:liveURL]) {
+    if ([self isAddressBarDisplayableURL:liveURL]) {
         return liveURL;
     }
-    if ([BrowsingPreferences isPersistableURL:restored]) {
+    if ([self isAddressBarDisplayableURL:restored]) {
         return restored;
     }
     return nil;
+}
+
+- (BOOL)isAddressBarDisplayableURL:(nullable NSURL *)url {
+    if (!url) {
+        return NO;
+    }
+    if ([BrowsingPreferences isPersistableURL:url]) {
+        return YES;
+    }
+    // 本地 HTML 不进会话，但仍应显示在地址栏。
+    return url.isFileURL;
 }
 
 - (WKWebView *)ensureWebView {
@@ -199,6 +211,14 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         if (self.title.length == 0 || [self.title isEqualToString:@"新标签页"]) {
             self.title = url.host.length > 0 ? url.host : url.absoluteString;
         }
+    } else if (url.isFileURL) {
+        self.restorableURL = url;
+        if (self.title.length == 0 || [self.title isEqualToString:@"新标签页"]) {
+            NSString *name = url.lastPathComponent;
+            self.title = name.length > 0 ? name : @"本地文件";
+        }
+    } else if (self.restorableURL.isFileURL) {
+        // 保留已有 file:// 恢复点。
     } else if (![BrowsingPreferences isPersistableURL:self.restorableURL]) {
         // 无可恢复 URL 时退回 NTP，避免留下无内容僵尸标签。
         [self loadNewTabPage];
@@ -215,7 +235,8 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         return;
     }
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
-    if (![BrowsingPreferences isPersistableURL:url]) {
+    BOOL canRestore = [BrowsingPreferences isPersistableURL:url] || url.isFileURL;
+    if (!canRestore) {
         [self loadNewTabPage];
         return;
     }
@@ -231,11 +252,18 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     }
     self.pendingRestorableLoad = NO;
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
-    if (![BrowsingPreferences isPersistableURL:url]) {
+    if ([BrowsingPreferences isPersistableURL:url]) {
+        self.restorableURL = url;
+        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         return;
     }
-    self.restorableURL = url;
-    [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+    // 本地 file:// 不进会话，但外部打开 / 休眠唤醒仍需加载。
+    if (url.isFileURL) {
+        self.restorableURL = url;
+        if (![BrowserLocalFileSupport loadFileURL:url inWebView:self.webView]) {
+            [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+    }
 }
 
 - (void)loadNewTabPage {
@@ -258,7 +286,13 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         self.pendingRestorableLoad = YES;
     } else {
         self.pendingRestorableLoad = NO;
-        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        if (url.isFileURL) {
+            if (![BrowserLocalFileSupport loadFileURL:url inWebView:self.webView]) {
+                [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+            }
+        } else {
+            [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        }
     }
 }
 
