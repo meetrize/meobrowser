@@ -1,5 +1,6 @@
 #import "BrowserSettingsWindowController.h"
 #import "BrowsingPreferences.h"
+#import "BrowserKeyboardPreferences.h"
 #import "BrowserUserAgent.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
@@ -18,6 +19,13 @@
 @property (nonatomic, strong) NSButton *userAgentCopyButton;
 @property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
 @property (nonatomic, strong) NSTextField *privacyHintLabel;
+
+@property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
+@property (nonatomic, strong) NSButton *reloadShortcutButton;
+@property (nonatomic, strong) NSButton *reloadShortcutResetButton;
+@property (nonatomic, strong) NSTextField *keyboardHintLabel;
+@property (nonatomic, assign) BOOL recordingReloadShortcut;
+@property (nonatomic, strong, nullable) id reloadShortcutRecordMonitor;
 
 @property (nonatomic, strong) SBTextField *serverURLField;
 @property (nonatomic, strong) SBTextField *serverEmailField;
@@ -39,7 +47,7 @@
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 760)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 860)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -57,11 +65,16 @@
                                                  selector:@selector(serverSyncUINeedsRefresh:)
                                                      name:ServerSyncEngineStateDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(keyboardPreferencesDidChange:)
+                                                     name:BrowserKeyboardPreferencesDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
 
 - (void)dealloc {
+    [self stopRecordingReloadShortcut];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -185,6 +198,35 @@
     self.serverHintLabel.preferredMaxLayoutWidth = 448;
 
     NSBox *separator3 = [self makeSeparator];
+    NSTextField *keyboardCaption = [self makeCaption:@"键盘快捷键"];
+    self.reloadShortcutEnabledCheckbox = [NSButton checkboxWithTitle:@"启用刷新快捷键"
+                                                              target:self
+                                                              action:@selector(reloadShortcutEnabledToggled:)];
+    self.reloadShortcutButton = [NSButton buttonWithTitle:@"F5"
+                                                   target:self
+                                                   action:@selector(reloadShortcutButtonClicked:)];
+    self.reloadShortcutButton.bezelStyle = NSBezelStyleRounded;
+    [self.reloadShortcutButton.widthAnchor constraintGreaterThanOrEqualToConstant:88].active = YES;
+    self.reloadShortcutResetButton = [NSButton buttonWithTitle:@"恢复默认"
+                                                        target:self
+                                                        action:@selector(reloadShortcutResetClicked:)];
+    self.reloadShortcutResetButton.bezelStyle = NSBezelStyleRounded;
+    NSTextField *reloadCaption = [NSTextField labelWithString:@"刷新页面"];
+    reloadCaption.font = [NSFont systemFontOfSize:12];
+    NSStackView *reloadShortcutRow = [NSStackView stackViewWithViews:@[
+        reloadCaption, self.reloadShortcutButton, self.reloadShortcutResetButton
+    ]];
+    reloadShortcutRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    reloadShortcutRow.spacing = 12;
+    reloadShortcutRow.alignment = NSLayoutAttributeCenterY;
+    self.keyboardHintLabel = [NSTextField wrappingLabelWithString:
+        @"默认 F5。点击快捷键按钮后按下新组合即可更改；Esc 取消。"
+        @"⌘R 始终可用（查看 → 刷新）。"];
+    self.keyboardHintLabel.font = [NSFont systemFontOfSize:11];
+    self.keyboardHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.keyboardHintLabel.preferredMaxLayoutWidth = 448;
+
+    NSBox *separator4 = [self makeSeparator];
     NSTextField *privacyCaption = [self makeCaption:@"隐私与数据"];
     self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…" target:self action:@selector(clearWebsiteDataClicked:)];
     self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
@@ -207,6 +249,8 @@
         syncCaption, self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
         self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
         self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel, separator3,
+        keyboardCaption, self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
+        separator4,
         privacyCaption, privacyRow, self.privacyHintLabel,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -225,18 +269,120 @@
         [separator.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [separator2.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [separator3.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [separator4.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.serverLoginBadge.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.serverHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.keyboardHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.privacyHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
     ]];
 
     [self refreshDefaultBrowserStatus];
     [self refreshServerSyncUI];
+    [self refreshKeyboardShortcutUI];
 }
 
 - (void)serverSyncUINeedsRefresh:(NSNotification *)note {
     (void)note;
     [self refreshServerSyncUI];
+}
+
+- (void)keyboardPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    if (self.recordingReloadShortcut) {
+        return;
+    }
+    [self refreshKeyboardShortcutUI];
+}
+
+- (void)refreshKeyboardShortcutUI {
+    BOOL enabled = [BrowserKeyboardPreferences reloadShortcutEnabled];
+    self.reloadShortcutEnabledCheckbox.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.reloadShortcutButton.enabled = enabled;
+    self.reloadShortcutResetButton.enabled = enabled && !self.recordingReloadShortcut;
+    if (self.recordingReloadShortcut) {
+        self.reloadShortcutButton.title = @"按下新快捷键…";
+    } else {
+        self.reloadShortcutButton.title = [BrowserKeyboardPreferences displayStringForReloadShortcut];
+    }
+}
+
+- (void)reloadShortcutEnabledToggled:(id)sender {
+    (void)sender;
+    [self stopRecordingReloadShortcut];
+    [BrowserKeyboardPreferences setReloadShortcutEnabled:
+        (self.reloadShortcutEnabledCheckbox.state == NSControlStateValueOn)];
+    [self refreshKeyboardShortcutUI];
+}
+
+- (void)reloadShortcutResetClicked:(id)sender {
+    (void)sender;
+    [self stopRecordingReloadShortcut];
+    [BrowserKeyboardPreferences resetReloadShortcutToDefault];
+    [self refreshKeyboardShortcutUI];
+}
+
+- (void)reloadShortcutButtonClicked:(id)sender {
+    (void)sender;
+    if (self.recordingReloadShortcut) {
+        [self stopRecordingReloadShortcut];
+        [self refreshKeyboardShortcutUI];
+        return;
+    }
+    [self startRecordingReloadShortcut];
+}
+
+- (void)startRecordingReloadShortcut {
+    if (self.recordingReloadShortcut) {
+        return;
+    }
+    self.recordingReloadShortcut = YES;
+    [self refreshKeyboardShortcutUI];
+    __weak typeof(self) weakSelf = self;
+    self.reloadShortcutRecordMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                              handler:^NSEvent *(NSEvent *event) {
+            return [weakSelf handleReloadShortcutRecordEvent:event];
+        }];
+}
+
+- (void)stopRecordingReloadShortcut {
+    self.recordingReloadShortcut = NO;
+    if (self.reloadShortcutRecordMonitor) {
+        [NSEvent removeMonitor:self.reloadShortcutRecordMonitor];
+        self.reloadShortcutRecordMonitor = nil;
+    }
+}
+
+- (NSEvent *)handleReloadShortcutRecordEvent:(NSEvent *)event {
+    if (!self.recordingReloadShortcut || self.window != NSApp.keyWindow) {
+        return event;
+    }
+
+    // Esc：取消录制
+    NSEventModifierFlags mods =
+        event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL cmd = (mods & NSEventModifierFlagCommand) != 0;
+    BOOL alt = (mods & NSEventModifierFlagOption) != 0;
+    BOOL ctrl = (mods & NSEventModifierFlagControl) != 0;
+    if (event.keyCode == 53 && !cmd && !alt && !ctrl) {
+        [self stopRecordingReloadShortcut];
+        [self refreshKeyboardShortcutUI];
+        return nil;
+    }
+
+    // 忽略纯修饰键（Shift / Ctrl / Opt / Cmd）
+    switch (event.keyCode) {
+        case 54: case 55: case 56: case 57: case 58:
+        case 59: case 60: case 61: case 62: case 63:
+            return nil;
+        default:
+            break;
+    }
+
+    [BrowserKeyboardPreferences setReloadShortcutFromEvent:event];
+    [self stopRecordingReloadShortcut];
+    [self refreshKeyboardShortcutUI];
+    return nil;
 }
 
 - (void)persistServerFields {
@@ -506,10 +652,12 @@
 }
 
 - (void)showWindow:(id)sender {
+    [self stopRecordingReloadShortcut];
     [self selectCurrentSearchEngineInPopUp];
     [self refreshDefaultBrowserStatus];
     self.clearWebsiteDataStatusLabel.stringValue = @"缓存、Cookie 与网站本地存储";
     [self refreshServerSyncUI];
+    [self refreshKeyboardShortcutUI];
     [super showWindow:sender];
 }
 

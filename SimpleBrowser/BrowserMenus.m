@@ -109,6 +109,13 @@
             NSMenuItem *viewMenuItem = [[NSMenuItem alloc] init];
             NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"查看"];
 
+            NSMenuItem *reload = [viewMenu addItemWithTitle:@"刷新"
+                                                     action:@selector(reloadPage:)
+                                              keyEquivalent:@"r"];
+            reload.target = nil;
+
+            [viewMenu addItem:[NSMenuItem separatorItem]];
+
             NSMenuItem *zoomIn = [viewMenu addItemWithTitle:@"放大"
                                                      action:@selector(zoomIn:)
                                               keyEquivalent:@"="];

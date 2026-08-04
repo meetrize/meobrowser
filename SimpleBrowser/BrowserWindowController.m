@@ -3,6 +3,7 @@
 #import "BrowserAppInfo.h"
 #import "SBTextField.h"
 #import "BrowsingPreferences.h"
+#import "BrowserKeyboardPreferences.h"
 #import "BrowserTabController.h"
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
@@ -138,6 +139,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
+@property (nonatomic, strong, nullable) id reloadKeyMonitor;
 @property (nonatomic, strong) NSButton *bookmarkButton;
 @property (nonatomic, strong) NSButton *securityBadgeButton;
 @property (nonatomic, strong) NSButton *downloadButton;
@@ -297,6 +299,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _pendingProvisionalURLByWebView = [NSMapTable weakToStrongObjectsMapTable];
         _webViewsWithHTTPAuthPrompt = [NSHashTable weakObjectsHashTable];
         [self setupUI];
+        [self installReloadKeyMonitor];
         if (loadTabs) {
             [self applySessionDictionary:session];
         }
@@ -519,6 +522,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    [self uninstallReloadKeyMonitor];
     [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
@@ -550,8 +554,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.reloadButton = [self toolbarIconButtonWithSymbol:@"arrow.clockwise"
                                                   toolTip:@"刷新"
                                                    action:@selector(reloadPage:)];
-    self.reloadButton.keyEquivalent = @"r";
-    self.reloadButton.keyEquivalentModifierMask = NSEventModifierFlagCommand;
 
     NSStackView *navButtons = [NSStackView stackViewWithViews:@[
         self.backButton, self.forwardButton, self.reloadButton
@@ -2330,6 +2332,48 @@ didRequestTransferTabID:(NSUUID *)tabID
     }
 }
 
+- (BOOL)canReloadCurrentPage {
+    BrowserTab *tab = self.tabController.selectedTab;
+    return tab != nil && (tab.isHibernated || !tab.isNewTabPage);
+}
+
+#pragma mark - Reload shortcut (F5 / configurable)
+
+- (void)installReloadKeyMonitor {
+    if (self.reloadKeyMonitor) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    self.reloadKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                                  handler:^NSEvent *(NSEvent *event) {
+        return [weakSelf handleReloadKeyEvent:event];
+    }];
+}
+
+- (void)uninstallReloadKeyMonitor {
+    if (self.reloadKeyMonitor) {
+        [NSEvent removeMonitor:self.reloadKeyMonitor];
+        self.reloadKeyMonitor = nil;
+    }
+}
+
+- (NSEvent *)handleReloadKeyEvent:(NSEvent *)event {
+    if (self.window != NSApp.keyWindow) {
+        return event;
+    }
+    if (event.isARepeat) {
+        return event;
+    }
+    if (![BrowserKeyboardPreferences eventMatchesReloadShortcut:event]) {
+        return event;
+    }
+    if (![self canReloadCurrentPage]) {
+        return nil;
+    }
+    [self reloadPage:nil];
+    return nil;
+}
+
 #pragma mark - Page Zoom
 
 static const CGFloat kBrowserPageZoomStep = 1.1;
@@ -2369,6 +2413,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
     SEL action = menuItem.action;
+    if (action == @selector(reloadPage:)) {
+        return [self canReloadCurrentPage];
+    }
     if (action == @selector(zoomIn:) ||
         action == @selector(zoomOut:) ||
         action == @selector(actualSize:)) {
