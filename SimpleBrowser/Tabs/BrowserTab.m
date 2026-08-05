@@ -30,6 +30,34 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     return tab;
 }
 
++ (instancetype)tabWithExistingWebView:(WKWebView *)webView {
+    NSParameterAssert(webView != nil);
+    BrowserTab *tab = [[self alloc] init];
+    tab->_tabID = [NSUUID UUID];
+    tab->_configuration = webView.configuration;
+    tab.webView = webView;
+    tab.title = @"新窗口";
+    tab.isNewTabPage = NO;
+    tab.lastActiveTimestamp = [NSDate date].timeIntervalSince1970;
+    [tab startObservingWebViewTitle];
+    return tab;
+}
+
+- (BOOL)resistsHibernation {
+    return self.relatedPopupRetainCount > 0 || self.relatedOpenerTab != nil;
+}
+
+- (void)detachRelatedPopupOpener {
+    BrowserTab *opener = self.relatedOpenerTab;
+    if (opener == nil) {
+        return;
+    }
+    self.relatedOpenerTab = nil;
+    if (opener.relatedPopupRetainCount > 0) {
+        opener.relatedPopupRetainCount -= 1;
+    }
+}
+
 - (BOOL)isHibernated {
     return !self.isNewTabPage && self.webView == nil && self.restorableURL != nil;
 }
@@ -196,11 +224,15 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 }
 
 - (void)prepareForClose {
+    [self detachRelatedPopupOpener];
     [self discardWebView];
     self.restorableURL = nil;
 }
 
 - (void)hibernate {
+    if (self.resistsHibernation) {
+        return;
+    }
     if (self.isNewTabPage || self.webView == nil) {
         return;
     }

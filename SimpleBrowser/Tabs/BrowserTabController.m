@@ -100,6 +100,32 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     return tab;
 }
 
+- (BrowserTab *)addRelatedPopupTabWithWebView:(WKWebView *)webView initialURL:(nullable NSURL *)url {
+    BrowserTab *opener = self.selectedTab;
+    BrowserTab *tab = [BrowserTab tabWithExistingWebView:webView];
+    url = [BrowserWebView publicURLFromInternalURL:url] ?: url;
+    // WebKit 会自行导航返回的 WebView；切勿再 loadRequest / pendingRestorableLoad。
+    if ([BrowsingPreferences isPersistableURL:url]) {
+        tab.restorableURL = url;
+        tab.title = url.host.length > 0 ? url.host : url.absoluteString;
+    } else if (url.isFileURL) {
+        tab.restorableURL = url;
+        NSString *name = url.lastPathComponent;
+        tab.title = name.length > 0 ? name : @"本地文件";
+    } else if (url.host.length > 0) {
+        tab.title = url.host;
+    } else {
+        tab.title = @"登录";
+    }
+    if (opener != nil && opener != tab) {
+        tab.relatedOpenerTab = opener;
+        opener.relatedPopupRetainCount += 1;
+    }
+    [self.mutableTabs addObject:tab];
+    [self selectTabInternal:tab notify:YES];
+    return tab;
+}
+
 - (void)closeTab:(BrowserTab *)tab {
     NSUInteger index = [self.mutableTabs indexOfObject:tab];
     if (index == NSNotFound) {
@@ -471,7 +497,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     BOOL changed = NO;
 
     for (BrowserTab *tab in self.mutableTabs) {
-        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
             continue;
         }
         NSURL *protectURL = tab.webView.URL ?: tab.restorableURL;
@@ -560,7 +586,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         for (BrowserTabController *controller in [self registeredControllers]) {
             BOOL isNonKey = (controller != keyController);
             for (BrowserTab *tab in controller.mutableTabs) {
-                if (tab == controller.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+                if (tab == controller.selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
                     continue;
                 }
                 NSInteger rank = [self hibernationVictimRankForTab:tab isNonKeyWindow:isNonKey];
@@ -593,7 +619,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
     NSMutableArray<BrowserTab *> *candidates = [NSMutableArray array];
     for (BrowserTab *tab in self.mutableTabs) {
-        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage) {
+        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
             continue;
         }
         [candidates addObject:tab];

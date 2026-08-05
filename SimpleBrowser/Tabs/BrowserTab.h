@@ -34,11 +34,21 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, assign) BrowserConnectionSecurityState connectionSecurityState;
 /// 页面内查找会话（查询词 / 模式 / 计数）；高亮在 WebView 文档侧。
 @property (nonatomic, strong, nullable) BrowserFindSession *findSession;
+/// window.open / OAuth 弹窗等 related browsing context：勿休眠，以免打断 opener / postMessage。
+@property (nonatomic, assign, readonly) BOOL resistsHibernation;
+/// 本标签作为 opener 时，仍存活的 related 弹窗数量。
+@property (nonatomic, assign) NSInteger relatedPopupRetainCount;
+/// 若本标签由 createWebView 创建，指向发起 window.open 的标签。
+@property (nonatomic, weak, nullable) BrowserTab *relatedOpenerTab;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
+/// 接入已由 WebKit 指定 configuration 创建的 WebView（须用于 createWebView 回调）。
++ (instancetype)tabWithExistingWebView:(WKWebView *)webView;
 
 /// 确保存在 WebView（NTP 首次导航 / 唤醒休眠时调用）。
 - (WKWebView *)ensureWebView;
+/// 弹窗关闭时解除与 opener 的 retain；prepareForClose 也会调用。
+- (void)detachRelatedPopupOpener;
 /// 关闭前主动释放内容进程：stop / 清委托 / about:blank / 离屏 / 置 nil。
 - (void)prepareForClose;
 /// 销毁 WebView，保留 restorableURL 与标题，便于再次选中时恢复。

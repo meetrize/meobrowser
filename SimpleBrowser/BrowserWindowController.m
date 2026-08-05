@@ -49,10 +49,29 @@
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationPresenter.h"
+#import "BrowserUserAgent.h"
 #import <Security/Security.h>
+#import <dlfcn.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
 static void *kBrowserFullscreenStateContext = &kBrowserFullscreenStateContext;
+
+/// WebKit 跨站导航 process-swap 可能导致 popup 的 window.opener 变 null（Google OAuth 常见）。
+/// 私有 API：自定义浏览器可用；不可用时静默跳过。
+static void MeoDisableProcessSwapOnNavigationIfAvailable(WKPreferences *preferences) {
+    if (preferences == nil) {
+        return;
+    }
+    typedef void (*MeoSetProcessSwapFn)(WKPreferences *, bool);
+    static MeoSetProcessSwapFn setProcessSwap = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        setProcessSwap = (MeoSetProcessSwapFn)dlsym(RTLD_DEFAULT, "WKPreferencesSetProcessSwapOnNavigationEnabled");
+    });
+    if (setProcessSwap) {
+        setProcessSwap(preferences, false);
+    }
+}
 
 static NSString * const kBrowserSecurityBadgeTitle = @"连接不安全";
 
@@ -382,6 +401,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     if (@available(macOS 12.3, *)) {
         configuration.preferences.elementFullscreenEnabled = YES;
     }
+    MeoDisableProcessSwapOnNavigationIfAvailable(configuration.preferences);
     // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
     [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
@@ -3959,7 +3979,6 @@ didFailNavigation:(WKNavigation *)navigation
 createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
    forNavigationAction:(WKNavigationAction *)navigationAction
         windowFeatures:(WKWindowFeatures *)windowFeatures {
-    (void)configuration;
     (void)windowFeatures;
 
     // 右键「下载图片/媒体」：WebKit 默认项无效，经 Open*InNewWindow 拿 URL 后改走下载。
@@ -3995,11 +4014,16 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
         if ([self openURLInExternalApplicationIfNeeded:url]) {
             return nil;
         }
-        if (url) {
-            [self.tabController addTabWithURL:url];
-        } else {
-            [self.tabController addNewTab];
-        }
+
+        // 必须用 WebKit 传入的 configuration 创建并 return，才能保留 window.opener / postMessage
+        //（Google GIS popup、gsi/transform 等依赖 related browsing context）。
+        // 切勿 addTabWithURL + return nil：JS 会视 window.open 被拦截并常再开第二窗。
+        MeoDisableProcessSwapOnNavigationIfAvailable(configuration.preferences);
+        BrowserWebView *popupWebView = [[BrowserWebView alloc] initWithFrame:NSZeroRect
+                                                              configuration:configuration];
+        popupWebView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
+        [self.tabController addRelatedPopupTabWithWebView:popupWebView initialURL:url];
+        return popupWebView;
     }
     return nil;
 }
