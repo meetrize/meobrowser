@@ -9,6 +9,7 @@
 #import "ServerSyncAuth.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
+#import "BrowserHistoryStore.h"
 #import <WebKit/WebKit.h>
 
 @interface BrowserSettingsWindowController ()
@@ -16,6 +17,8 @@
 @property (nonatomic, strong) NSTextField *defaultBrowserStatusLabel;
 @property (nonatomic, strong) NSButton *setDefaultBrowserButton;
 @property (nonatomic, strong) NSButton *clearWebsiteDataButton;
+@property (nonatomic, strong) NSButton *clearHistoryButton;
+@property (nonatomic, strong) NSButton *clearHistoryOnQuitCheckbox;
 @property (nonatomic, strong) NSButton *userAgentCopyButton;
 @property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
 @property (nonatomic, strong) NSTextField *privacyHintLabel;
@@ -47,7 +50,7 @@
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 860)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 920)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -230,15 +233,21 @@
     NSTextField *privacyCaption = [self makeCaption:@"隐私与数据"];
     self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…" target:self action:@selector(clearWebsiteDataClicked:)];
     self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
+    self.clearHistoryButton = [NSButton buttonWithTitle:@"清除浏览历史…" target:self action:@selector(clearHistoryClicked:)];
+    self.clearHistoryButton.bezelStyle = NSBezelStyleRounded;
     self.userAgentCopyButton = [NSButton buttonWithTitle:@"复制 User-Agent" target:self action:@selector(copyUserAgentClicked:)];
     self.userAgentCopyButton.bezelStyle = NSBezelStyleRounded;
     self.clearWebsiteDataStatusLabel = [NSTextField labelWithString:@"缓存、Cookie 与网站本地存储"];
     self.clearWebsiteDataStatusLabel.font = [NSFont systemFontOfSize:11];
     self.clearWebsiteDataStatusLabel.textColor = [NSColor secondaryLabelColor];
-    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[self.clearWebsiteDataButton, self.userAgentCopyButton, self.clearWebsiteDataStatusLabel]];
+    NSStackView *privacyRow = [NSStackView stackViewWithViews:@[self.clearWebsiteDataButton, self.clearHistoryButton, self.userAgentCopyButton]];
     privacyRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     privacyRow.spacing = 12;
-    self.privacyHintLabel = [NSTextField wrappingLabelWithString:@"频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
+    self.clearHistoryOnQuitCheckbox = [NSButton checkboxWithTitle:@"退出时清除浏览历史"
+                                                           target:self
+                                                           action:@selector(clearHistoryOnQuitChanged:)];
+    self.clearHistoryOnQuitCheckbox.state = BrowserHistoryStore.clearOnQuitEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.privacyHintLabel = [NSTextField wrappingLabelWithString:@"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
     self.privacyHintLabel.font = [NSFont systemFontOfSize:11];
     self.privacyHintLabel.textColor = [NSColor secondaryLabelColor];
     self.privacyHintLabel.preferredMaxLayoutWidth = 448;
@@ -251,7 +260,7 @@
         self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel, separator3,
         keyboardCaption, self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
         separator4,
-        privacyCaption, privacyRow, self.privacyHintLabel,
+        privacyCaption, privacyRow, self.clearWebsiteDataStatusLabel, self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
@@ -613,7 +622,7 @@
     NSString *currentHost = [self currentBrowserPageHost];
     NSAlert *confirm = [[NSAlert alloc] init];
     confirm.messageText = @"清除网站数据？";
-    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。不会删除登录助手与站点备忘。";
+    confirm.informativeText = @"将删除 Cookie、缓存与网站本地存储。不会删除登录助手、站点备忘与浏览历史。";
     confirm.alertStyle = NSAlertStyleWarning;
     [confirm addButtonWithTitle:@"清除全部"];
     NSButton *currentButton = [confirm addButtonWithTitle:@"清除当前站点"];
@@ -651,11 +660,37 @@
     }];
 }
 
+- (void)clearHistoryClicked:(id)sender {
+    (void)sender;
+    NSAlert *confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"清除全部浏览历史？";
+    confirm.informativeText = @"将删除本地浏览记录。不会删除快捷方式、Cookie 或网站数据。";
+    confirm.alertStyle = NSAlertStyleWarning;
+    [confirm addButtonWithTitle:@"清除"];
+    [confirm addButtonWithTitle:@"取消"];
+    __weak typeof(self) weakSelf = self;
+    [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+        typeof(self) self = weakSelf;
+        if (!self || returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+        [[BrowserHistoryStore sharedStore] clearAll];
+        [[BrowserHistoryStore sharedStore] flushSynchronously];
+        self.clearWebsiteDataStatusLabel.stringValue = @"已清除浏览历史";
+    }];
+}
+
+- (void)clearHistoryOnQuitChanged:(id)sender {
+    (void)sender;
+    BrowserHistoryStore.clearOnQuitEnabled = (self.clearHistoryOnQuitCheckbox.state == NSControlStateValueOn);
+}
+
 - (void)showWindow:(id)sender {
     [self stopRecordingReloadShortcut];
     [self selectCurrentSearchEngineInPopUp];
     [self refreshDefaultBrowserStatus];
     self.clearWebsiteDataStatusLabel.stringValue = @"缓存、Cookie 与网站本地存储";
+    self.clearHistoryOnQuitCheckbox.state = BrowserHistoryStore.clearOnQuitEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [super showWindow:sender];

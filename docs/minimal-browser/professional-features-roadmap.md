@@ -200,7 +200,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 - [x] Launchpad 背景图（见 [new-tab-launchpad-wallpaper-design.md](new-tab-launchpad-wallpaper-design.md)）
 - [x] Favicon（Launchpad + 星标 + 补全；见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md)；标签栏仍延后）
 - [ ] 快捷方式导入/导出
-- [ ] 浏览历史 + 地址栏历史补全（AC-3）
+- [x] 浏览历史 + 地址栏历史补全（AC-3）
 - [ ] 标签拖拽排序（完成 multi-tab L2d）
 
 ### M3 — 多任务与网络（约 2～3 周）

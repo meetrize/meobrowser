@@ -171,6 +171,25 @@
             }
         }
 
+        // 历史：插在「窗口」之前（查看之后）
+        if (![self menuExistsWithTitle:@"历史"]) {
+            NSMenuItem *historyMenuItem = [[NSMenuItem alloc] init];
+            NSMenu *historyMenu = [[NSMenu alloc] initWithTitle:@"历史"];
+
+            NSMenuItem *showHistory = [historyMenu addItemWithTitle:@"显示历史侧栏"
+                                                             action:@selector(toggleHistoryPanel:)
+                                                      keyEquivalent:@"y"];
+            showHistory.target = nil;
+
+            historyMenuItem.submenu = historyMenu;
+            NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
+            if (windowIndex == NSNotFound) {
+                [mainMenu addItem:historyMenuItem];
+            } else {
+                [mainMenu insertItem:historyMenuItem atIndex:windowIndex];
+            }
+        }
+
         // 标签页：插在「窗口」之前（查看之后）
         if (![self menuExistsWithTitle:@"标签页"]) {
             NSMenuItem *tabMenuItem = [[NSMenuItem alloc] init];

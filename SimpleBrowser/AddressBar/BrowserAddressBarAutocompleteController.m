@@ -2,6 +2,8 @@
 #import "BrowserShortcutSuggestionPanel.h"
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserHistoryStore.h"
+#import "BrowserHistoryEntry.h"
 #import "SBTextField.h"
 
 static const NSTimeInterval kQueryDebounceInterval = 0.05;
@@ -169,6 +171,50 @@ static const NSUInteger kSuggestionLimit = 8;
     return [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
+- (NSArray<BrowserShortcutItem *> *)mergedSuggestionsForQuery:(NSString *)query {
+    NSArray<BrowserShortcutItem *> *shortcuts =
+        [BrowserShortcutStore shortcutsMatchingQuery:query limit:kSuggestionLimit];
+    NSMutableSet<NSString *> *seenURLs = [NSMutableSet set];
+    NSMutableArray<BrowserShortcutItem *> *merged = [NSMutableArray array];
+
+    for (BrowserShortcutItem *item in shortcuts) {
+        NSString *key = item.urlString.lowercaseString ?: @"";
+        if (key.length == 0 || [seenURLs containsObject:key]) {
+            continue;
+        }
+        [seenURLs addObject:key];
+        item.fromHistory = NO;
+        [merged addObject:item];
+        if (merged.count >= kSuggestionLimit) {
+            return merged;
+        }
+    }
+
+    NSUInteger historyLimit = kSuggestionLimit - merged.count;
+    if (historyLimit == 0) {
+        return merged;
+    }
+    NSArray<BrowserHistoryEntry *> *history =
+        [[BrowserHistoryStore sharedStore] suggestionsMatchingQuery:query limit:historyLimit + 4];
+    for (BrowserHistoryEntry *entry in history) {
+        NSString *key = entry.url.lowercaseString ?: @"";
+        if (key.length == 0 || [seenURLs containsObject:key]) {
+            continue;
+        }
+        [seenURLs addObject:key];
+        BrowserShortcutItem *item = [BrowserShortcutItem itemWithTitle:entry.title
+                                                             urlString:entry.url
+                                                          iconURLString:@""
+                                                             sortOrder:0];
+        item.fromHistory = YES;
+        [merged addObject:item];
+        if (merged.count >= kSuggestionLimit) {
+            break;
+        }
+    }
+    return merged;
+}
+
 - (void)performQuery {
     NSString *trimmed = [self userTypedQueryFromAddressField];
     if (trimmed.length == 0) {
@@ -176,7 +222,7 @@ static const NSUInteger kSuggestionLimit = 8;
         return;
     }
 
-    NSArray<BrowserShortcutItem *> *matches = [BrowserShortcutStore shortcutsMatchingQuery:trimmed limit:kSuggestionLimit];
+    NSArray<BrowserShortcutItem *> *matches = [self mergedSuggestionsForQuery:trimmed];
     if (matches.count == 0) {
         // 仅在确有内联补全时才回写文本；否则会把光标强行挪到行末，破坏中间/开头连续输入。
         if (self.hasActiveInlineAutocomplete) {

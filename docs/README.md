@@ -20,6 +20,7 @@
 | [minimal-browser/new-tab-launchpad-wallpaper-design.md](minimal-browser/new-tab-launchpad-wallpaper-design.md) | Launchpad 新标签页背景图 — 降采样与共享解码方案 |
 | [minimal-browser/new-tab-launchpad-wallpaper-development-plan.md](minimal-browser/new-tab-launchpad-wallpaper-development-plan.md) | Launchpad 新标签页背景图 — 分阶段开发计划 |
 | [minimal-browser/address-bar-shortcut-autocomplete-design.md](minimal-browser/address-bar-shortcut-autocomplete-design.md) | 地址栏快捷方式补全 — 交互与实现方案 |
+| [minimal-browser/browsing-history-design.md](minimal-browser/browsing-history-design.md) | 浏览历史与地址栏历史补全（AC-3）— 设计方案 |
 | [minimal-browser/address-bar-shortcut-autocomplete-development-plan.md](minimal-browser/address-bar-shortcut-autocomplete-development-plan.md) | 地址栏快捷方式补全 — 开发计划 |
 | [minimal-browser/new-tab-launchpad-development-plan.md](minimal-browser/new-tab-launchpad-development-plan.md) | Launchpad 新标签页分阶段开发计划 |
 | [minimal-browser/acceptance.md](minimal-browser/acceptance.md) | MeoBrowser L1 + Launchpad 新标签页验收记录 |

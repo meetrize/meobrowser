@@ -90,6 +90,7 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
 @interface BrowserShortcutSuggestionIconView : NSView
 @property (nonatomic, strong) NSImageView *imageView;
 @property (nonatomic, strong) NSTextField *letterLabel;
+@property (nonatomic, strong) NSImageView *sourceBadgeView;
 @property (nonatomic, copy) NSString *loadToken;
 @end
 
@@ -119,6 +120,12 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
         _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [self addSubview:_letterLabel];
 
+        _sourceBadgeView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _sourceBadgeView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _sourceBadgeView.hidden = YES;
+        _sourceBadgeView.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:_sourceBadgeView];
+
         [NSLayoutConstraint activateConstraints:@[
             [_imageView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_imageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -126,6 +133,10 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
             [_imageView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
             [_letterLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
             [_letterLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_sourceBadgeView.widthAnchor constraintEqualToConstant:9],
+            [_sourceBadgeView.heightAnchor constraintEqualToConstant:9],
+            [_sourceBadgeView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:1],
+            [_sourceBadgeView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:1],
         ]];
     }
     return self;
@@ -136,6 +147,22 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
     self.letterLabel.stringValue = DisplayLetterForShortcut(item);
     self.imageView.hidden = YES;
     self.letterLabel.hidden = NO;
+
+    if (item.fromHistory) {
+        if (@available(macOS 11.0, *)) {
+            NSImage *clock = [NSImage imageWithSystemSymbolName:@"clock.fill" accessibilityDescription:@"历史"];
+            NSImageSymbolConfiguration *config =
+                [NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightRegular];
+            self.sourceBadgeView.image = [clock imageWithSymbolConfiguration:config];
+            self.sourceBadgeView.contentTintColor = [NSColor secondaryLabelColor];
+            self.sourceBadgeView.hidden = NO;
+        } else {
+            self.sourceBadgeView.hidden = YES;
+        }
+    } else {
+        self.sourceBadgeView.hidden = YES;
+        self.sourceBadgeView.image = nil;
+    }
 
     // 补全行不主动打第三方瀑布，仅用磁盘缓存 / 已有 iconURL（避免输入时风暴）。
     NSString *token = item.urlString ?: @"";

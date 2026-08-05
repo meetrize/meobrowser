@@ -17,6 +17,9 @@ typedef NS_ENUM(NSInteger, BrowserShortcutItemKind) {
 @property (nonatomic, assign) BrowserShortcutItemKind kind;
 @property (nonatomic, copy) NSString *folderID;
 
+/// 仅用于地址栏建议展示，不参与快捷方式持久化。
+@property (nonatomic, assign, getter=isFromHistory) BOOL fromHistory;
+
 @property (nonatomic, readonly, getter=isFolder) BOOL folder;
 @property (nonatomic, readonly, getter=isTopLevel) BOOL topLevel;
 

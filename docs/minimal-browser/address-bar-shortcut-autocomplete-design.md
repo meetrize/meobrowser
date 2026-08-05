@@ -1,7 +1,7 @@
 # 地址栏快捷方式补全 — 交互与实现方案
 
 > 目标：在地址栏输入字母时，从起始页（Launchpad）快捷方式中实时匹配，弹出建议菜单；支持鼠标点击、方向键 + 回车、Tab 补全。  
-> 状态：**AC-1 + AC-2 已实现**（2026-07-13）  
+> 状态：**AC-1 + AC-2 + AC-3 已实现**（AC-3：历史补全，见 [browsing-history-design.md](browsing-history-design.md)）  
 > 开发计划：[address-bar-shortcut-autocomplete-development-plan.md](address-bar-shortcut-autocomplete-development-plan.md)
 
 ---
@@ -14,9 +14,9 @@
 |------|------|------|
 | **AC-1** | MVP | 输入触发匹配、弹出菜单、鼠标/键盘打开 |
 | **AC-2** | 体验打磨 | 高亮匹配片段、图标、排序优化、边界态 |
-| AC-3 | 扩展（可选） | 历史记录、最常访问、域名模糊匹配 |
+| **AC-3** | 扩展 | 历史记录合并补全（快捷方式优先；同 URL 去重） |
 
-**本方案首版交付目标：AC-1 + AC-2。**
+**交付状态：AC-1 + AC-2 + AC-3（历史）已落地。**
 
 ### 1.2 不做什么
 
@@ -31,7 +31,8 @@
 |----------|------------|
 | 地址栏 `SBTextField` | 保留；在其下方叠放建议面板 |
 | `loadAddressBarURL` / `normalizedURLFromString:` | 无选中建议时原样执行 |
-| `BrowserShortcutStore` | **唯一数据源**；增删改快捷方式后建议列表自动同步 |
+| `BrowserShortcutStore` | 快捷方式数据源（优先展示） |
+| `BrowserHistoryStore` | AC-3 历史数据源；与快捷方式同 URL 时快捷方式胜出 |
 | 地址栏星标按钮 | 并存；建议面板 z-order 低于星标，不遮挡点击 |
 | Launchpad 单击/中键打开 | 行为一致；建议打开复用同一 `loadURL:` 路径 |
 

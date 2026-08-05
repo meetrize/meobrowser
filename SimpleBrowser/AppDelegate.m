@@ -11,6 +11,7 @@
 #import "CompanionChannel.h"
 #import "ServerSyncEngine.h"
 #import "ServerSyncSettings.h"
+#import "BrowserHistoryStore.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -342,6 +343,7 @@
         [self persistAllBrowserWindowSessions];
         _isTerminating = YES;
     }
+    [[BrowserHistoryStore sharedStore] clearIfConfiguredOnQuit];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 

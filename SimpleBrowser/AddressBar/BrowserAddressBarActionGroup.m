@@ -114,6 +114,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
 @property (nonatomic, strong, readwrite, nullable) NSButton *captchaAssistButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *feedButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *findInPageButton;
+@property (nonatomic, strong, readwrite, nullable) NSButton *historyButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *tabOverviewButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *companionLinkButton;
 @property (nonatomic, strong, readwrite, nullable) NSButton *sendToPhoneButton;
@@ -207,6 +208,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
     NSArray<NSDictionary<NSString *, NSString *> *> *specs = @[
         @{@"id": @"tabOverview", @"symbol": @"square.grid.2x2", @"tip": @"标签概览"},
         @{@"id": @"findInPage", @"symbol": @"magnifyingglass", @"tip": @"查找"},
+        @{@"id": @"history", @"symbol": @"clock", @"tip": @"历史"},
         @{@"id": @"download", @"symbol": @"arrow.down.circle", @"tip": @"下载"},
         @{@"id": @"loginAssist", @"symbol": @"key.horizontal", @"tip": @"登录助手"},
         @{@"id": @"companionLink", @"symbol": @"link", @"tip": @"互联"},
@@ -372,6 +374,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
     self.captchaAssistButton = nil;
     self.feedButton = nil;
     self.findInPageButton = nil;
+    self.historyButton = nil;
     self.tabOverviewButton = nil;
     self.companionLinkButton = nil;
     self.sendToPhoneButton = nil;
@@ -389,6 +392,8 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             self.feedButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"findInPage"]) {
             self.findInPageButton = self.actionButtons[i];
+        } else if ([itemID isEqualToString:@"history"]) {
+            self.historyButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"tabOverview"]) {
             self.tabOverviewButton = self.actionButtons[i];
         } else if ([itemID isEqualToString:@"companionLink"]) {

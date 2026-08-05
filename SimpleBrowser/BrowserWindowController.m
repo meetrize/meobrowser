@@ -20,6 +20,8 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserDownloadProgressRingView.h"
+#import "BrowserHistoryStore.h"
+#import "BrowserHistorySidebarController.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
 #import "BrowserTabOverviewController.h"
@@ -122,7 +124,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @implementation BrowserProvisionalNavigationWatchdog
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -131,6 +133,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSStackView *contentRowStack;
 @property (nonatomic, strong) PhoneNotificationSidebarController *notificationSidebarController;
 @property (nonatomic, strong) AssistSidebarController *assistSidebarController;
+@property (nonatomic, strong) BrowserHistorySidebarController *historySidebarController;
 @property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
@@ -688,6 +691,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireHistoryButton];
     [self wireTabOverviewButton];
     [self wireCompanionLinkButton];
     [self wireSendToPhoneButton];
@@ -753,14 +757,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.assistSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.historySidebarController = [[BrowserHistorySidebarController alloc] init];
+    self.historySidebarController.delegate = self;
+    self.historySidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.historySidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.historySidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.trailingSidebarSlot = [[BrowserTrailingSidebarSlot alloc] init];
     self.trailingSidebarSlot.notificationSidebar = self.notificationSidebarController;
     self.trailingSidebarSlot.assistSidebar = self.assistSidebarController;
+    self.trailingSidebarSlot.historySidebar = self.historySidebarController;
 
     self.contentRowStack = [NSStackView stackViewWithViews:@[
         self.contentContainer,
         self.notificationSidebarController.view,
-        self.assistSidebarController.view
+        self.assistSidebarController.view,
+        self.historySidebarController.view
     ]];
     self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.contentRowStack.spacing = 0;
@@ -939,6 +953,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     button.action = @selector(toggleFindBar:);
 }
 
+- (void)wireHistoryButton {
+    NSButton *button = self.addressBarActionGroup.historyButton;
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = @selector(toggleHistoryPanel:);
+}
+
 - (void)wireTabOverviewButton {
     NSButton *button = self.addressBarActionGroup.tabOverviewButton;
     if (!button) {
@@ -1039,6 +1062,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
     }
     [self wireFindInPageButton];
+    [self wireHistoryButton];
     [self wireTabOverviewButton];
     [self wireCompanionLinkButton];
     [self wireSendToPhoneButton];
@@ -1114,6 +1138,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL open = !self.notificationSidebarController.visible;
     [self.trailingSidebarSlot setNotificationVisible:open animated:YES];
     [self updateNotificationInboxButtonAppearance];
+    [self updateHistoryButtonAppearance];
 }
 
 - (void)updateNotificationInboxButtonAppearance {
@@ -1167,6 +1192,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     (void)controller;
     [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
     [self updateNotificationInboxButtonAppearance];
+    [self updateHistoryButtonAppearance];
 }
 
 - (void)notificationSidebarDidRequestCompanionSettings:(PhoneNotificationSidebarController *)controller {
@@ -1191,10 +1217,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
              revealingRecipeID:(NSString *)recipeID
                         memoID:(NSString *)memoID {
     if (visible) {
-        if (self.notificationSidebarController.visible) {
-            [self.trailingSidebarSlot setNotificationVisible:NO animated:YES];
-            [self updateNotificationInboxButtonAppearance];
-        }
         if (recipeID.length > 0) {
             [self.trailingSidebarSlot setAssistVisible:YES animated:YES];
             [self.assistSidebarController revealRecipeID:recipeID];
@@ -1209,6 +1231,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     } else {
         [self.trailingSidebarSlot setAssistVisible:NO animated:YES];
     }
+    [self updateNotificationInboxButtonAppearance];
+    [self updateHistoryButtonAppearance];
 }
 
 - (void)showAssistSidebar:(id)sender {
@@ -1218,6 +1242,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)assistSidebarDidRequestClose:(AssistSidebarController *)controller {
     (void)controller;
     [self.trailingSidebarSlot setAssistVisible:NO animated:YES];
+    [self updateNotificationInboxButtonAppearance];
+    [self updateHistoryButtonAppearance];
 }
 
 - (void)assistSidebar:(AssistSidebarController *)controller didChangeWidth:(CGFloat)width {
@@ -1279,6 +1305,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)showDownloadsPanel {
+    [self.addressAutocompleteController dismissPanel];
     if (!self.downloadPanel) {
         self.downloadPanel = [[BrowserDownloadPanel alloc] init];
         self.downloadPanel.panelDelegate = self;
@@ -1297,6 +1324,59 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)downloadPanelDidRequestClose:(BrowserDownloadPanel *)panel {
     (void)panel;
     self.downloadPanelVisible = NO;
+}
+
+#pragma mark - History Sidebar
+
+- (void)toggleHistoryPanel:(id)sender {
+    (void)sender;
+    BOOL open = !self.historySidebarController.visible;
+    [self.trailingSidebarSlot setHistoryVisible:open animated:YES];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)historySidebarDidRequestClose:(BrowserHistorySidebarController *)controller {
+    (void)controller;
+    [self.trailingSidebarSlot setHistoryVisible:NO animated:YES];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)historySidebar:(BrowserHistorySidebarController *)controller
+               openURL:(NSURL *)url
+              inNewTab:(BOOL)inNewTab {
+    (void)controller;
+    if (inNewTab) {
+        [self launchpadView:self.launchpadView openURLInNewTab:url];
+    } else {
+        [self launchpadView:self.launchpadView openURL:url];
+    }
+}
+
+- (void)historySidebar:(BrowserHistorySidebarController *)controller didChangeWidth:(CGFloat)width {
+    (void)controller;
+    (void)width;
+}
+
+- (void)updateHistoryButtonAppearance {
+    NSButton *button = self.addressBarActionGroup.historyButton;
+    if (!button) {
+        return;
+    }
+    BOOL visible = self.historySidebarController.visible;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+    if (@available(macOS 11.0, *)) {
+        NSString *symbol = visible ? @"clock.fill" : @"clock";
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:15
+                                                            weight:NSFontWeightSemibold
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"历史"];
+        button.image = [image imageWithSymbolConfiguration:config];
+    }
 }
 
 - (void)downloadManagerDidChange:(BrowserDownloadManager *)manager {
@@ -2541,6 +2621,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(toggleTabOverview:) || action == @selector(showTabOverview)) {
         return YES;
     }
+    if (action == @selector(toggleHistoryPanel:)) {
+        return YES;
+    }
     return YES;
 }
 
@@ -3689,6 +3772,8 @@ didFailNavigation:(WKNavigation *)navigation
         [self updateSecurityBadgeVisibility];
     }
 
+    [self recordHistoryForWebView:webView tab:tab];
+
     NSInteger generation = tab.titleUpdateGeneration;
     __weak typeof(self) weakSelf = self;
     // 立刻拉取 document.title；SPA 可能晚到，再延迟补几次。
@@ -3711,6 +3796,24 @@ didFailNavigation:(WKNavigation *)navigation
     }
 }
 
+- (void)recordHistoryForWebView:(WKWebView *)webView tab:(BrowserTab *)tab {
+    if (!tab || tab.isNewTabPage || !webView) {
+        return;
+    }
+    if (!self.navigationErrorView.hidden || !self.certificateWarningView.hidden) {
+        return;
+    }
+    NSURL *url = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    if (![BrowsingPreferences isPersistableURL:url]) {
+        url = [BrowserWebView publicURLFromInternalURL:tab.restorableURL] ?: tab.restorableURL;
+    }
+    if (![BrowsingPreferences isPersistableURL:url]) {
+        return;
+    }
+    NSString *title = webView.title.length > 0 ? webView.title : tab.title;
+    [[BrowserHistoryStore sharedStore] recordURL:url title:title];
+}
+
 - (void)applyTitleFromWebView:(WKWebView *)webView generation:(NSInteger)generation {
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (!tab || tab.titleUpdateGeneration != generation) {
@@ -3723,6 +3826,16 @@ didFailNavigation:(WKNavigation *)navigation
         if (![tab.title isEqualToString:newTitle]) {
             tab.title = newTitle;
             titleChanged = YES;
+        }
+    }
+
+    if (titleChanged) {
+        NSURL *url = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+        if (![BrowsingPreferences isPersistableURL:url]) {
+            url = [BrowserWebView publicURLFromInternalURL:tab.restorableURL] ?: tab.restorableURL;
+        }
+        if ([BrowsingPreferences isPersistableURL:url] && tab.title.length > 0) {
+            [[BrowserHistoryStore sharedStore] updateTitle:tab.title forURL:url];
         }
     }
 
