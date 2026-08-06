@@ -193,6 +193,8 @@ static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) 
 @property (nonatomic, assign) NSUInteger loadToken;
 @property (nonatomic, copy, nullable) NSString *boundHost;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *boundShortcut;
+- (BOOL)isShowingLetterFallback;
+- (void)retryIconLoadIfStillPending;
 @property (nonatomic, strong) NSLayoutConstraint *imageTopConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *imageLeadingConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *imageTrailingConstraint;
@@ -344,6 +346,75 @@ static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) 
         }
         [strongSelf applyTileLoadedImage:image];
         BrowserShortcutWritebackIconIfNeeded(shortcut);
+    }];
+}
+
+- (BOOL)isShowingLetterFallback {
+    if (self.hidden || self.boundShortcut == nil) {
+        return NO;
+    }
+    return !self.letterLabel.hidden && self.imageView.hidden;
+}
+
+- (void)retryIconLoadIfStillPending {
+    BrowserShortcutItem *shortcut = self.boundShortcut;
+    if (shortcut == nil || shortcut.iconURLString.length > 0) {
+        return;
+    }
+    if (![self isShowingLetterFallback]) {
+        return;
+    }
+    NSString *host = self.boundHost;
+    if (host.length == 0) {
+        return;
+    }
+
+    NSImage *mem = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+    if (mem != nil) {
+        [self applyTileLoadedImage:mem];
+        BrowserShortcutWritebackIconIfNeeded(shortcut);
+        return;
+    }
+    if ([[BrowserFaviconService sharedService] isHostNegativeCached:host]) {
+        return;
+    }
+
+    self.loadToken += 1;
+    NSUInteger token = self.loadToken;
+    __weak typeof(self) weakSelf = self;
+    [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                 preferredIconURL:nil
+                                                      triggerFetch:NO
+                                                        completion:^(NSImage *image) {
+        BrowserShortcutFolderTileView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.loadToken != token) {
+            return;
+        }
+        if (![strongSelf isShowingLetterFallback] || shortcut.iconURLString.length > 0) {
+            return;
+        }
+        if (image != nil) {
+            [strongSelf applyTileLoadedImage:image];
+            BrowserShortcutWritebackIconIfNeeded(shortcut);
+            return;
+        }
+        if ([[BrowserFaviconService sharedService] isHostNegativeCached:host]) {
+            return;
+        }
+        [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                     preferredIconURL:nil
+                                                          triggerFetch:YES
+                                                            completion:^(NSImage *fetched) {
+            BrowserShortcutFolderTileView *s = weakSelf;
+            if (!s || s.loadToken != token || fetched == nil) {
+                return;
+            }
+            if (![s isShowingLetterFallback] || shortcut.iconURLString.length > 0) {
+                return;
+            }
+            [s applyTileLoadedImage:fetched];
+            BrowserShortcutWritebackIconIfNeeded(shortcut);
+        }];
     }];
 }
 
@@ -761,6 +832,94 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     }];
 }
 
+- (BOOL)isShowingLetterFallback {
+    if (self.addCell || self.shortcut == nil) {
+        return NO;
+    }
+    if (self.shortcut.isFolder) {
+        for (BrowserShortcutFolderTileView *tile in self.folderTiles) {
+            BrowserShortcutItem *child = tile.boundShortcut;
+            if (child != nil && child.iconURLString.length == 0 && [tile isShowingLetterFallback]) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+    return !self.letterLabel.hidden && self.iconImageView.hidden;
+}
+
+- (void)retryIconLoadIfStillPending {
+    if (self.addCell || self.shortcut == nil) {
+        return;
+    }
+    if (self.shortcut.isFolder) {
+        for (BrowserShortcutFolderTileView *tile in self.folderTiles) {
+            [tile retryIconLoadIfStillPending];
+        }
+        return;
+    }
+    if (self.shortcut.iconURLString.length > 0) {
+        return;
+    }
+    if (![self isShowingLetterFallback]) {
+        return;
+    }
+
+    BrowserShortcutItem *shortcut = self.shortcut;
+    NSString *host = self.boundHost;
+    if (host.length == 0) {
+        return;
+    }
+
+    NSImage *mem = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+    if (mem != nil) {
+        [self applyLoadedIconImage:mem];
+        BrowserShortcutWritebackIconIfNeeded(shortcut);
+        return;
+    }
+    if ([[BrowserFaviconService sharedService] isHostNegativeCached:host]) {
+        return;
+    }
+
+    self.iconLoadToken += 1;
+    NSUInteger token = self.iconLoadToken;
+    __weak typeof(self) weakSelf = self;
+    [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                 preferredIconURL:nil
+                                                      triggerFetch:NO
+                                                        completion:^(NSImage *image) {
+        BrowserShortcutCellContentView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.iconLoadToken != token) {
+            return;
+        }
+        if (![strongSelf isShowingLetterFallback] || shortcut.iconURLString.length > 0) {
+            return;
+        }
+        if (image != nil) {
+            [strongSelf applyLoadedIconImage:image];
+            BrowserShortcutWritebackIconIfNeeded(shortcut);
+            return;
+        }
+        if ([[BrowserFaviconService sharedService] isHostNegativeCached:host]) {
+            return;
+        }
+        [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
+                                                     preferredIconURL:nil
+                                                          triggerFetch:YES
+                                                            completion:^(NSImage *fetched) {
+            BrowserShortcutCellContentView *s = weakSelf;
+            if (!s || s.iconLoadToken != token || fetched == nil) {
+                return;
+            }
+            if (![s isShowingLetterFallback] || shortcut.iconURLString.length > 0) {
+                return;
+            }
+            [s applyLoadedIconImage:fetched];
+            BrowserShortcutWritebackIconIfNeeded(shortcut);
+        }];
+    }];
+}
+
 - (void)configureWithShortcut:(BrowserShortcutItem *)shortcut
                      children:(NSArray<BrowserShortcutItem *> *)children {
     self.addCell = NO;
@@ -1044,6 +1203,14 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
 
 - (void)applyTitleColor:(NSColor *)color {
     [self.shortcutContentView applyTitleColor:color];
+}
+
+- (BOOL)isShowingLetterFallback {
+    return [self.shortcutContentView isShowingLetterFallback];
+}
+
+- (void)retryIconLoadIfStillPending {
+    [self.shortcutContentView retryIconLoadIfStillPending];
 }
 
 - (void)setMergeHighlighted:(BOOL)mergeHighlighted {

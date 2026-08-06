@@ -11,6 +11,9 @@
 
 static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortcut-item-id";
 
+static const NSTimeInterval kLaunchpadIconRefreshAfterVisibleDelay = 0.3;
+static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
+
 @class BrowserLaunchpadView;
 
 @interface BrowserLaunchpadView (ContextMenu)
@@ -318,6 +321,7 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
 @property (nonatomic, strong) NSView *dropPlaceholderView;
 @property (nonatomic, assign) NSInteger dropPlaceholderIndex; // DropBefore 插入下标；NSNotFound 表示隐藏
 @property (nonatomic, assign) BOOL dropDidCommit;
+@property (nonatomic, strong, nullable) dispatch_block_t pendingIconRefreshBlock;
 @end
 
 @implementation BrowserLaunchpadView
@@ -344,12 +348,17 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
                                                  selector:@selector(shortcutStoreDidChange:)
                                                      name:BrowserShortcutStoreDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(windowDidBecomeKey:)
+                                                     name:NSWindowDidBecomeKeyNotification
+                                                   object:nil];
         [self refreshWallpaperPresentation];
     }
     return self;
 }
 
 - (void)dealloc {
+    [self cancelPendingIconRefresh];
     [self releaseWallpaperIfNeeded];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self removeEscapeMonitor];
@@ -373,10 +382,64 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
     }
     if (hidden) {
         [self releaseWallpaperIfNeeded];
+        [self cancelPendingIconRefresh];
     } else if (self.window != nil) {
         [self acquireWallpaperIfNeeded];
         [self refreshWallpaperPresentation];
+        [self scheduleRefreshPendingShortcutIconsWithDelay:kLaunchpadIconRefreshAfterVisibleDelay];
     }
+}
+
+#pragma mark - Pending shortcut icon refresh
+
+- (void)cancelPendingIconRefresh {
+    if (self.pendingIconRefreshBlock) {
+        dispatch_block_cancel(self.pendingIconRefreshBlock);
+        self.pendingIconRefreshBlock = nil;
+    }
+}
+
+- (void)scheduleRefreshPendingShortcutIconsWithDelay:(NSTimeInterval)delay {
+    [self cancelPendingIconRefresh];
+    if (self.hidden) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        BrowserLaunchpadView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.hidden) {
+            return;
+        }
+        [strongSelf refreshPendingShortcutIconsIfNeeded];
+        strongSelf.pendingIconRefreshBlock = nil;
+    });
+    self.pendingIconRefreshBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
+- (void)refreshPendingShortcutIconsIfNeeded {
+    if (self.hidden) {
+        return;
+    }
+    for (NSCollectionViewItem *item in self.collectionView.visibleItems) {
+        if (![item isKindOfClass:[BrowserShortcutCellView class]]) {
+            continue;
+        }
+        BrowserShortcutCellView *cell = (BrowserShortcutCellView *)item;
+        if ([cell isShowingLetterFallback]) {
+            [cell retryIconLoadIfStillPending];
+        }
+    }
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+    NSWindow *window = notification.object;
+    if (self.hidden || self.window != window) {
+        return;
+    }
+    [self scheduleRefreshPendingShortcutIconsWithDelay:kLaunchpadIconRefreshAfterWindowKeyDelay];
 }
 
 - (void)setupViews {
@@ -663,6 +726,9 @@ static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortc
         } else {
             [self dismissFolderOverlayAnimated:NO];
         }
+    }
+    if (!self.hidden) {
+        [self scheduleRefreshPendingShortcutIconsWithDelay:kLaunchpadIconRefreshAfterVisibleDelay];
     }
 }
 

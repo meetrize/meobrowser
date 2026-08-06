@@ -39,6 +39,9 @@ FOUNDATION_EXPORT NSString * const BrowserFaviconHostUserInfoKey;
 
 - (nullable NSImage *)cachedImageForHost:(NSString *)host;
 
+/// 该 host 是否处于 negative cache（近期静默拉取失败，24h 内不再重试）。
+- (BOOL)isHostNegativeCached:(NSString *)host;
+
 - (void)cancelFetchForHost:(NSString *)host;
 - (void)cancelAll;
 

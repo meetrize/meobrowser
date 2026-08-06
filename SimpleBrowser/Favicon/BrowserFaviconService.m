@@ -160,6 +160,13 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
     return [[BrowserFaviconCache sharedCache] imageForHost:host];
 }
 
+- (BOOL)isHostNegativeCached:(NSString *)host {
+    if (host.length == 0) {
+        return NO;
+    }
+    return [self isNegativeCachedForHost:host];
+}
+
 - (void)imageForPageURLString:(NSString *)pageURLString
               preferredIconURL:(nullable NSString *)iconURLString
                    triggerFetch:(BOOL)triggerFetch

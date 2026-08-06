@@ -20,6 +20,12 @@ typedef void (^BrowserShortcutCellActivateHandler)(BrowserShortcutItem *item, BO
 - (void)applyIconSize:(CGFloat)iconSize;
 - (void)applyTitleColor:(NSColor *)color;
 
+/// 仍为字母占位（尚未显示 favicon）。
+- (BOOL)isShowingLetterFallback;
+
+/// 若仍为字母占位且 iconURL 未持久化，先查缓存再按需补拉（尊重 negative cache）。
+- (void)retryIconLoadIfStillPending;
+
 /// 拖拽代理图（半透明图标影子）；contentView 为 cell 的 view。
 + (nullable NSImage *)draggingProxyImageFromContentView:(NSView *)contentView
                                                   alpha:(CGFloat)alpha;
