@@ -50,6 +50,7 @@
 #import "PhoneNotificationInboxStore.h"
 #import "PhoneNotificationPresenter.h"
 #import "BrowserUserAgent.h"
+#import "BrowserGeolocationBridge.h"
 #import <Security/Security.h>
 #import <dlfcn.h>
 
@@ -405,6 +406,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
     [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
+    [BrowserGeolocationBridge installOnConfiguration:configuration];
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
@@ -4205,6 +4207,49 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
                             ? WKPermissionDecisionGrant
                             : WKPermissionDecisionDeny);
     }];
+}
+
+- (void)handleGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin
+                             decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler {
+    NSString *host = origin.host.length > 0 ? origin.host : @"";
+    [BrowserGeolocationBridge handleWebKitPermissionRequestForHost:host
+                                                        hostWindow:self.window
+                                                   decisionHandler:decisionHandler];
+}
+
+// WebKit SPI（macOS 10.13.4+）：部分版本仍走 frame 回调。
+- (void)_webView:(WKWebView *)webView
+    requestGeolocationPermissionForFrame:(WKFrameInfo *)frame
+                         decisionHandler:(void (^)(BOOL allowed))decisionHandler
+    API_AVAILABLE(macos(10.13.4)) {
+    (void)webView;
+    NSString *host = frame.request.URL.host ?: @"";
+    [BrowserGeolocationBridge handleWebKitPermissionRequestForHost:host
+                                                        hostWindow:self.window
+                                                   decisionHandler:^(WKPermissionDecision decision) {
+        decisionHandler(decision == WKPermissionDecisionGrant);
+    }];
+}
+
+// WebKit SPI（macOS 12+）；公开 API 需 macOS 27+。
+- (void)_webView:(WKWebView *)webView
+    requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin
+                         initiatedByFrame:(WKFrameInfo *)frame
+                          decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler
+    API_AVAILABLE(macos(12.0)) {
+    (void)webView;
+    (void)frame;
+    [self handleGeolocationPermissionForOrigin:origin decisionHandler:decisionHandler];
+}
+
+- (void)webView:(WKWebView *)webView
+requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin
+                     initiatedByFrame:(WKFrameInfo *)frame
+                      decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler
+    API_AVAILABLE(macos(27.0)) {
+    (void)webView;
+    (void)frame;
+    [self handleGeolocationPermissionForOrigin:origin decisionHandler:decisionHandler];
 }
 
 @end

@@ -2,6 +2,8 @@
 #import "BrowsingPreferences.h"
 #import "BrowserKeyboardPreferences.h"
 #import "BrowserUserAgent.h"
+#import "BrowserLocationPreferences.h"
+#import "BrowserLocationService.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -22,6 +24,9 @@
 @property (nonatomic, strong) NSButton *userAgentCopyButton;
 @property (nonatomic, strong) NSTextField *clearWebsiteDataStatusLabel;
 @property (nonatomic, strong) NSTextField *privacyHintLabel;
+@property (nonatomic, strong) NSButton *geolocationEnabledCheckbox;
+@property (nonatomic, strong) NSTextField *locationHintLabel;
+@property (nonatomic, strong) NSButton *openSystemLocationSettingsButton;
 
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
@@ -50,7 +55,7 @@
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 920)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 980)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -71,6 +76,10 @@
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(keyboardPreferencesDidChange:)
                                                      name:BrowserKeyboardPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(locationPreferencesDidChange:)
+                                                     name:BrowserLocationPreferencesDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -247,6 +256,20 @@
                                                            target:self
                                                            action:@selector(clearHistoryOnQuitChanged:)];
     self.clearHistoryOnQuitCheckbox.state = BrowserHistoryStore.clearOnQuitEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.geolocationEnabledCheckbox = [NSButton checkboxWithTitle:@"允许网站请求定位"
+                                                             target:self
+                                                             action:@selector(geolocationEnabledChanged:)];
+    self.geolocationEnabledCheckbox.state = [BrowserLocationPreferences sharedPreferences].geolocationEnabled
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.locationHintLabel = [NSTextField wrappingLabelWithString:
+        @"网站可通过 navigator.geolocation 获取你的位置。首次访问时仍会询问是否允许该站点。"];
+    self.locationHintLabel.font = [NSFont systemFontOfSize:11];
+    self.locationHintLabel.textColor = [NSColor secondaryLabelColor];
+    self.locationHintLabel.preferredMaxLayoutWidth = 448;
+    self.openSystemLocationSettingsButton = [NSButton buttonWithTitle:@"打开系统定位设置…"
+                                                               target:self
+                                                               action:@selector(openSystemLocationSettingsClicked:)];
+    self.openSystemLocationSettingsButton.bezelStyle = NSBezelStyleRounded;
     self.privacyHintLabel = [NSTextField wrappingLabelWithString:@"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
     self.privacyHintLabel.font = [NSFont systemFontOfSize:11];
     self.privacyHintLabel.textColor = [NSColor secondaryLabelColor];
@@ -260,7 +283,9 @@
         self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel, separator3,
         keyboardCaption, self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
         separator4,
-        privacyCaption, privacyRow, self.clearWebsiteDataStatusLabel, self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
+        privacyCaption, privacyRow, self.clearWebsiteDataStatusLabel,
+        self.geolocationEnabledCheckbox, self.locationHintLabel, self.openSystemLocationSettingsButton,
+        self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
     ]];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.alignment = NSLayoutAttributeLeading;
@@ -283,11 +308,13 @@
         [self.serverHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.keyboardHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
         [self.privacyHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.locationHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
     ]];
 
     [self refreshDefaultBrowserStatus];
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
+    [self refreshLocationPermissionHint];
 }
 
 - (void)serverSyncUINeedsRefresh:(NSNotification *)note {
@@ -680,6 +707,36 @@
     }];
 }
 
+- (void)locationPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    self.geolocationEnabledCheckbox.state = [BrowserLocationPreferences sharedPreferences].geolocationEnabled
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [self refreshLocationPermissionHint];
+}
+
+- (void)refreshLocationPermissionHint {
+    NSString *status = [BrowserLocationService systemAuthorizationStatusDescription];
+    if ([BrowserLocationPreferences sharedPreferences].geolocationEnabled) {
+        self.locationHintLabel.stringValue =
+            [NSString stringWithFormat:@"%@。网站首次请求定位时会询问是否允许该站点。", status];
+    } else {
+        self.locationHintLabel.stringValue =
+            [NSString stringWithFormat:@"%@。开启上方选项后，网站才可请求定位。", status];
+    }
+}
+
+- (void)geolocationEnabledChanged:(id)sender {
+    (void)sender;
+    [BrowserLocationPreferences sharedPreferences].geolocationEnabled =
+        (self.geolocationEnabledCheckbox.state == NSControlStateValueOn);
+    [self refreshLocationPermissionHint];
+}
+
+- (void)openSystemLocationSettingsClicked:(id)sender {
+    (void)sender;
+    [BrowserLocationService openSystemLocationSettings];
+}
+
 - (void)clearHistoryOnQuitChanged:(id)sender {
     (void)sender;
     BrowserHistoryStore.clearOnQuitEnabled = (self.clearHistoryOnQuitCheckbox.state == NSControlStateValueOn);
@@ -691,6 +748,9 @@
     [self refreshDefaultBrowserStatus];
     self.clearWebsiteDataStatusLabel.stringValue = @"缓存、Cookie 与网站本地存储";
     self.clearHistoryOnQuitCheckbox.state = BrowserHistoryStore.clearOnQuitEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.geolocationEnabledCheckbox.state = [BrowserLocationPreferences sharedPreferences].geolocationEnabled
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    [self refreshLocationPermissionHint];
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [super showWindow:sender];

@@ -1,4 +1,5 @@
 #import "BrowsingPreferences.h"
+#import "BrowserSitePermissionStore.h"
 #import <AppKit/AppKit.h>
 #import <CoreServices/CoreServices.h>
 #import <WebKit/WebKit.h>
@@ -373,6 +374,7 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
     };
 
     [[NSURLCache sharedURLCache] removeAllCachedResponses];
+    [[BrowserSitePermissionStore sharedStore] removeAllGeolocationDecisions];
 
     NSSet<NSString *> *types = [WKWebsiteDataStore allWebsiteDataTypes];
     NSDate *since = [NSDate dateWithTimeIntervalSince1970:0];
@@ -451,6 +453,7 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
         [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:types
                                                   forDataRecords:matched
                                                completionHandler:^{
+            [[BrowserSitePermissionStore sharedStore] removeGeolocationDecisionForHost:trimmed];
             finish(nil);
         }];
     }];
