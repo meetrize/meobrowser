@@ -183,7 +183,6 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
 @property (nonatomic, strong) BrowserFindBarController *findBarController;
 @property (nonatomic, strong) BrowserTabOverviewController *tabOverviewController;
-@property (nonatomic, strong, nullable) NSTextField *tabOverviewBadgeLabel;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
@@ -991,39 +990,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     button.target = self;
     button.action = @selector(toggleTabOverview:);
-    [self installTabOverviewBadgeOnButton:button];
     [self updateTabOverviewButtonAppearance];
-}
-
-- (void)installTabOverviewBadgeOnButton:(NSButton *)button {
-    if (!button) {
-        return;
-    }
-    [self.tabOverviewBadgeLabel removeFromSuperview];
-    NSTextField *badge = self.tabOverviewBadgeLabel;
-    if (!badge) {
-        badge = [NSTextField labelWithString:@"0"];
-        badge.editable = NO;
-        badge.bezeled = NO;
-        badge.drawsBackground = YES;
-        badge.backgroundColor = [NSColor systemRedColor];
-        badge.textColor = [NSColor whiteColor];
-        badge.font = [NSFont systemFontOfSize:9 weight:NSFontWeightBold];
-        badge.alignment = NSTextAlignmentCenter;
-        badge.wantsLayer = YES;
-        badge.layer.cornerRadius = 7.0;
-        badge.layer.masksToBounds = YES;
-        badge.hidden = YES;
-        badge.translatesAutoresizingMaskIntoConstraints = NO;
-        self.tabOverviewBadgeLabel = badge;
-    }
-    [button addSubview:badge];
-    [NSLayoutConstraint activateConstraints:@[
-        [badge.widthAnchor constraintGreaterThanOrEqualToConstant:14],
-        [badge.heightAnchor constraintEqualToConstant:14],
-        [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:1],
-        [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-1],
-    ]];
 }
 
 - (void)updateTabOverviewButtonAppearance {
@@ -1041,15 +1008,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                                  scale:NSImageSymbolScaleMedium];
             NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"标签概览"];
             button.image = [image imageWithSymbolConfiguration:config];
-        }
-    }
-    NSUInteger count = self.tabController.tabs.count;
-    if (self.tabOverviewBadgeLabel) {
-        if (count >= 2) {
-            self.tabOverviewBadgeLabel.stringValue = count > 99 ? @"99+" : [NSString stringWithFormat:@"%lu", (unsigned long)count];
-            self.tabOverviewBadgeLabel.hidden = NO;
-        } else {
-            self.tabOverviewBadgeLabel.hidden = YES;
         }
     }
 }

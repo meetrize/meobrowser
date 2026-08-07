@@ -39,7 +39,7 @@ extern NSNotificationName const BrowserAddressBarActionVisibilityDidChangeNotifi
 /// 浏览历史按钮；由窗口控制器设置 target/action。
 @property (nonatomic, strong, readonly, nullable) NSButton *historyButton;
 
-/// 标签概览按钮；由窗口控制器设置 target/action 与角标。
+/// 标签概览按钮；由窗口控制器设置 target/action。
 @property (nonatomic, strong, readonly, nullable) NSButton *tabOverviewButton;
 
 /// 互联（Companion）按钮；由窗口控制器设置 target/action，圆点由本视图维护。
