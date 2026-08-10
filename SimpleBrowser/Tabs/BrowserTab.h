@@ -68,9 +68,10 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)pullDocumentTitleFromWebView;
 
 - (void)notePendingMainFrameNavigation;
-- (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation;
-- (BOOL)isMainFrameNavigation:(WKNavigation *)navigation;
-- (void)endMainFrameNavigation:(WKNavigation *)navigation;
+/// WebKit 可能传入 nil navigation（支付页跳转等）；内部已做空值安全处理。
+- (BOOL)beginMainFrameNavigation:(nullable WKNavigation *)navigation;
+- (BOOL)isMainFrameNavigation:(nullable WKNavigation *)navigation;
+- (void)endMainFrameNavigation:(nullable WKNavigation *)navigation;
 
 @end
 

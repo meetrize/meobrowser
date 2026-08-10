@@ -12,6 +12,8 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 @property (nonatomic, strong, nullable, readwrite) WKWebView *webView;
 @property (nonatomic, assign) BOOL hasPendingMainFrameNavigation;
 @property (nonatomic, strong) NSMutableSet<WKNavigation *> *mainFrameNavigations;
+/// WebKit 在部分主框架导航（跨站支付跳转等）会传入 nil WKNavigation，NSSet 不能存 nil，改用计数跟踪。
+@property (nonatomic, assign) NSUInteger nilMainFrameNavigationCount;
 @property (nonatomic, assign, readwrite) NSInteger titleUpdateGeneration;
 /// 已创建 WebView、待 navigationDelegate 挂上后再加载 restorableURL。
 @property (nonatomic, assign) BOOL pendingRestorableLoad;
@@ -220,6 +222,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.isLoading = NO;
     self.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
     [self.mainFrameNavigations removeAllObjects];
+    self.nilMainFrameNavigationCount = 0;
     self.hasPendingMainFrameNavigation = NO;
 }
 
@@ -342,21 +345,33 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 - (BOOL)beginMainFrameNavigation:(WKNavigation *)navigation {
     // WebKit 仅对主框架调用 didStartProvisionalNavigation；即使 decidePolicy 漏记 pending
     //（如 targetFrame == nil 的 loadRequest），也必须接纳，否则标题/进度永远不同步。
+    // navigation 可能为 nil（支付跳转 / 部分跨站重定向等），不可直接 addObject:。
     self.hasPendingMainFrameNavigation = NO;
-    if (!self.mainFrameNavigations) {
-        self.mainFrameNavigations = [NSMutableSet set];
+    if (navigation) {
+        if (!self.mainFrameNavigations) {
+            self.mainFrameNavigations = [NSMutableSet set];
+        }
+        [self.mainFrameNavigations addObject:navigation];
+    } else {
+        self.nilMainFrameNavigationCount++;
     }
-    [self.mainFrameNavigations addObject:navigation];
     self.titleUpdateGeneration++;
     return YES;
 }
 
 - (BOOL)isMainFrameNavigation:(WKNavigation *)navigation {
-    return [self.mainFrameNavigations containsObject:navigation];
+    if (navigation) {
+        return [self.mainFrameNavigations containsObject:navigation];
+    }
+    return self.nilMainFrameNavigationCount > 0;
 }
 
 - (void)endMainFrameNavigation:(WKNavigation *)navigation {
-    [self.mainFrameNavigations removeObject:navigation];
+    if (navigation) {
+        [self.mainFrameNavigations removeObject:navigation];
+    } else if (self.nilMainFrameNavigationCount > 0) {
+        self.nilMainFrameNavigationCount--;
+    }
 }
 
 - (void)dealloc {
