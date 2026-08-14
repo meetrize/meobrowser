@@ -50,6 +50,7 @@
 #import "PhoneNotificationInboxStore.h"
 #import "BrowserWebInspector.h"
 #import "BrowserDeveloperPreferences.h"
+#import "BrowserPageSource.h"
 #import "PhoneNotificationPresenter.h"
 #import "BrowserUserAgent.h"
 #import "BrowserGeolocationBridge.h"
@@ -2532,6 +2533,54 @@ didRequestTransferTabID:(NSUUID *)tabID
     return tab != nil && !tab.isNewTabPage && !tab.isHibernated && self.webView != nil;
 }
 
+- (BOOL)canViewPageSource {
+    return [self canOpenWebInspector];
+}
+
+- (void)viewPageSource:(id)sender {
+    (void)sender;
+    if (![self canViewPageSource]) {
+        return;
+    }
+
+    WKWebView *webView = self.webView;
+    BrowserTab *sourceTab = self.tabController.selectedTab;
+    NSString *pageTitle = sourceTab.title ?: @"";
+    __weak typeof(self) weakSelf = self;
+    [webView evaluateJavaScript:@"document.documentElement ? document.documentElement.outerHTML : ''"
+              completionHandler:^(id result, NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        NSString *outer = [result isKindOfClass:[NSString class]] ? (NSString *)result : nil;
+        if (error != nil || outer.length == 0) {
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"无法查看源代码";
+            alert.informativeText = error.localizedDescription.length > 0
+                ? error.localizedDescription
+                : @"当前页面没有可读取的文档内容。";
+            [alert addButtonWithTitle:@"好"];
+            [alert beginSheetModalForWindow:self.window completionHandler:nil];
+            return;
+        }
+
+        BOOL truncated = NO;
+        NSUInteger maxLen = [BrowserPageSource maxSourceLength];
+        if (outer.length > maxLen) {
+            outer = [outer substringToIndex:maxLen];
+            truncated = YES;
+        }
+
+        NSString *tabTitle = [NSString stringWithFormat:@"源代码 — %@",
+                              pageTitle.length > 0 ? pageTitle : @"页面"];
+        NSString *html = [BrowserPageSource HTMLDocumentForSource:outer
+                                                        pageTitle:pageTitle
+                                                        truncated:truncated];
+        [self.tabController addTabWithHTMLString:html title:tabTitle];
+    }];
+}
+
 - (void)openWebInspector:(id)sender {
     (void)sender;
     if (![self canOpenWebInspector]) {
@@ -2669,7 +2718,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(reloadPage:) || action == @selector(hardReloadPage:)) {
         return [self canReloadCurrentPage];
     }
-    if (action == @selector(openWebInspector:)) {
+    if (action == @selector(openWebInspector:) || action == @selector(viewPageSource:)) {
         return [self canOpenWebInspector];
     }
     if (action == @selector(zoomIn:) ||

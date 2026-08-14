@@ -168,6 +168,12 @@
             webInspector.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
             webInspector.target = nil;
 
+            NSMenuItem *viewSource = [viewMenu addItemWithTitle:@"查看网页源代码"
+                                                         action:@selector(viewPageSource:)
+                                                  keyEquivalent:@"u"];
+            viewSource.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+            viewSource.target = nil;
+
             [viewMenu addItem:[NSMenuItem separatorItem]];
 
             NSMenuItem *notificationInbox = [viewMenu addItemWithTitle:@"手机通知"

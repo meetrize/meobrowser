@@ -426,6 +426,13 @@ static NSString *MeoScrollToFragmentJS(void) {
         downloadItem.action = @selector(meo_downloadContextResource:);
         downloadItem.representedObject = openItem;
     }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *viewSource = [[NSMenuItem alloc] initWithTitle:@"查看网页源代码"
+                                                        action:@selector(meo_viewPageSource:)
+                                                 keyEquivalent:@""];
+    viewSource.target = self;
+    [menu addItem:viewSource];
 }
 
 - (void)didCloseMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
@@ -670,6 +677,22 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
 
     [self meo_openLinkAtContextMenuPointInNewWindow];
+}
+
+- (void)meo_viewPageSource:(id)sender {
+    (void)sender;
+    id responder = self.window.firstResponder;
+    // 走窗口控制器的 viewPageSource:（响应链 / 直接查找）。
+    NSWindowController *wc = self.window.windowController;
+    if ([wc respondsToSelector:@selector(viewPageSource:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [wc performSelector:@selector(viewPageSource:) withObject:nil];
+#pragma clang diagnostic pop
+        return;
+    }
+    (void)responder;
+    [NSApp sendAction:@selector(viewPageSource:) to:nil from:self];
 }
 
 - (void)meo_openLinkAtContextMenuPointInNewWindow {

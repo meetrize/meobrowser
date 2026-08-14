@@ -100,6 +100,15 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     return tab;
 }
 
+- (BrowserTab *)addTabWithHTMLString:(NSString *)html title:(NSString *)title {
+    NSParameterAssert(html != nil);
+    BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
+    [tab prepareHTMLDocument:html title:title];
+    [self.mutableTabs addObject:tab];
+    [self selectTabInternal:tab notify:YES];
+    return tab;
+}
+
 - (BrowserTab *)addRelatedPopupTabWithWebView:(WKWebView *)webView initialURL:(nullable NSURL *)url {
     BrowserTab *opener = self.selectedTab;
     BrowserTab *tab = [BrowserTab tabWithExistingWebView:webView];

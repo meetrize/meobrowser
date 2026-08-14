@@ -1,7 +1,7 @@
 # 轻量开发者工具（Web Inspector）— 设计方案
 
 > 目标：在**不显著增加常驻内存、不拖慢日常浏览**的前提下，为 MeoBrowser 提供 Elements / Console / Network 等基础调试能力；并附带「查看源代码」「硬刷新」等原生轻量能力。  
-> 状态：**DI-0 / DI-1 已实现**（DI-2 待开发）  
+> 状态：**DI-0 / DI-1 / DI-2 已实现**（DI-3 可选）  
 > 开发计划：[web-inspector-development-plan.md](web-inspector-development-plan.md)  
 > 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.2 · [design.md](design.md) · [insecure-https-design.md](insecure-https-design.md) · [anti-bot-session-design.md](anti-bot-session-design.md) · [multi-tab-design.md](multi-tab-design.md)
 

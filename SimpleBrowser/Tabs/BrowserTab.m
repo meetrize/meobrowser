@@ -233,6 +233,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     [self detachRelatedPopupOpener];
     [self discardWebView];
     self.restorableURL = nil;
+    self.pendingHTMLString = nil;
 }
 
 - (void)hibernate {
@@ -240,6 +241,12 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         return;
     }
     if (self.isNewTabPage || self.webView == nil) {
+        return;
+    }
+    // 源代码等内存 HTML 页：保留 pendingHTMLString，丢弃 WebView。
+    if (self.pendingHTMLString.length > 0) {
+        self.restorableURL = nil;
+        [self discardWebView];
         return;
     }
     NSURL *url = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
@@ -272,6 +279,11 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     if (self.webView != nil) {
         return;
     }
+    if (self.pendingHTMLString.length > 0) {
+        [self ensureWebView];
+        self.pendingRestorableLoad = YES;
+        return;
+    }
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     BOOL canRestore = [BrowsingPreferences isPersistableURL:url] || url.isFileURL;
     if (!canRestore) {
@@ -289,6 +301,11 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
         return;
     }
     self.pendingRestorableLoad = NO;
+    if (self.pendingHTMLString.length > 0) {
+        NSString *html = self.pendingHTMLString;
+        [self.webView loadHTMLString:html baseURL:[NSURL URLWithString:@"meo-source://view"]];
+        return;
+    }
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     if ([BrowsingPreferences isPersistableURL:url]) {
         self.restorableURL = url;
@@ -309,8 +326,21 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.title = @"新标签页";
     self.addressBarDraft = nil;
     self.restorableURL = nil;
+    self.pendingHTMLString = nil;
     self.pendingRestorableLoad = NO;
     [self discardWebView];
+}
+
+- (void)prepareHTMLDocument:(NSString *)html title:(NSString *)title {
+    NSParameterAssert(html != nil);
+    self.isNewTabPage = NO;
+    self.addressBarDraft = nil;
+    self.restorableURL = nil;
+    self.pendingHTMLString = [html copy];
+    NSString *trimmed = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    self.title = trimmed.length > 0 ? trimmed : @"源代码";
+    // 等 refreshTabsUI：wake → attach navigationDelegate → loadPendingRestorableURLIfNeeded。
+    self.pendingRestorableLoad = YES;
 }
 
 - (void)loadURL:(NSURL *)url {

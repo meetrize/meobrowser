@@ -2,7 +2,7 @@
 
 > 基于 [web-inspector-design.md](web-inspector-design.md) 的分阶段实施计划。  
 > 前置条件：多标签、`BrowserMenus` 查看菜单、`BrowserSettingsWindowController`、`BrowserWebView.reloadFromOrigin`、标签休眠已就绪。  
-> 状态：**DI-0 / DI-1 已完成**；DI-2 待开发。  
+> 状态：**DI-0 / DI-1 / DI-2 已完成**；DI-3 可选。  
 > 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.2
 
 ---
@@ -130,19 +130,19 @@
 
 #### 2A — 取源与展示
 
-- [ ] **2.1** `BrowserWindowController.viewPageSource:`（或 `Developer/` 内 helper）
+- [x] **2.1** `BrowserWindowController.viewPageSource:`（或 `Developer/` 内 helper）
   - `evaluateJavaScript` 取 `document.documentElement.outerHTML`
   - 空 / 失败 → 简短 Alert
   - 超大字符串截断（阈值按设计，如 5 MB）并提示
-- [ ] **2.2** 包装为只读 HTML（`<pre>` + 等宽、转义 `<` 等）或 `data:text/plain`
-- [ ] **2.3** `tabController` 开新标签加载；标题「源代码 — …」
-- [ ] **2.4** 标记不可会话恢复：扩展 `BrowsingPreferences.isPersistableURL` 或加载前设 tab 标志 / 使用约定 URL scheme（如 `meo-source:` 且 persist 返回 NO）
+- [x] **2.2** 包装为只读 HTML（`<pre>` + 等宽、转义 `<` 等）或 `data:text/plain`
+- [x] **2.3** `tabController` 开新标签加载；标题「源代码 — …」
+- [x] **2.4** 标记不可会话恢复：扩展 `BrowsingPreferences.isPersistableURL` 或加载前设 tab 标志 / 使用约定 URL scheme（如 `meo-source:` 且 persist 返回 NO）
 
 #### 2B — 入口
 
-- [ ] **2.5** `BrowserMenus`：「查看网页源代码」⌘⌥U
-- [ ] **2.6** `BrowserWebView.willOpenMenu:` 插入右键项 → 转发 window `viewPageSource:`
-- [ ] **2.7** `validateMenuItem:`：无文档 / Launchpad 禁用
+- [x] **2.5** `BrowserMenus`：「查看网页源代码」⌘⌥U
+- [x] **2.6** `BrowserWebView.willOpenMenu:` 插入右键项 → 转发 window `viewPageSource:`
+- [x] **2.7** `validateMenuItem:`：无文档 / Launchpad 禁用
 
 #### 2C — 验收 DI-2
 
@@ -151,6 +151,7 @@
 - [ ] **2.10** 右键与菜单一致
 - [ ] **2.11** 对照设计 §10 清单手测；更新 [acceptance.md](acceptance.md) 可选一行
 
+**DI-2 代码已落地（2026-08-14）**；2.8～2.11 需本机手测。
 ---
 
 ## Phase DI-3：体验（可选，不阻塞首版）

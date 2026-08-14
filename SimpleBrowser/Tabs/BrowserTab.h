@@ -28,6 +28,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, copy, nullable) NSString *addressBarDraft;
 /// 休眠 / 懒恢复用：无 WebView 时记住应加载的 URL。
 @property (nonatomic, copy, nullable) NSURL *restorableURL;
+/// 待加载的 HTML 文档（查看源代码等）；优先于 restorableURL，且不写入会话。
+@property (nonatomic, copy, nullable) NSString *pendingHTMLString;
 /// 最近一次被选中的时间（用于休眠策略）。
 @property (nonatomic, assign) NSTimeInterval lastActiveTimestamp;
 /// 当前主文档连接安全态（用于地址栏「连接不安全」指示）。
@@ -63,6 +65,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 
 - (void)loadNewTabPage;
 - (void)loadURL:(NSURL *)url;
+/// 以内存 HTML 打开本标签（查看源代码）；不进入会话。须在挂上 navigationDelegate 后由 loadPendingRestorableURLIfNeeded 完成加载。
+- (void)prepareHTMLDocument:(NSString *)html title:(NSString *)title;
 - (NSString *)displayTitle;
 /// 从 WKWebView.title 与 document.title 拉取页面标题并写回 tab.title。
 - (void)pullDocumentTitleFromWebView;

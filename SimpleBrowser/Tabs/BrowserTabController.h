@@ -22,6 +22,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (BrowserTab *)addNewTab;
 - (BrowserTab *)addTabWithURL:(NSURL *)url;
+/// 打开只读 HTML 内容标签（查看源代码等）；不进入会话恢复。
+- (BrowserTab *)addTabWithHTMLString:(NSString *)html title:(NSString *)title;
 /// 接入 createWebView 返回的 related WebView；会选中该标签并保留与 opener 的关联。
 - (BrowserTab *)addRelatedPopupTabWithWebView:(WKWebView *)webView initialURL:(nullable NSURL *)url;
 - (void)closeTab:(BrowserTab *)tab;

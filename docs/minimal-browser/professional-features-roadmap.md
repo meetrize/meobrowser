@@ -192,7 +192,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 - [ ] 命令面板（打开 URL、切换标签、基础命令）
 - [ ] ⌘L / ⌘1～9 / ⌘⇧T / ⌘⇧R
 - [ ] 加载进度 + 停止加载
-- [ ] Web Inspector + 查看源代码（方案：[web-inspector-design.md](web-inspector-design.md)，计划 DI-0～DI-2）
+- [x] Web Inspector + 查看源代码（方案：[web-inspector-design.md](web-inspector-design.md)，DI-0～DI-2 已实现）
 - [ ] 固定标签（Pin）
 
 ### M2 — 工作区（约 2 周）

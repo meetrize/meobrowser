@@ -64,6 +64,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserGeolocationBridge.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserDeveloperPreferences.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserWebInspector.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserPageSource.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedItem.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedDetector.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedReader.m \
