@@ -303,7 +303,8 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.pendingRestorableLoad = NO;
     if (self.pendingHTMLString.length > 0) {
         NSString *html = self.pendingHTMLString;
-        [self.webView loadHTMLString:html baseURL:[NSURL URLWithString:@"meo-source://view"]];
+        // 勿用自定义 scheme 作 baseURL：会被 decidePolicy 当成外链交接。
+        [self.webView loadHTMLString:html baseURL:[NSURL URLWithString:@"about:blank"]];
         return;
     }
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
