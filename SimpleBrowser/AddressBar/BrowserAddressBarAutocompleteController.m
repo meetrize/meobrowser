@@ -24,6 +24,10 @@ static const NSUInteger kSuggestionLimit = 8;
 /// 用户用 Backspace/Delete 清掉内联补全后，同一查询不再自动补上，直到输入变化。
 @property (nonatomic, assign) BOOL inlineAutocompleteSuppressed;
 @property (nonatomic, copy) NSString *suppressedForQuery;
+/// 下一次 textDidChange 来自删除操作时，对删除后的前缀抑制内联补全。
+@property (nonatomic, assign) BOOL pendingDeleteSuppressesInline;
+/// 用于识别 ⌘X 等不经 doCommandBySelector 的缩短编辑。
+@property (nonatomic, assign) NSUInteger lastAddressFieldLength;
 @end
 
 @implementation BrowserAddressBarAutocompleteController
@@ -97,24 +101,41 @@ static const NSUInteger kSuggestionLimit = 8;
 
 #pragma mark - Query
 
+- (void)noteAddressFieldLength {
+    self.lastAddressFieldLength = (self.addressField.stringValue ?: @"").length;
+}
+
+- (void)suppressInlineAutocompleteForTypedQuery:(NSString *)typed {
+    self.inlineAutocompleteSuppressed = YES;
+    self.suppressedForQuery = [typed copy];
+}
+
 - (void)addressFieldTextDidChange:(NSNotification *)notification {
     (void)notification;
     if (self.applyingInlineAutocomplete) {
         return;
     }
     self.hasActiveInlineAutocomplete = NO;
-    // 输入内容变了则解除「删除后抑制」；同一前缀下的删除由 delete 键处理。
+    NSString *raw = self.addressField.stringValue ?: @"";
     NSString *typed = [self userTypedQueryFromAddressField];
-    if (self.inlineAutocompleteSuppressed &&
-        ![typed isEqualToString:self.suppressedForQuery ?: @""]) {
+    BOOL shortened = raw.length < self.lastAddressFieldLength;
+    if (self.pendingDeleteSuppressesInline || shortened) {
+        // 删除 / ⌘X 剪切（含删掉选中补全后缀）后不要立刻内联补全。
+        self.pendingDeleteSuppressesInline = NO;
+        [self suppressInlineAutocompleteForTypedQuery:typed];
+    } else if (self.inlineAutocompleteSuppressed &&
+               ![typed isEqualToString:self.suppressedForQuery ?: @""]) {
+        // 非删除导致的内容变化（如继续输入）则解除抑制。
         self.inlineAutocompleteSuppressed = NO;
         self.suppressedForQuery = nil;
     }
+    self.lastAddressFieldLength = raw.length;
     [self scheduleQuery];
 }
 
 - (void)addressFieldDidBeginEditing:(NSNotification *)notification {
     (void)notification;
+    [self noteAddressFieldLength];
     [self cancelPendingDismiss];
     [self scheduleQuery];
 }
@@ -368,9 +389,34 @@ static const NSUInteger kSuggestionLimit = 8;
     }
     NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
     [self revertInlineAutocompleteToTypedQuery:typed];
-    self.inlineAutocompleteSuppressed = YES;
-    self.suppressedForQuery = [typed copy];
+    [self suppressInlineAutocompleteForTypedQuery:typed];
     return YES;
+}
+
+/// 判断删除命令是否会真正改动文本（避免无效删除留下抑制标记）。
+- (BOOL)deleteCommand:(SEL)commandSelector willChangeTextInView:(NSTextView *)textView {
+    if (!textView) {
+        return NO;
+    }
+    NSString *text = textView.string ?: @"";
+    NSRange sel = textView.selectedRange;
+    if (sel.location == NSNotFound) {
+        return NO;
+    }
+    if (sel.length > 0) {
+        return YES;
+    }
+    if (commandSelector == @selector(deleteBackward:) ||
+        commandSelector == @selector(deleteWordBackward:) ||
+        commandSelector == @selector(deleteToBeginningOfLine:)) {
+        return sel.location > 0;
+    }
+    if (commandSelector == @selector(deleteForward:) ||
+        commandSelector == @selector(deleteWordForward:) ||
+        commandSelector == @selector(deleteToEndOfLine:)) {
+        return sel.location < text.length;
+    }
+    return NO;
 }
 
 - (void)setAddressFieldText:(NSString *)text selectingFrom:(NSUInteger)prefixLength {
@@ -389,6 +435,7 @@ static const NSUInteger kSuggestionLimit = 8;
         [editor setSelectedRange:NSMakeRange(prefixLength, length - prefixLength)];
     }
     self.applyingInlineAutocomplete = NO;
+    [self noteAddressFieldLength];
 }
 
 - (void)revertInlineAutocompleteToTypedQuery:(NSString *)typed {
@@ -401,6 +448,7 @@ static const NSUInteger kSuggestionLimit = 8;
     }
     self.applyingInlineAutocomplete = NO;
     self.hasActiveInlineAutocomplete = NO;
+    [self noteAddressFieldLength];
 }
 
 - (BOOL)acceptInlineAutocompleteIfNeeded {
@@ -438,6 +486,7 @@ static const NSUInteger kSuggestionLimit = 8;
     self.hasActiveInlineAutocomplete = NO;
     self.inlineAutocompleteSuppressed = NO;
     self.suppressedForQuery = nil;
+    self.pendingDeleteSuppressesInline = NO;
     [self.panel dismissPanel];
 }
 
@@ -508,6 +557,7 @@ static const NSUInteger kSuggestionLimit = 8;
     }
     self.applyingInlineAutocomplete = NO;
     self.hasActiveInlineAutocomplete = NO;
+    [self noteAddressFieldLength];
     [self dismissPanelImmediately];
     [self.addressField.window makeFirstResponder:self.addressField];
     return YES;
@@ -535,8 +585,6 @@ static const NSUInteger kSuggestionLimit = 8;
 #pragma mark - Keyboard
 
 - (BOOL)handleCommandBySelector:(SEL)commandSelector textView:(NSTextView *)textView {
-    (void)textView;
-
     if (commandSelector == @selector(cancel:)) {
         if (self.panelVisible || self.hasActiveInlineAutocomplete) {
             NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
@@ -556,6 +604,18 @@ static const NSUInteger kSuggestionLimit = 8;
         if ([self clearInlineAutocompleteForDelete]) {
             return YES;
         }
+        // 普通删除 / 删除选中文本：允许系统删字，但随后抑制内联补全。
+        if ([self deleteCommand:commandSelector willChangeTextInView:textView]) {
+            self.pendingDeleteSuppressesInline = YES;
+        }
+    }
+
+    // ⌘X 多经菜单直接发 cut:，不一定走 doCommandBySelector；此处兜底，主路径靠文本变短检测。
+    if (commandSelector == @selector(cut:)) {
+        NSRange sel = textView.selectedRange;
+        if (sel.length > 0) {
+            self.pendingDeleteSuppressesInline = YES;
+        }
     }
 
     if (commandSelector == @selector(moveRight:) ||
@@ -573,8 +633,7 @@ static const NSUInteger kSuggestionLimit = 8;
         if (self.hasActiveInlineAutocomplete) {
             NSString *typed = self.currentQuery.length > 0 ? self.currentQuery : [self userTypedQueryFromAddressField];
             [self revertInlineAutocompleteToTypedQuery:typed];
-            self.inlineAutocompleteSuppressed = YES;
-            self.suppressedForQuery = [typed copy];
+            [self suppressInlineAutocompleteForTypedQuery:typed];
             return YES;
         }
     }
