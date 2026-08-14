@@ -48,6 +48,8 @@
 #import "FormMemo.h"
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneNotificationInboxStore.h"
+#import "BrowserWebInspector.h"
+#import "BrowserDeveloperPreferences.h"
 #import "PhoneNotificationPresenter.h"
 #import "BrowserUserAgent.h"
 #import "BrowserGeolocationBridge.h"
@@ -410,6 +412,21 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
     [self.findBarController configureWebViewConfiguration:configuration];
+}
+
+- (void)applyWebInspectionPreferenceToLiveWebViews {
+    for (BrowserTab *tab in self.tabController.tabs) {
+        [BrowserWebInspector applyInspectableToWebView:tab.webView];
+    }
+}
+
++ (void)applyWebInspectionPreferenceAcrossWindows {
+    for (NSWindow *window in NSApp.windows) {
+        id controller = window.windowController;
+        if ([controller isKindOfClass:[BrowserWindowController class]]) {
+            [(BrowserWindowController *)controller applyWebInspectionPreferenceToLiveWebViews];
+        }
+    }
 }
 
 - (void)configureChromeWindow {
@@ -2480,9 +2497,97 @@ didRequestTransferTabID:(NSUUID *)tabID
     }
 }
 
+- (void)hardReloadPage:(id)sender {
+    (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.isHibernated) {
+        [self refreshTabsUI];
+        return;
+    }
+    [self cancelPendingSSLAuthForWebView:self.webView];
+    BrowserPendingNavigationError *pending =
+        [self.pendingNavigationErrorByWebView objectForKey:self.webView];
+    NSURL *reloadURL = pending.failingURL;
+    [self clearNavigationErrorForWebView:self.webView];
+    if (reloadURL) {
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:reloadURL];
+        request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        [self.webView loadRequest:request];
+        return;
+    }
+    if ([self.webView isKindOfClass:[BrowserWebView class]]) {
+        [(BrowserWebView *)self.webView reloadFromOrigin];
+    } else {
+        [self.webView reloadFromOrigin];
+    }
+}
+
 - (BOOL)canReloadCurrentPage {
     BrowserTab *tab = self.tabController.selectedTab;
     return tab != nil && (tab.isHibernated || !tab.isNewTabPage);
+}
+
+- (BOOL)canOpenWebInspector {
+    BrowserTab *tab = self.tabController.selectedTab;
+    return tab != nil && !tab.isNewTabPage && !tab.isHibernated && self.webView != nil;
+}
+
+- (void)openWebInspector:(id)sender {
+    (void)sender;
+    if (![self canOpenWebInspector]) {
+        return;
+    }
+
+    if (![BrowserWebInspector isInspectionSupported]) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"无法打开 Web Inspector";
+        alert.informativeText = @"需要 macOS 13.3 或更高版本。";
+        [alert addButtonWithTitle:@"好"];
+        [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+
+    if (![BrowserDeveloperPreferences sharedPreferences].allowWebInspection) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"尚未允许网页检查";
+        alert.informativeText = @"请先在设置中开启「允许网页检查」，再打开 Web Inspector。";
+        [alert addButtonWithTitle:@"打开设置"];
+        [alert addButtonWithTitle:@"取消"];
+        [alert beginSheetModalForWindow:self.window
+                      completionHandler:^(NSModalResponse returnCode) {
+            if (returnCode != NSAlertFirstButtonReturn) {
+                return;
+            }
+            id delegate = NSApp.delegate;
+            if ([delegate respondsToSelector:@selector(showBrowserSettings:)]) {
+                [delegate showBrowserSettings:nil];
+            }
+        }];
+        return;
+    }
+
+    if ([BrowserWebInspector showInspectorForWebView:self.webView]) {
+        return;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"无法直接打开检查器";
+    alert.informativeText =
+        @"已开启网页检查时，也可：\n"
+        @"1. 在页面上右键 →「检查元素」\n"
+        @"2. 或在 Safari → 开发 →（你的 Mac）→ MeoBrowser 中选择页面\n\n"
+        @"若 Safari 没有「开发」菜单：Safari → 设置 → 高级 → 勾选「在菜单栏中显示开发菜单」。";
+    [alert addButtonWithTitle:@"好"];
+    [alert addButtonWithTitle:@"打开设置"];
+    [alert beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode == NSAlertSecondButtonReturn) {
+            id <NSObject> delegate = NSApp.delegate;
+            if ([delegate respondsToSelector:@selector(showBrowserSettings:)]) {
+                [(id)delegate showBrowserSettings:nil];
+            }
+        }
+    }];
 }
 
 #pragma mark - Reload shortcut (F5 / configurable)
@@ -2561,8 +2666,11 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
     SEL action = menuItem.action;
-    if (action == @selector(reloadPage:)) {
+    if (action == @selector(reloadPage:) || action == @selector(hardReloadPage:)) {
         return [self canReloadCurrentPage];
+    }
+    if (action == @selector(openWebInspector:)) {
+        return [self canOpenWebInspector];
     }
     if (action == @selector(zoomIn:) ||
         action == @selector(zoomOut:) ||
@@ -3982,6 +4090,7 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
         BrowserWebView *popupWebView = [[BrowserWebView alloc] initWithFrame:NSZeroRect
                                                               configuration:configuration];
         popupWebView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
+        [BrowserWebInspector applyInspectableToWebView:popupWebView];
         [self.tabController addRelatedPopupTabWithWebView:popupWebView initialURL:url];
         return popupWebView;
     }

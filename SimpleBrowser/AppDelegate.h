@@ -19,6 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable BrowserWindowController *)browserWindowAtScreenPoint:(NSPoint)screenPoint
                                                        excluding:(nullable BrowserWindowController *)source;
 - (void)hideForeignDropPlaceholdersExcludingStrip:(nullable BrowserTabStripView *)strip;
+- (void)showBrowserSettings:(nullable id)sender;
 
 @end
 

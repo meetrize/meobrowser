@@ -11,6 +11,9 @@ BROWSER_RES_DIR := $(BUILD_DIR)/$(BROWSER_BUNDLE_NAME).app/Contents/Resources
 BROWSER_ICON_SRC := $(BROWSER_SRC_DIR)/Resources/AppIcon.icns
 BROWSER_ICON_NAME := AppIcon
 
+# Direct 构建默认启用程序化打开 Web Inspector（私有运行时路径）；MAS 可 `make browser MEO_ENABLE_PRIVATE_INSPECTOR_SHOW=0`
+MEO_ENABLE_PRIVATE_INSPECTOR_SHOW ?= 1
+
 SOURCES := $(SRC_DIR)/main.m $(SRC_DIR)/AppDelegate.m $(SRC_DIR)/MainWindowController.m
 BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
@@ -59,6 +62,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserSitePermissionStore.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserLocationService.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserGeolocationBridge.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDeveloperPreferences.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserWebInspector.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedItem.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedDetector.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedReader.m \
@@ -167,7 +172,7 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation
 

@@ -2,7 +2,7 @@
 
 > 目标读者：产品决策、后续迭代开发  
 > 产品定位：macOS 原生、轻量、**为技术人员与专业人士优化工作流**的浏览器  
-> 关联文档：[design.md](design.md) · [multi-tab-design.md](multi-tab-design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md)
+> 关联文档：[design.md](design.md) · [multi-tab-design.md](multi-tab-design.md) · [new-tab-launchpad-design.md](new-tab-launchpad-design.md) · [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md) · [web-inspector-design.md](web-inspector-design.md)
 
 ---
 
@@ -77,16 +77,19 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 
 这是与「普通轻量浏览器」最大的差异化。
 
+> **方案已定稿**：[web-inspector-design.md](web-inspector-design.md) · 开发计划：[web-inspector-development-plan.md](web-inspector-development-plan.md)  
+> 原则：按需复用系统 Web Inspector（`inspectable` + ⌘⌥I / Safari 附加），**不**自建 DevTools 前端；附带查看源代码与硬刷新。
+
 | 功能 | 说明 | 理由 |
 |------|------|------|
-| **打开 Web Inspector** | 菜单 + ⌘⌥I，调用 `WKWebView` 的检查器 API | 调试前端、看 Network/Console 的基础 |
-| **查看网页源代码** | 右键或命令面板 | 查文档结构、排查 SSR 问题 |
+| **打开 Web Inspector** | 设置「允许网页检查」+ 菜单 ⌘⌥I；降级走 Safari「开发」菜单 | 调试前端、看 Network/Console 的基础 |
+| **查看网页源代码** | 菜单 ⌘⌥U / 右键 → 新标签 DOM 快照 | 查文档结构、排查 SSR 问题 |
 | **localhost 友好** | `localhost`、`127.0.0.1`、`*.local` 默认可访问；可选「开发模式」 | 本地 dev 是开发者第一场景 |
 | **自签名证书处理** | 开发模式下允许继续访问 + 明确警告（非生产默认） | 内网/HTTPS dev 常见痛点；交互/实现方案见 [insecure-https-design.md](insecure-https-design.md) |
 | **自定义 User-Agent** | 设置中预设：默认 / Mobile / 自定义字符串；**默认 UA 对齐见** [anti-bot-session-design.md](anti-bot-session-design.md)（AB-0） | 响应式调试、爬虫规则验证；默认对齐可减 Google/百度等误伤 |
-| **禁用缓存（硬刷新）** | ⌘⇧R 绕过缓存 reload | 与前端工作流一致 |
+| **禁用缓存（硬刷新）** | ⌘⇧R → 已有 `reloadFromOrigin` | 与前端工作流一致 |
 
-**实现提示**：Web Inspector 在 macOS 上可通过 `[_WKInspector` 或 Safari 开发菜单模式；优先查当前 WebKit 公开 API，避免私有 API 依赖。
+**实现提示**：见 [web-inspector-design.md](web-inspector-design.md)；公开 `inspectable`（macOS 13.3+）为底线，程序化 show 可选且可降级，避免私有 API 作为唯一路径。
 
 ### 3.3 工作区与 Launchpad 深化 — P0 / P1
 
@@ -189,7 +192,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 - [ ] 命令面板（打开 URL、切换标签、基础命令）
 - [ ] ⌘L / ⌘1～9 / ⌘⇧T / ⌘⇧R
 - [ ] 加载进度 + 停止加载
-- [ ] Web Inspector + 查看源代码
+- [ ] Web Inspector + 查看源代码（方案：[web-inspector-design.md](web-inspector-design.md)，计划 DI-0～DI-2）
 - [ ] 固定标签（Pin）
 
 ### M2 — 工作区（约 2 周）

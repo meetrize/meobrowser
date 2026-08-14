@@ -4,6 +4,8 @@
 #import "BrowserUserAgent.h"
 #import "BrowserLocationPreferences.h"
 #import "BrowserLocationService.h"
+#import "BrowserDeveloperPreferences.h"
+#import "BrowserWebInspector.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -14,7 +16,8 @@
 #import "BrowserHistoryStore.h"
 #import <WebKit/WebKit.h>
 
-@interface BrowserSettingsWindowController ()
+@interface BrowserSettingsWindowController () <NSTabViewDelegate>
+@property (nonatomic, strong) NSTabView *tabView;
 @property (nonatomic, strong) NSPopUpButton *searchEnginePopUp;
 @property (nonatomic, strong) NSTextField *defaultBrowserStatusLabel;
 @property (nonatomic, strong) NSButton *setDefaultBrowserButton;
@@ -27,6 +30,9 @@
 @property (nonatomic, strong) NSButton *geolocationEnabledCheckbox;
 @property (nonatomic, strong) NSTextField *locationHintLabel;
 @property (nonatomic, strong) NSButton *openSystemLocationSettingsButton;
+
+@property (nonatomic, strong) NSButton *allowWebInspectionCheckbox;
+@property (nonatomic, strong) NSTextField *developerHintLabel;
 
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
@@ -55,7 +61,7 @@
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 980)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 520)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -81,6 +87,10 @@
                                                  selector:@selector(locationPreferencesDidChange:)
                                                      name:BrowserLocationPreferencesDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(developerPreferencesDidChange:)
+                                                     name:BrowserDeveloperPreferencesDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -96,14 +106,50 @@
     return label;
 }
 
-- (NSBox *)makeSeparator {
-    NSBox *separator = [[NSBox alloc] initWithFrame:NSZeroRect];
-    separator.boxType = NSBoxSeparator;
-    separator.translatesAutoresizingMaskIntoConstraints = NO;
-    return separator;
+- (NSTextField *)makeHint:(NSString *)text {
+    NSTextField *label = [NSTextField wrappingLabelWithString:text];
+    label.font = [NSFont systemFontOfSize:11];
+    label.textColor = [NSColor secondaryLabelColor];
+    label.preferredMaxLayoutWidth = 460;
+    return label;
+}
+
+- (NSStackView *)makeVerticalStackWithViews:(NSArray<NSView *> *)views {
+    NSStackView *stack = [NSStackView stackViewWithViews:views];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 10;
+    stack.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    return stack;
+}
+
+- (void)addTabNamed:(NSString *)title
+              views:(NSArray<NSView *> *)views
+          toTabView:(NSTabView *)tabView
+       widthViews:(NSArray<NSView *> *)widthViews {
+    NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:title];
+    item.label = title;
+    NSView *content = [[NSView alloc] initWithFrame:NSZeroRect];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *stack = [self makeVerticalStackWithViews:views];
+    [content addSubview:stack];
+    NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray arrayWithArray:@[
+        [stack.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor],
+    ]];
+    for (NSView *view in widthViews) {
+        [constraints addObject:[view.widthAnchor constraintEqualToAnchor:stack.widthAnchor constant:-32]];
+    }
+    [NSLayoutConstraint activateConstraints:constraints];
+    item.view = content;
+    [tabView addTabViewItem:item];
 }
 
 - (void)buildUI {
+    // —— 常规 ——
     NSTextField *searchCaption = [self makeCaption:@"默认搜索引擎"];
     self.searchEnginePopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.searchEnginePopUp.translatesAutoresizingMaskIntoConstraints = NO;
@@ -118,11 +164,8 @@
     searchGrid.columnSpacing = 12;
     [searchGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
-    NSTextField *searchHint = [NSTextField labelWithString:@"在地址栏输入非网址内容时将使用所选搜索引擎。"];
-    searchHint.font = [NSFont systemFontOfSize:11];
-    searchHint.textColor = [NSColor secondaryLabelColor];
+    NSTextField *searchHint = [self makeHint:@"在地址栏输入非网址内容时将使用所选搜索引擎。"];
 
-    NSBox *separator = [self makeSeparator];
     NSTextField *browserCaption = [self makeCaption:@"默认浏览器"];
     self.defaultBrowserStatusLabel = [NSTextField labelWithString:@""];
     self.defaultBrowserStatusLabel.font = [NSFont systemFontOfSize:12];
@@ -132,18 +175,11 @@
     NSStackView *browserRow = [NSStackView stackViewWithViews:@[self.defaultBrowserStatusLabel, self.setDefaultBrowserButton]];
     browserRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     browserRow.spacing = 12;
-    NSTextField *browserHint = [NSTextField wrappingLabelWithString:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。"];
-    browserHint.font = [NSFont systemFontOfSize:11];
-    browserHint.textColor = [NSColor secondaryLabelColor];
-    browserHint.preferredMaxLayoutWidth = 448;
+    NSTextField *browserHint = [self makeHint:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。"];
 
-    NSBox *separator2 = [self makeSeparator];
-    NSTextField *syncCaption = [self makeCaption:@"Meo 云同步"];
-
-    // 登录状态徽标（显著）
+    // —— 云同步 ——
     self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
     self.serverLoginBadge.boxType = NSBoxCustom;
-    // NSBoxCustom 用 borderWidth/borderColor 即可；borderType 已弃用。
     self.serverLoginBadge.borderWidth = 1;
     self.serverLoginBadge.cornerRadius = 8;
     self.serverLoginBadge.titlePosition = NSNoTitle;
@@ -202,15 +238,11 @@
     self.serverSyncNowButton = [NSButton buttonWithTitle:@"立即同步" target:self action:@selector(serverSyncNowClicked:)];
     self.serverSyncNowButton.bezelStyle = NSBezelStyleRounded;
 
-    self.serverHintLabel = [NSTextField wrappingLabelWithString:
+    self.serverHintLabel = [self makeHint:
         @"数据保存在你自己的 PocketBase 服务器，无需 Apple 开发者账号。"
         @"密码、Cookie、Companion 通知不会上传。表单备忘字段为明文。"];
-    self.serverHintLabel.font = [NSFont systemFontOfSize:11];
-    self.serverHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.serverHintLabel.preferredMaxLayoutWidth = 448;
 
-    NSBox *separator3 = [self makeSeparator];
-    NSTextField *keyboardCaption = [self makeCaption:@"键盘快捷键"];
+    // —— 键盘 ——
     self.reloadShortcutEnabledCheckbox = [NSButton checkboxWithTitle:@"启用刷新快捷键"
                                                               target:self
                                                               action:@selector(reloadShortcutEnabledToggled:)];
@@ -231,15 +263,11 @@
     reloadShortcutRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     reloadShortcutRow.spacing = 12;
     reloadShortcutRow.alignment = NSLayoutAttributeCenterY;
-    self.keyboardHintLabel = [NSTextField wrappingLabelWithString:
+    self.keyboardHintLabel = [self makeHint:
         @"默认 F5。点击快捷键按钮后按下新组合即可更改；Esc 取消。"
         @"⌘R 始终可用（查看 → 刷新）。"];
-    self.keyboardHintLabel.font = [NSFont systemFontOfSize:11];
-    self.keyboardHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.keyboardHintLabel.preferredMaxLayoutWidth = 448;
 
-    NSBox *separator4 = [self makeSeparator];
-    NSTextField *privacyCaption = [self makeCaption:@"隐私与数据"];
+    // —— 隐私 ——
     self.clearWebsiteDataButton = [NSButton buttonWithTitle:@"清除网站数据…" target:self action:@selector(clearWebsiteDataClicked:)];
     self.clearWebsiteDataButton.bezelStyle = NSBezelStyleRounded;
     self.clearHistoryButton = [NSButton buttonWithTitle:@"清除浏览历史…" target:self action:@selector(clearHistoryClicked:)];
@@ -261,60 +289,84 @@
                                                              action:@selector(geolocationEnabledChanged:)];
     self.geolocationEnabledCheckbox.state = [BrowserLocationPreferences sharedPreferences].geolocationEnabled
         ? NSControlStateValueOn : NSControlStateValueOff;
-    self.locationHintLabel = [NSTextField wrappingLabelWithString:
+    self.locationHintLabel = [self makeHint:
         @"网站可通过 navigator.geolocation 获取你的位置。首次访问时仍会询问是否允许该站点。"];
-    self.locationHintLabel.font = [NSFont systemFontOfSize:11];
-    self.locationHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.locationHintLabel.preferredMaxLayoutWidth = 448;
     self.openSystemLocationSettingsButton = [NSButton buttonWithTitle:@"打开系统定位设置…"
                                                                target:self
                                                                action:@selector(openSystemLocationSettingsClicked:)];
     self.openSystemLocationSettingsButton.bezelStyle = NSBezelStyleRounded;
-    self.privacyHintLabel = [NSTextField wrappingLabelWithString:@"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
-    self.privacyHintLabel.font = [NSFont systemFontOfSize:11];
-    self.privacyHintLabel.textColor = [NSColor secondaryLabelColor];
-    self.privacyHintLabel.preferredMaxLayoutWidth = 448;
+    self.privacyHintLabel = [self makeHint:@"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
 
-    NSStackView *root = [NSStackView stackViewWithViews:@[
-        searchGrid, searchHint, separator,
-        browserCaption, browserRow, browserHint, separator2,
-        syncCaption, self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
-        self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
-        self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel, separator3,
-        keyboardCaption, self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
-        separator4,
-        privacyCaption, privacyRow, self.clearWebsiteDataStatusLabel,
-        self.geolocationEnabledCheckbox, self.locationHintLabel, self.openSystemLocationSettingsButton,
-        self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
-    ]];
-    root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.alignment = NSLayoutAttributeLeading;
-    root.spacing = 10;
-    root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
-    root.translatesAutoresizingMaskIntoConstraints = NO;
+    // —— 开发者 ——
+    self.allowWebInspectionCheckbox = [NSButton checkboxWithTitle:@"允许网页检查"
+                                                           target:self
+                                                           action:@selector(allowWebInspectionChanged:)];
+    self.developerHintLabel = [self makeHint:@""];
+    [self refreshDeveloperInspectionUI];
+
+    self.tabView = [[NSTabView alloc] initWithFrame:NSZeroRect];
+    self.tabView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.tabView.tabViewType = NSTopTabsBezelBorder;
+    self.tabView.delegate = self;
+
+    [self addTabNamed:@"常规"
+                views:@[searchGrid, searchHint, browserCaption, browserRow, browserHint]
+            toTabView:self.tabView
+           widthViews:@[searchHint, browserHint]];
+
+    [self addTabNamed:@"云同步"
+                views:@[
+                    self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
+                    self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
+                    self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel,
+                ]
+            toTabView:self.tabView
+           widthViews:@[self.serverLoginBadge, self.serverHintLabel]];
+
+    [self addTabNamed:@"键盘"
+                views:@[
+                    self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
+                ]
+            toTabView:self.tabView
+           widthViews:@[self.keyboardHintLabel]];
+
+    [self addTabNamed:@"隐私"
+                views:@[
+                    privacyRow, self.clearWebsiteDataStatusLabel,
+                    self.geolocationEnabledCheckbox, self.locationHintLabel, self.openSystemLocationSettingsButton,
+                    self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
+                ]
+            toTabView:self.tabView
+           widthViews:@[self.locationHintLabel, self.privacyHintLabel]];
+
+    [self addTabNamed:@"开发者"
+                views:@[self.allowWebInspectionCheckbox, self.developerHintLabel]
+            toTabView:self.tabView
+           widthViews:@[self.developerHintLabel]];
 
     NSView *contentView = self.window.contentView;
-    [contentView addSubview:root];
+    [contentView addSubview:self.tabView];
     [NSLayoutConstraint activateConstraints:@[
-        [root.topAnchor constraintEqualToAnchor:contentView.topAnchor],
-        [root.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
-        [root.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
-        [root.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
-        [separator.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [separator2.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [separator3.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [separator4.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.serverLoginBadge.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.serverHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.keyboardHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.privacyHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
-        [self.locationHintLabel.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32],
+        [self.tabView.topAnchor constraintEqualToAnchor:contentView.topAnchor constant:12],
+        [self.tabView.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:12],
+        [self.tabView.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor constant:-12],
+        [self.tabView.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor constant:-12],
     ]];
 
     [self refreshDefaultBrowserStatus];
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [self refreshLocationPermissionHint];
+}
+
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
+    (void)tabView;
+    (void)tabViewItem;
+    // 离开「键盘」页时结束快捷键录制，避免焦点混乱。
+    if (self.recordingReloadShortcut) {
+        [self stopRecordingReloadShortcut];
+        [self refreshKeyboardShortcutUI];
+    }
 }
 
 - (void)serverSyncUINeedsRefresh:(NSNotification *)note {
@@ -732,6 +784,35 @@
     [self refreshLocationPermissionHint];
 }
 
+- (void)developerPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshDeveloperInspectionUI];
+}
+
+- (void)refreshDeveloperInspectionUI {
+    BOOL supported = [BrowserWebInspector isInspectionSupported];
+    self.allowWebInspectionCheckbox.enabled = supported;
+    self.allowWebInspectionCheckbox.state =
+        [BrowserDeveloperPreferences sharedPreferences].allowWebInspection
+            ? NSControlStateValueOn : NSControlStateValueOff;
+    if (!supported) {
+        self.developerHintLabel.stringValue =
+            @"需要 macOS 13.3 或更高版本才能使用系统 Web Inspector。";
+        return;
+    }
+    self.developerHintLabel.stringValue =
+        @"开启后可使用系统 Web Inspector（检查元素、控制台、网络等）。"
+        @"快捷键 ⌘⌥I，或页面右键「检查元素」。"
+        @"也可在 Safari 启用「开发」菜单后，通过「开发 → MeoBrowser」附加调试。"
+        @"仅在调试时建议开启；关闭时不影响日常浏览。";
+}
+
+- (void)allowWebInspectionChanged:(id)sender {
+    (void)sender;
+    [BrowserDeveloperPreferences sharedPreferences].allowWebInspection =
+        (self.allowWebInspectionCheckbox.state == NSControlStateValueOn);
+}
+
 - (void)openSystemLocationSettingsClicked:(id)sender {
     (void)sender;
     [BrowserLocationService openSystemLocationSettings];
@@ -751,6 +832,7 @@
     self.geolocationEnabledCheckbox.state = [BrowserLocationPreferences sharedPreferences].geolocationEnabled
         ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshLocationPermissionHint];
+    [self refreshDeveloperInspectionUI];
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [super showWindow:sender];

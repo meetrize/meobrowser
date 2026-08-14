@@ -54,6 +54,11 @@ NS_ASSUME_NONNULL_BEGIN
               revealingRecipeID:(nullable NSString *)recipeID
                          memoID:(nullable NSString *)memoID;
 - (void)reloadAssistSidebarIfVisible;
+
+/// 将「允许网页检查」偏好同步到本窗所有 live WKWebView。
+- (void)applyWebInspectionPreferenceToLiveWebViews;
+/// 同步到应用内全部浏览器窗口。
++ (void)applyWebInspectionPreferenceAcrossWindows;
 @end
 
 NS_ASSUME_NONNULL_END

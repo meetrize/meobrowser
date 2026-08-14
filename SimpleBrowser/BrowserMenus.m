@@ -114,6 +114,12 @@
                                               keyEquivalent:@"r"];
             reload.target = nil;
 
+            NSMenuItem *hardReload = [viewMenu addItemWithTitle:@"强制刷新"
+                                                         action:@selector(hardReloadPage:)
+                                                  keyEquivalent:@"r"];
+            hardReload.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            hardReload.target = nil;
+
             [viewMenu addItem:[NSMenuItem separatorItem]];
 
             NSMenuItem *zoomIn = [viewMenu addItemWithTitle:@"放大"
@@ -153,6 +159,14 @@
                                                            action:@selector(useSelectionForFind:)
                                                     keyEquivalent:@"e"];
             useSelection.target = nil;
+
+            [viewMenu addItem:[NSMenuItem separatorItem]];
+
+            NSMenuItem *webInspector = [viewMenu addItemWithTitle:@"打开 Web Inspector"
+                                                           action:@selector(openWebInspector:)
+                                                    keyEquivalent:@"i"];
+            webInspector.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+            webInspector.target = nil;
 
             [viewMenu addItem:[NSMenuItem separatorItem]];
 

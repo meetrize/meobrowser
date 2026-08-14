@@ -12,6 +12,7 @@
 #import "ServerSyncEngine.h"
 #import "ServerSyncSettings.h"
 #import "BrowserHistoryStore.h"
+#import "BrowserDeveloperPreferences.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -26,12 +27,21 @@
 - (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
     // 地址栏等工具按钮悬停时立刻显示功能名 Tooltip（单位：毫秒）
-    [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"NSInitialToolTipDelay": @1}];
+    NSMutableDictionary *defaults = [@{@"NSInitialToolTipDelay": @1} mutableCopy];
+#if DEBUG
+    // Debug 构建默认允许网页检查，便于本机调试；Release 仍默认关。
+    defaults[@"MeoBrowserAllowWebInspection"] = @YES;
+#endif
+    [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
     _browserWindows = [NSMutableArray array];
     _pendingExternalURLs = [NSMutableArray array];
     [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
     [BrowserMenus installSettingsMenuForTarget:self];
     [BrowserMenus installBrowserChromeMenus];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(developerPreferencesDidChange:)
+                                                 name:BrowserDeveloperPreferencesDidChangeNotification
+                                               object:nil];
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -345,6 +355,11 @@
     }
     [[BrowserHistoryStore sharedStore] clearIfConfiguredOnQuit];
     [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)developerPreferencesDidChange:(NSNotification *)notification {
+    (void)notification;
+    [BrowserWindowController applyWebInspectionPreferenceAcrossWindows];
 }
 
 @end

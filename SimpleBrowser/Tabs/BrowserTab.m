@@ -4,6 +4,7 @@
 #import "BrowsingPreferences.h"
 #import "BrowserFeedReader.h"
 #import "BrowserLocalFileSupport.h"
+#import "BrowserWebInspector.h"
 
 static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 
@@ -41,6 +42,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     tab.title = @"新窗口";
     tab.isNewTabPage = NO;
     tab.lastActiveTimestamp = [NSDate date].timeIntervalSince1970;
+    [BrowserWebInspector applyInspectableToWebView:webView];
     [tab startObservingWebViewTitle];
     return tab;
 }
@@ -109,6 +111,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     }
     self.webView = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:self.configuration];
     self.webView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
+    [BrowserWebInspector applyInspectableToWebView:self.webView];
     [self startObservingWebViewTitle];
     return self.webView;
 }
