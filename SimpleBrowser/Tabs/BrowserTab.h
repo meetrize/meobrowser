@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 
 @class BrowserFindSession;
+@class BrowserNavigationSession;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -42,6 +43,14 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, assign) NSInteger relatedPopupRetainCount;
 /// 若本标签由 createWebView 创建，指向发起 window.open 的标签。
 @property (nonatomic, weak, nullable) BrowserTab *relatedOpenerTab;
+/// 当前主文档导航代际会话；超时看门狗须校验 generation。
+@property (nonatomic, strong, nullable) BrowserNavigationSession *navigationSession;
+/// 新导航会话开始时回调（用于挂上 T0 总超时）；在主线程触发。
+@property (nonatomic, copy, nullable) void (^navigationSessionDidBeginHandler)(BrowserTab *tab, BrowserNavigationSession *session);
+/// 硬恢复：已丢弃 WebView，待用户重新加载；唤醒时勿自动 load restorable。
+@property (nonatomic, assign) BOOL pendingHardRecover;
+/// 硬恢复错误文案（展示于原生错误页）。
+@property (nonatomic, copy, nullable) NSString *hardRecoverMessage;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 /// 接入已由 WebKit 指定 configuration 创建的 WebView（须用于 createWebView 回调）。
@@ -55,6 +64,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)prepareForClose;
 /// 销毁 WebView，保留 restorableURL 与标题，便于再次选中时恢复。
 - (void)hibernate;
+/// NH-3 硬恢复：无条件丢弃 WebView（绕过 resistsHibernation），保留 restorableURL。
+- (void)forceDiscardWebViewForHardRecover;
 /// 若已休眠则仅重建 WebView，不发起导航（须先挂上 navigationDelegate，再调 loadPendingRestorableURLIfNeeded）。
 - (void)wakeFromHibernationIfNeeded;
 /// 在 navigationDelegate 已设置后加载 restorableURL（会话恢复 / 唤醒用）。
@@ -72,6 +83,13 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)pullDocumentTitleFromWebView;
 
 - (void)notePendingMainFrameNavigation;
+/// 开始一次被跟踪的主文档导航（递增 generation，phase=Loading）。
+- (BrowserNavigationSession *)beginNavigationSessionWithURL:(nullable NSURL *)url;
+- (void)clearNavigationSession;
+/// 将已有会话推进到 provisional（若 generation 匹配）。
+- (void)markNavigationSessionProvisional;
+/// 将已有会话推进到 committed（若 generation 匹配）。
+- (void)markNavigationSessionCommitted;
 /// WebKit 可能传入 nil navigation（支付页跳转等）；内部已做空值安全处理。
 - (BOOL)beginMainFrameNavigation:(nullable WKNavigation *)navigation;
 - (BOOL)isMainFrameNavigation:(nullable WKNavigation *)navigation;

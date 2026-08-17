@@ -174,7 +174,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 
 | 能力 | 说明 |
 |------|------|
-| **崩溃/卡死恢复** | 重启后恢复标签，坏标签可单独关闭 |
+| **崩溃/卡死恢复** | 重启后恢复标签，坏标签可单独关闭；**导航卡顿/卡死治理（不可达 URL、境外/失效资源）** 方案：[navigation-hang-remediation-design.md](navigation-hang-remediation-design.md) · 计划：[navigation-hang-remediation-development-plan.md](navigation-hang-remediation-development-plan.md) |
 | **内存可见性** | 可选：关于页显示标签数与内存（已有 `make stats-browser` 基础） |
 | **可访问性** | VoiceOver、键盘全可达 |
 | **国际化** | UI 中文为主，代码与 URL 处理保持 Unicode 正确 |

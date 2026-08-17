@@ -11,8 +11,10 @@
 #import "CompanionChannel.h"
 #import "ServerSyncEngine.h"
 #import "ServerSyncSettings.h"
+#import "ServerSyncKeychain.h"
 #import "BrowserHistoryStore.h"
 #import "BrowserDeveloperPreferences.h"
+#import "BrowserUserAgent.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -38,6 +40,8 @@
     [SBApplicationMenus installStandardMenusWithAppName:BrowserAppDisplayName];
     [BrowserMenus installSettingsMenuForTarget:self];
     [BrowserMenus installBrowserChromeMenus];
+    [BrowserUserAgent warmUpInBackground];
+    [ServerSyncKeychain warmMemoryCacheInBackground];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(developerPreferencesDidChange:)
                                                  name:BrowserDeveloperPreferencesDidChangeNotification
@@ -46,6 +50,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    [BrowserUserAgent scheduleMainQueueSampleIfNeeded];
     [[CompanionChannel sharedChannel] start];
     // startIfNeeded 内部会判登录；此处勿再先读一次钥匙串 token。
     if (ServerSyncSettings.sharedSettings.enabled) {

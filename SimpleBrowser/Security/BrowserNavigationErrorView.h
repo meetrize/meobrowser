@@ -16,7 +16,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)configureWithTitle:(NSString *)title
                    message:(NSString *)message
-               showGoBack:(BOOL)showGoBack;
+                showGoBack:(BOOL)showGoBack
+          reloadButtonTitle:(nullable NSString *)reloadButtonTitle;
 
 @end
 

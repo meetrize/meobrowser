@@ -8,10 +8,12 @@ NSNotificationName const BrowserFaviconDidUpdateNotification = @"BrowserFaviconD
 NSString * const BrowserFaviconHostUserInfoKey = @"host";
 
 static const NSTimeInterval kChannelTimeout = 8.0;
+static const NSTimeInterval kChannelWaitTimeout = 9.0;
 static const NSUInteger kMaxIconBytes = 512 * 1024;
 static const NSUInteger kMaxHTMLBytes = 64 * 1024;
 static const NSUInteger kMaxConcurrentFetches = 2;
-static const NSTimeInterval kNegativeCacheTTL = 24.0 * 60.0 * 60.0;
+/// 失败 host 短负缓存，避免坏站打爆 utility 队列；Silent 拉取跳过。
+static const NSTimeInterval kNegativeCacheTTL = 10.0 * 60.0;
 /// 低于此像素边长视为「偏糊」，若还有更高优先级候选则继续尝试。
 static const NSUInteger kPreferredMinPixelEdge = 64;
 
@@ -31,6 +33,14 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
 
 @implementation BrowserFaviconFetchJob
 @end
+
+static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval timeout) {
+    if (!sem) {
+        return NO;
+    }
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC));
+    return dispatch_semaphore_wait(sem, deadline) == 0;
+}
 
 @interface BrowserFaviconService () <NSURLSessionDataDelegate>
 @property (nonatomic, strong) NSURLSession *session;
@@ -389,7 +399,7 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
             sourceURL = url;
             dispatch_semaphore_signal(sem);
         }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        (void)BrowserFaviconWaitSemaphore(sem, kChannelWaitTimeout);
         if (job.cancelled) {
             [self completeJob:job iconURL:nil image:nil error:[self cancelledError]];
             return;
@@ -497,7 +507,9 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
             sourceURL = url;
             dispatch_semaphore_signal(sem);
         }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        if (!BrowserFaviconWaitSemaphore(sem, kChannelWaitTimeout)) {
+            continue;
+        }
         if (image == nil) {
             continue;
         }
@@ -581,7 +593,9 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
         sourceURL = url;
         dispatch_semaphore_signal(sem);
     }];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    if (!BrowserFaviconWaitSemaphore(sem, kChannelWaitTimeout)) {
+        return NO;
+    }
     if (image == nil) {
         return NO;
     }
@@ -620,7 +634,7 @@ typedef void (^BrowserFaviconFetchCompletion)(NSURL * _Nullable iconURL,
             htmlData = data;
             dispatch_semaphore_signal(sem);
         }];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        (void)BrowserFaviconWaitSemaphore(sem, kChannelWaitTimeout);
         if (htmlData.length == 0) {
             continue;
         }

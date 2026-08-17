@@ -4,8 +4,6 @@
 // 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
 static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 
-const NSTimeInterval BrowserMainFrameNavigationTimeout = 12.0;
-
 @interface BrowserWebView ()
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuDownload;
 @property (nonatomic, assign, readwrite) BOOL pendingContextMenuOpenInNewWindow;
@@ -306,6 +304,19 @@ static NSString *MeoScrollToFragmentJS(void) {
         components.fragment = restoreFragment;
     }
     return components.URL ?: url;
+}
+
++ (BOOL)URLContainsHashRestoreQuery:(NSURL *)url {
+    if (url == nil) {
+        return NO;
+    }
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        if ([item.name isEqualToString:kMeoHashRestoreQueryItem]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (nullable WKNavigation *)loadRequest:(NSURLRequest *)request {

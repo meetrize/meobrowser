@@ -5,6 +5,7 @@
 #import "BrowserFeedReader.h"
 #import "BrowserLocalFileSupport.h"
 #import "BrowserWebInspector.h"
+#import "BrowserNavigationSession.h"
 
 static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 
@@ -19,6 +20,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 /// 已创建 WebView、待 navigationDelegate 挂上后再加载 restorableURL。
 @property (nonatomic, assign) BOOL pendingRestorableLoad;
 @property (nonatomic, assign) BOOL observingWebViewTitle;
+@property (nonatomic, assign) NSInteger navigationGenerationCounter;
 @end
 
 @implementation BrowserTab
@@ -224,6 +226,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.webView = nil;
     self.isLoading = NO;
     self.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
+    [self clearNavigationSession];
     [self.mainFrameNavigations removeAllObjects];
     self.nilMainFrameNavigationCount = 0;
     self.hasPendingMainFrameNavigation = NO;
@@ -272,6 +275,28 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     [self discardWebView];
 }
 
+- (void)forceDiscardWebViewForHardRecover {
+    if (self.isNewTabPage || self.webView == nil) {
+        self.isLoading = NO;
+        [self clearNavigationSession];
+        return;
+    }
+    // 与 hibernate 相同保留 restorable；但忽略 resistsHibernation。
+    if (self.pendingHTMLString.length > 0) {
+        // 内存 HTML：硬恢复后退回可再加载的 pending。
+        [self discardWebView];
+        self.pendingRestorableLoad = NO;
+        return;
+    }
+    NSURL *url = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
+    url = [BrowserWebView publicURLFromInternalURL:url];
+    if ([BrowsingPreferences isPersistableURL:url] || url.isFileURL) {
+        self.restorableURL = url;
+    }
+    [self discardWebView];
+    self.pendingRestorableLoad = NO;
+}
+
 - (void)wakeFromHibernationIfNeeded {
     if (self.isNewTabPage) {
         return;
@@ -300,22 +325,30 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     if (!self.pendingRestorableLoad || self.webView == nil) {
         return;
     }
+    // 硬恢复等待用户确认：只重建 WebView，不自动导航。
+    if (self.pendingHardRecover) {
+        self.pendingRestorableLoad = NO;
+        return;
+    }
     self.pendingRestorableLoad = NO;
     if (self.pendingHTMLString.length > 0) {
         NSString *html = self.pendingHTMLString;
         // 勿用自定义 scheme 作 baseURL：会被 decidePolicy 当成外链交接。
+        [self beginNavigationSessionWithURL:nil];
         [self.webView loadHTMLString:html baseURL:[NSURL URLWithString:@"about:blank"]];
         return;
     }
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     if ([BrowsingPreferences isPersistableURL:url]) {
         self.restorableURL = url;
+        [self beginNavigationSessionWithURL:url];
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         return;
     }
     // 本地 file:// 不进会话，但外部打开 / 休眠唤醒仍需加载。
     if (url.isFileURL) {
         self.restorableURL = url;
+        [self beginNavigationSessionWithURL:url];
         if (![BrowserLocalFileSupport loadFileURL:url inWebView:self.webView]) {
             [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         }
@@ -329,6 +362,8 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.restorableURL = nil;
     self.pendingHTMLString = nil;
     self.pendingRestorableLoad = NO;
+    self.pendingHardRecover = NO;
+    self.hardRecoverMessage = nil;
     [self discardWebView];
 }
 
@@ -349,12 +384,15 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.isNewTabPage = NO;
     self.addressBarDraft = nil;
     self.restorableURL = url;
+    self.pendingHardRecover = NO;
+    self.hardRecoverMessage = nil;
     [self ensureWebView];
     // 尚无 navigationDelegate 时只记 pending，等窗口 attach 后再加载（避免 #hash 恢复竞态）。
     if (self.webView.navigationDelegate == nil) {
         self.pendingRestorableLoad = YES;
     } else {
         self.pendingRestorableLoad = NO;
+        [self beginNavigationSessionWithURL:url];
         if (url.isFileURL) {
             if (![BrowserLocalFileSupport loadFileURL:url inWebView:self.webView]) {
                 [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
@@ -363,6 +401,44 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
             [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         }
     }
+}
+
+- (BrowserNavigationSession *)beginNavigationSessionWithURL:(NSURL *)url {
+    self.navigationGenerationCounter += 1;
+    BrowserNavigationSession *session =
+        [BrowserNavigationSession sessionWithGeneration:self.navigationGenerationCounter
+                                                  tabID:self.tabID
+                                                    URL:url];
+    if ([BrowserWebView URLContainsHashRestoreQuery:url]) {
+        session.usesShortDocumentLoadGrace = YES;
+    }
+    self.navigationSession = session;
+    self.isLoading = YES;
+    void (^handler)(BrowserTab *, BrowserNavigationSession *) = self.navigationSessionDidBeginHandler;
+    if (handler) {
+        handler(self, session);
+    }
+    return session;
+}
+
+- (void)clearNavigationSession {
+    self.navigationSession = nil;
+}
+
+- (void)markNavigationSessionProvisional {
+    BrowserNavigationSession *session = self.navigationSession;
+    if (!session) {
+        return;
+    }
+    session.phase = BrowserNavigationSessionPhaseProvisional;
+}
+
+- (void)markNavigationSessionCommitted {
+    BrowserNavigationSession *session = self.navigationSession;
+    if (!session) {
+        return;
+    }
+    session.phase = BrowserNavigationSessionPhaseCommitted;
 }
 
 - (NSString *)displayTitle {

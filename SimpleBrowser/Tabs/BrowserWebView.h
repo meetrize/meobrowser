@@ -1,9 +1,7 @@
 #import <WebKit/WebKit.h>
+#import "BrowserNavigationTimeouts.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-/// 主框架导航超时（秒）。短于 WebKit/NSURLRequest 默认 60s，便于不可达站点更快失败。
-FOUNDATION_EXPORT const NSTimeInterval BrowserMainFrameNavigationTimeout;
 
 /// WKWebView 子类：拦截系统右键菜单中无效的「Search with…」与「Download Image」等项；
 /// 选中文本含 http(s):// 时补充「在新标签中打开」。
@@ -50,6 +48,8 @@ FOUNDATION_EXPORT const NSTimeInterval BrowserMainFrameNavigationTimeout;
 + (nullable NSURL *)networkLoadURLByStrippingFragment:(NSURL *)url;
 /// 地址栏 / 会话用：去掉内部 `__meo_hf`，还原为用户可见的 #hash URL。
 + (nullable NSURL *)publicURLFromInternalURL:(nullable NSURL *)url;
+/// 是否为带 `__meo_hf` 的 hash 恢复导航（T2 应用短宽限）。
++ (BOOL)URLContainsHashRestoreQuery:(nullable NSURL *)url;
 
 @end
 

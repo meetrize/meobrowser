@@ -17,6 +17,7 @@ static const NSUInteger kMaxDiskEntries = 500;
 
 @interface BrowserFaviconCache ()
 @property (nonatomic, strong) NSCache<NSString *, NSImage *> *memoryCache;
+@property (nonatomic, strong) NSCache<NSString *, NSDictionary *> *memoryMetaCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *indexMap;
 @property (nonatomic, strong) dispatch_queue_t ioQueue;
 @end
@@ -41,6 +42,8 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (self) {
         _memoryCache = [[NSCache alloc] init];
         _memoryCache.countLimit = kMemoryCacheLimit;
+        _memoryMetaCache = [[NSCache alloc] init];
+        _memoryMetaCache.countLimit = kMemoryCacheLimit;
         _ioQueue = dispatch_queue_create("com.meobrowser.favicon.cache", DISPATCH_QUEUE_SERIAL);
         _indexMap = [NSMutableDictionary dictionary];
         [self loadIndexUnlocked];
@@ -193,6 +196,10 @@ static const NSUInteger kMaxDiskEntries = 500;
 
     dispatch_async(self.ioQueue, ^{
         NSImage *diskImage = [self loadDiskImageUnlockedForHost:key];
+        NSDictionary *entry = self.indexMap[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            [self.memoryMetaCache setObject:entry forKey:key];
+        }
         if (diskImage != nil) {
             [self.memoryCache setObject:diskImage forKey:key];
         }
@@ -211,9 +218,17 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (cached != nil) {
         return cached;
     }
+    // 主线程禁止 sync 读盘；仅内存命中。
+    if ([NSThread isMainThread]) {
+        return nil;
+    }
     __block NSImage *diskImage = nil;
     dispatch_sync(self.ioQueue, ^{
         diskImage = [self loadDiskImageUnlockedForHost:key];
+        NSDictionary *entry = self.indexMap[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            [self.memoryMetaCache setObject:entry forKey:key];
+        }
     });
     if (diskImage != nil) {
         [self.memoryCache setObject:diskImage forKey:key];
@@ -240,11 +255,24 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (key == nil) {
         return nil;
     }
+    NSDictionary *meta = [self.memoryMetaCache objectForKey:key];
+    id mem = meta[kEntrySourceURLKey];
+    if ([mem isKindOfClass:[NSString class]] && [mem length] > 0) {
+        return mem;
+    }
+    // 主线程只读内存元数据，避免 sync IO。
+    if ([NSThread isMainThread]) {
+        return nil;
+    }
     __block NSString *sourceURL = nil;
     dispatch_sync(self.ioQueue, ^{
-        id value = self.indexMap[key][kEntrySourceURLKey];
-        if ([value isKindOfClass:[NSString class]] && [value length] > 0) {
-            sourceURL = value;
+        NSDictionary *entry = self.indexMap[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            [self.memoryMetaCache setObject:entry forKey:key];
+            id value = entry[kEntrySourceURLKey];
+            if ([value isKindOfClass:[NSString class]] && [value length] > 0) {
+                sourceURL = value;
+            }
         }
     });
     return sourceURL;
@@ -255,11 +283,23 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (key == nil) {
         return nil;
     }
+    NSDictionary *meta = [self.memoryMetaCache objectForKey:key];
+    id mem = meta[kEntrySourceChannelKey];
+    if ([mem isKindOfClass:[NSString class]] && [mem length] > 0) {
+        return mem;
+    }
+    if ([NSThread isMainThread]) {
+        return nil;
+    }
     __block NSString *channel = nil;
     dispatch_sync(self.ioQueue, ^{
-        id value = self.indexMap[key][kEntrySourceChannelKey];
-        if ([value isKindOfClass:[NSString class]] && [value length] > 0) {
-            channel = value;
+        NSDictionary *entry = self.indexMap[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            [self.memoryMetaCache setObject:entry forKey:key];
+            id value = entry[kEntrySourceChannelKey];
+            if ([value isKindOfClass:[NSString class]] && [value length] > 0) {
+                channel = value;
+            }
         }
     });
     return channel;
@@ -323,6 +363,14 @@ static const NSUInteger kMaxDiskEntries = 500;
 
     if (ok) {
         [self.memoryCache setObject:displayImage forKey:key];
+        NSMutableDictionary *meta = [NSMutableDictionary dictionary];
+        if (sourceURL.length > 0) {
+            meta[kEntrySourceURLKey] = sourceURL;
+        }
+        if (channel.length > 0) {
+            meta[kEntrySourceChannelKey] = channel;
+        }
+        [self.memoryMetaCache setObject:meta forKey:key];
     }
     return ok;
 }
@@ -332,11 +380,21 @@ static const NSUInteger kMaxDiskEntries = 500;
     if (key == nil) {
         return;
     }
+    if ([NSThread isMainThread]) {
+        [self.memoryCache removeObjectForKey:key];
+        [self.memoryMetaCache removeObjectForKey:key];
+        dispatch_async(self.ioQueue, ^{
+            [self removeHostUnlocked:key];
+            [self persistIndexUnlocked];
+        });
+        return;
+    }
     dispatch_sync(self.ioQueue, ^{
         [self removeHostUnlocked:key];
         [self persistIndexUnlocked];
     });
     [self.memoryCache removeObjectForKey:key];
+    [self.memoryMetaCache removeObjectForKey:key];
 }
 
 - (void)removeHostUnlocked:(NSString *)key {
@@ -351,6 +409,7 @@ static const NSUInteger kMaxDiskEntries = 500;
 
 - (void)clearMemoryCache {
     [self.memoryCache removeAllObjects];
+    [self.memoryMetaCache removeAllObjects];
 }
 
 @end

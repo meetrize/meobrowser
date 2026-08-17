@@ -38,6 +38,12 @@
 #import "BrowserCertificateWarningView.h"
 #import "BrowserNavigationErrorView.h"
 #import "BrowserHTTPAuthPrompt.h"
+#import "BrowserNavigationSession.h"
+#import "BrowserNavigationWatchdog.h"
+#import "BrowserNavigationTimeouts.h"
+#import "BrowserReachabilityProbe.h"
+#import "BrowserTabLoadIsolator.h"
+#import "BrowserNavigationDiagnostics.h"
 #import "CompanionChannel.h"
 #import "BrowserTransientToast.h"
 #import "PhoneNotificationSidebarController.h"
@@ -132,19 +138,11 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, copy) NSString *message;
 @property (nonatomic, strong, nullable) NSURL *failingURL;
 @property (nonatomic, assign) BOOL canGoBack;
+/// 负缓存命中：重新加载按钮显示「仍要访问」，并清除负缓存后重试。
+@property (nonatomic, assign) BOOL fromNegativeCache;
 @end
 
 @implementation BrowserPendingNavigationError
-@end
-
-@interface BrowserProvisionalNavigationWatchdog : NSObject
-@property (nonatomic, weak) WKWebView *webView;
-@property (nonatomic, strong, nullable) NSURL *provisionalURL;
-@property (nonatomic, assign) NSInteger token;
-@property (nonatomic, strong, nullable) dispatch_block_t block;
-@end
-
-@implementation BrowserProvisionalNavigationWatchdog
 @end
 
 @interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
@@ -192,8 +190,11 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserNavigationErrorView *navigationErrorView;
 @property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingSSLAuth *> *pendingSSLAuthByWebView;
 @property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingNavigationError *> *pendingNavigationErrorByWebView;
-@property (nonatomic, strong) NSMapTable<WKWebView *, BrowserProvisionalNavigationWatchdog *> *provisionalWatchdogByWebView;
+@property (nonatomic, strong) BrowserNavigationWatchdog *navigationWatchdog;
 @property (nonatomic, strong) NSMapTable<WKWebView *, NSURL *> *pendingProvisionalURLByWebView;
+@property (nonatomic, strong) NSMapTable<WKWebView *, BrowserReachabilityProbeHandle *> *reachabilityProbeByWebView;
+@property (nonatomic, strong) NSMapTable<WKWebView *, NSNumber *> *hardRecoverTokenByWebView;
+@property (nonatomic, assign) NSInteger hardRecoverTokenCounter;
 @property (nonatomic, strong) NSHashTable<WKWebView *> *webViewsWithHTTPAuthPrompt;
 @property (nonatomic, assign) BOOL addressFieldIsEditing;
 /// 上次 refreshTabsUI 时的选中标签，用于判断是否切到新标签页后再聚焦地址栏。
@@ -380,8 +381,10 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         [_downloadManager addObserver:self];
         _pendingSSLAuthByWebView = [NSMapTable weakToStrongObjectsMapTable];
         _pendingNavigationErrorByWebView = [NSMapTable weakToStrongObjectsMapTable];
-        _provisionalWatchdogByWebView = [NSMapTable weakToStrongObjectsMapTable];
+        _navigationWatchdog = [[BrowserNavigationWatchdog alloc] init];
         _pendingProvisionalURLByWebView = [NSMapTable weakToStrongObjectsMapTable];
+        _reachabilityProbeByWebView = [NSMapTable weakToStrongObjectsMapTable];
+        _hardRecoverTokenByWebView = [NSMapTable weakToStrongObjectsMapTable];
         _webViewsWithHTTPAuthPrompt = [NSHashTable weakObjectsHashTable];
         [self setupUI];
         [self installReloadKeyMonitor];
@@ -1651,6 +1654,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (webView == self.observedFullscreenWebView) {
         [self stopObservingFullscreenState];
     }
+    // 切走标签不取消导航超时：后台标签仍可独立超时失败。
     if (webView.superview == self.contentContainer) {
         [webView removeFromSuperview];
     }
@@ -1732,6 +1736,32 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     webView.hidden = tab.isNewTabPage;
 
     __weak typeof(self) weakSelf = self;
+    tab.navigationSessionDidBeginHandler = ^(BrowserTab *changedTab, BrowserNavigationSession *session) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !session) {
+            return;
+        }
+        WKWebView *sessionWebView = changedTab.webView;
+        if (!sessionWebView) {
+            return;
+        }
+        [strongSelf startOverallNavigationWatchdogForWebView:sessionWebView
+                                                     session:session
+                                                         URL:session.URL];
+        BrowserNavigationLog(@"nav-begin tab=%@ gen=%ld url=%@",
+                             changedTab.tabID.UUIDString,
+                             (long)session.generation,
+                             session.URL.absoluteString ?: @"(nil)");
+        [strongSelf startReachabilityProbeForWebView:sessionWebView
+                                                 tab:changedTab
+                                             session:session
+                                                 URL:session.URL];
+        if (sessionWebView == strongSelf.webView) {
+            [strongSelf.loadingProgressView beginLoading];
+            [strongSelf updateReloadStopButtonAppearance];
+        }
+        [strongSelf updateTabStripDisplay];
+    };
     tab.titleDidChangeHandler = ^(BrowserTab *changedTab) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -1779,6 +1809,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [selectedTab loadPendingRestorableURLIfNeeded];
         if (selectedTab.webView != nil) {
             selectedTab.webView.hidden = NO;
+        }
+        if (selectedTab.pendingHardRecover) {
+            [self presentHardRecoverErrorForSelectedTabIfNeeded];
         }
     } else if (selectedTab != nil) {
         [self detachWebViewIfNeeded:selectedTab.webView];
@@ -2469,6 +2502,8 @@ didRequestTransferTabID:(NSUUID *)tabID
     (void)sender;
     [self cancelPendingSSLAuthForWebView:self.webView];
     [self clearNavigationErrorForWebView:self.webView];
+    BrowserTab *tab = self.tabController.selectedTab;
+    [tab beginNavigationSessionWithURL:nil];
     [self.webView goBack];
 }
 
@@ -2476,56 +2511,232 @@ didRequestTransferTabID:(NSUUID *)tabID
     (void)sender;
     [self cancelPendingSSLAuthForWebView:self.webView];
     [self clearNavigationErrorForWebView:self.webView];
+    BrowserTab *tab = self.tabController.selectedTab;
+    [tab beginNavigationSessionWithURL:nil];
     [self.webView goForward];
 }
 
 - (void)reloadPage:(id)sender {
     (void)sender;
     BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.pendingHardRecover) {
+        [self reloadAfterHardRecoverForTab:tab];
+        return;
+    }
     if (tab.isHibernated) {
         [self refreshTabsUI];
         return;
     }
-    [self cancelPendingSSLAuthForWebView:self.webView];
+    WKWebView *webView = self.webView;
+    if (webView && (webView.isLoading || tab.isLoading)) {
+        [self stopLoadingInWebView:webView];
+        return;
+    }
+    [self cancelPendingSSLAuthForWebView:webView];
     BrowserPendingNavigationError *pending =
-        [self.pendingNavigationErrorByWebView objectForKey:self.webView];
+        [self.pendingNavigationErrorByWebView objectForKey:webView];
     NSURL *reloadURL = pending.failingURL;
-    [self clearNavigationErrorForWebView:self.webView];
+    [self clearNavigationErrorForWebView:webView];
     if (reloadURL) {
-        [self.webView loadRequest:[NSURLRequest requestWithURL:reloadURL]];
+        [tab beginNavigationSessionWithURL:reloadURL];
+        [webView loadRequest:[NSURLRequest requestWithURL:reloadURL]];
     } else {
-        [self.webView reload];
+        NSURL *current = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+        [tab beginNavigationSessionWithURL:current];
+        [webView reload];
     }
 }
 
 - (void)hardReloadPage:(id)sender {
     (void)sender;
     BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.pendingHardRecover) {
+        [self reloadAfterHardRecoverForTab:tab];
+        return;
+    }
     if (tab.isHibernated) {
         [self refreshTabsUI];
         return;
     }
-    [self cancelPendingSSLAuthForWebView:self.webView];
+    WKWebView *webView = self.webView;
+    if (webView && (webView.isLoading || tab.isLoading)) {
+        [self stopLoadingInWebView:webView];
+        return;
+    }
+    [self cancelPendingSSLAuthForWebView:webView];
     BrowserPendingNavigationError *pending =
-        [self.pendingNavigationErrorByWebView objectForKey:self.webView];
+        [self.pendingNavigationErrorByWebView objectForKey:webView];
     NSURL *reloadURL = pending.failingURL;
-    [self clearNavigationErrorForWebView:self.webView];
+    [self clearNavigationErrorForWebView:webView];
     if (reloadURL) {
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:reloadURL];
         request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-        [self.webView loadRequest:request];
+        [tab beginNavigationSessionWithURL:reloadURL];
+        [webView loadRequest:request];
         return;
     }
-    if ([self.webView isKindOfClass:[BrowserWebView class]]) {
-        [(BrowserWebView *)self.webView reloadFromOrigin];
+    NSURL *current = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    [tab beginNavigationSessionWithURL:current];
+    if ([webView isKindOfClass:[BrowserWebView class]]) {
+        [(BrowserWebView *)webView reloadFromOrigin];
     } else {
-        [self.webView reloadFromOrigin];
+        [webView reloadFromOrigin];
     }
+}
+
+- (void)stopLoadingInWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    [self cancelHardRecoverWatchdogForWebView:webView];
+    [self cancelReachabilityProbeForWebView:webView];
+    [self.navigationWatchdog cancelAllForWebView:webView];
+    [tab clearNavigationSession];
+    [webView stopLoading];
+    tab.isLoading = NO;
+    [self updateTabStripDisplay];
+    if (webView == self.webView) {
+        [self.loadingProgressView resetHidden];
+        [self updateReloadStopButtonAppearance];
+        [self updateNavigationState];
+    }
+}
+
+- (void)reloadAfterHardRecoverForTab:(BrowserTab *)tab {
+    if (!tab) {
+        return;
+    }
+    NSURL *url = [BrowserWebView publicURLFromInternalURL:tab.restorableURL] ?: tab.restorableURL;
+    tab.pendingHardRecover = NO;
+    tab.hardRecoverMessage = nil;
+    [self clearNavigationErrorForWebView:tab.webView];
+    [self hideNavigationErrorOverlay];
+    if (url) {
+        [tab loadURL:url];
+    }
+    [self refreshTabsUI];
+}
+
+- (void)presentHardRecoverErrorForSelectedTabIfNeeded {
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab.pendingHardRecover || tab.webView == nil) {
+        return;
+    }
+    NSURL *url = tab.restorableURL;
+    NSString *message = tab.hardRecoverMessage.length > 0
+        ? tab.hardRecoverMessage
+        : @"页面无响应，已停止。可重新加载。";
+    [self presentNavigationErrorForWebView:tab.webView
+                                     title:@"页面无响应"
+                                   message:message
+                                failingURL:url
+                          fromNegativeCache:NO];
+}
+
+- (void)forceStopSelectedTab:(id)sender {
+    (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return;
+    }
+    NSURL *url = [tab currentOrRestorableURL];
+    [self forceAbandonTab:tab
+               failingURL:url
+                  message:@"已强制停止此标签的页面进程。可重新加载。"];
+}
+
+- (void)forceAbandonTab:(BrowserTab *)tab
+             failingURL:(NSURL *)failingURL
+                message:(NSString *)message {
+    if (!tab || tab.isNewTabPage) {
+        return;
+    }
+    WKWebView *oldWebView = tab.webView;
+    [self cancelHardRecoverWatchdogForWebView:oldWebView];
+    [self cancelReachabilityProbeForWebView:oldWebView];
+    [self.navigationWatchdog cancelAllForWebView:oldWebView];
+    [self clearNavigationErrorForWebView:oldWebView];
+    [self cancelPendingSSLAuthForWebView:oldWebView];
+
+    tab.hardRecoverMessage = message.length > 0 ? message : @"页面无响应，已停止。可重新加载。";
+    [BrowserTabLoadIsolator forceAbandonWebViewInTab:tab failingURL:failingURL];
+
+    BrowserNavigationLog(@"force-abandon done tab=%@ selected=%d",
+                         tab.tabID.UUIDString,
+                         tab == self.tabController.selectedTab);
+
+    if (tab == self.tabController.selectedTab) {
+        [self refreshTabsUI];
+        [self presentHardRecoverErrorForSelectedTabIfNeeded];
+        [self updateNavigationState];
+        [self updateTabStripDisplay];
+    } else {
+        [self updateTabStripDisplay];
+    }
+}
+
+- (void)cancelHardRecoverWatchdogForWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    [self.hardRecoverTokenByWebView removeObjectForKey:webView];
+}
+
+- (void)scheduleHardRecoverWatchdogForWebView:(WKWebView *)webView
+                                          tab:(BrowserTab *)tab
+                                          URL:(NSURL *)url {
+    if (!webView || !tab) {
+        return;
+    }
+    NSInteger token = ++self.hardRecoverTokenCounter;
+    [self.hardRecoverTokenByWebView setObject:@(token) forKey:webView];
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    __weak BrowserTab *weakTab = tab;
+    NSURL *failingURL = url;
+    BrowserNavigationLog(@"schedule-T3 tab=%@ delay=%.0fs gen-check webView=%p",
+                         tab.tabID.UUIDString,
+                         BrowserStuckWebViewHardRecoverDelay,
+                         webView);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(BrowserStuckWebViewHardRecoverDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        BrowserTab *strongTab = weakTab;
+        if (!strongSelf || !strongWebView || !strongTab) {
+            return;
+        }
+        NSNumber *current = [strongSelf.hardRecoverTokenByWebView objectForKey:strongWebView];
+        if (!current || current.integerValue != token) {
+            return;
+        }
+        [strongSelf.hardRecoverTokenByWebView removeObjectForKey:strongWebView];
+        // 仍挂着同一 WebView 且 stopLoading 未真正结束 → 硬杀内容进程。
+        if (strongTab.webView != strongWebView) {
+            return;
+        }
+        if (strongTab.pendingHardRecover) {
+            return;
+        }
+        if (!strongWebView.isLoading && !strongTab.isLoading) {
+            BrowserNavigationLog(@"T3 skip (idle) tab=%@", strongTab.tabID.UUIDString);
+            return;
+        }
+        BrowserNavigationLog(@"T3 fire tab=%@ stillLoading wv=%d tab=%d",
+                             strongTab.tabID.UUIDString,
+                             strongWebView.isLoading,
+                             strongTab.isLoading);
+        [strongSelf forceAbandonTab:strongTab
+                         failingURL:failingURL
+                            message:@"页面长时间无响应，已停止该标签的页面进程。可重新加载。"];
+    });
 }
 
 - (BOOL)canReloadCurrentPage {
     BrowserTab *tab = self.tabController.selectedTab;
-    return tab != nil && (tab.isHibernated || !tab.isNewTabPage);
+    return tab != nil && (tab.isHibernated || tab.pendingHardRecover || !tab.isNewTabPage);
 }
 
 - (BOOL)canOpenWebInspector {
@@ -2666,6 +2877,16 @@ didRequestTransferTabID:(NSUUID *)tabID
     if (event.isARepeat) {
         return event;
     }
+    // Esc：停止当前标签加载（即使尚未进入 provisional）。
+    if (event.keyCode == 53) {
+        BrowserTab *tab = self.tabController.selectedTab;
+        WKWebView *webView = self.webView;
+        if (webView && tab && !tab.isNewTabPage && (webView.isLoading || tab.isLoading)) {
+            [self stopLoadingInWebView:webView];
+            return nil;
+        }
+        return event;
+    }
     if (![BrowserKeyboardPreferences eventMatchesReloadShortcut:event]) {
         return event;
     }
@@ -2717,6 +2938,10 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     SEL action = menuItem.action;
     if (action == @selector(reloadPage:) || action == @selector(hardReloadPage:)) {
         return [self canReloadCurrentPage];
+    }
+    if (action == @selector(forceStopSelectedTab:)) {
+        BrowserTab *tab = self.tabController.selectedTab;
+        return tab != nil && !tab.isNewTabPage && tab.webView != nil && !tab.pendingHardRecover;
     }
     if (action == @selector(openWebInspector:) || action == @selector(viewPageSource:)) {
         return [self canOpenWebInspector];
@@ -2916,6 +3141,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         self.backButton.enabled = NO;
         self.forwardButton.enabled = NO;
         self.reloadButton.enabled = tab != nil && (tab.isHibernated || !tab.isNewTabPage);
+        [self updateReloadStopButtonAppearance];
         [self setDisplayedWindowTitle:tab.displayTitle ?: BrowserAppDisplayName];
         [self persistAddressBarDraftFromField];
         if (tab) {
@@ -2936,6 +3162,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     self.backButton.enabled = webView.canGoBack;
     self.forwardButton.enabled = webView.canGoForward;
     self.reloadButton.enabled = YES;
+    [self updateReloadStopButtonAppearance];
 
     NSString *title = tab.displayTitle;
     [self setDisplayedWindowTitle:title];
@@ -2949,6 +3176,22 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self reloadAssistSidebarIfVisible];
     [self.captchaAssistController updateForURL:webView.URL];
     [self.feedAssistController updateForURL:webView.URL];
+}
+
+- (void)updateReloadStopButtonAppearance {
+    BrowserTab *tab = self.tabController.selectedTab;
+    WKWebView *webView = self.webView;
+    BrowserNavigationSession *session = tab.navigationSession;
+    BOOL sessionActive = session != nil
+        && session.phase != BrowserNavigationSessionPhaseIdle;
+    BOOL loading = webView != nil && tab != nil && !tab.isNewTabPage
+        && (tab.isLoading || (sessionActive && webView.isLoading));
+    NSString *symbolName = loading ? @"xmark" : @"arrow.clockwise";
+    NSImage *image = [self toolbarSymbolImageNamed:symbolName];
+    if (image) {
+        self.reloadButton.image = image;
+    }
+    self.reloadButton.toolTip = loading ? @"停止" : @"刷新";
 }
 
 - (void)showErrorWithTitle:(NSString *)title message:(NSString *)message {
@@ -3095,9 +3338,11 @@ doCommandBySelector:(SEL)commandSelector {
     if (!pending || pending.webView != self.webView) {
         return;
     }
+    NSString *reloadTitle = pending.fromNegativeCache ? @"仍要访问" : @"重新加载";
     [self.navigationErrorView configureWithTitle:pending.title
                                          message:pending.message
-                                      showGoBack:pending.canGoBack];
+                                      showGoBack:pending.canGoBack
+                               reloadButtonTitle:reloadTitle];
     self.navigationErrorView.hidden = NO;
     [self.contentContainer addSubview:self.navigationErrorView positioned:NSWindowAbove relativeTo:nil];
     [self.loadingProgressView resetHidden];
@@ -3131,6 +3376,18 @@ doCommandBySelector:(SEL)commandSelector {
                                    title:(NSString *)title
                                  message:(NSString *)message
                               failingURL:(NSURL *)failingURL {
+    [self presentNavigationErrorForWebView:webView
+                                     title:title
+                                   message:message
+                                failingURL:failingURL
+                          fromNegativeCache:NO];
+}
+
+- (void)presentNavigationErrorForWebView:(WKWebView *)webView
+                                   title:(NSString *)title
+                                 message:(NSString *)message
+                              failingURL:(NSURL *)failingURL
+                        fromNegativeCache:(BOOL)fromNegativeCache {
     if (!webView) {
         return;
     }
@@ -3140,6 +3397,7 @@ doCommandBySelector:(SEL)commandSelector {
     pending.message = message.length > 0 ? message : @"发生未知错误。";
     pending.failingURL = failingURL;
     pending.canGoBack = webView.canGoBack;
+    pending.fromNegativeCache = fromNegativeCache;
     [self.pendingNavigationErrorByWebView setObject:pending forKey:webView];
 
     if (webView == self.webView) {
@@ -3152,84 +3410,310 @@ doCommandBySelector:(SEL)commandSelector {
     }
 }
 
-- (void)cancelProvisionalNavigationWatchdogForWebView:(WKWebView *)webView {
-    if (!webView) {
-        return;
-    }
-    BrowserProvisionalNavigationWatchdog *watchdog =
-        [self.provisionalWatchdogByWebView objectForKey:webView];
-    if (!watchdog) {
-        return;
-    }
-    if (watchdog.block) {
-        dispatch_block_cancel(watchdog.block);
-        watchdog.block = nil;
-    }
-    [self.provisionalWatchdogByWebView removeObjectForKey:webView];
+- (void)cancelNavigationWatchdogForWebView:(WKWebView *)webView {
+    [self cancelReachabilityProbeForWebView:webView];
+    [self.navigationWatchdog cancelAllForWebView:webView];
 }
 
-- (void)scheduleProvisionalNavigationWatchdogForWebView:(WKWebView *)webView
-                                          provisionalURL:(NSURL *)provisionalURL {
+- (void)cancelReachabilityProbeForWebView:(WKWebView *)webView {
     if (!webView) {
         return;
     }
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    BrowserReachabilityProbeHandle *handle = [self.reachabilityProbeByWebView objectForKey:webView];
+    if (handle) {
+        [handle cancel];
+        [self.reachabilityProbeByWebView removeObjectForKey:webView];
+    }
+}
 
-    BrowserProvisionalNavigationWatchdog *watchdog = [[BrowserProvisionalNavigationWatchdog alloc] init];
-    watchdog.webView = webView;
-    watchdog.provisionalURL = provisionalURL;
-    static NSInteger sToken = 0;
-    watchdog.token = ++sToken;
-    [self.provisionalWatchdogByWebView setObject:watchdog forKey:webView];
+- (void)startReachabilityProbeForWebView:(WKWebView *)webView
+                                     tab:(BrowserTab *)tab
+                                 session:(BrowserNavigationSession *)session
+                                     URL:(NSURL *)url {
+    [self cancelReachabilityProbeForWebView:webView];
+    if (!webView || !tab || !session || !url) {
+        return;
+    }
+    if (![BrowserReachabilityProbe shouldProbeURL:url]) {
+        return;
+    }
 
-    NSInteger token = watchdog.token;
+    NSString *hostKey = [BrowserHostNegativeCache hostKeyForURL:url];
+    NSNumber *cachedCode = hostKey.length > 0
+        ? [[BrowserHostNegativeCache sharedCache] failureCodeForHostKey:hostKey]
+        : nil;
+    if (cachedCode != nil) {
+        NSInteger generation = session.generation;
+        __weak typeof(self) weakSelf = self;
+        __weak WKWebView *weakWebView = webView;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            WKWebView *strongWebView = weakWebView;
+            if (!strongSelf || !strongWebView) {
+                return;
+            }
+            BrowserTab *current = [strongSelf.tabController tabForWebView:strongWebView];
+            if (!current || current.navigationSession.generation != generation) {
+                return;
+            }
+            if (current.navigationSession.phase == BrowserNavigationSessionPhaseCommitted) {
+                return;
+            }
+            [strongSelf applyReachabilityProbeFailureForWebView:strongWebView
+                                                            tab:current
+                                                            URL:url
+                                                      errorCode:cachedCode.integerValue
+                                               fromNegativeCache:YES];
+        });
+        return;
+    }
+
+    NSInteger generation = session.generation;
     __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWebView = webView;
-    dispatch_block_t block = dispatch_block_create(0, ^{
+    BrowserReachabilityProbeHandle *handle =
+        [[BrowserReachabilityProbe sharedProbe] probeURL:url
+                                              completion:^(BrowserReachabilityProbeResult result,
+                                                           NSInteger suggestedURLErrorCode) {
         typeof(self) strongSelf = weakSelf;
         WKWebView *strongWebView = weakWebView;
         if (!strongSelf || !strongWebView) {
             return;
         }
-        BrowserProvisionalNavigationWatchdog *current =
-            [strongSelf.provisionalWatchdogByWebView objectForKey:strongWebView];
-        if (!current || current.token != token) {
+        [strongSelf.reachabilityProbeByWebView removeObjectForKey:strongWebView];
+        BrowserTab *current = [strongSelf.tabController tabForWebView:strongWebView];
+        if (!current || current.navigationSession.generation != generation) {
             return;
         }
-        [strongSelf fireProvisionalNavigationWatchdog:current];
-    });
-    watchdog.block = block;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                 (int64_t)(BrowserMainFrameNavigationTimeout * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(),
-                   block);
+        if (current.navigationSession.phase == BrowserNavigationSessionPhaseCommitted
+            || current.navigationSession.phase == BrowserNavigationSessionPhaseIdle) {
+            return;
+        }
+        if (result == BrowserReachabilityProbeResultReachable
+            || result == BrowserReachabilityProbeResultUnknown) {
+            BrowserNavigationLog(@"probe tab=%@ result=%ld (no-op)",
+                                 current.tabID.UUIDString,
+                                 (long)result);
+            return;
+        }
+        BrowserNavigationLog(@"probe fail-fast tab=%@ result=%ld code=%ld",
+                             current.tabID.UUIDString,
+                             (long)result,
+                             (long)suggestedURLErrorCode);
+        NSInteger code = suggestedURLErrorCode;
+        if (code == 0) {
+            code = (result == BrowserReachabilityProbeResultDNSFailed)
+                ? NSURLErrorDNSLookupFailed
+                : NSURLErrorCannotConnectToHost;
+        }
+        if (hostKey.length > 0) {
+            [[BrowserHostNegativeCache sharedCache] recordFailureCode:code forHostKey:hostKey];
+        }
+        [strongSelf applyReachabilityProbeFailureForWebView:strongWebView
+                                                        tab:current
+                                                        URL:url
+                                                  errorCode:code
+                                           fromNegativeCache:NO];
+    }];
+    if (handle) {
+        [self.reachabilityProbeByWebView setObject:handle forKey:webView];
+    }
 }
 
-- (void)fireProvisionalNavigationWatchdog:(BrowserProvisionalNavigationWatchdog *)watchdog {
-    WKWebView *webView = watchdog.webView;
-    if (!webView) {
+- (void)applyReachabilityProbeFailureForWebView:(WKWebView *)webView
+                                            tab:(BrowserTab *)tab
+                                            URL:(NSURL *)url
+                                      errorCode:(NSInteger)errorCode
+                               fromNegativeCache:(BOOL)fromNegativeCache {
+    if (!webView || !tab) {
         return;
     }
-    NSURL *failingURL = watchdog.provisionalURL ?: webView.URL;
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    [self cancelReachabilityProbeForWebView:webView];
+    [self.navigationWatchdog cancelAllForWebView:webView];
+    [webView stopLoading];
+    tab.isLoading = NO;
+    [tab clearNavigationSession];
+    [self updateTabStripDisplay];
+    if (webView == self.webView) {
+        [self.loadingProgressView resetHidden];
+        [self updateReloadStopButtonAppearance];
+    }
+    NSURL *failingURL = url ?: [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    [self presentNavigationErrorForWebView:webView
+                                     title:@"无法加载页面"
+                                   message:[self userFacingMessageForNavigationErrorCode:errorCode
+                                                                   fallbackDescription:nil]
+                                failingURL:failingURL
+                          fromNegativeCache:fromNegativeCache];
+    if (webView == self.webView) {
+        [self updateNavigationState];
+    }
+}
+
+- (void)cancelPreCommitNavigationWatchdogForWebView:(WKWebView *)webView {
+    [self cancelReachabilityProbeForWebView:webView];
+    [self.navigationWatchdog cancelOverallForWebView:webView];
+    [self.navigationWatchdog cancelProvisionalForWebView:webView];
+}
+
+- (void)startOverallNavigationWatchdogForWebView:(WKWebView *)webView
+                                         session:(BrowserNavigationSession *)session
+                                             URL:(NSURL *)url {
+    if (!webView || !session) {
+        return;
+    }
+    // 新导航开始：清掉上一轮残留的 T2，避免跨代际误触发。
+    [self.navigationWatchdog cancelDocumentLoadGraceForWebView:webView];
+    __weak typeof(self) weakSelf = self;
+    [self.navigationWatchdog startOverallTimeoutForWebView:webView
+                                                   session:session
+                                                       URL:url
+                                                   handler:^(WKWebView *timedWebView,
+                                                             BrowserNavigationSession *timedSession,
+                                                             NSURL *failingURL) {
+        [weakSelf fireNavigationTimeoutForWebView:timedWebView
+                                          session:timedSession
+                                              URL:failingURL];
+    }];
+}
+
+- (void)startProvisionalNavigationWatchdogForWebView:(WKWebView *)webView
+                                             session:(BrowserNavigationSession *)session
+                                                 URL:(NSURL *)url {
+    if (!webView || !session) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [self.navigationWatchdog startProvisionalTimeoutForWebView:webView
+                                                       session:session
+                                                           URL:url
+                                                       handler:^(WKWebView *timedWebView,
+                                                                 BrowserNavigationSession *timedSession,
+                                                                 NSURL *failingURL) {
+        [weakSelf fireNavigationTimeoutForWebView:timedWebView
+                                          session:timedSession
+                                              URL:failingURL];
+    }];
+}
+
+- (void)startDocumentLoadGraceWatchdogForWebView:(WKWebView *)webView
+                                         session:(BrowserNavigationSession *)session
+                                             URL:(NSURL *)url {
+    if (!webView || !session) {
+        return;
+    }
+    BOOL shortGrace = session.usesShortDocumentLoadGrace
+        || [BrowserWebView URLContainsHashRestoreQuery:webView.URL]
+        || [BrowserWebView URLContainsHashRestoreQuery:url];
+    NSTimeInterval interval = shortGrace
+        ? BrowserDocumentLoadGraceTimeoutShort
+        : BrowserDocumentLoadGraceTimeout;
+    __weak typeof(self) weakSelf = self;
+    [self.navigationWatchdog startDocumentLoadGraceForWebView:webView
+                                                      session:session
+                                                          URL:url
+                                                     interval:interval
+                                                      handler:^(WKWebView *timedWebView,
+                                                                BrowserNavigationSession *timedSession,
+                                                                NSURL *failingURL) {
+        (void)failingURL;
+        [weakSelf fireDocumentLoadGraceForWebView:timedWebView session:timedSession];
+    }];
+}
+
+- (void)fireDocumentLoadGraceForWebView:(WKWebView *)webView
+                                session:(BrowserNavigationSession *)session {
+    if (!webView || !session) {
+        return;
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (!tab || tab.navigationSession.generation != session.generation) {
+        return;
+    }
+    // 已结束加载则无需 stop。
+    if (!tab.isLoading && !webView.isLoading) {
+        [self.navigationWatchdog cancelDocumentLoadGraceForWebView:webView];
+        [tab clearNavigationSession];
+        if (webView == self.webView) {
+            [self updateReloadStopButtonAppearance];
+        }
+        return;
+    }
+
+    [self.navigationWatchdog cancelDocumentLoadGraceForWebView:webView];
+    // 截断子资源等待；保留已渲染文档，不展示错误页。
+    [webView stopLoading];
+    tab.isLoading = NO;
+    [tab clearNavigationSession];
+    [self updateTabStripDisplay];
+    if (webView == self.webView) {
+        [self.loadingProgressView resetHidden];
+        [self updateReloadStopButtonAppearance];
+        [self updateNavigationState];
+    }
+}
+
+- (void)fireNavigationTimeoutForWebView:(WKWebView *)webView
+                                session:(BrowserNavigationSession *)session
+                                    URL:(NSURL *)failingURL {
+    if (!webView || !session) {
+        return;
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (!tab || tab.navigationSession.generation != session.generation) {
+        return;
+    }
+
+    BrowserNavigationLog(@"T0/T1 timeout tab=%@ gen=%ld phase=%ld url=%@",
+                         tab.tabID.UUIDString,
+                         (long)session.generation,
+                         (long)session.phase,
+                         (failingURL ?: session.URL).absoluteString ?: @"");
+
+    [self.navigationWatchdog cancelAllForWebView:webView];
+    [self cancelReachabilityProbeForWebView:webView];
 
     // stopLoading 会触发 Cancelled 失败回调（被忽略）；此处直接展示超时错误页。
     [webView stopLoading];
 
-    BrowserTab *tab = [self.tabController tabForWebView:webView];
     tab.isLoading = NO;
+    [tab clearNavigationSession];
     [self updateTabStripDisplay];
     if (webView == self.webView) {
         [self.loadingProgressView resetHidden];
+        [self updateReloadStopButtonAppearance];
     }
+    NSURL *errorURL = failingURL ?: session.URL ?: [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
     [self presentNavigationErrorForWebView:webView
                                      title:@"无法加载页面"
                                    message:[self userFacingMessageForNavigationErrorCode:NSURLErrorTimedOut
                                                                    fallbackDescription:nil]
-                                failingURL:failingURL];
+                                failingURL:errorURL];
     if (webView == self.webView) {
         [self updateNavigationState];
     }
+    // stopLoading 若未真正结束 isLoading，武装 T3 硬恢复。
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    __weak BrowserTab *weakTab = tab;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        BrowserTab *strongTab = weakTab;
+        if (!strongSelf || !strongWebView || !strongTab) {
+            return;
+        }
+        if (strongTab.webView != strongWebView || strongTab.pendingHardRecover) {
+            return;
+        }
+        if (strongWebView.isLoading || strongTab.isLoading) {
+            BrowserNavigationLog(@"stopLoading ineffective → arm T3 tab=%@", strongTab.tabID.UUIDString);
+            [strongSelf scheduleHardRecoverWatchdogForWebView:strongWebView
+                                                          tab:strongTab
+                                                          URL:errorURL];
+        }
+    });
 }
 
 - (NSString *)userFacingMessageForNavigationError:(NSError *)error {
@@ -3434,14 +3918,27 @@ doCommandBySelector:(SEL)commandSelector {
 
 - (void)navigationErrorViewDidChooseReload:(BrowserNavigationErrorView *)view {
     (void)view;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.pendingHardRecover) {
+        [self reloadAfterHardRecoverForTab:tab];
+        return;
+    }
     WKWebView *webView = self.webView;
     BrowserPendingNavigationError *pending =
         webView ? [self.pendingNavigationErrorByWebView objectForKey:webView] : nil;
     NSURL *reloadURL = pending.failingURL;
+    BOOL clearNegative = pending.fromNegativeCache || reloadURL != nil;
+    NSString *hostKey = clearNegative ? [BrowserHostNegativeCache hostKeyForURL:reloadURL] : nil;
+    if (hostKey.length > 0) {
+        [[BrowserHostNegativeCache sharedCache] clearHostKey:hostKey];
+    }
     [self clearNavigationErrorForWebView:webView];
     if (reloadURL) {
+        [tab beginNavigationSessionWithURL:reloadURL];
         [webView loadRequest:[NSURLRequest requestWithURL:reloadURL]];
     } else {
+        NSURL *current = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+        [tab beginNavigationSessionWithURL:current];
         [webView reload];
     }
 }
@@ -3692,8 +4189,17 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     if (isMainFrame && !sameDocument) {
         BrowserTab *tab = [self.tabController tabForWebView:webView];
         [tab notePendingMainFrameNavigation];
-        if (requestURL) {
-            [self.pendingProvisionalURLByWebView setObject:requestURL forKey:webView];
+        NSURL *trackedURL = [BrowserWebView publicURLFromInternalURL:requestURL] ?: requestURL;
+        if (trackedURL) {
+            [self.pendingProvisionalURLByWebView setObject:trackedURL forKey:webView];
+        }
+        // 链接点击等 WebKit 自发导航：若尚无活跃会话，立刻挂上 T0（覆盖无 provisional 空等）。
+        BrowserNavigationSession *session = tab.navigationSession;
+        BOOL active = session != nil
+            && (session.phase == BrowserNavigationSessionPhaseLoading
+                || session.phase == BrowserNavigationSessionPhaseProvisional);
+        if (!active) {
+            [tab beginNavigationSessionWithURL:trackedURL];
         }
     }
     decisionHandler(WKNavigationActionPolicyAllow);
@@ -3753,13 +4259,24 @@ didBecomeDownload:(WKDownload *)download {
     tab.isLoading = YES;
     if (webView == self.webView) {
         [self.loadingProgressView beginLoading];
+        [self updateReloadStopButtonAppearance];
     }
     NSURL *provisionalURL = [self.pendingProvisionalURLByWebView objectForKey:webView];
     [self.pendingProvisionalURLByWebView removeObjectForKey:webView];
     if (!provisionalURL) {
         provisionalURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
     }
-    [self scheduleProvisionalNavigationWatchdogForWebView:webView provisionalURL:provisionalURL];
+
+    BrowserNavigationSession *session = tab.navigationSession;
+    if (!session
+        || session.phase == BrowserNavigationSessionPhaseCommitted
+        || session.phase == BrowserNavigationSessionPhaseIdle) {
+        session = [tab beginNavigationSessionWithURL:provisionalURL];
+    }
+    [tab markNavigationSessionProvisional];
+    [self startProvisionalNavigationWatchdogForWebView:webView
+                                               session:tab.navigationSession ?: session
+                                                   URL:provisionalURL];
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
@@ -3767,7 +4284,21 @@ didBecomeDownload:(WKDownload *)download {
     if (![tab isMainFrameNavigation:navigation]) {
         return;
     }
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    [self cancelPreCommitNavigationWatchdogForWebView:webView];
+    [tab markNavigationSessionCommitted];
+
+    BrowserNavigationSession *session = tab.navigationSession;
+    if (session) {
+        if ([BrowserWebView URLContainsHashRestoreQuery:webView.URL]) {
+            session.usesShortDocumentLoadGrace = YES;
+        }
+        NSURL *graceURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL ?: session.URL;
+        [self startDocumentLoadGraceWatchdogForWebView:webView session:session URL:graceURL];
+    }
+    if (webView == self.webView) {
+        [self updateReloadStopButtonAppearance];
+    }
+
     [self.findBarController noteNavigationCommittedInWebView:webView];
 
     __weak typeof(self) weakSelf = self;
@@ -3855,7 +4386,8 @@ didBecomeDownload:(WKDownload *)download {
     if (![tab isMainFrameNavigation:navigation]) {
         return;
     }
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    [self cancelNavigationWatchdogForWebView:webView];
+    [tab clearNavigationSession];
     [tab endMainFrameNavigation:navigation];
     [self syncFromWebView:webView];
     [self.feedAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
@@ -3864,6 +4396,7 @@ didBecomeDownload:(WKDownload *)download {
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.findBarController noteNavigationFinishedInWebView:webView];
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
+        [self updateReloadStopButtonAppearance];
     }
 }
 
@@ -3874,7 +4407,8 @@ didFailProvisionalNavigation:(WKNavigation *)navigation
     if ([tab isMainFrameNavigation:navigation]) {
         [tab endMainFrameNavigation:navigation];
     }
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    [self cancelNavigationWatchdogForWebView:webView];
+    [tab clearNavigationSession];
     [self handleNavigationError:error forWebView:webView];
 }
 
@@ -3885,7 +4419,8 @@ didFailNavigation:(WKNavigation *)navigation
     if ([tab isMainFrameNavigation:navigation]) {
         [tab endMainFrameNavigation:navigation];
     }
-    [self cancelProvisionalNavigationWatchdogForWebView:webView];
+    [self cancelNavigationWatchdogForWebView:webView];
+    [tab clearNavigationSession];
     [self handleNavigationError:error forWebView:webView];
 }
 
@@ -3895,6 +4430,8 @@ didFailNavigation:(WKNavigation *)navigation
         return;
     }
 
+    [self.navigationWatchdog cancelDocumentLoadGraceForWebView:webView];
+    [tab clearNavigationSession];
     tab.isLoading = NO;
     tab.addressBarDraft = nil;
 
@@ -3904,6 +4441,7 @@ didFailNavigation:(WKNavigation *)navigation
         self.backButton.enabled = tab.isNewTabPage ? NO : webView.canGoBack;
         self.forwardButton.enabled = tab.isNewTabPage ? NO : webView.canGoForward;
         self.reloadButton.enabled = !tab.isNewTabPage;
+        [self updateReloadStopButtonAppearance];
         [self updateBookmarkButtonState];
         [self updateConnectionSecurityStateForTab:tab webView:webView];
         [self updateSecurityBadgeVisibility];
@@ -3998,6 +4536,7 @@ didFailNavigation:(WKNavigation *)navigation
             } else {
                 [self.loadingProgressView resetHidden];
             }
+            [self updateReloadStopButtonAppearance];
             [self updateNavigationState];
         }
         [self updateTabStripDisplay];
@@ -4013,6 +4552,7 @@ didFailNavigation:(WKNavigation *)navigation
     if (pending && !pending.completionInvoked) {
         if (webView == self.webView) {
             [self.loadingProgressView resetHidden];
+            [self updateReloadStopButtonAppearance];
             [self updateNavigationState];
         }
         return;

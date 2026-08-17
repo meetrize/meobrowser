@@ -99,10 +99,13 @@
 
 - (void)configureWithTitle:(NSString *)title
                    message:(NSString *)message
-                showGoBack:(BOOL)showGoBack {
+                showGoBack:(BOOL)showGoBack
+          reloadButtonTitle:(NSString *)reloadButtonTitle {
     self.titleLabel.stringValue = title.length > 0 ? title : @"无法加载页面";
     self.messageLabel.stringValue = message.length > 0 ? message : @"发生未知错误。";
     self.goBackButton.hidden = !showGoBack;
+    NSString *reloadTitle = reloadButtonTitle.length > 0 ? reloadButtonTitle : @"重新加载";
+    self.reloadButton.title = reloadTitle;
 }
 
 - (void)goBackClicked:(id)sender {

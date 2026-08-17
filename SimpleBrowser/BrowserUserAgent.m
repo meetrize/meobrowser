@@ -1,19 +1,73 @@
 #import "BrowserUserAgent.h"
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#import <os/lock.h>
 
 @implementation BrowserUserAgent
 
-+ (NSString *)safariAlignedUserAgent {
-    static NSString *cached = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        cached = [self computeSafariAlignedUserAgent];
-        if (cached.length == 0) {
-            cached = [self fallbackUserAgent];
-        }
-    });
+static NSString *sCachedUserAgent = nil;
+static os_unfair_lock sUserAgentLock = OS_UNFAIR_LOCK_INIT;
+static BOOL sWarmUpStarted = NO;
+
++ (void)setCachedUserAgent:(NSString *)ua {
+    if (ua.length == 0) {
+        return;
+    }
+    os_unfair_lock_lock(&sUserAgentLock);
+    sCachedUserAgent = [ua copy];
+    os_unfair_lock_unlock(&sUserAgentLock);
+}
+
++ (nullable NSString *)cachedUserAgentCopy {
+    os_unfair_lock_lock(&sUserAgentLock);
+    NSString *cached = sCachedUserAgent;
+    os_unfair_lock_unlock(&sUserAgentLock);
     return cached;
+}
+
+/// 仅在主线程调用：WKWebView / WebKit 初始化不允许离主线程。
++ (void)sampleOnMainQueueIfNeeded {
+    NSAssert([NSThread isMainThread], @"UA sampling requires main thread");
+    if ([self cachedUserAgentCopy].length > 0) {
+        // 若已是采样结果则跳过；fallback 也可被升级覆盖。
+    }
+    NSString *computed = [self computeSafariAlignedUserAgent];
+    if (computed.length == 0) {
+        computed = [self fallbackUserAgent];
+    }
+    [self setCachedUserAgent:computed];
+}
+
++ (void)warmUpInBackground {
+    os_unfair_lock_lock(&sUserAgentLock);
+    if (sWarmUpStarted) {
+        os_unfair_lock_unlock(&sUserAgentLock);
+        return;
+    }
+    sWarmUpStarted = YES;
+    // 后台绝不创建 WKWebView（WebKit::InitializeWebKit2 会 SIGTRAP）。
+    if (sCachedUserAgent.length == 0) {
+        sCachedUserAgent = [[self fallbackUserAgent] copy];
+    }
+    os_unfair_lock_unlock(&sUserAgentLock);
+}
+
++ (void)scheduleMainQueueSampleIfNeeded {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self sampleOnMainQueueIfNeeded];
+    });
+}
+
++ (NSString *)safariAlignedUserAgent {
+    NSString *cached = [self cachedUserAgentCopy];
+    if (cached.length > 0) {
+        return cached;
+    }
+
+    NSString *fallback = [self fallbackUserAgent];
+    [self setCachedUserAgent:fallback];
+    [self warmUpInBackground];
+    return fallback;
 }
 
 + (NSString *)computeSafariAlignedUserAgent {
@@ -25,10 +79,8 @@
         return nil;
     }
 
-    // 去掉末尾 App 名（WKWebView 默认可能带 bundle 名）。
     NSString *base = [self strippingTrailingApplicationTokenFromUserAgent:sampled];
 
-    // 已含 Version + Safari：替换 Version 为系统 Safari 短版本，保持与本机一致。
     NSRegularExpression *versionRe =
         [NSRegularExpression regularExpressionWithPattern:@"Version/[0-9]+(?:\\.[0-9]+)*"
                                                   options:0
@@ -62,9 +114,13 @@
 }
 
 + (NSString *)sampleDefaultUserAgent {
+    // 仅主线程：短超时等待，禁止无限泵 runloop。
+    if (![NSThread isMainThread]) {
+        return nil;
+    }
+
     __block NSString *result = nil;
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    // 空 applicationName，避免采样到硬编码 Safari 伪装段。
     config.applicationNameForUserAgent = @"";
     WKWebView *webView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1) configuration:config];
 
@@ -77,15 +133,15 @@
         dispatch_semaphore_signal(sem);
     }];
 
-    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    // 主线程需泵 runloop 才能完成 evaluateJavaScript，但硬限 0.5s。
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.5];
     while (dispatch_semaphore_wait(sem, DISPATCH_TIME_NOW) != 0) {
         if ([deadline timeIntervalSinceNow] < 0) {
             break;
         }
         [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
     }
-
     (void)webView;
     return result;
 }
@@ -97,7 +153,6 @@
     if (![version isKindOfClass:[NSString class]] || version.length == 0) {
         return nil;
     }
-    // 仅保留主.次，避免过长。
     NSArray<NSString *> *parts = [version componentsSeparatedByString:@"."];
     if (parts.count >= 2) {
         return [NSString stringWithFormat:@"%@.%@", parts[0], parts[1]];
@@ -106,7 +161,6 @@
 }
 
 + (NSString *)strippingTrailingApplicationTokenFromUserAgent:(NSString *)ua {
-    // 匹配末尾「 Name/1.2.3」且 Name 不是 Version/Safari/Mobile/AppleWebKit。
     NSRegularExpression *re =
         [NSRegularExpression regularExpressionWithPattern:
              @"\\s+(?!Version|Safari|Mobile|AppleWebKit|Chrome|CriOS|FxiOS)[A-Za-z0-9._-]+/[0-9][^\\s]*\\s*$"

@@ -225,6 +225,11 @@
                                                keyEquivalent:@"w"];
             closeTab.target = nil;
 
+            NSMenuItem *forceStopTab = [tabMenu addItemWithTitle:@"强制停止此标签"
+                                                          action:@selector(forceStopSelectedTab:)
+                                                   keyEquivalent:@""];
+            forceStopTab.target = nil;
+
             NSMenuItem *restoreTab = [tabMenu addItemWithTitle:@"恢复最近关闭的标签页"
                                                         action:@selector(restoreRecentlyClosedBrowserTab:)
                                                  keyEquivalent:@"t"];

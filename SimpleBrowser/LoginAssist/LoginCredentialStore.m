@@ -3,7 +3,7 @@
 
 static NSString * const kLoginAssistKeychainService = @"MeoBrowser.LoginAssist";
 
-/// 钥匙串 I/O 放串行后台队列；主线程用 runloop 等待，避免 SecItem* 同步堵死整窗。
+/// 钥匙串 I/O 放串行后台队列；主线程仅有限预算等待，避免无限泵 runloop。
 static dispatch_queue_t LoginCredentialKeychainQueue(void) {
     static dispatch_queue_t queue;
     static dispatch_once_t onceToken;
@@ -13,23 +13,32 @@ static dispatch_queue_t LoginCredentialKeychainQueue(void) {
     return queue;
 }
 
-static void LoginCredentialPerformKeychain(void (^block)(void)) {
+static const NSTimeInterval kLoginCredentialMainThreadBudget = 0.25;
+
+static BOOL LoginCredentialPerformKeychain(void (^block)(void)) {
     if (!block) {
-        return;
+        return YES;
     }
     if (![NSThread isMainThread]) {
         dispatch_sync(LoginCredentialKeychainQueue(), block);
-        return;
+        return YES;
     }
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    __block BOOL finished = NO;
     dispatch_async(LoginCredentialKeychainQueue(), ^{
         block();
+        finished = YES;
         dispatch_semaphore_signal(sem);
     });
-    while (dispatch_semaphore_wait(sem, DISPATCH_TIME_NOW) != 0) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:kLoginCredentialMainThreadBudget];
+    while (!finished && dispatch_semaphore_wait(sem, DISPATCH_TIME_NOW) != 0) {
+        if ([deadline timeIntervalSinceNow] < 0) {
+            return NO;
+        }
         [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
     }
+    return finished;
 }
 
 @implementation LoginCredentials
@@ -121,7 +130,7 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
     [self deleteCredentialsForRecipeID:recipeID error:nil];
 
     __block OSStatus status = errSecSuccess;
-    LoginCredentialPerformKeychain(^{
+    BOOL completed = LoginCredentialPerformKeychain(^{
         NSDictionary *query = @{
             (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
             (__bridge id)kSecAttrService: kLoginAssistKeychainService,
@@ -131,6 +140,11 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
         };
         status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
     });
+    // 主线程超时：仍写入内存缓存；后台 SecItemAdd 会继续。
+    self.memoryCache[recipeID] = [credentials copy];
+    if (!completed) {
+        return YES;
+    }
     if (status != errSecSuccess) {
         if (error) {
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain
@@ -139,7 +153,6 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
         }
         return NO;
     }
-    self.memoryCache[recipeID] = [credentials copy];
     return YES;
 }
 
@@ -160,7 +173,7 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
 
     __block CFTypeRef result = NULL;
     __block OSStatus status = errSecSuccess;
-    LoginCredentialPerformKeychain(^{
+    BOOL completed = LoginCredentialPerformKeychain(^{
         NSDictionary *query = @{
             (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
             (__bridge id)kSecAttrService: kLoginAssistKeychainService,
@@ -170,6 +183,14 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
         };
         status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
     });
+    if (!completed) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"LoginCredentialStore"
+                                         code:4
+                                     userInfo:@{NSLocalizedDescriptionKey: @"钥匙串繁忙，请稍后重试"}];
+        }
+        return nil;
+    }
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
     if (status == errSecItemNotFound) {
         self.memoryCache[recipeID] = [credentials copy];
@@ -234,7 +255,7 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
     }
     [self.memoryCache removeObjectForKey:recipeID];
     __block OSStatus status = errSecSuccess;
-    LoginCredentialPerformKeychain(^{
+    BOOL completed = LoginCredentialPerformKeychain(^{
         NSDictionary *query = @{
             (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
             (__bridge id)kSecAttrService: kLoginAssistKeychainService,
@@ -242,6 +263,9 @@ static void LoginCredentialPerformKeychain(void (^block)(void)) {
         };
         status = SecItemDelete((__bridge CFDictionaryRef)query);
     });
+    if (!completed) {
+        return YES;
+    }
     if (status != errSecSuccess && status != errSecItemNotFound) {
         if (error) {
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain
