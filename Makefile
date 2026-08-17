@@ -54,6 +54,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserAddressBarRowView.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserShortcutSuggestionPanel.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserURLInputClassifier.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserPageTranslationController.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserInPageTranslator.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserNavigationErrorView.m \
@@ -179,7 +181,7 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation
 

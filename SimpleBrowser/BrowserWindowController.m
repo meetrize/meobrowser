@@ -17,6 +17,7 @@
 #import "BrowserAddressBarActionGroup.h"
 #import "BrowserAddressBarRowView.h"
 #import "BrowserURLInputClassifier.h"
+#import "BrowserPageTranslationController.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserDownloadProgressRingView.h"
@@ -166,6 +167,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSButton *reloadButton;
 @property (nonatomic, strong, nullable) id reloadKeyMonitor;
 @property (nonatomic, strong) NSButton *bookmarkButton;
+@property (nonatomic, strong) NSButton *translateButton;
+@property (nonatomic, strong) BrowserPageTranslationController *pageTranslationController;
 @property (nonatomic, strong) NSButton *securityBadgeButton;
 @property (nonatomic, strong) NSButton *downloadButton;
 @property (nonatomic, strong) NSView *downloadBadgeView;
@@ -374,6 +377,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
+        _pageTranslationController = [[BrowserPageTranslationController alloc] init];
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -676,12 +680,17 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.bookmarkButton = [self makeBookmarkButton];
+    self.translateButton = [self makeTranslateButton];
     [self.addressField addSubview:self.bookmarkButton];
-    self.addressField.trailingContentInset = 22;
+    [self.addressField addSubview:self.translateButton];
+    self.addressField.trailingContentInset = 42;
     [NSLayoutConstraint activateConstraints:@[
-        [self.bookmarkButton.trailingAnchor constraintEqualToAnchor:self.addressField.trailingAnchor constant:-6],
+        [self.translateButton.trailingAnchor constraintEqualToAnchor:self.addressField.trailingAnchor constant:-6],
+        [self.translateButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
+        [self.bookmarkButton.trailingAnchor constraintEqualToAnchor:self.translateButton.leadingAnchor constant:-4],
         [self.bookmarkButton.centerYAnchor constraintEqualToAnchor:self.addressField.centerYAnchor],
     ]];
+    self.pageTranslationController.hostWindow = self.window;
 
     self.securityBadgeButton = [[NSButton alloc] initWithFrame:NSZeroRect];
     self.securityBadgeButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1466,6 +1475,70 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     return button;
 }
 
+- (NSButton *)makeTranslateButton {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSZeroRect];
+    button.target = self;
+    button.action = @selector(showPageTranslationMenu:);
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.imageScaling = NSImageScaleProportionallyDown;
+    button.toolTip = @"翻译网页";
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [button.widthAnchor constraintEqualToConstant:16],
+        [button.heightAnchor constraintEqualToConstant:16],
+    ]];
+    NSImage *image = [self translateSymbolImage];
+    if (image) {
+        button.image = image;
+    }
+    return button;
+}
+
+- (NSImage *)translateSymbolImage {
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:11
+                                                            weight:NSFontWeightRegular
+                                                             scale:NSImageSymbolScaleSmall];
+        NSArray<NSString *> *candidates = @[ @"translate", @"character.bubble", @"text.bubble" ];
+        for (NSString *name in candidates) {
+            NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:@"翻译"];
+            if (image) {
+                return [image imageWithSymbolConfiguration:config];
+            }
+        }
+    }
+    return nil;
+}
+
+- (void)updateTranslateButtonState {
+    BrowserTab *tab = self.tabController.selectedTab;
+    WKWebView *webView = self.webView;
+    BOOL enabled = tab != nil && !tab.isNewTabPage && webView != nil
+        && [BrowsingPreferences isPersistableURL:(webView.URL ?: [tab currentOrRestorableURL])];
+    self.translateButton.enabled = enabled;
+    if (@available(macOS 10.14, *)) {
+        self.translateButton.contentTintColor = enabled
+            ? [NSColor secondaryLabelColor]
+            : [NSColor tertiaryLabelColor];
+    }
+    BOOL translated = [self.pageTranslationController isShowingTranslationForWebView:webView];
+    self.translateButton.toolTip = translated ? @"翻译（正在显示译文）" : @"翻译网页";
+}
+
+- (void)showPageTranslationMenu:(id)sender {
+    (void)sender;
+    self.pageTranslationController.hostWindow = self.window;
+    [self.pageTranslationController showMenuFromButton:self.translateButton
+                                            forWebView:self.webView
+                                                   tab:self.tabController.selectedTab];
+}
+
 - (NSImage *)bookmarkSymbolImageNamed:(NSString *)symbolName filled:(BOOL)filled {
     if (@available(macOS 11.0, *)) {
         NSImageSymbolConfiguration *config =
@@ -1505,12 +1578,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL canBookmark = tab && !tab.isNewTabPage && [BrowsingPreferences isPersistableURL:url];
     if (!canBookmark) {
         [self setBookmarkButtonFilled:NO enabled:NO];
+        [self updateTranslateButtonState];
         return;
     }
 
     NSString *normalized = [BrowserShortcutStore normalizedURLStringFromInput:url.absoluteString];
     BOOL bookmarked = normalized ? [BrowserShortcutStore isURLStringBookmarked:normalized] : NO;
     [self setBookmarkButtonFilled:bookmarked enabled:YES];
+    [self updateTranslateButtonState];
 }
 
 - (void)toggleBookmark:(id)sender {
@@ -4347,6 +4422,8 @@ didBecomeDownload:(WKDownload *)download {
         [self updateConnectionSecurityStateForTab:tab webView:webView];
         [self updateSecurityBadgeVisibility];
     }
+    NSURL *commitURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    [self.pageTranslationController webViewDidCommitNavigation:webView URL:commitURL];
 
     // commit 时 title 可能已有；先刷一次标签，后续 sync / 延迟再补全。
     if (!tab.isNewTabPage && webView.title.length > 0 && ![tab.title isEqualToString:webView.title]) {
