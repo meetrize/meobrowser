@@ -9,7 +9,9 @@
 @property (nonatomic, copy, nullable) void (^completion)(BOOL success, NSString * _Nullable errorMessage);
 @property (nonatomic, assign) BOOL startFinished;
 @property (nonatomic, assign) BOOL completed;
+@property (nonatomic, assign) BOOL cancelled;
 @property (nonatomic, strong, nullable) id retainedDelegate;
+@property (nonatomic, strong, nullable) dispatch_block_t timeoutBlock;
 @end
 
 @implementation BrowserInPageTranslatorSession
@@ -49,10 +51,23 @@
 }
 
 - (BOOL)isTranslatingWebView:(WKWebView *)webView {
-    return webView != nil && [self.sessionsByWebView objectForKey:webView] != nil;
+    BrowserInPageTranslatorSession *session = webView ? [self.sessionsByWebView objectForKey:webView] : nil;
+    return session != nil && !session.completed && !session.cancelled;
 }
 
 #pragma mark - Public
+
+- (void)cancelTranslationForWebView:(WKWebView *)webView {
+    if (webView == nil) {
+        return;
+    }
+    BrowserInPageTranslatorSession *session = [self.sessionsByWebView objectForKey:webView];
+    if (session == nil || session.completed) {
+        return;
+    }
+    session.cancelled = YES;
+    [self finishSession:session success:NO message:nil];
+}
 
 - (void)translateWebView:(WKWebView *)webView
   targetLocaleIdentifier:(NSString *)localeID
@@ -86,6 +101,22 @@
     session.retainedDelegate = self;
     [self.sessionsByWebView setObject:session forKey:webView];
 
+    __weak typeof(self) weakSelf = self;
+    __weak BrowserInPageTranslatorSession *weakSession = session;
+    dispatch_block_t timeoutBlock = dispatch_block_create(0, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        BrowserInPageTranslatorSession *strongSession = weakSession;
+        if (!strongSelf || !strongSession || strongSession.completed) {
+            return;
+        }
+        strongSession.cancelled = YES;
+        [strongSelf finishSession:strongSession success:NO message:@"翻译超时，请重试"];
+    });
+    session.timeoutBlock = timeoutBlock;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   timeoutBlock);
+
     ((void (*)(id, SEL, id))objc_msgSend)(webView, NSSelectorFromString(@"_setTextManipulationDelegate:"), self);
 
     Class confCls = NSClassFromString(@"_WKTextManipulationConfiguration");
@@ -94,7 +125,6 @@
         ((void (*)(id, SEL, BOOL))objc_msgSend)(configuration, NSSelectorFromString(@"setIncludeSubframes:"), YES);
     }
 
-    __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWebView = webView;
     ((void (*)(id, SEL, id, id))objc_msgSend)(
         webView,
@@ -108,7 +138,7 @@
                     return;
                 }
                 BrowserInPageTranslatorSession *current = [strongSelf.sessionsByWebView objectForKey:strongWebView];
-                if (current == nil || current.completed) {
+                if (current == nil || current.completed || current.cancelled) {
                     return;
                 }
                 current.startFinished = YES;
@@ -121,7 +151,7 @@
 
 - (void)_webView:(WKWebView *)webView didFindTextManipulationItems:(NSArray *)items {
     BrowserInPageTranslatorSession *session = [self.sessionsByWebView objectForKey:webView];
-    if (session == nil || session.completed || items.count == 0) {
+    if (session == nil || session.completed || session.cancelled || items.count == 0) {
         return;
     }
     [session.collectedItems addObjectsFromArray:items];
@@ -137,6 +167,9 @@
 #pragma mark - Translate pipeline
 
 - (void)translateCollectedItemsForSession:(BrowserInPageTranslatorSession *)session {
+    if (session.cancelled || session.completed) {
+        return;
+    }
     WKWebView *webView = session.webView;
     if (webView == nil) {
         [self finishSession:session success:NO message:@"页面已关闭"];
@@ -189,18 +222,25 @@
         dispatch_group_enter(group);
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             dispatch_semaphore_wait(limiter, DISPATCH_TIME_FOREVER);
+            if (session.cancelled || session.completed) {
+                dispatch_semaphore_signal(limiter);
+                dispatch_group_leave(group);
+                return;
+            }
             [self translateText:text
                  targetLocale:session.targetLocale
                    completion:^(NSString *translated, NSError *error) {
-                       if (translated.length > 0) {
-                           @synchronized (translatedByJob) {
-                               translatedByJob[@(jobIndex)] = translated;
+                       if (!session.cancelled && !session.completed) {
+                           if (translated.length > 0) {
+                               @synchronized (translatedByJob) {
+                                   translatedByJob[@(jobIndex)] = translated;
+                               }
+                           } else {
+                               @synchronized (translatedByJob) {
+                                   failureCount += 1;
+                               }
+                               (void)error;
                            }
-                       } else {
-                           @synchronized (translatedByJob) {
-                               failureCount += 1;
-                           }
-                           (void)error;
                        }
                        dispatch_semaphore_signal(limiter);
                        dispatch_group_leave(group);
@@ -211,7 +251,7 @@
     __weak typeof(self) weakSelf = self;
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) {
+        if (!strongSelf || session.cancelled || session.completed) {
             return;
         }
         if (translatedByJob.count == 0) {
@@ -230,6 +270,9 @@
                   session:(BrowserInPageTranslatorSession *)session
              failureCount:(NSUInteger)failureCount {
     (void)failureCount;
+    if (session.cancelled || session.completed) {
+        return;
+    }
     WKWebView *webView = session.webView;
     if (webView == nil) {
         [self finishSession:session success:NO message:@"页面已关闭"];
@@ -310,7 +353,7 @@
         ^(NSArray *errors) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (!strongSelf) {
+                if (!strongSelf || session.cancelled || session.completed) {
                     return;
                 }
                 BOOL ok = (errors == nil || errors.count == 0 || replacements.count > errors.count);
@@ -328,6 +371,10 @@
         return;
     }
     session.completed = YES;
+    if (session.timeoutBlock) {
+        dispatch_block_cancel(session.timeoutBlock);
+        session.timeoutBlock = nil;
+    }
     WKWebView *webView = session.webView;
     if (webView != nil) {
         @try {

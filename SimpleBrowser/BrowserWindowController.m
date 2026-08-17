@@ -378,6 +378,11 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
         _pageTranslationController = [[BrowserPageTranslationController alloc] init];
+        __weak typeof(self) weakSelf = self;
+        _pageTranslationController.uiStateDidChangeHandler = ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            [strongSelf updateTranslateButtonState];
+        };
         [self configureWebViewConfiguration:_webViewConfiguration];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -1519,16 +1524,33 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)updateTranslateButtonState {
     BrowserTab *tab = self.tabController.selectedTab;
     WKWebView *webView = self.webView;
-    BOOL enabled = tab != nil && !tab.isNewTabPage && webView != nil
+    BOOL pageOK = tab != nil && !tab.isNewTabPage && webView != nil
         && [BrowsingPreferences isPersistableURL:(webView.URL ?: [tab currentOrRestorableURL])];
-    self.translateButton.enabled = enabled;
+    self.translateButton.enabled = pageOK;
+    BrowserPageTranslationUIState state = [self.pageTranslationController uiStateForWebView:webView];
     if (@available(macOS 10.14, *)) {
-        self.translateButton.contentTintColor = enabled
-            ? [NSColor secondaryLabelColor]
-            : [NSColor tertiaryLabelColor];
+        if (!pageOK) {
+            self.translateButton.contentTintColor = [NSColor tertiaryLabelColor];
+        } else if (state == BrowserPageTranslationUIStateTranslating) {
+            self.translateButton.contentTintColor = [NSColor controlAccentColor];
+        } else if (state == BrowserPageTranslationUIStateTranslated) {
+            self.translateButton.contentTintColor = [NSColor systemBlueColor];
+        } else {
+            self.translateButton.contentTintColor = [NSColor secondaryLabelColor];
+        }
     }
-    BOOL translated = [self.pageTranslationController isShowingTranslationForWebView:webView];
-    self.translateButton.toolTip = translated ? @"翻译（正在显示译文）" : @"翻译网页";
+    switch (state) {
+        case BrowserPageTranslationUIStateTranslating:
+            self.translateButton.toolTip = @"正在翻译…（打开菜单可取消）";
+            break;
+        case BrowserPageTranslationUIStateTranslated:
+            self.translateButton.toolTip = @"已显示译文（可恢复原文）";
+            break;
+        case BrowserPageTranslationUIStateIdle:
+        default:
+            self.translateButton.toolTip = @"翻译网页";
+            break;
+    }
 }
 
 - (void)showPageTranslationMenu:(id)sender {
