@@ -36,7 +36,7 @@ static const NSUInteger kSuggestionLimit = 8;
     self = [super init];
     if (self) {
         _addressField = addressField;
-        _selectedIndex = 0;
+        _selectedIndex = NSNotFound;
         _panel = [[BrowserShortcutSuggestionPanel alloc] init];
         _panel.suggestionDelegate = self;
     }
@@ -256,8 +256,9 @@ static const NSUInteger kSuggestionLimit = 8;
     BOOL queryChanged = ![trimmed isEqualToString:self.currentQuery];
     self.currentQuery = trimmed;
     self.matches = matches;
-    if (queryChanged || self.selectedIndex >= matches.count) {
-        self.selectedIndex = 0;
+    // 输入变化后默认不选中；仅方向键 / 悬停才会选中。
+    if (queryChanged || self.selectedIndex == NSNotFound || self.selectedIndex >= matches.count) {
+        self.selectedIndex = NSNotFound;
     }
 
     self.panelVisible = YES;
@@ -482,7 +483,7 @@ static const NSUInteger kSuggestionLimit = 8;
     self.panelVisible = NO;
     self.matches = @[];
     self.currentQuery = @"";
-    self.selectedIndex = 0;
+    self.selectedIndex = NSNotFound;
     self.hasActiveInlineAutocomplete = NO;
     self.inlineAutocompleteSuppressed = NO;
     self.suppressedForQuery = nil;
@@ -521,14 +522,14 @@ static const NSUInteger kSuggestionLimit = 8;
 #pragma mark - Selection actions
 
 - (nullable BrowserShortcutItem *)selectedItem {
-    if (self.selectedIndex >= self.matches.count) {
+    if (self.selectedIndex == NSNotFound || self.selectedIndex >= self.matches.count) {
         return nil;
     }
     return self.matches[self.selectedIndex];
 }
 
 - (BOOL)shouldOpenSelectedShortcutOnEnter {
-    return self.panelVisible && self.matches.count > 0;
+    return self.panelVisible && [self selectedItem] != nil;
 }
 
 - (void)openSelectedShortcut {
@@ -564,13 +565,19 @@ static const NSUInteger kSuggestionLimit = 8;
 }
 
 - (void)moveSelectionByDelta:(NSInteger)delta {
-    if (self.matches.count == 0) {
+    if (self.matches.count == 0 || delta == 0) {
         return;
     }
     NSInteger count = (NSInteger)self.matches.count;
-    NSInteger next = ((NSInteger)self.selectedIndex + delta) % count;
-    if (next < 0) {
-        next += count;
+    NSInteger next;
+    if (self.selectedIndex == NSNotFound) {
+        // 尚未选中：↓ 选第一项，↑ 选最后一项。
+        next = delta > 0 ? 0 : (count - 1);
+    } else {
+        next = ((NSInteger)self.selectedIndex + delta) % count;
+        if (next < 0) {
+            next += count;
+        }
     }
     self.selectedIndex = (NSUInteger)next;
     [self.panel updateWithItems:self.matches
@@ -651,8 +658,13 @@ static const NSUInteger kSuggestionLimit = 8;
         return YES;
     }
     if (commandSelector == @selector(insertNewline:)) {
-        [self openSelectedShortcut];
-        return YES;
+        if ([self selectedItem]) {
+            [self openSelectedShortcut];
+            return YES;
+        }
+        // 未选中建议：关闭面板，交给地址栏走 URL / 默认搜索引擎。
+        [self dismissPanelImmediately];
+        return NO;
     }
     if (commandSelector == @selector(insertTab:)) {
         return [self completeSelectedShortcutInAddressField];

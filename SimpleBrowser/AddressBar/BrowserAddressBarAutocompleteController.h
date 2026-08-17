@@ -29,7 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 处理地址栏特殊键；返回 YES 表示已消费。
 - (BOOL)handleCommandBySelector:(SEL)commandSelector textView:(NSTextView *)textView;
 
-/// 面板可见且有匹配时，Enter 应打开选中项而非走搜索引擎。
+/// 面板可见且用户已选中建议项时，Enter 应打开该项；否则走地址栏 URL/搜索。
 - (BOOL)shouldOpenSelectedShortcutOnEnter;
 
 - (void)openSelectedShortcut;

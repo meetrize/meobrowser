@@ -391,7 +391,7 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
         row.rowIndex = i;
         row.panel = self;
         [row configureWithItem:items[i] query:query];
-        row.rowSelected = (i == selectedIndex);
+        row.rowSelected = (selectedIndex != NSNotFound && i == selectedIndex);
         [self.rowsContainer addSubview:row];
         [self.rowViews addObject:row];
     }
@@ -427,7 +427,7 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
 
 - (void)updateSelectionHighlight {
     for (BrowserShortcutSuggestionRowView *row in self.rowViews) {
-        row.rowSelected = (row.rowIndex == self.selectedIndex);
+        row.rowSelected = (self.selectedIndex != NSNotFound && row.rowIndex == self.selectedIndex);
     }
 }
 
