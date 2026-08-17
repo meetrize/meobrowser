@@ -145,6 +145,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | 功能 | 说明 |
 |------|------|
 | **阅读模式** | 提取正文、可调字体（技术文档长篇阅读） |
+| **网页翻译多模式** | 替换译文 / 双语对照 / 即指即译；页内抽取，不改 URL。见 [page-translation-modes-design.md](page-translation-modes-design.md) · [开发计划](page-translation-modes-development-plan.md) |
 | **页面缩放** | ⌘+ / ⌘- / 重置，按站点记忆 |
 | **最小 UI 模式** | 隐藏工具栏，仅保留标签栏（演示、截图） |
 | **深色模式强制/跟随** | 对部分文档站 `color-scheme` 不友好的补偿 |

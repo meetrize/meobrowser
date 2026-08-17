@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import "BrowserTranslationPipeline.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -11,8 +12,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationUIState) {
     BrowserPageTranslationUIStateTranslated,
 };
 
-/// 地址栏网页翻译：菜单对齐 Safari（翻译成中文 / 首选语言 / 显示原始网页）。
-/// 优先软链 SafariSharedUI；不可用时在原页面就地替换文本（不经过翻译代理域名）。
+/// 地址栏网页翻译：替换 / 双语对照 / 即指即译；优先软链 Safari（仅替换）；否则页内管道。
 @interface BrowserPageTranslationController : NSObject
 
 @property (nonatomic, weak, nullable) NSWindow *hostWindow;
@@ -40,6 +40,9 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationUIState) {
 
 /// 综合 UI 状态（优先 translating）。
 - (BrowserPageTranslationUIState)uiStateForWebView:(nullable WKWebView *)webView;
+
+/// 当前页呈现模式（未翻译时返回 Replace）。
+- (BrowserTranslationPresentationMode)presentationModeForWebView:(nullable WKWebView *)webView;
 
 @end
 

@@ -56,6 +56,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AddressBar/BrowserURLInputClassifier.m \
                    $(BROWSER_SRC_DIR)/Translation/BrowserPageTranslationController.m \
                    $(BROWSER_SRC_DIR)/Translation/BrowserInPageTranslator.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserTextTranslationService.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserTranslationPipeline.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserNavigationErrorView.m \
@@ -287,6 +289,7 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	cp "$(BROWSER_SRC_DIR)/LoginAssist/FormMemo/form-memo-test.html" "$(BROWSER_RES_DIR)/form-memo-test.html"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/captcha-assist-test.html" "$(BROWSER_RES_DIR)/captcha-assist-test.html"
 	cp "$(BROWSER_SRC_DIR)/FindInPage/Resources/find-in-page.js" "$(BROWSER_RES_DIR)/find-in-page.js"
+	cp "$(BROWSER_SRC_DIR)/Translation/Resources/page-translation.js" "$(BROWSER_RES_DIR)/page-translation.js"
 	mkdir -p "$(BROWSER_RES_DIR)/PhoneRules"
 	cp "$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json" "$(BROWSER_RES_DIR)/PhoneRules/simple_rules.json"
 	mkdir -p "$(BROWSER_RES_DIR)/CaptchaAssist/helpers"

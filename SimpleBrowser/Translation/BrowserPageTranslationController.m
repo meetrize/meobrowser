@@ -1,5 +1,5 @@
 #import "BrowserPageTranslationController.h"
-#import "BrowserInPageTranslator.h"
+#import "BrowserTranslationPipeline.h"
 #import "BrowserTab.h"
 #import "BrowserTransientToast.h"
 #import "BrowsingPreferences.h"
@@ -9,11 +9,21 @@
 
 typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     BrowserPageTranslationMenuActionTranslateChinese = 1,
+    BrowserPageTranslationMenuActionTranslateBilingual,
+    BrowserPageTranslationMenuActionTranslateHover,
     BrowserPageTranslationMenuActionTranslateLocale,
     BrowserPageTranslationMenuActionPreferredLanguagesSettings,
     BrowserPageTranslationMenuActionShowOriginal,
     BrowserPageTranslationMenuActionCancelTranslation,
 };
+
+@interface BrowserPageTranslationPendingRequest : NSObject
+@property (nonatomic, assign) BrowserTranslationPresentationMode mode;
+@property (nonatomic, copy) NSString *localeID;
+@end
+
+@implementation BrowserPageTranslationPendingRequest
+@end
 
 @interface BrowserPageTranslationPreferenceProvider : NSObject
 @property (nonatomic, strong) id availability;
@@ -73,6 +83,8 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
 @property (nonatomic, strong) NSMapTable<WKWebView *, id> *contextsByWebView;
 @property (nonatomic, strong) NSHashTable<WKWebView *> *inPageTranslatedWebViews;
 @property (nonatomic, strong) NSHashTable<WKWebView *> *translatingWebViews;
+@property (nonatomic, strong) NSMapTable<WKWebView *, NSNumber *> *presentationModeByWebView;
+@property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPageTranslationPendingRequest *> *pendingByWebView;
 @property (nonatomic, weak) WKWebView *menuWebView;
 @property (nonatomic, weak) BrowserTab *menuTab;
 @end
@@ -86,6 +98,10 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
                                                    valueOptions:NSPointerFunctionsStrongMemory];
         _inPageTranslatedWebViews = [NSHashTable weakObjectsHashTable];
         _translatingWebViews = [NSHashTable weakObjectsHashTable];
+        _presentationModeByWebView = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory
+                                                           valueOptions:NSPointerFunctionsStrongMemory];
+        _pendingByWebView = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsWeakMemory
+                                                  valueOptions:NSPointerFunctionsStrongMemory];
         [self loadSafariTranslationRuntimeIfNeeded];
     }
     return self;
@@ -186,10 +202,12 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     if (webView == nil) {
         return;
     }
-    [[BrowserInPageTranslator sharedTranslator] cancelTranslationForWebView:webView];
+    [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
     [self.contextsByWebView removeObjectForKey:webView];
     [self.inPageTranslatedWebViews removeObject:webView];
     [self.translatingWebViews removeObject:webView];
+    [self.presentationModeByWebView removeObjectForKey:webView];
+    [self.pendingByWebView removeObjectForKey:webView];
     [self notifyUIStateDidChange];
 }
 
@@ -197,22 +215,36 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     if (webView == nil) {
         return;
     }
-    // 新文档：取消进行中的翻译，清除译文态。
+    BrowserPageTranslationPendingRequest *pending = [self.pendingByWebView objectForKey:webView];
+    [self.pendingByWebView removeObjectForKey:webView];
+
+    // 新文档：取消进行中的翻译，清除译文态（保留 pending 以便切换模式后续跑）。
     if ([self.translatingWebViews containsObject:webView]) {
-        [[BrowserInPageTranslator sharedTranslator] cancelTranslationForWebView:webView];
+        [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
         [self.translatingWebViews removeObject:webView];
         [BrowserTransientToast dismissPersistentMessageInWindow:self.hostWindow];
     }
     [self.inPageTranslatedWebViews removeObject:webView];
+    [self.presentationModeByWebView removeObjectForKey:webView];
     [self notifyUIStateDidChange];
 
     id ctx = [self contextForWebView:webView createIfNeeded:YES];
-    if (ctx == nil) {
-        return;
+    if (ctx != nil) {
+        SEL sel = NSSelectorFromString(@"owningWebViewDidCommitNavigationWithURL:completionHandler:");
+        if ([ctx respondsToSelector:sel]) {
+            ((void (*)(id, SEL, id, id))objc_msgSend)(ctx, sel, url, ^{});
+        }
     }
-    SEL sel = NSSelectorFromString(@"owningWebViewDidCommitNavigationWithURL:completionHandler:");
-    if ([ctx respondsToSelector:sel]) {
-        ((void (*)(id, SEL, id, id))objc_msgSend)(ctx, sel, url, ^{});
+
+    if (pending != nil && pending.localeID.length > 0) {
+        BrowserTab *tab = self.menuTab;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self startTranslationForWebView:webView
+                                         tab:tab
+                          localeIdentifier:pending.localeID
+                                      mode:pending.mode
+                         allowSafariEngine:NO];
+        });
     }
 }
 
@@ -239,7 +271,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         return NO;
     }
     return [self.translatingWebViews containsObject:webView]
-        || [[BrowserInPageTranslator sharedTranslator] isTranslatingWebView:webView];
+        || [[BrowserTranslationPipeline sharedPipeline] isTranslatingWebView:webView];
 }
 
 - (BrowserPageTranslationUIState)uiStateForWebView:(WKWebView *)webView {
@@ -250,6 +282,17 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         return BrowserPageTranslationUIStateTranslated;
     }
     return BrowserPageTranslationUIStateIdle;
+}
+
+- (BrowserTranslationPresentationMode)presentationModeForWebView:(WKWebView *)webView {
+    if (webView == nil) {
+        return BrowserTranslationPresentationModeReplace;
+    }
+    NSNumber *stored = [self.presentationModeByWebView objectForKey:webView];
+    if (stored != nil) {
+        return (BrowserTranslationPresentationMode)stored.integerValue;
+    }
+    return BrowserTranslationPresentationModeReplace;
 }
 
 - (void)notifyUIStateDidChange {
@@ -294,6 +337,22 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         zhItem.tag = BrowserPageTranslationMenuActionTranslateChinese;
         zhItem.enabled = canStartTranslate;
         [menu addItem:zhItem];
+
+        NSMenuItem *bilingualItem = [[NSMenuItem alloc] initWithTitle:@"双语对照（英 / 中）"
+                                                               action:@selector(handleTranslateMenuItem:)
+                                                        keyEquivalent:@""];
+        bilingualItem.target = self;
+        bilingualItem.tag = BrowserPageTranslationMenuActionTranslateBilingual;
+        bilingualItem.enabled = canStartTranslate;
+        [menu addItem:bilingualItem];
+
+        NSMenuItem *hoverItem = [[NSMenuItem alloc] initWithTitle:@"即指即译"
+                                                           action:@selector(handleTranslateMenuItem:)
+                                                    keyEquivalent:@""];
+        hoverItem.target = self;
+        hoverItem.tag = BrowserPageTranslationMenuActionTranslateHover;
+        hoverItem.enabled = canStartTranslate;
+        [menu addItem:hoverItem];
     }
 
     [menu addItem:[NSMenuItem separatorItem]];
@@ -420,14 +479,32 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     BrowserTab *tab = self.menuTab;
     switch ((BrowserPageTranslationMenuAction)sender.tag) {
         case BrowserPageTranslationMenuActionTranslateChinese:
-            [self translateWebView:webView tab:tab toLocaleIdentifier:@"zh-Hans"];
+            [self translateWebView:webView
+                               tab:tab
+                localeIdentifier:@"zh-Hans"
+                            mode:BrowserTranslationPresentationModeReplace];
+            break;
+        case BrowserPageTranslationMenuActionTranslateBilingual:
+            [self translateWebView:webView
+                               tab:tab
+                localeIdentifier:@"zh-Hans"
+                            mode:BrowserTranslationPresentationModeBilingual];
+            break;
+        case BrowserPageTranslationMenuActionTranslateHover:
+            [self translateWebView:webView
+                               tab:tab
+                localeIdentifier:@"zh-Hans"
+                            mode:BrowserTranslationPresentationModeHover];
             break;
         case BrowserPageTranslationMenuActionTranslateLocale: {
             NSString *localeID = [sender.representedObject isKindOfClass:[NSString class]]
                 ? (NSString *)sender.representedObject
                 : nil;
             if (localeID.length > 0) {
-                [self translateWebView:webView tab:tab toLocaleIdentifier:localeID];
+                [self translateWebView:webView
+                                   tab:tab
+                    localeIdentifier:localeID
+                                mode:BrowserTranslationPresentationModeReplace];
             }
             break;
         }
@@ -435,6 +512,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
             [self openPreferredLanguagesSettings];
             break;
         case BrowserPageTranslationMenuActionShowOriginal:
+            [self.pendingByWebView removeObjectForKey:webView];
             [self showOriginalForWebView:webView];
             break;
         case BrowserPageTranslationMenuActionCancelTranslation:
@@ -445,7 +523,10 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
 
 #pragma mark - Translate / Original
 
-- (void)translateWebView:(WKWebView *)webView tab:(BrowserTab *)tab toLocaleIdentifier:(NSString *)localeID {
+- (void)translateWebView:(WKWebView *)webView
+                     tab:(BrowserTab *)tab
+      localeIdentifier:(NSString *)localeID
+                  mode:(BrowserTranslationPresentationMode)mode {
     if (![self canTranslateWebView:webView tab:tab] || localeID.length == 0) {
         return;
     }
@@ -454,41 +535,76 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         return;
     }
 
-    [self beginTranslatingUIForWebView:webView];
-
-    BOOL trySafari = self.safariEngineAvailable
-        && (!self.safariRegionChecked || self.safariRegionSupported);
-    id ctx = trySafari ? [self contextForWebView:webView createIfNeeded:YES] : nil;
-    if (ctx != nil && [ctx respondsToSelector:NSSelectorFromString(@"requestTranslatingWebpageToLocale:completionHandler:")]) {
-        __weak typeof(self) weakSelf = self;
-        __weak WKWebView *weakWebView = webView;
-        ((void (*)(id, SEL, id, id))objc_msgSend)(
-            ctx,
-            NSSelectorFromString(@"requestTranslatingWebpageToLocale:completionHandler:"),
-            localeID,
-            ^(BOOL success) {
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                WKWebView *strongWebView = weakWebView;
-                if (!strongSelf || !strongWebView) {
-                    return;
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (![strongSelf.translatingWebViews containsObject:strongWebView]) {
-                        return; // 已被取消
-                    }
-                    if (success) {
-                        [strongSelf finishTranslatingUIForWebView:strongWebView
-                                                          success:YES
-                                                          message:nil];
-                        return;
-                    }
-                    [strongSelf translateInPlaceWebView:strongWebView localeIdentifier:localeID];
-                });
-            });
+    // 模式互斥：已翻译时先 reload，再在 commit 后按新模式启动。
+    if ([self isShowingTranslationForWebView:webView]) {
+        BrowserPageTranslationPendingRequest *pending = [[BrowserPageTranslationPendingRequest alloc] init];
+        pending.mode = mode;
+        pending.localeID = localeID;
+        [self.pendingByWebView setObject:pending forKey:webView];
+        [self showOriginalForWebView:webView];
         return;
     }
 
-    [self translateInPlaceWebView:webView localeIdentifier:localeID];
+    BOOL allowSafari = (mode == BrowserTranslationPresentationModeReplace);
+    [self startTranslationForWebView:webView
+                                 tab:tab
+                  localeIdentifier:localeID
+                              mode:mode
+                 allowSafariEngine:allowSafari];
+}
+
+- (void)startTranslationForWebView:(WKWebView *)webView
+                               tab:(BrowserTab *)tab
+                localeIdentifier:(NSString *)localeID
+                            mode:(BrowserTranslationPresentationMode)mode
+               allowSafariEngine:(BOOL)allowSafariEngine {
+    (void)tab;
+    if (webView == nil || localeID.length == 0 || [self isTranslatingWebView:webView]) {
+        return;
+    }
+
+    [self.presentationModeByWebView setObject:@(mode) forKey:webView];
+    [self beginTranslatingUIForWebView:webView];
+
+    if (allowSafariEngine && mode == BrowserTranslationPresentationModeReplace) {
+        BOOL trySafari = self.safariEngineAvailable
+            && (!self.safariRegionChecked || self.safariRegionSupported);
+        id ctx = trySafari ? [self contextForWebView:webView createIfNeeded:YES] : nil;
+        if (ctx != nil && [ctx respondsToSelector:NSSelectorFromString(@"requestTranslatingWebpageToLocale:completionHandler:")]) {
+            __weak typeof(self) weakSelf = self;
+            __weak WKWebView *weakWebView = webView;
+            ((void (*)(id, SEL, id, id))objc_msgSend)(
+                ctx,
+                NSSelectorFromString(@"requestTranslatingWebpageToLocale:completionHandler:"),
+                localeID,
+                ^(BOOL success) {
+                    __strong typeof(weakSelf) strongSelf = weakSelf;
+                    WKWebView *strongWebView = weakWebView;
+                    if (!strongSelf || !strongWebView) {
+                        return;
+                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (![strongSelf.translatingWebViews containsObject:strongWebView]) {
+                            return; // 已被取消
+                        }
+                        if (success) {
+                            [strongSelf.presentationModeByWebView setObject:@(BrowserTranslationPresentationModeReplace)
+                                                                     forKey:strongWebView];
+                            [strongSelf finishTranslatingUIForWebView:strongWebView
+                                                              success:YES
+                                                              message:nil];
+                            return;
+                        }
+                        [strongSelf translateViaPipelineWebView:strongWebView
+                                             localeIdentifier:localeID
+                                                         mode:BrowserTranslationPresentationModeReplace];
+                    });
+                });
+            return;
+        }
+    }
+
+    [self translateViaPipelineWebView:webView localeIdentifier:localeID mode:mode];
 }
 
 - (void)beginTranslatingUIForWebView:(WKWebView *)webView {
@@ -500,18 +616,22 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     [self notifyUIStateDidChange];
 }
 
-- (void)translateInPlaceWebView:(WKWebView *)webView localeIdentifier:(NSString *)localeID {
+- (void)translateViaPipelineWebView:(WKWebView *)webView
+                 localeIdentifier:(NSString *)localeID
+                             mode:(BrowserTranslationPresentationMode)mode {
     if (webView == nil) {
         return;
     }
     if (![self.translatingWebViews containsObject:webView]) {
         [self beginTranslatingUIForWebView:webView];
     }
+    [self.presentationModeByWebView setObject:@(mode) forKey:webView];
     __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWebView = webView;
-    [[BrowserInPageTranslator sharedTranslator] translateWebView:webView
-                                          targetLocaleIdentifier:localeID
-                                                      completion:^(BOOL success, NSString *errorMessage) {
+    [[BrowserTranslationPipeline sharedPipeline] translateWebView:webView
+                                           targetLocaleIdentifier:localeID
+                                                             mode:mode
+                                                       completion:^(BOOL success, NSString *errorMessage) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         WKWebView *strongWebView = weakWebView;
         if (!strongSelf) {
@@ -519,7 +639,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         }
         NSString *message = nil;
         if (success) {
-            message = nil;
+            message = errorMessage; // 可能为「部分段落未译出」
         } else if (errorMessage.length > 0) {
             message = errorMessage;
         } else {
@@ -535,9 +655,10 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     if (webView == nil) {
         return;
     }
-    BOOL hadInPageJob = [[BrowserInPageTranslator sharedTranslator] isTranslatingWebView:webView];
-    [[BrowserInPageTranslator sharedTranslator] cancelTranslationForWebView:webView];
-    if (!hadInPageJob) {
+    [self.pendingByWebView removeObjectForKey:webView];
+    BOOL hadPipelineJob = [[BrowserTranslationPipeline sharedPipeline] isTranslatingWebView:webView];
+    [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
+    if (!hadPipelineJob) {
         // Safari 路径尚未进入页内翻译，或会话已结束：直接收尾 UI。
         [self finishTranslatingUIForWebView:webView success:NO message:@"已取消翻译"];
     }
@@ -553,9 +674,14 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
 
     if (success && webView != nil) {
         [self.inPageTranslatedWebViews addObject:webView];
-        [self showToast:@"翻译完成"];
-    } else if (message.length > 0) {
-        [self showToast:message];
+        [self showToast:(message.length > 0 ? message : @"翻译完成")];
+    } else {
+        if (webView != nil && ![self.inPageTranslatedWebViews containsObject:webView]) {
+            [self.presentationModeByWebView removeObjectForKey:webView];
+        }
+        if (message.length > 0) {
+            [self showToast:message];
+        }
     }
     [self notifyUIStateDidChange];
 }
@@ -566,10 +692,13 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     }
 
     if ([self isTranslatingWebView:webView]) {
-        [[BrowserInPageTranslator sharedTranslator] cancelTranslationForWebView:webView];
+        [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
         [self.translatingWebViews removeObject:webView];
         [BrowserTransientToast dismissPersistentMessageInWindow:self.hostWindow];
     }
+
+    // 主动「显示原始网页」时清掉 pending（模式切换会先写入 pending 再调用本方法，勿清）。
+    // 调用方若设置了 pending，保留之。
 
     id ctx = [self contextForWebView:webView createIfNeeded:NO];
     BOOL safariTranslated = NO;
@@ -580,12 +709,14 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     }
     if (safariTranslated && [ctx respondsToSelector:NSSelectorFromString(@"reloadPageInOriginalLanguage")]) {
         [self.inPageTranslatedWebViews removeObject:webView];
+        [self.presentationModeByWebView removeObjectForKey:webView];
         ((void (*)(id, SEL))objc_msgSend)(ctx, NSSelectorFromString(@"reloadPageInOriginalLanguage"));
         [self notifyUIStateDidChange];
         return;
     }
 
     [self.inPageTranslatedWebViews removeObject:webView];
+    [self.presentationModeByWebView removeObjectForKey:webView];
     [self notifyUIStateDidChange];
     [webView reload];
 }

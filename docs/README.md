@@ -36,6 +36,8 @@
 | [minimal-browser/download-design.md](minimal-browser/download-design.md) | 下载管理 — 交互与实现方案（V1） |
 | [minimal-browser/find-in-page-design.md](minimal-browser/find-in-page-design.md) | 页面内查找 — 浮动条、高亮、字面/通配符双模式方案 |
 | [minimal-browser/find-in-page-development-plan.md](minimal-browser/find-in-page-development-plan.md) | 页面内查找 — 分阶段开发计划（FI-0～FI-3） |
+| [minimal-browser/page-translation-modes-design.md](minimal-browser/page-translation-modes-design.md) | 网页翻译多模式 — 替换 / 双语对照 / 即指即译（已实现） |
+| [minimal-browser/page-translation-modes-development-plan.md](minimal-browser/page-translation-modes-development-plan.md) | 网页翻译多模式 — 分阶段开发计划（PT-0～PT-3，已实现） |
 | [minimal-browser/auto-login-design.md](minimal-browser/auto-login-design.md) | 站点登录助手 — 一键/自动登录（账密、短信、二维码）设计方案 |
 | [minimal-browser/auto-login-development-plan.md](minimal-browser/auto-login-development-plan.md) | 站点登录助手 — 分阶段开发计划（LA-0～LA-7） |
 | [minimal-browser/captcha-assist-design.md](minimal-browser/captcha-assist-design.md) | 图形验证码智能助手 — AI 识别与交互（滑块、点选、OCR 等）设计方案 |

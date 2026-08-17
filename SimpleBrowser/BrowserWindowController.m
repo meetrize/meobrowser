@@ -1543,9 +1543,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         case BrowserPageTranslationUIStateTranslating:
             self.translateButton.toolTip = @"正在翻译…（打开菜单可取消）";
             break;
-        case BrowserPageTranslationUIStateTranslated:
-            self.translateButton.toolTip = @"已显示译文（可恢复原文）";
+        case BrowserPageTranslationUIStateTranslated: {
+            BrowserTranslationPresentationMode mode =
+                [self.pageTranslationController presentationModeForWebView:webView];
+            if (mode == BrowserTranslationPresentationModeBilingual) {
+                self.translateButton.toolTip = @"双语对照中（可恢复原文）";
+            } else if (mode == BrowserTranslationPresentationModeHover) {
+                self.translateButton.toolTip = @"即指即译已开启（可恢复原文）";
+            } else {
+                self.translateButton.toolTip = @"已显示译文（可恢复原文）";
+            }
             break;
+        }
         case BrowserPageTranslationUIStateIdle:
         default:
             self.translateButton.toolTip = @"翻译网页";
