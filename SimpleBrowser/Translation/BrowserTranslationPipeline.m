@@ -51,29 +51,25 @@
 #pragma mark - Script bridge
 
 + (NSString *)pageTranslationScriptSource {
-    static NSString *source;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"page-translation" ofType:@"js"];
-        NSString *fileSource = nil;
-        if (path.length > 0) {
-            NSError *error = nil;
-            fileSource = [NSString stringWithContentsOfFile:path
-                                                   encoding:NSUTF8StringEncoding
-                                                      error:&error];
-            if (error != nil || fileSource.length == 0) {
-                fileSource = nil;
-            }
+    // Always read from the bundle so rebuilds pick up the latest page-translation.js
+    // without requiring a process restart to clear a dispatch_once cache.
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"page-translation" ofType:@"js"];
+    if (path.length > 0) {
+        NSError *error = nil;
+        NSString *fileSource = [NSString stringWithContentsOfFile:path
+                                                         encoding:NSUTF8StringEncoding
+                                                            error:&error];
+        if (error == nil && fileSource.length > 0) {
+            return fileSource;
         }
-        if (fileSource.length == 0) {
-            fileSource = @"(function(){window.__MeoTranslation=window.__MeoTranslation||{"
-                         @"clear:function(){return{ok:true}},"
-                         @"applyBilingual:function(){return{ok:false,applied:0,total:0}},"
-                         @"applyHover:function(){return{ok:false,applied:0,total:0}}};})();";
-        }
-        source = fileSource;
-    });
-    return source;
+    }
+    return @"(function(){window.__MeoTranslation=window.__MeoTranslation||{"
+           @"clear:function(){return{ok:true}},"
+           @"collectCandidates:function(){return{ok:false,candidates:[],total:0}},"
+           @"applyBilingualById:function(){return{ok:false,applied:0,total:0}},"
+           @"applyHoverById:function(){return{ok:false,applied:0,total:0}},"
+           @"applyBilingual:function(){return{ok:false,applied:0,total:0}},"
+           @"applyHover:function(){return{ok:false,applied:0,total:0}}};})();";
 }
 
 + (void)evaluateJavaScript:(NSString *)js
@@ -94,7 +90,10 @@
 }
 
 + (void)ensureBridgeInWebView:(WKWebView *)webView completion:(void (^)(BOOL ready))completion {
-    NSString *check = @"(function(){return !!(window.__MeoTranslation && window.__MeoTranslation.clear);})()";
+    // Require collectCandidates so older injected bridges are upgraded.
+    NSString *check =
+        @"(function(){return !!(window.__MeoTranslation && "
+        @"typeof window.__MeoTranslation.collectCandidates==='function');})()";
     [self evaluateJavaScript:check inWebView:webView completion:^(id value) {
         if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
             if (completion) {
@@ -159,31 +158,10 @@
     }];
 }
 
-- (void)translateWebView:(WKWebView *)webView
-  targetLocaleIdentifier:(NSString *)localeID
-                    mode:(BrowserTranslationPresentationMode)mode
-              completion:(void (^)(BOOL, NSString * _Nullable))completion {
-    if (webView == nil || localeID.length == 0) {
-        if (completion) {
-            completion(NO, @"无法翻译此页面");
-        }
-        return;
-    }
-    if ([self isTranslatingWebView:webView]) {
-        if (completion) {
-            completion(NO, @"正在翻译中…");
-        }
-        return;
-    }
-    if (![webView respondsToSelector:NSSelectorFromString(@"_setTextManipulationDelegate:")]
-        || ![webView respondsToSelector:NSSelectorFromString(@"_startTextManipulationsWithConfiguration:completion:")]
-        || ![webView respondsToSelector:NSSelectorFromString(@"_completeTextManipulationForItems:completion:")]) {
-        if (completion) {
-            completion(NO, @"当前系统不支持页内翻译");
-        }
-        return;
-    }
-
+- (BrowserTranslationPipelineSession *)beginSessionForWebView:(WKWebView *)webView
+                                       targetLocaleIdentifier:(NSString *)localeID
+                                                         mode:(BrowserTranslationPresentationMode)mode
+                                                   completion:(void (^)(BOOL, NSString * _Nullable))completion {
     BrowserTranslationPipelineSession *session = [[BrowserTranslationPipelineSession alloc] init];
     session.webView = webView;
     session.targetLocale = [[BrowserTextTranslationService sharedService] normalizedTargetLocaleIdentifier:localeID];
@@ -208,6 +186,57 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(),
                    timeoutBlock);
+    return session;
+}
+
+- (void)translateWebView:(WKWebView *)webView
+  targetLocaleIdentifier:(NSString *)localeID
+                    mode:(BrowserTranslationPresentationMode)mode
+              completion:(void (^)(BOOL, NSString * _Nullable))completion {
+    if (webView == nil || localeID.length == 0) {
+        if (completion) {
+            completion(NO, @"无法翻译此页面");
+        }
+        return;
+    }
+    if ([self isTranslatingWebView:webView]) {
+        if (completion) {
+            completion(NO, @"正在翻译中…");
+        }
+        return;
+    }
+
+    BOOL presentationMode = (mode != BrowserTranslationPresentationModeReplace);
+    if (!presentationMode) {
+        if (![webView respondsToSelector:NSSelectorFromString(@"_setTextManipulationDelegate:")]
+            || ![webView respondsToSelector:NSSelectorFromString(@"_startTextManipulationsWithConfiguration:completion:")]
+            || ![webView respondsToSelector:NSSelectorFromString(@"_completeTextManipulationForItems:completion:")]) {
+            if (completion) {
+                completion(NO, @"当前系统不支持页内翻译");
+            }
+            return;
+        }
+        [self startReplaceTranslationForWebView:webView
+                         targetLocaleIdentifier:localeID
+                                     completion:completion];
+        return;
+    }
+
+    BrowserTranslationPipelineSession *session =
+        [self beginSessionForWebView:webView
+              targetLocaleIdentifier:localeID
+                                mode:mode
+                          completion:completion];
+    [self startJSPresentationTranslationForSession:session];
+}
+
+- (void)startReplaceTranslationForWebView:(WKWebView *)webView
+                   targetLocaleIdentifier:(NSString *)localeID
+                               completion:(void (^)(BOOL, NSString * _Nullable))completion {
+    (void)[self beginSessionForWebView:webView
+                targetLocaleIdentifier:localeID
+                                  mode:BrowserTranslationPresentationModeReplace
+                            completion:completion];
 
     ((void (*)(id, SEL, id))objc_msgSend)(webView, NSSelectorFromString(@"_setTextManipulationDelegate:"), self);
 
@@ -217,6 +246,7 @@
         ((void (*)(id, SEL, BOOL))objc_msgSend)(configuration, NSSelectorFromString(@"setIncludeSubframes:"), YES);
     }
 
+    __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWebView = webView;
     ((void (*)(id, SEL, id, id))objc_msgSend)(
         webView,
@@ -239,6 +269,188 @@
         });
 }
 
+- (void)startJSPresentationTranslationForSession:(BrowserTranslationPipelineSession *)session {
+    if (session.cancelled || session.completed) {
+        return;
+    }
+    WKWebView *webView = session.webView;
+    if (webView == nil) {
+        [self finishSession:session success:NO message:@"页面已关闭"];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [[self class] ensureBridgeInWebView:webView completion:^(BOOL ready) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed) {
+            return;
+        }
+        if (!ready) {
+            [strongSelf finishSession:session success:NO message:@"无法注入翻译脚本"];
+            return;
+        }
+        NSString *collectJS =
+            @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.collectCandidates)"
+            @"{return{ok:false,candidates:[],total:0};}"
+            @"return window.__MeoTranslation.collectCandidates();})()";
+        [[strongSelf class] evaluateJavaScript:collectJS inWebView:webView completion:^(id value) {
+            __strong typeof(weakSelf) innerSelf = weakSelf;
+            if (!innerSelf || session.cancelled || session.completed) {
+                return;
+            }
+            [innerSelf continueJSPresentationWithCollectResult:value session:session];
+        }];
+    }];
+}
+
+- (void)continueJSPresentationWithCollectResult:(id)value
+                                        session:(BrowserTranslationPipelineSession *)session {
+    if (session.cancelled || session.completed) {
+        return;
+    }
+    WKWebView *webView = session.webView;
+    if (webView == nil) {
+        [self finishSession:session success:NO message:@"页面已关闭"];
+        return;
+    }
+
+    NSArray *rawCandidates = nil;
+    if ([value isKindOfClass:[NSDictionary class]]) {
+        rawCandidates = value[@"candidates"];
+    }
+    if (![rawCandidates isKindOfClass:[NSArray class]] || rawCandidates.count == 0) {
+        [self finishSession:session success:NO message:@"未找到可翻译文本"];
+        return;
+    }
+
+    BrowserTextTranslationService *service = [BrowserTextTranslationService sharedService];
+    NSMutableArray<NSDictionary *> *jobs = [NSMutableArray array];
+    NSMutableSet<NSString *> *seenSources = [NSMutableSet set];
+    for (id entry in rawCandidates) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSString *candidateId = [entry[@"id"] isKindOfClass:[NSString class]] ? entry[@"id"] : nil;
+        NSString *source = [entry[@"source"] isKindOfClass:[NSString class]] ? entry[@"source"] : nil;
+        if (candidateId.length == 0 || source.length == 0) {
+            continue;
+        }
+        if (![service isSuitableForPresentationTranslation:source]) {
+            continue;
+        }
+        NSString *normalizedSource =
+            [[source stringByReplacingOccurrencesOfString:@"\\s+"
+                                               withString:@" "
+                                                  options:NSRegularExpressionSearch
+                                                    range:NSMakeRange(0, source.length)]
+             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (normalizedSource.length == 0 || [seenSources containsObject:normalizedSource]) {
+            continue;
+        }
+        [seenSources addObject:normalizedSource];
+        [jobs addObject:@{
+            @"id": candidateId,
+            @"text": source,
+        }];
+    }
+
+    if (jobs.count == 0) {
+        [self finishSession:session success:NO message:@"未找到可翻译文本"];
+        return;
+    }
+
+    NSMutableArray<NSString *> *texts = [NSMutableArray arrayWithCapacity:jobs.count];
+    for (NSDictionary *job in jobs) {
+        [texts addObject:job[@"text"] ?: @""];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [[BrowserTextTranslationService sharedService] translateTexts:texts
+                                                     targetLocale:session.targetLocale
+                                                      concurrency:6
+                                                       completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed) {
+            return;
+        }
+        NSMutableArray<NSDictionary *> *units = [NSMutableArray array];
+        for (NSUInteger i = 0; i < jobs.count && i < translatedOrEmpty.count; i++) {
+            NSString *translated = translatedOrEmpty[i];
+            if (translated.length == 0) {
+                continue;
+            }
+            NSDictionary *job = jobs[i];
+            [units addObject:@{
+                @"id": job[@"id"] ?: @"",
+                @"source": job[@"text"] ?: @"",
+                @"text": translated,
+            }];
+        }
+        if (units.count == 0) {
+            [strongSelf finishSession:session success:NO message:@"翻译服务暂时不可用"];
+            return;
+        }
+        [strongSelf applyJSPresentationByIdWithUnits:units
+                                             session:session
+                                       failureCount:failureCount];
+    }];
+}
+
+- (void)applyJSPresentationByIdWithUnits:(NSArray<NSDictionary *> *)units
+                                 session:(BrowserTranslationPipelineSession *)session
+                           failureCount:(NSUInteger)failureCount {
+    if (session.cancelled || session.completed) {
+        return;
+    }
+    WKWebView *webView = session.webView;
+    if (webView == nil) {
+        [self finishSession:session success:NO message:@"页面已关闭"];
+        return;
+    }
+
+    NSString *unitsJSON = [[self class] jsonStringFromObject:units];
+    if (unitsJSON.length == 0) {
+        [self finishSession:session success:NO message:@"翻译结果无效"];
+        return;
+    }
+
+    NSString *method = (session.mode == BrowserTranslationPresentationModeHover)
+        ? @"applyHoverById"
+        : @"applyBilingualById";
+    NSString *js = [NSString stringWithFormat:
+                    @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.%@){return {ok:false};}"
+                    @"return window.__MeoTranslation.%@(%@);})()",
+                    method, method, unitsJSON];
+
+    __weak typeof(self) weakSelf = self;
+    [[self class] evaluateJavaScript:js inWebView:webView completion:^(id value) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed) {
+            return;
+        }
+        NSInteger applied = 0;
+        NSInteger total = (NSInteger)units.count;
+        if ([value isKindOfClass:[NSDictionary class]]) {
+            applied = [value[@"applied"] integerValue];
+            if (value[@"total"] != nil) {
+                total = [value[@"total"] integerValue];
+            }
+        }
+        BOOL ok = YES;
+        NSString *message = nil;
+        if (applied == 0) {
+            ok = NO;
+            message = @"未能在页面上应用译文";
+        } else if (applied <= 2 && total >= 10) {
+            ok = NO;
+            message = @"未能定位正文译文";
+        } else if (applied < total || failureCount > 0) {
+            message = @"部分段落未译出";
+        }
+        [strongSelf finishSession:session success:ok message:message];
+    }];
+}
+
 #pragma mark - _WKTextManipulationDelegate
 
 - (void)_webView:(WKWebView *)webView didFindTextManipulationItems:(NSArray *)items {
@@ -256,7 +468,7 @@
     [self _webView:webView didFindTextManipulationItems:@[ item ]];
 }
 
-#pragma mark - Translate pipeline
+#pragma mark - Translate pipeline (Replace / TextManipulation)
 
 - (void)translateCollectedItemsForSession:(BrowserTranslationPipelineSession *)session {
     if (session.cancelled || session.completed) {
@@ -272,6 +484,7 @@
         return;
     }
 
+    BrowserTextTranslationService *translateService = [BrowserTextTranslationService sharedService];
     NSMutableArray<NSDictionary *> *jobs = [NSMutableArray array];
     for (id item in session.collectedItems) {
         NSArray *tokens = [item valueForKey:@"tokens"];
@@ -287,8 +500,11 @@
                 excluded = NO;
             }
             NSString *content = [token valueForKey:@"content"];
-            if (!excluded && [content isKindOfClass:[NSString class]]
-                && [[BrowserTextTranslationService sharedService] shouldTranslateText:content]) {
+            if (excluded || ![content isKindOfClass:[NSString class]]) {
+                index += 1;
+                continue;
+            }
+            if ([translateService shouldTranslateText:content]) {
                 [jobs addObject:@{
                     @"item": item,
                     @"tokenIndex": @(index),
@@ -329,17 +545,10 @@
             [strongSelf finishSession:session success:NO message:@"翻译服务暂时不可用"];
             return;
         }
-        if (session.mode == BrowserTranslationPresentationModeReplace) {
-            [strongSelf applyReplaceTranslations:translatedByJob
-                                            jobs:jobs
-                                         session:session
-                                   failureCount:failureCount];
-        } else {
-            [strongSelf applyJSPresentationWithTranslations:translatedByJob
-                                                       jobs:jobs
-                                                    session:session
-                                              failureCount:failureCount];
-        }
+        [strongSelf applyReplaceTranslations:translatedByJob
+                                        jobs:jobs
+                                     session:session
+                               failureCount:failureCount];
     }];
 }
 
@@ -442,101 +651,6 @@
                 [strongSelf finishSession:session success:ok message:message];
             });
         });
-}
-
-- (void)applyJSPresentationWithTranslations:(NSDictionary<NSNumber *, NSString *> *)translatedByJob
-                                       jobs:(NSArray<NSDictionary *> *)jobs
-                                    session:(BrowserTranslationPipelineSession *)session
-                              failureCount:(NSUInteger)failureCount {
-    if (session.cancelled || session.completed) {
-        return;
-    }
-    WKWebView *webView = session.webView;
-    if (webView == nil) {
-        [self finishSession:session success:NO message:@"页面已关闭"];
-        return;
-    }
-
-    // Bilingual / Hover：不调用 completeTextManipulation，保留原文。
-    // 过滤域名/URL/短元数据，并按规范化 source 去重（Replace 路径不受影响）。
-    BrowserTextTranslationService *service = [BrowserTextTranslationService sharedService];
-    NSMutableArray<NSDictionary *> *units = [NSMutableArray array];
-    NSMutableSet<NSString *> *seenSources = [NSMutableSet set];
-    NSArray<NSNumber *> *sortedKeys = [[translatedByJob allKeys] sortedArrayUsingSelector:@selector(compare:)];
-    for (NSNumber *jobIndex in sortedKeys) {
-        NSDictionary *job = jobs[jobIndex.unsignedIntegerValue];
-        NSString *source = job[@"text"] ?: @"";
-        NSString *text = translatedByJob[jobIndex] ?: @"";
-        if (source.length == 0 || text.length == 0) {
-            continue;
-        }
-        if (![service isSuitableForPresentationTranslation:source]) {
-            continue;
-        }
-        NSString *normalizedSource =
-            [[source stringByReplacingOccurrencesOfString:@"\\s+"
-                                               withString:@" "
-                                                  options:NSRegularExpressionSearch
-                                                    range:NSMakeRange(0, source.length)]
-             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (normalizedSource.length == 0 || [seenSources containsObject:normalizedSource]) {
-            continue;
-        }
-        [seenSources addObject:normalizedSource];
-        [units addObject:@{
-            @"id": [NSString stringWithFormat:@"u%lu", (unsigned long)jobIndex.unsignedIntegerValue],
-            @"source": source,
-            @"text": text,
-        }];
-    }
-    if (units.count == 0) {
-        [self finishSession:session success:NO message:@"翻译结果为空"];
-        return;
-    }
-
-    NSString *unitsJSON = [[self class] jsonStringFromObject:units];
-    if (unitsJSON.length == 0) {
-        [self finishSession:session success:NO message:@"翻译结果无效"];
-        return;
-    }
-
-    NSString *method = (session.mode == BrowserTranslationPresentationModeHover)
-        ? @"applyHover"
-        : @"applyBilingual";
-    NSString *js = [NSString stringWithFormat:
-                    @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.%@){return {ok:false};}"
-                    @"return window.__MeoTranslation.%@(%@);})()",
-                    method, method, unitsJSON];
-
-    __weak typeof(self) weakSelf = self;
-    [[self class] ensureBridgeInWebView:webView completion:^(BOOL ready) {
-        (void)ready;
-        if (session.cancelled || session.completed) {
-            return;
-        }
-        [[self class] evaluateJavaScript:js inWebView:webView completion:^(id value) {
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf || session.cancelled || session.completed) {
-                return;
-            }
-            NSInteger applied = 0;
-            NSInteger total = (NSInteger)units.count;
-            if ([value isKindOfClass:[NSDictionary class]]) {
-                applied = [value[@"applied"] integerValue];
-                if (value[@"total"] != nil) {
-                    total = [value[@"total"] integerValue];
-                }
-            }
-            BOOL ok = applied > 0;
-            NSString *message = nil;
-            if (ok && (applied < total || failureCount > 0)) {
-                message = @"部分段落未译出";
-            } else if (!ok) {
-                message = @"未能在页面上应用译文";
-            }
-            [strongSelf finishSession:session success:ok message:message];
-        }];
-    }];
 }
 
 - (void)finishSession:(BrowserTranslationPipelineSession *)session
