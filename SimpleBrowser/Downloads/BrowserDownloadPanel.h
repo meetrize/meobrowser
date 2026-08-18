@@ -7,6 +7,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol BrowserDownloadPanelDelegate <NSObject>
 - (void)downloadPanelDidRequestClose:(BrowserDownloadPanel *)panel;
+- (void)downloadPanelDidRequestSettings:(BrowserDownloadPanel *)panel;
 @end
 
 @interface BrowserDownloadPanel : NSPanel

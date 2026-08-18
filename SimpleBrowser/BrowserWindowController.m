@@ -20,6 +20,7 @@
 #import "BrowserPageTranslationController.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
+#import "BrowserSettingsWindowController.h"
 #import "BrowserDownloadProgressRingView.h"
 #import "BrowserHistoryStore.h"
 #import "BrowserHistorySidebarController.h"
@@ -1342,6 +1343,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)downloadPanelDidRequestClose:(BrowserDownloadPanel *)panel {
     (void)panel;
     self.downloadPanelVisible = NO;
+}
+
+- (void)downloadPanelDidRequestSettings:(BrowserDownloadPanel *)panel {
+    (void)panel;
+    id delegate = NSApp.delegate;
+    if ([delegate respondsToSelector:@selector(showBrowserSettingsSelectingTabIdentifier:)]) {
+        [(AppDelegate *)delegate showBrowserSettingsSelectingTabIdentifier:BrowserSettingsTabGeneral];
+    } else if ([delegate respondsToSelector:@selector(showBrowserSettings:)]) {
+        [delegate showBrowserSettings:nil];
+    }
 }
 
 #pragma mark - History Sidebar

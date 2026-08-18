@@ -6,7 +6,7 @@ static const CGFloat kRowHeight = 52.0;
 static const CGFloat kPanelWidth = 360.0;
 static const CGFloat kPanelCornerRadius = 8.0;
 static const CGFloat kMaxVisibleRows = 6.0;
-static const CGFloat kHeaderHeight = 36.0;
+static const CGFloat kHeaderHeight = 40.0;
 
 @interface BrowserDownloadFlippedView : NSView
 @end
@@ -287,6 +287,8 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 @property (nonatomic, strong) NSVisualEffectView *effectView;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *clearButton;
+@property (nonatomic, strong) NSButton *folderButton;
+@property (nonatomic, strong) NSButton *settingsButton;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) NSView *rowsContainer;
 @property (nonatomic, strong) NSTextField *emptyLabel;
@@ -350,6 +352,13 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         }
         _clearButton.translatesAutoresizingMaskIntoConstraints = NO;
 
+        _folderButton = [self makeHeaderIconButtonWithSymbol:@"folder"
+                                                     toolTip:@"打开下载文件夹"
+                                                      action:@selector(openFolderClicked:)];
+        _settingsButton = [self makeHeaderIconButtonWithSymbol:@"gearshape"
+                                                       toolTip:@"下载设置…"
+                                                        action:@selector(openSettingsClicked:)];
+
         _emptyLabel = [[NSTextField alloc] initWithFrame:NSZeroRect];
         _emptyLabel.editable = NO;
         _emptyLabel.selectable = NO;
@@ -376,6 +385,8 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         [contentView addSubview:_effectView];
         [_effectView addSubview:_titleLabel];
         [_effectView addSubview:_clearButton];
+        [_effectView addSubview:_folderButton];
+        [_effectView addSubview:_settingsButton];
         [_effectView addSubview:_scrollView];
         [_effectView addSubview:_emptyLabel];
 
@@ -387,8 +398,19 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 
             [_titleLabel.leadingAnchor constraintEqualToAnchor:_effectView.leadingAnchor constant:12],
             [_titleLabel.topAnchor constraintEqualToAnchor:_effectView.topAnchor constant:10],
+            [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_clearButton.leadingAnchor constant:-8],
 
-            [_clearButton.trailingAnchor constraintEqualToAnchor:_effectView.trailingAnchor constant:-10],
+            [_settingsButton.trailingAnchor constraintEqualToAnchor:_effectView.trailingAnchor constant:-8],
+            [_settingsButton.centerYAnchor constraintEqualToAnchor:_titleLabel.centerYAnchor],
+            [_settingsButton.widthAnchor constraintEqualToConstant:28],
+            [_settingsButton.heightAnchor constraintEqualToConstant:28],
+
+            [_folderButton.trailingAnchor constraintEqualToAnchor:_settingsButton.leadingAnchor constant:-2],
+            [_folderButton.centerYAnchor constraintEqualToAnchor:_titleLabel.centerYAnchor],
+            [_folderButton.widthAnchor constraintEqualToConstant:28],
+            [_folderButton.heightAnchor constraintEqualToConstant:28],
+
+            [_clearButton.trailingAnchor constraintEqualToAnchor:_folderButton.leadingAnchor constant:-4],
             [_clearButton.centerYAnchor constraintEqualToAnchor:_titleLabel.centerYAnchor],
 
             [_scrollView.topAnchor constraintEqualToAnchor:_effectView.topAnchor constant:kHeaderHeight],
@@ -401,6 +423,32 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         ]];
     }
     return self;
+}
+
+- (NSButton *)makeHeaderIconButtonWithSymbol:(NSString *)name
+                                     toolTip:(NSString *)toolTip
+                                      action:(SEL)action {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSZeroRect];
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:12
+                                                            weight:NSFontWeightMedium
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:toolTip];
+        button.image = [image imageWithSymbolConfiguration:config];
+    }
+    button.toolTip = toolTip;
+    button.accessibilityLabel = toolTip;
+    button.target = self;
+    button.action = action;
+    return button;
 }
 
 - (BOOL)canBecomeKeyWindow {
@@ -510,6 +558,38 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
 - (void)clearFinished:(id)sender {
     (void)sender;
     [self.manager clearFinishedItems];
+}
+
+- (void)openFolderClicked:(id)sender {
+    (void)sender;
+    NSWindow *owner = self.ownerWindow;
+    BrowserDownloadManager *manager = self.manager;
+    [self dismissPanel];
+    if ([manager openDownloadDirectory]) {
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"无法打开下载文件夹";
+    alert.informativeText = @"请检查下载位置是否可用，或在设置中重新选择。";
+    [alert addButtonWithTitle:@"打开设置"];
+    [alert addButtonWithTitle:@"好"];
+    void (^openSettings)(NSModalResponse) = ^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+        [self.panelDelegate downloadPanelDidRequestSettings:self];
+    };
+    if (owner) {
+        [alert beginSheetModalForWindow:owner completionHandler:openSettings];
+    } else {
+        openSettings([alert runModal]);
+    }
+}
+
+- (void)openSettingsClicked:(id)sender {
+    (void)sender;
+    [self dismissPanel];
+    [self.panelDelegate downloadPanelDidRequestSettings:self];
 }
 
 - (void)rowDidClickReveal:(BrowserDownloadRowView *)row {

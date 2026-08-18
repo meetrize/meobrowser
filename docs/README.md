@@ -35,6 +35,8 @@
 | [minimal-browser/multi-window-development-plan.md](minimal-browser/multi-window-development-plan.md) | 多窗口 — 分阶段开发计划（MW-0～MW-4） |
 | [minimal-browser/download-design.md](minimal-browser/download-design.md) | 下载管理 — 交互与实现方案（V1.1：Safari 对齐 blob / `<a download>`） |
 | [minimal-browser/download-streaming-blob-development-plan.md](minimal-browser/download-streaming-blob-development-plan.md) | 流式 / blob 附件下载 — 开发计划（DL-0～DL-2） |
+| [minimal-browser/download-folder-settings-design.md](minimal-browser/download-folder-settings-design.md) | 下载目录与面板入口 — 打开文件夹 / 自定义目录（V1.2） |
+| [minimal-browser/download-folder-settings-development-plan.md](minimal-browser/download-folder-settings-development-plan.md) | 下载目录与面板入口 — 开发计划（DF-0～DF-2） |
 | [minimal-browser/find-in-page-design.md](minimal-browser/find-in-page-design.md) | 页面内查找 — 浮动条、高亮、字面/通配符双模式方案 |
 | [minimal-browser/find-in-page-development-plan.md](minimal-browser/find-in-page-development-plan.md) | 页面内查找 — 分阶段开发计划（FI-0～FI-3） |
 | [minimal-browser/page-translation-modes-design.md](minimal-browser/page-translation-modes-design.md) | 网页翻译多模式 — 替换 / 双语对照 / 即指即译（已实现） |

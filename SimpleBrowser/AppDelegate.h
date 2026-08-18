@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
                                                        excluding:(nullable BrowserWindowController *)source;
 - (void)hideForeignDropPlaceholdersExcludingStrip:(nullable BrowserTabStripView *)strip;
 - (void)showBrowserSettings:(nullable id)sender;
+- (void)showBrowserSettingsSelectingTabIdentifier:(NSString *)identifier;
 
 @end
 

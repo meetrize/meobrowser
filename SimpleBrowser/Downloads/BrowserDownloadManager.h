@@ -34,7 +34,7 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 - (void)takeOwnershipOfDownload:(WKDownload *)download
              suggestedFilename:(nullable NSString *)suggestedFilename;
 
-/// 主动发起下载（例如将来扩展菜单）；不问路径，写入 Downloads。
+/// 主动发起下载（例如将来扩展菜单）；不问路径，写入当前下载目录（偏好，默认 ~/Downloads）。
 - (void)startDownloadWithURL:(NSURL *)url fromWebView:(WKWebView *)webView;
 - (void)startDownloadWithURL:(NSURL *)url
           suggestedFilename:(nullable NSString *)suggestedFilename
@@ -51,6 +51,11 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 - (void)removeItem:(BrowserDownloadItem *)item;
 - (void)clearFinishedItems;
 - (void)markAllCompletedAsRead;
+
+/// 当前有效下载目录（自定义可用则用之，否则系统「下载」）。
+- (nullable NSURL *)downloadDirectoryURL;
+/// 用系统默认文件管理器打开下载目录（读取全局 NSFileViewer，如 MeoFind；未设置则 Finder）。
+- (BOOL)openDownloadDirectory;
 
 + (BOOL)shouldDownloadNavigationResponse:(WKNavigationResponse *)navigationResponse;
 

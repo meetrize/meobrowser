@@ -155,6 +155,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | 功能 | 说明 |
 |------|------|
 | **下载列表** | 显示进度、打开所在文件夹、取消（见 [download-design.md](download-design.md) V1.1） |
+| **自定义下载目录** | 面板表头打开目录 + 设置里改默认文件夹（见 [download-folder-settings-design.md](download-folder-settings-design.md) V1.2） |
 | **「链接另存为」** | V1：系统右键「下载链接的文件」，静默写入 Downloads |
 | **拖拽下载项到 Finder / 终端** | V1 已支持拖到 Finder |
 
@@ -215,6 +216,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 - [ ] 分屏（双 WebView）
 - [ ] 代理与 Cookie 管理
 - [x] 下载管理基础版（V1.1：见 [download-design.md](download-design.md)）
+- [x] 自定义下载目录 + 面板打开文件夹（V1.2：见 [download-folder-settings-design.md](download-folder-settings-design.md)）
 - [ ] 复制 Markdown 链接、环境分组
 
 ### M4 — 体验深化（持续）

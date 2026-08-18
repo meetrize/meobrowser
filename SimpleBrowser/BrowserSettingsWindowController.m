@@ -6,6 +6,7 @@
 #import "BrowserLocationService.h"
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserWebInspector.h"
+#import "BrowserDownloadPreferences.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -15,6 +16,12 @@
 #import "SBSecureTextField.h"
 #import "BrowserHistoryStore.h"
 #import <WebKit/WebKit.h>
+
+NSString * const BrowserSettingsTabGeneral = @"general";
+NSString * const BrowserSettingsTabSync = @"sync";
+NSString * const BrowserSettingsTabKeyboard = @"keyboard";
+NSString * const BrowserSettingsTabPrivacy = @"privacy";
+NSString * const BrowserSettingsTabDeveloper = @"developer";
 
 @interface BrowserSettingsWindowController () <NSTabViewDelegate>
 @property (nonatomic, strong) NSTabView *tabView;
@@ -33,6 +40,11 @@
 
 @property (nonatomic, strong) NSButton *allowWebInspectionCheckbox;
 @property (nonatomic, strong) NSTextField *developerHintLabel;
+
+@property (nonatomic, strong) NSTextField *downloadPathLabel;
+@property (nonatomic, strong) NSButton *chooseDownloadDirectoryButton;
+@property (nonatomic, strong) NSButton *resetDownloadDirectoryButton;
+@property (nonatomic, strong) NSTextField *downloadDirectoryHintLabel;
 
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
@@ -91,6 +103,10 @@
                                                  selector:@selector(developerPreferencesDidChange:)
                                                      name:BrowserDeveloperPreferencesDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(downloadPreferencesDidChange:)
+                                                     name:BrowserDownloadPreferencesDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -125,10 +141,11 @@
 }
 
 - (void)addTabNamed:(NSString *)title
+         identifier:(NSString *)identifier
               views:(NSArray<NSView *> *)views
           toTabView:(NSTabView *)tabView
        widthViews:(NSArray<NSView *> *)widthViews {
-    NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:title];
+    NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:identifier];
     item.label = title;
     NSView *content = [[NSView alloc] initWithFrame:NSZeroRect];
     content.translatesAutoresizingMaskIntoConstraints = NO;
@@ -176,6 +193,33 @@
     browserRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     browserRow.spacing = 12;
     NSTextField *browserHint = [self makeHint:@"设为默认后，系统中打开的 http/https 链接将由 MeoBrowser 处理。"];
+
+    NSTextField *downloadCaption = [self makeCaption:@"下载位置"];
+    self.downloadPathLabel = [NSTextField labelWithString:@""];
+    self.downloadPathLabel.font = [NSFont systemFontOfSize:12];
+    self.downloadPathLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.downloadPathLabel.usesSingleLineMode = YES;
+    self.downloadPathLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.downloadPathLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.downloadPathLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.chooseDownloadDirectoryButton = [NSButton buttonWithTitle:@"选择…"
+                                                            target:self
+                                                            action:@selector(chooseDownloadDirectoryClicked:)];
+    self.chooseDownloadDirectoryButton.bezelStyle = NSBezelStyleRounded;
+    self.resetDownloadDirectoryButton = [NSButton buttonWithTitle:@"恢复默认"
+                                                           target:self
+                                                           action:@selector(resetDownloadDirectoryClicked:)];
+    self.resetDownloadDirectoryButton.bezelStyle = NSBezelStyleRounded;
+    NSStackView *downloadRow = [NSStackView stackViewWithViews:@[
+        self.downloadPathLabel, self.chooseDownloadDirectoryButton, self.resetDownloadDirectoryButton
+    ]];
+    downloadRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    downloadRow.spacing = 12;
+    downloadRow.alignment = NSLayoutAttributeCenterY;
+    self.downloadDirectoryHintLabel = [self makeHint:@"将文件保存到此文件夹，不再询问。"];
+    [self refreshDownloadDirectoryUI];
 
     // —— 云同步 ——
     self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
@@ -310,11 +354,16 @@
     self.tabView.delegate = self;
 
     [self addTabNamed:@"常规"
-                views:@[searchGrid, searchHint, browserCaption, browserRow, browserHint]
+           identifier:BrowserSettingsTabGeneral
+                views:@[
+                    searchGrid, searchHint, browserCaption, browserRow, browserHint,
+                    downloadCaption, downloadRow, self.downloadDirectoryHintLabel,
+                ]
             toTabView:self.tabView
-           widthViews:@[searchHint, browserHint]];
+           widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel]];
 
     [self addTabNamed:@"云同步"
+           identifier:BrowserSettingsTabSync
                 views:@[
                     self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
                     self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
@@ -324,6 +373,7 @@
            widthViews:@[self.serverLoginBadge, self.serverHintLabel]];
 
     [self addTabNamed:@"键盘"
+           identifier:BrowserSettingsTabKeyboard
                 views:@[
                     self.reloadShortcutEnabledCheckbox, reloadShortcutRow, self.keyboardHintLabel,
                 ]
@@ -331,6 +381,7 @@
            widthViews:@[self.keyboardHintLabel]];
 
     [self addTabNamed:@"隐私"
+           identifier:BrowserSettingsTabPrivacy
                 views:@[
                     privacyRow, self.clearWebsiteDataStatusLabel,
                     self.geolocationEnabledCheckbox, self.locationHintLabel, self.openSystemLocationSettingsButton,
@@ -340,6 +391,7 @@
            widthViews:@[self.locationHintLabel, self.privacyHintLabel]];
 
     [self addTabNamed:@"开发者"
+           identifier:BrowserSettingsTabDeveloper
                 views:@[self.allowWebInspectionCheckbox, self.developerHintLabel]
             toTabView:self.tabView
            widthViews:@[self.developerHintLabel]];
@@ -357,6 +409,7 @@
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [self refreshLocationPermissionHint];
+    [self refreshDownloadDirectoryUI];
 }
 
 - (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
@@ -823,6 +876,69 @@
     BrowserHistoryStore.clearOnQuitEnabled = (self.clearHistoryOnQuitCheckbox.state == NSControlStateValueOn);
 }
 
+- (void)selectTabWithIdentifier:(NSString *)identifier {
+    if (identifier.length == 0 || !self.tabView) {
+        return;
+    }
+    NSInteger index = [self.tabView indexOfTabViewItemWithIdentifier:identifier];
+    if (index == NSNotFound) {
+        return;
+    }
+    [self.tabView selectTabViewItemAtIndex:index];
+}
+
+- (void)downloadPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshDownloadDirectoryUI];
+}
+
+- (void)refreshDownloadDirectoryUI {
+    BrowserDownloadPreferences *prefs = [BrowserDownloadPreferences sharedPreferences];
+    self.downloadPathLabel.stringValue = prefs.displayPath ?: @"~/Downloads";
+    NSURL *tooltipURL = prefs.customDirectoryURL ?: prefs.effectiveDirectoryURL;
+    self.downloadPathLabel.toolTip = tooltipURL.path;
+    self.resetDownloadDirectoryButton.enabled = prefs.usesCustomDirectory;
+    if (prefs.usesCustomDirectory && !prefs.customDirectoryIsReachable) {
+        self.downloadDirectoryHintLabel.stringValue =
+            @"该文件夹不可用，新下载将保存到系统下载文件夹。可重新选择或恢复默认。";
+        self.downloadDirectoryHintLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        self.downloadDirectoryHintLabel.stringValue = @"将文件保存到此文件夹，不再询问。";
+        self.downloadDirectoryHintLabel.textColor = [NSColor secondaryLabelColor];
+    }
+}
+
+- (void)chooseDownloadDirectoryClicked:(id)sender {
+    (void)sender;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = NO;
+    panel.canChooseDirectories = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.canCreateDirectories = YES;
+    panel.prompt = @"选择";
+    panel.message = @"选择下载文件夹";
+    NSURL *current = [BrowserDownloadPreferences sharedPreferences].customDirectoryURL
+        ?: [BrowserDownloadPreferences sharedPreferences].effectiveDirectoryURL;
+    if (current) {
+        panel.directoryURL = current;
+    }
+    __weak typeof(self) weakSelf = self;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        typeof(self) self = weakSelf;
+        if (!self || result != NSModalResponseOK || panel.URL == nil) {
+            return;
+        }
+        [BrowserDownloadPreferences sharedPreferences].customDirectoryURL = panel.URL;
+        [self refreshDownloadDirectoryUI];
+    }];
+}
+
+- (void)resetDownloadDirectoryClicked:(id)sender {
+    (void)sender;
+    [[BrowserDownloadPreferences sharedPreferences] resetToSystemDownloadsDirectory];
+    [self refreshDownloadDirectoryUI];
+}
+
 - (void)showWindow:(id)sender {
     [self stopRecordingReloadShortcut];
     [self selectCurrentSearchEngineInPopUp];
@@ -835,6 +951,7 @@
     [self refreshDeveloperInspectionUI];
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
+    [self refreshDownloadDirectoryUI];
     [super showWindow:sender];
 }
 

@@ -253,6 +253,11 @@
     [_settingsWindowController.window makeKeyAndOrderFront:nil];
 }
 
+- (void)showBrowserSettingsSelectingTabIdentifier:(NSString *)identifier {
+    [self showBrowserSettings:nil];
+    [_settingsWindowController selectTabWithIdentifier:identifier];
+}
+
 - (void)showLoginAssistSettings:(id)sender {
     (void)sender;
     BrowserWindowController *keyBrowser = [self keyBrowserWindowController];

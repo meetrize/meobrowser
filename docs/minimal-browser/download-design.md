@@ -1,8 +1,8 @@
 # 下载管理 — 交互与实现方案（V1）
 
 > 目标：为 MeoBrowser 提供轻量、可预期的文件下载能力，默认静默写入「下载」文件夹，并用工具栏浮层面板管理进度与文件操作。  
-> 状态：**V1.1 已实现**（2026-08-18）— 对齐 Safari 的 `<a download>` / blob 附件与流式落盘；豆包等媒体站仍走专用回退。  
-> 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.8 · [design.md](design.md) · [download-streaming-blob-development-plan.md](download-streaming-blob-development-plan.md)
+> 状态：**V1.1 已实现**（2026-08-18）；**V1.2 已实现**（2026-08-18）— 面板打开下载目录 + 设置自定义目录。  
+> 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.8 · [design.md](design.md) · [download-streaming-blob-development-plan.md](download-streaming-blob-development-plan.md) · [download-folder-settings-design.md](download-folder-settings-design.md) · [download-folder-settings-development-plan.md](download-folder-settings-development-plan.md)
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 1.2 不做什么（V1）
 
-- 不弹出 `NSSavePanel` / 不询问保存位置（V2 可选设置）
+- 不弹出 `NSSavePanel` / 不询问**单次**保存位置（V1.2 可在设置里改默认目录；「下载前询问」仍为 V2）
 - 不做底部 Chrome 式 shelf、不做独立下载窗口、不做侧栏
 - 不暂停 / 断点续传 UI（`resumeData` 仅保留给失败状态，不暴露）
 - 不做永久下载历史库；仅内存中保留「进行中 + 近期完成」
@@ -70,9 +70,10 @@
 ### 2.3 下载面板
 
 - 非激活浮层（`canBecomeKeyWindow == NO`），点外部 / Esc / 再按 ⌘J 关闭  
-- 表头：「下载」+「清空已完成」  
+- 表头：左「下载」；右「清空已完成」+ 打开下载文件夹 + 设置（**V1.2**，空列表也显示图标）  
 - 行：文件名、来源 host、进度条/状态文案、取消或显示/打开  
 - 最多约 6 行可见，其余滚动；条目上限约 50，超出剔除最旧已完成项  
+- 打开目录 / 自定义下载位置：见 [download-folder-settings-design.md](download-folder-settings-design.md)  
 
 ### 2.4 菜单
 
@@ -128,7 +129,7 @@ navigationAction.shouldPerformDownload   // <a download> 等同站资源
 
 ### 3.2 落盘规则
 
-1. 目录 = 用户「下载」文件夹（`NSDownloadsDirectory`）  
+1. 目录 = 设置中的下载位置；未自定义时为用户「下载」文件夹（`NSDownloadsDirectory`）。见 V1.2  
 2. 文件名优先级（与 Safari 一致）：  
    `<a download>` → `Content-Disposition` 的 `filename*` / `filename` → WebKit `suggestedFilename` → URL 末段 → MIME / 魔数默认名  
 3. 无扩展名时按 MIME 补全（zip / pdf / 常见办公文档等）  
@@ -180,16 +181,20 @@ V1.1：
 | 路径 | 说明 |
 |------|------|
 | `SimpleBrowser/Downloads/BrowserDownloadItem.*` | 下载项模型 |
-| `SimpleBrowser/Downloads/BrowserDownloadManager.*` | `WKDownloadDelegate`、落盘、`~/Downloads` |
-| `SimpleBrowser/Downloads/BrowserDownloadPanel.*` | 工具栏锚点浮层列表 |
+| `SimpleBrowser/Downloads/BrowserDownloadPreferences.*` | 自定义下载目录（V1.2） |
+| `SimpleBrowser/Downloads/BrowserDownloadManager.*` | `WKDownloadDelegate`、落盘（有效目录） |
+| `SimpleBrowser/Downloads/BrowserDownloadPanel.*` | 工具栏锚点浮层列表；表头打开目录 / 设置 |
 | `SimpleBrowser/BrowserWindowController.m` | 导航策略 + 按钮 + ⌘J + 关窗确认 |
+| `SimpleBrowser/BrowserSettingsWindowController.*` | 常规「下载位置」 |
 | `SimpleBrowser/BrowserMenus.m` | 「文件 → 下载」⌘J |
 
 ---
 
 ## 5. V2 展望（不在本版）
 
-- 设置：自定义目录、「下载前询问」开关  
+- 「下载前询问」开关（每次 `NSSavePanel`）  
 - 完成通知（Notification Center）  
 - 失败重试 / 续传 UI  
 - 强制下载当前页（PDF 另存）显式入口  
+
+自定义下载目录已收到 [V1.2](download-folder-settings-design.md)。  

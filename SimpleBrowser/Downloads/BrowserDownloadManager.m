@@ -1,5 +1,6 @@
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadItem.h"
+#import "BrowserDownloadPreferences.h"
 #import "BrowserSSLExceptionStore.h"
 #import "BrowserFeedReader.h"
 #import "BrowserRiskHostPolicy.h"
@@ -12,7 +13,7 @@ static const NSUInteger kMaxKeptItems = 50;
 
 static NSString *HostFromURL(NSURL *url);
 static NSString *SanitizedFilename(NSString *raw);
-static NSURL *UniqueDestinationURLInDownloads(NSString *filename);
+static NSURL *UniqueDestinationURL(NSString *filename);
 static NSString *ExtensionForMIMEType(NSString *mime);
 static NSString *DefaultFilenameForMIMEType(NSString *mime);
 static NSString *JSONStringLiteral(NSString *string);
@@ -486,7 +487,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
 
     NSString *ext = ExtensionForMIMEType(mime);
     NSString *filename = SanitizedFilename([NSString stringWithFormat:@"image.%@", ext]);
-    NSURL *destination = UniqueDestinationURLInDownloads(filename);
+    NSURL *destination = UniqueDestinationURL(filename);
     if (!destination) {
         return;
     }
@@ -1041,7 +1042,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
         filename = DefaultFilenameForMIMEType(resolvedMIME);
     }
     filename = SanitizedFilename(filename);
-    NSURL *destination = UniqueDestinationURLInDownloads(filename);
+    NSURL *destination = UniqueDestinationURL(filename);
     if (!destination) {
         [self failBlobDownloadItem:item message:@"无法写入下载文件夹"];
         return;
@@ -1087,6 +1088,63 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     } else {
         [self markItemAsCancelled:item];
     }
+}
+
+/// 用户指定的默认文件管理器（全局 NSFileViewer，如 MeoFind）。
+/// 对目录调用 openURL: / URLForApplicationToOpenURL: 会被系统固定交给 Finder，必须绕开。
+static NSURL *MeoDefaultFileViewerApplicationURL(void) {
+    NSString *bundleID = [NSUserDefaults.standardUserDefaults stringForKey:@"NSFileViewer"];
+    if (bundleID.length == 0) {
+        return nil;
+    }
+    return [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:bundleID];
+}
+
+static BOOL MeoOpenURLsWithApplication(NSArray<NSURL *> *urls, NSURL *appURL) {
+    if (urls.count == 0 || !appURL) {
+        return NO;
+    }
+    if (@available(macOS 11.0, *)) {
+        NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+        config.activates = YES;
+        [NSWorkspace.sharedWorkspace openURLs:urls
+                        withApplicationAtURL:appURL
+                               configuration:config
+                           completionHandler:nil];
+        return YES;
+    }
+    return NO;
+}
+
+static BOOL MeoOpenDirectoryWithDefaultFileManager(NSURL *directoryURL) {
+    if (!directoryURL.isFileURL || directoryURL.path.length == 0) {
+        return NO;
+    }
+    NSURL *viewerURL = MeoDefaultFileViewerApplicationURL();
+    if (MeoOpenURLsWithApplication(@[directoryURL], viewerURL)) {
+        return YES;
+    }
+    // 未设置 NSFileViewer 时退回系统目录打开（通常为 Finder）
+    return [NSWorkspace.sharedWorkspace openURL:directoryURL];
+}
+
+- (nullable NSURL *)downloadDirectoryURL {
+    return [BrowserDownloadPreferences sharedPreferences].effectiveDirectoryURL;
+}
+
+- (BOOL)openDownloadDirectory {
+    BrowserDownloadPreferences *prefs = [BrowserDownloadPreferences sharedPreferences];
+    NSURL *custom = prefs.customDirectoryURL;
+    if (custom && prefs.customDirectoryIsReachable) {
+        if (MeoOpenDirectoryWithDefaultFileManager(custom)) {
+            return YES;
+        }
+    }
+    NSURL *effective = prefs.effectiveDirectoryURL;
+    if (effective) {
+        return MeoOpenDirectoryWithDefaultFileManager(effective);
+    }
+    return NO;
 }
 
 - (void)revealItemInFinder:(BrowserDownloadItem *)item {
@@ -1265,7 +1323,7 @@ decideDestinationUsingResponse:(NSURLResponse *)response
         item.sourceHost = HostFromURL(item.sourceURL);
     }
 
-    NSURL *destination = UniqueDestinationURLInDownloads(name);
+    NSURL *destination = UniqueDestinationURL(name);
     if (!destination) {
         item.state = BrowserDownloadStateFailed;
         item.errorMessage = @"无法写入下载文件夹";
@@ -1972,27 +2030,22 @@ static NSString *FilenameFromContentDisposition(NSString *disposition) {
     return nil;
 }
 
-static NSURL *UniqueDestinationURLInDownloads(NSString *filename) {
+static NSURL *UniqueDestinationURL(NSString *filename) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSError *error = nil;
-    NSURL *downloads = [fm URLForDirectory:NSDownloadsDirectory
-                                  inDomain:NSUserDomainMask
-                         appropriateForURL:nil
-                                    create:YES
-                                     error:&error];
-    if (!downloads) {
+    NSURL *directory = [BrowserDownloadPreferences sharedPreferences].effectiveDirectoryURL;
+    if (!directory) {
         return nil;
     }
 
     NSString *baseName = [filename stringByDeletingPathExtension];
     NSString *extension = filename.pathExtension;
-    NSURL *candidate = [downloads URLByAppendingPathComponent:filename isDirectory:NO];
+    NSURL *candidate = [directory URLByAppendingPathComponent:filename isDirectory:NO];
     NSInteger suffix = 1;
     while ([fm fileExistsAtPath:candidate.path]) {
         NSString *nextName = extension.length > 0
             ? [NSString stringWithFormat:@"%@-%ld.%@", baseName, (long)suffix, extension]
             : [NSString stringWithFormat:@"%@-%ld", baseName, (long)suffix];
-        candidate = [downloads URLByAppendingPathComponent:nextName isDirectory:NO];
+        candidate = [directory URLByAppendingPathComponent:nextName isDirectory:NO];
         suffix += 1;
         if (suffix > 10000) {
             return nil;

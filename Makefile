@@ -81,6 +81,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedURLSchemeHandler.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedAssistController.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadItem.m \
+                   $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPreferences.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadManager.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadPanel.m \
                    $(BROWSER_SRC_DIR)/Downloads/BrowserDownloadProgressRingView.m \
