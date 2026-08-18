@@ -17,6 +17,12 @@ static NSString *ExtensionForMIMEType(NSString *mime);
 static NSString *DefaultFilenameForMIMEType(NSString *mime);
 static NSString *JSONStringLiteral(NSString *string);
 static NSString *MIMETypeBySniffingData(NSData *data);
+static BOOL HostNeedsMediaCapture(NSString *host);
+static BOOL FilenameLooksLikeMedia(NSString *filename);
+static BOOL FilenameIsGenericPlaceholder(NSString *filename);
+static NSString *EnsureFilenameExtension(NSString *filename, NSString *mime);
+static NSString *FilenameFromContentDisposition(NSString *disposition);
+static NSString *HTTPHeaderValue(NSHTTPURLResponse *http, NSString *name);
 
 /// blob: 分块拉取时每段二进制大小（Base64 约再 ×4/3）。
 static const NSUInteger kBlobDownloadChunkBytes = 256 * 1024;
@@ -41,7 +47,9 @@ static NSArray<NSString *> *ProgressKVOKeyPaths(void) {
 
 @interface BrowserDownloadManager (Private)
 - (void)saveDataURL:(NSURL *)url;
-- (void)saveBlobURL:(NSURL *)url fromWebView:(WKWebView *)webView;
+- (void)saveBlobURL:(NSURL *)url
+ suggestedFilename:(NSString *)suggestedFilename
+       fromWebView:(WKWebView *)webView;
 - (void)failBlobDownloadItem:(BrowserDownloadItem *)item message:(NSString *)message;
 - (void)finishBlobDownloadItem:(BrowserDownloadItem *)item
                       withData:(NSData *)data
@@ -61,6 +69,8 @@ static NSArray<NSString *> *ProgressKVOKeyPaths(void) {
                               sourceURL:(NSURL *)sourceURL
                                    mime:(NSString *)mime
                                    size:(NSUInteger)totalSize;
+- (BOOL)retryFailedBlobDownload:(BrowserDownloadItem *)item
+                       webView:(WKWebView *)webView;
 @end
 
 static BOOL DataLooksLikeTextError(NSData *data);
@@ -359,10 +369,21 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
 }
 
 - (void)takeOwnershipOfDownload:(WKDownload *)download {
+    [self takeOwnershipOfDownload:download suggestedFilename:nil];
+}
+
+- (void)takeOwnershipOfDownload:(WKDownload *)download
+             suggestedFilename:(NSString *)suggestedFilename {
     if (!download) {
         return;
     }
-    if ([self.itemByDownload objectForKey:download]) {
+    BrowserDownloadItem *existing = [self.itemByDownload objectForKey:download];
+    if (existing) {
+        if (suggestedFilename.length > 0 && FilenameIsGenericPlaceholder(existing.preferredFilename ?: existing.filename)) {
+            existing.preferredFilename = SanitizedFilename(suggestedFilename);
+            existing.filename = existing.preferredFilename;
+            [self notifyChange];
+        }
         return;
     }
 
@@ -371,7 +392,11 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     item.state = BrowserDownloadStatePending;
     item.sourceURL = download.originalRequest.URL;
     item.sourceHost = HostFromURL(download.originalRequest.URL);
-    if (download.originalRequest.URL.lastPathComponent.length > 0) {
+    if (suggestedFilename.length > 0) {
+        item.preferredFilename = SanitizedFilename(suggestedFilename);
+        item.filename = item.preferredFilename;
+    } else if (download.originalRequest.URL.lastPathComponent.length > 0
+               && ![download.originalRequest.URL.scheme.lowercaseString isEqualToString:@"blob"]) {
         item.filename = download.originalRequest.URL.lastPathComponent;
     }
 
@@ -383,6 +408,12 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
 }
 
 - (void)startDownloadWithURL:(NSURL *)url fromWebView:(WKWebView *)webView {
+    [self startDownloadWithURL:url suggestedFilename:nil fromWebView:webView];
+}
+
+- (void)startDownloadWithURL:(NSURL *)url
+          suggestedFilename:(NSString *)suggestedFilename
+                fromWebView:(WKWebView *)webView {
     if (!url) {
         return;
     }
@@ -393,7 +424,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     }
     // blob: 仅存在于页面内存，WKDownload / 网络请求无法读取，须在同源 WebView 内 fetch。
     if ([scheme isEqualToString:@"blob"]) {
-        [self saveBlobURL:url fromWebView:webView];
+        [self saveBlobURL:url suggestedFilename:suggestedFilename fromWebView:webView];
         return;
     }
     if (!webView) {
@@ -410,8 +441,9 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
             }
         }
         __weak typeof(self) weakSelf = self;
+        NSString *name = [suggestedFilename copy];
         [webView startDownloadUsingRequest:request completionHandler:^(WKDownload *download) {
-            [weakSelf takeOwnershipOfDownload:download];
+            [weakSelf takeOwnershipOfDownload:download suggestedFilename:name];
         }];
     }
 }
@@ -482,15 +514,27 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     [self notifyChange];
 }
 
-- (void)saveBlobURL:(NSURL *)url fromWebView:(WKWebView *)webView {
+- (void)saveBlobURL:(NSURL *)url
+ suggestedFilename:(NSString *)suggestedFilename
+       fromWebView:(WKWebView *)webView {
     if (!url || !webView) {
         return;
     }
 
+    BOOL mediaHost = HostNeedsMediaCapture(webView.URL.host);
+    BOOL requireMedia = mediaHost
+        && (suggestedFilename.length == 0 || FilenameLooksLikeMedia(suggestedFilename));
+
     BrowserDownloadItem *item = [[BrowserDownloadItem alloc] init];
     item.sourceURL = url;
     item.sourceHost = HostFromURL(url) ?: @"blob";
-    item.filename = @"video.mp4";
+    item.requiresMediaContent = requireMedia;
+    if (suggestedFilename.length > 0) {
+        item.preferredFilename = SanitizedFilename(suggestedFilename);
+        item.filename = item.preferredFilename;
+    } else {
+        item.filename = requireMedia ? @"video.mp4" : @"download";
+    }
     item.state = BrowserDownloadStateDownloading;
     item.progress = 0;
     item.createdAt = [NSDate date];
@@ -505,6 +549,8 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     NSString *functionBody =
         @"const preferred = preferredArg;"
          "const sessionId = sessionIdArg;"
+         "const preferMedia = !!preferMediaArg;"
+         "const suggestedName = (typeof suggestedNameArg === 'string') ? suggestedNameArg : '';"
          "function looksLikeMedia(u8, mime) {"
          "  if (mime && /^(video|audio|image)\\//i.test(mime)) { return true; }"
          "  if (!u8 || u8.length < 12) { return false; }"
@@ -533,22 +579,55 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
          "  var t = asTextPreview(u8);"
          "  return /unsupported|not support|error|fail|denied|DOCTYPE|html/i.test(t) || u8.length < 2048;"
          "}"
+         "function downloadNameFromPage(url) {"
+         "  if (suggestedName) { return suggestedName; }"
+         "  try {"
+         "    const nodes = document.querySelectorAll('a[download]');"
+         "    for (const a of nodes) {"
+         "      try {"
+         "        if (a.href === url || a.href === preferred) {"
+         "          const n = a.getAttribute('download');"
+         "          if (n) { return n; }"
+         "        }"
+         "      } catch (e) {}"
+         "    }"
+         "    const el = document.activeElement;"
+         "    if (el && el.tagName === 'A' && el.hasAttribute('download')) {"
+         "      try {"
+         "        if (!url || el.href === url || el.href === preferred) {"
+         "          return el.getAttribute('download') || '';"
+         "        }"
+         "      } catch (e2) {}"
+         "    }"
+         "  } catch (e3) {}"
+         "  return '';"
+         "}"
+         "function withFilename(payload, url) {"
+         "  if (!payload) { return payload; }"
+         "  const name = downloadNameFromPage(url || payload.url || preferred);"
+         "  if (name) { payload.filename = name; }"
+         "  return payload;"
+         "}"
          "function storeBytes(bytes, mime, url) {"
          "  if (!window.__meoBlobDownloads) { window.__meoBlobDownloads = {}; }"
          "  window.__meoBlobDownloads[sessionId] = { bytes: bytes, mime: mime || 'application/octet-stream' };"
-         "  return { ok: true, mode: 'bytes', size: bytes.length, mime: mime || 'application/octet-stream', url: url || preferred };"
+         "  return withFilename({ ok: true, mode: 'bytes', size: bytes.length, mime: mime || 'application/octet-stream', url: url || preferred }, url);"
          "}"
          "async function readBlob(blob, url) {"
          "  const buf = await blob.arrayBuffer();"
          "  const bytes = new Uint8Array(buf);"
          "  const mime = blob.type || '';"
-         "  if (looksLikeTextError(bytes) && !looksLikeMedia(bytes, mime)) {"
-         "    throw new Error(asTextPreview(bytes) || 'blob 不是视频');"
+         "  if (bytes.length === 0) { throw new Error('文件为空'); }"
+         "  if (preferMedia) {"
+         "    if (looksLikeTextError(bytes) && !looksLikeMedia(bytes, mime)) {"
+         "      throw new Error(asTextPreview(bytes) || 'blob 不是视频');"
+         "    }"
+         "    if (!looksLikeMedia(bytes, mime) && bytes.length < 4096) {"
+         "      throw new Error('内容过小，不像视频');"
+         "    }"
+         "    return storeBytes(bytes, mime || 'video/mp4', url);"
          "  }"
-         "  if (!looksLikeMedia(bytes, mime) && bytes.length < 4096) {"
-         "    throw new Error('内容过小，不像视频');"
-         "  }"
-         "  return storeBytes(bytes, mime || 'video/mp4', url);"
+         "  return storeBytes(bytes, mime || 'application/octet-stream', url);"
          "}"
          "function bestCachedHTTPS() {"
          "  const list = (window.__meoMediaHTTPS || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));"
@@ -561,13 +640,16 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
          "function bestCachedBlobEntry() {"
          "  const map = window.__meoMediaBlobByURL || {};"
          "  const preferredEntry = map[preferred];"
-         "  if (preferredEntry && preferredEntry.blob && preferredEntry.size > 4096 && !/^text\\//i.test(preferredEntry.mime || '')) {"
-         "    return { url: preferred, entry: preferredEntry };"
+         "  if (preferredEntry && preferredEntry.blob) {"
+         "    if (!preferMedia || (preferredEntry.size > 0 && !/^text\\//i.test(preferredEntry.mime || ''))) {"
+         "      return { url: preferred, entry: preferredEntry };"
+         "    }"
          "  }"
          "  let best = null, bestURL = null;"
          "  for (const u of Object.keys(map)) {"
          "    const e = map[u];"
-         "    if (!e || !e.blob || !(e.size > 4096) || /^text\\//i.test(e.mime || '')) { continue; }"
+         "    if (!e || !e.blob) { continue; }"
+         "    if (preferMedia && (!(e.size > 4096) || /^text\\//i.test(e.mime || ''))) { continue; }"
          "    if (!best || e.size > best.size) { best = e; bestURL = u; }"
          "  }"
          "  return best ? { url: bestURL, entry: best } : null;"
@@ -618,17 +700,36 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
          "  }"
          "  return null;"
          "}"
-         "async function main() {"
-         "  const https = bestCachedHTTPS();"
-         "  if (https) { return { ok: true, mode: 'url', url: https, mime: 'video/mp4' }; }"
+         "async function readPreferredBlob() {"
          "  const cached = bestCachedBlobEntry();"
+         "  if (cached && cached.url === preferred) {"
+         "    return await readBlob(cached.entry.blob, cached.url);"
+         "  }"
+         "  if (/^blob:/i.test(preferred)) {"
+         "    const res = await fetch(preferred);"
+         "    return await readBlob(await res.blob(), preferred);"
+         "  }"
+         "  if (cached) {"
+         "    return await readBlob(cached.entry.blob, cached.url);"
+         "  }"
+         "  throw new Error('未找到可读取的文件数据');"
+         "}"
+         "async function main() {"
          "  const errors = [];"
+         "  if (!preferMedia) {"
+         "    try { return await readPreferredBlob(); }"
+         "    catch (err) { errors.push(String(err && err.message ? err.message : err)); }"
+         "    throw new Error(errors.filter(Boolean).join('；') || '无法读取要下载的文件');"
+         "  }"
+         "  const https = bestCachedHTTPS();"
+         "  if (https) { return withFilename({ ok: true, mode: 'url', url: https, mime: 'video/mp4' }); }"
+         "  const cached = bestCachedBlobEntry();"
          "  if (cached) {"
          "    try { return await readBlob(cached.entry.blob, cached.url); }"
          "    catch (err) { errors.push(String(err && err.message ? err.message : err)); }"
          "  }"
          "  const playURL = await resolveViaPlayInfo();"
-         "  if (playURL) { return { ok: true, mode: 'url', url: playURL, mime: 'video/mp4' }; }"
+         "  if (playURL) { return withFilename({ ok: true, mode: 'url', url: playURL, mime: 'video/mp4' }); }"
          "  if (/^blob:/i.test(preferred)) {"
          "    try {"
          "      const res = await fetch(preferred);"
@@ -649,6 +750,8 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     NSDictionary *arguments = @{
         @"preferredArg": url.absoluteString ?: @"",
         @"sessionIdArg": sessionID ?: @"",
+        @"preferMediaArg": @(requireMedia),
+        @"suggestedNameArg": suggestedFilename ?: @"",
     };
 
     __weak typeof(self) weakSelf = self;
@@ -664,7 +767,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
         }
         if (error) {
             [strongSelf failBlobDownloadItem:item
-                                     message:error.localizedDescription ?: @"无法读取页面内视频数据"];
+                                     message:error.localizedDescription ?: @"无法读取要下载的文件"];
             return;
         }
         NSString *jsonString = nil;
@@ -675,7 +778,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
             jsonString = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
         }
         if (jsonString.length == 0) {
-            [strongSelf failBlobDownloadItem:item message:@"无法解析视频下载结果"];
+            [strongSelf failBlobDownloadItem:item message:@"无法解析下载结果"];
             return;
         }
 
@@ -684,7 +787,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
             ? [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil]
             : nil;
         if (![payload isKindOfClass:[NSDictionary class]] || ![payload[@"ok"] boolValue]) {
-            NSString *message = @"无法读取页面内媒体（blob）";
+            NSString *message = requireMedia ? @"无法读取页面内媒体（blob）" : @"无法读取要下载的文件";
             id errVal = payload[@"error"];
             if ([errVal isKindOfClass:[NSString class]] && [(NSString *)errVal length] > 0) {
                 message = (NSString *)errVal;
@@ -693,17 +796,24 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
             return;
         }
 
+        NSString *pageName = [payload[@"filename"] isKindOfClass:[NSString class]] ? (NSString *)payload[@"filename"] : nil;
+        if (pageName.length > 0 && FilenameIsGenericPlaceholder(item.preferredFilename)) {
+            item.preferredFilename = SanitizedFilename(pageName);
+            item.filename = item.preferredFilename;
+        }
+
         NSString *mode = [payload[@"mode"] isKindOfClass:[NSString class]] ? payload[@"mode"] : @"bytes";
         if ([mode isEqualToString:@"url"]) {
             NSString *resolved = [payload[@"url"] isKindOfClass:[NSString class]] ? payload[@"url"] : nil;
             NSURL *resolvedURL = resolved.length > 0 ? [NSURL URLWithString:resolved] : nil;
             if (!resolvedURL || !strongWebView) {
-                [strongSelf failBlobDownloadItem:item message:@"未找到有效的视频下载地址"];
+                [strongSelf failBlobDownloadItem:item message:@"未找到有效的下载地址"];
                 return;
             }
+            NSString *keepName = item.preferredFilename;
             [strongSelf.mutableItems removeObject:item];
             [strongSelf notifyChange];
-            [strongSelf startDownloadWithURL:resolvedURL fromWebView:strongWebView];
+            [strongSelf startDownloadWithURL:resolvedURL suggestedFilename:keepName fromWebView:strongWebView];
             return;
         }
 
@@ -734,7 +844,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     } else {
         handleResult(nil, [NSError errorWithDomain:@"BrowserDownloadManager"
                                               code:1
-                                          userInfo:@{NSLocalizedDescriptionKey: @"系统版本过低，无法保存页面内视频"}]);
+                                          userInfo:@{NSLocalizedDescriptionKey: @"系统版本过低，无法保存页面内文件"}]);
     }
 }
 
@@ -744,7 +854,11 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
                                sourceURL:(NSURL *)sourceURL
                                     mime:(NSString *)mime
                                     size:(NSUInteger)totalSize {
-    item.filename = SanitizedFilename(DefaultFilenameForMIMEType(mime));
+    if (item.preferredFilename.length > 0) {
+        item.filename = SanitizedFilename(EnsureFilenameExtension(item.preferredFilename, mime));
+    } else {
+        item.filename = SanitizedFilename(DefaultFilenameForMIMEType(mime));
+    }
     item.hasKnownTotalUnitCount = YES;
     item.totalUnitCount = (int64_t)totalSize;
     item.completedUnitCount = 0;
@@ -752,7 +866,7 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
     [self notifyChange];
 
     if (totalSize == 0) {
-        [self failBlobDownloadItem:item message:@"视频数据为空"];
+        [self failBlobDownloadItem:item message:@"文件为空"];
         CleanupBlobDownloadSession(webView, sessionID);
         return;
     }
@@ -884,34 +998,49 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
 
     NSString *resolvedMIME = mime.length > 0 ? mime : @"application/octet-stream";
     NSString *sniffed = MIMETypeBySniffingData(data);
-    if (sniffed.length > 0) {
+    if (sniffed.length > 0 && ([resolvedMIME isEqualToString:@"application/octet-stream"] || resolvedMIME.length == 0)) {
+        resolvedMIME = sniffed;
+    } else if (sniffed.length > 0 && item.requiresMediaContent) {
         resolvedMIME = sniffed;
     }
 
     BOOL mediaMIME = [resolvedMIME.lowercaseString hasPrefix:@"video/"]
         || [resolvedMIME.lowercaseString hasPrefix:@"audio/"]
         || [resolvedMIME.lowercaseString hasPrefix:@"image/"];
-    if (!mediaMIME && DataLooksLikeTextError(data)) {
-        NSString *preview = [[NSString alloc] initWithData:data.length > 200 ? [data subdataWithRange:NSMakeRange(0, 200)] : data
-                                                  encoding:NSUTF8StringEncoding];
-        if (preview.length == 0) {
-            preview = [[NSString alloc] initWithData:data.length > 200 ? [data subdataWithRange:NSMakeRange(0, 200)] : data
-                                            encoding:NSISOLatin1StringEncoding];
+    if (item.requiresMediaContent) {
+        if (!mediaMIME && DataLooksLikeTextError(data)) {
+            NSString *preview = [[NSString alloc] initWithData:data.length > 200 ? [data subdataWithRange:NSMakeRange(0, 200)] : data
+                                                      encoding:NSUTF8StringEncoding];
+            if (preview.length == 0) {
+                preview = [[NSString alloc] initWithData:data.length > 200 ? [data subdataWithRange:NSMakeRange(0, 200)] : data
+                                                encoding:NSISOLatin1StringEncoding];
+            }
+            preview = [[preview stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
+                       stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSString *message = preview.length > 0
+                ? [NSString stringWithFormat:@"不是有效视频（%@）", preview]
+                : @"不是有效视频文件";
+            [self failBlobDownloadItem:item message:message];
+            return;
         }
-        preview = [[preview stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
-                   stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSString *message = preview.length > 0
-            ? [NSString stringWithFormat:@"不是有效视频（%@）", preview]
-            : @"不是有效视频文件";
-        [self failBlobDownloadItem:item message:message];
-        return;
-    }
-    if (!mediaMIME && sniffed.length == 0 && data.length < 2048) {
-        [self failBlobDownloadItem:item message:@"下载内容过小，不像视频文件"];
+        if (!mediaMIME && sniffed.length == 0 && data.length < 2048) {
+            [self failBlobDownloadItem:item message:@"下载内容过小，不像视频文件"];
+            return;
+        }
+    } else if (data.length == 0) {
+        [self failBlobDownloadItem:item message:@"文件为空"];
         return;
     }
 
-    NSString *filename = SanitizedFilename(DefaultFilenameForMIMEType(resolvedMIME));
+    NSString *filename = nil;
+    if (item.preferredFilename.length > 0) {
+        filename = EnsureFilenameExtension(item.preferredFilename, resolvedMIME);
+    } else if (!FilenameIsGenericPlaceholder(item.filename)) {
+        filename = EnsureFilenameExtension(item.filename, resolvedMIME);
+    } else {
+        filename = DefaultFilenameForMIMEType(resolvedMIME);
+    }
+    filename = SanitizedFilename(filename);
     NSURL *destination = UniqueDestinationURLInDownloads(filename);
     if (!destination) {
         [self failBlobDownloadItem:item message:@"无法写入下载文件夹"];
@@ -1043,15 +1172,52 @@ static void CleanupBlobDownloadSession(WKWebView *webView, NSString *sessionID);
         return NO;
     }
     NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
-    id dispositionValue = http.allHeaderFields[@"Content-Disposition"];
-    if (![dispositionValue isKindOfClass:[NSString class]]) {
-        dispositionValue = http.allHeaderFields[@"content-disposition"];
-    }
-    if (![dispositionValue isKindOfClass:[NSString class]]) {
+    NSString *disposition = HTTPHeaderValue(http, @"Content-Disposition");
+    if (disposition.length == 0) {
         return NO;
     }
-    NSString *disposition = [(NSString *)dispositionValue lowercaseString];
-    return [disposition containsString:@"attachment"];
+    return [disposition.lowercaseString containsString:@"attachment"];
+}
+
++ (BOOL)shouldDownloadNavigationAction:(WKNavigationAction *)navigationAction {
+    if (!navigationAction) {
+        return NO;
+    }
+    if (@available(macOS 11.3, *)) {
+        if (navigationAction.shouldPerformDownload) {
+            return YES;
+        }
+    }
+    NSURL *url = navigationAction.request.URL;
+    if ([url.scheme.lowercaseString isEqualToString:@"blob"]) {
+        BOOL isMainFrame = navigationAction.targetFrame.isMainFrame
+            || (navigationAction.targetFrame == nil && navigationAction.sourceFrame == nil);
+        if (isMainFrame
+            || navigationAction.targetFrame == nil
+            || navigationAction.navigationType == WKNavigationTypeLinkActivated) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
++ (NSString *)downloadAttributeFromNavigationAction:(WKNavigationAction *)navigationAction {
+    if (!navigationAction) {
+        return nil;
+    }
+    static SEL selector;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        selector = NSSelectorFromString(@"downloadAttribute");
+    });
+    if (selector == NULL || ![navigationAction respondsToSelector:selector]) {
+        return nil;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    id value = [navigationAction performSelector:selector];
+#pragma clang diagnostic pop
+    return [value isKindOfClass:[NSString class]] ? (NSString *)value : nil;
 }
 
 #pragma mark - WKDownloadDelegate
@@ -1068,11 +1234,31 @@ decideDestinationUsingResponse:(NSURLResponse *)response
         [self.mutableItems insertObject:item atIndex:0];
     }
 
-    NSString *name = SanitizedFilename(suggestedFilename.length > 0
-                                       ? suggestedFilename
-                                       : (response.suggestedFilename.length > 0
-                                          ? response.suggestedFilename
-                                          : @"download"));
+    NSString *fromDisposition = nil;
+    if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+        fromDisposition = FilenameFromContentDisposition(HTTPHeaderValue((NSHTTPURLResponse *)response, @"Content-Disposition"));
+    }
+    NSString *name = nil;
+    if (item.preferredFilename.length > 0) {
+        name = item.preferredFilename;
+    } else if (suggestedFilename.length > 0 && !FilenameIsGenericPlaceholder(suggestedFilename)) {
+        name = suggestedFilename;
+    } else if (fromDisposition.length > 0) {
+        name = fromDisposition;
+    } else if (response.suggestedFilename.length > 0 && !FilenameIsGenericPlaceholder(response.suggestedFilename)) {
+        name = response.suggestedFilename;
+    } else if (suggestedFilename.length > 0) {
+        name = suggestedFilename;
+    } else if (response.suggestedFilename.length > 0) {
+        name = response.suggestedFilename;
+    } else {
+        name = response.URL.lastPathComponent.length > 0 ? response.URL.lastPathComponent : @"download";
+    }
+    name = SanitizedFilename(name);
+    name = EnsureFilenameExtension(name, response.MIMEType);
+    if (item.preferredFilename.length == 0 && !FilenameIsGenericPlaceholder(name)) {
+        item.preferredFilename = name;
+    }
     item.filename = name;
     if (!item.sourceURL) {
         item.sourceURL = response.URL ?: download.originalRequest.URL;
@@ -1127,7 +1313,21 @@ decideDestinationUsingResponse:(NSURLResponse *)response
         return;
     }
     [self stopObservingProgressForItem:item];
-    if (error.code == NSURLErrorCancelled) {
+
+    WKWebView *webView = nil;
+    if (@available(macOS 11.3, *)) {
+        webView = download.webView;
+    }
+
+    BOOL cancelled = (error.code == NSURLErrorCancelled);
+    item.download = nil;
+    [self.itemByDownload removeObjectForKey:download];
+
+    if (!cancelled && [self retryFailedBlobDownload:item webView:webView]) {
+        return;
+    }
+
+    if (cancelled) {
         item.state = BrowserDownloadStateCancelled;
         item.errorMessage = nil;
     } else {
@@ -1135,9 +1335,22 @@ decideDestinationUsingResponse:(NSURLResponse *)response
         item.errorMessage = error.localizedDescription ?: @"下载失败";
     }
     item.finishedAt = [NSDate date];
-    item.download = nil;
-    [self.itemByDownload removeObjectForKey:download];
     [self notifyChange];
+}
+
+- (BOOL)retryFailedBlobDownload:(BrowserDownloadItem *)item webView:(WKWebView *)webView {
+    if (!item || !webView) {
+        return NO;
+    }
+    NSURL *url = item.sourceURL;
+    if (![url.scheme.lowercaseString isEqualToString:@"blob"]) {
+        return NO;
+    }
+    NSString *name = item.preferredFilename.length > 0 ? item.preferredFilename : nil;
+    [self.mutableItems removeObject:item];
+    [self notifyChange];
+    [self saveBlobURL:url suggestedFilename:name fromWebView:webView];
+    return YES;
 }
 
 - (void)download:(WKDownload *)download
@@ -1435,14 +1648,72 @@ static NSString *ExtensionForMIMEType(NSString *mime) {
         return @"m4a";
     }
 
+    if ([lower isEqualToString:@"application/zip"]
+        || [lower isEqualToString:@"application/x-zip-compressed"]
+        || [lower isEqualToString:@"application/x-zip"]) {
+        return @"zip";
+    }
+    if ([lower isEqualToString:@"application/pdf"]) {
+        return @"pdf";
+    }
+    if ([lower isEqualToString:@"application/json"]) {
+        return @"json";
+    }
+    if ([lower isEqualToString:@"text/csv"] || [lower isEqualToString:@"application/csv"]) {
+        return @"csv";
+    }
+    if ([lower isEqualToString:@"text/plain"]) {
+        return @"txt";
+    }
+    if ([lower isEqualToString:@"application/xml"] || [lower isEqualToString:@"text/xml"]) {
+        return @"xml";
+    }
+    if ([lower isEqualToString:@"application/gzip"] || [lower isEqualToString:@"application/x-gzip"]) {
+        return @"gz";
+    }
+    if ([lower isEqualToString:@"application/x-7z-compressed"]) {
+        return @"7z";
+    }
+    if ([lower isEqualToString:@"application/vnd.rar"] || [lower isEqualToString:@"application/x-rar-compressed"]) {
+        return @"rar";
+    }
+    if ([lower isEqualToString:@"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]) {
+        return @"xlsx";
+    }
+    if ([lower isEqualToString:@"application/vnd.openxmlformats-officedocument.wordprocessingml.document"]) {
+        return @"docx";
+    }
+    if ([lower isEqualToString:@"application/vnd.openxmlformats-officedocument.presentationml.presentation"]) {
+        return @"pptx";
+    }
+    if ([lower isEqualToString:@"application/msword"]) {
+        return @"doc";
+    }
+    if ([lower isEqualToString:@"application/vnd.ms-excel"]) {
+        return @"xls";
+    }
+
     return @"bin";
 }
 
 static NSString *MIMETypeBySniffingData(NSData *data) {
-    if (data.length < 12) {
+    if (data.length < 4) {
         return nil;
     }
     const unsigned char *bytes = data.bytes;
+    // ZIP / OOXML
+    if (bytes[0] == 'P' && bytes[1] == 'K') {
+        return @"application/zip";
+    }
+    if (data.length >= 5 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F') {
+        return @"application/pdf";
+    }
+    if (bytes[0] == 0x1F && bytes[1] == 0x8B) {
+        return @"application/gzip";
+    }
+    if (data.length < 12) {
+        return nil;
+    }
     // ISO BMFF (mp4/mov): size + 'ftyp'
     if (bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p') {
         return @"video/mp4";
@@ -1560,6 +1831,145 @@ static NSString *SanitizedFilename(NSString *raw) {
         return @"download";
     }
     return name;
+}
+
+static BOOL HostNeedsMediaCapture(NSString *host) {
+    NSString *h = host.lowercaseString ?: @"";
+    if (h.length == 0) {
+        return NO;
+    }
+    static NSArray<NSString *> *needles;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        needles = @[
+            @"doubao.com", @"jianying.com", @"capcut.com", @"bytedance.com",
+            @"byteintl.com", @"tiktok.com", @"ixigua.com",
+        ];
+    });
+    for (NSString *n in needles) {
+        if ([h isEqualToString:n] || [h hasSuffix:[@"." stringByAppendingString:n]]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL FilenameLooksLikeMedia(NSString *filename) {
+    NSString *ext = filename.pathExtension.lowercaseString;
+    if (ext.length == 0) {
+        return NO;
+    }
+    static NSSet<NSString *> *mediaExts;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        mediaExts = [NSSet setWithArray:@[
+            @"mp4", @"webm", @"mov", @"mkv", @"m4v", @"avi", @"ogv",
+            @"mp3", @"m4a", @"wav", @"aac", @"ogg", @"weba", @"flac",
+        ]];
+    });
+    return [mediaExts containsObject:ext];
+}
+
+static BOOL FilenameIsGenericPlaceholder(NSString *filename) {
+    if (filename.length == 0) {
+        return YES;
+    }
+    NSString *base = filename.lastPathComponent.stringByDeletingPathExtension.lowercaseString;
+    if ([base isEqualToString:@"download"]
+        || [base isEqualToString:@"unknown"]
+        || [base isEqualToString:@"video"]
+        || [base isEqualToString:@"audio"]
+        || [base isEqualToString:@"image"]
+        || [base isEqualToString:@"下载中"]) {
+        return YES;
+    }
+    // blob UUID 末段
+    if (filename.pathExtension.length == 0 && filename.length >= 32) {
+        NSCharacterSet *nonHex = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF-"] invertedSet];
+        if ([filename rangeOfCharacterFromSet:nonHex].location == NSNotFound) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSString *EnsureFilenameExtension(NSString *filename, NSString *mime) {
+    if (filename.length == 0) {
+        return DefaultFilenameForMIMEType(mime);
+    }
+    if (filename.pathExtension.length > 0) {
+        return filename;
+    }
+    NSString *ext = ExtensionForMIMEType(mime);
+    if (ext.length == 0 || [ext isEqualToString:@"bin"]) {
+        return filename;
+    }
+    return [filename stringByAppendingFormat:@".%@", ext];
+}
+
+static NSString *HTTPHeaderValue(NSHTTPURLResponse *http, NSString *name) {
+    if (!http || name.length == 0) {
+        return nil;
+    }
+    id value = http.allHeaderFields[name];
+    if (![value isKindOfClass:[NSString class]]) {
+        value = http.allHeaderFields[name.lowercaseString];
+    }
+    if (![value isKindOfClass:[NSString class]]) {
+        NSString *target = name.lowercaseString;
+        for (id key in http.allHeaderFields) {
+            if ([key isKindOfClass:[NSString class]] && [[(NSString *)key lowercaseString] isEqualToString:target]) {
+                value = http.allHeaderFields[key];
+                break;
+            }
+        }
+    }
+    return [value isKindOfClass:[NSString class]] ? (NSString *)value : nil;
+}
+
+static NSString *FilenameFromContentDisposition(NSString *disposition) {
+    if (disposition.length == 0) {
+        return nil;
+    }
+    NSError *error = nil;
+    NSRegularExpression *star = [NSRegularExpression regularExpressionWithPattern:@"filename\\*\\s*=\\s*(?:UTF-8|utf-8)''([^;]+)"
+                                                                          options:NSRegularExpressionCaseInsensitive
+                                                                            error:&error];
+    NSTextCheckingResult *match = [star firstMatchInString:disposition
+                                                   options:0
+                                                     range:NSMakeRange(0, disposition.length)];
+    if (match && match.numberOfRanges > 1) {
+        NSString *encoded = [[disposition substringWithRange:[match rangeAtIndex:1]]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\"' "]];
+        NSString *decoded = [encoded stringByRemovingPercentEncoding];
+        if (decoded.length > 0) {
+            return decoded;
+        }
+    }
+
+    NSRegularExpression *quoted = [NSRegularExpression regularExpressionWithPattern:@"filename\\s*=\\s*\"([^\"]+)\""
+                                                                            options:NSRegularExpressionCaseInsensitive
+                                                                              error:&error];
+    match = [quoted firstMatchInString:disposition options:0 range:NSMakeRange(0, disposition.length)];
+    if (match && match.numberOfRanges > 1) {
+        NSString *name = [disposition substringWithRange:[match rangeAtIndex:1]];
+        if (name.length > 0) {
+            return name;
+        }
+    }
+
+    NSRegularExpression *plain = [NSRegularExpression regularExpressionWithPattern:@"filename\\s*=\\s*([^;\\s]+)"
+                                                                           options:NSRegularExpressionCaseInsensitive
+                                                                             error:&error];
+    match = [plain firstMatchInString:disposition options:0 range:NSMakeRange(0, disposition.length)];
+    if (match && match.numberOfRanges > 1) {
+        NSString *name = [[disposition substringWithRange:[match rangeAtIndex:1]]
+                          stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\"'"]];
+        if (name.length > 0 && ![name.lowercaseString hasPrefix:@"utf-8"]) {
+            return name;
+        }
+    }
+    return nil;
 }
 
 static NSURL *UniqueDestinationURLInDownloads(NSString *filename) {

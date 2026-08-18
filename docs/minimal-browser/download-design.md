@@ -1,8 +1,8 @@
 # 下载管理 — 交互与实现方案（V1）
 
 > 目标：为 MeoBrowser 提供轻量、可预期的文件下载能力，默认静默写入「下载」文件夹，并用工具栏浮层面板管理进度与文件操作。  
-> 状态：**V1 已实现**（2026-07-14）  
-> 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.8 · [design.md](design.md)
+> 状态：**V1.1 已实现**（2026-08-18）— 对齐 Safari 的 `<a download>` / blob 附件与流式落盘；豆包等媒体站仍走专用回退。  
+> 关联：[professional-features-roadmap.md](professional-features-roadmap.md) §3.8 · [design.md](design.md) · [download-streaming-blob-development-plan.md](download-streaming-blob-development-plan.md)
 
 ---
 
@@ -107,6 +107,16 @@ BrowserDownloadManager  ←── WKDownloadDelegate
 
 ### 3.1 何时转下载
 
+导航动作（对齐 Safari，macOS 11.3+）：
+
+```objc
+navigationAction.shouldPerformDownload   // <a download> 等同站资源
+|| blob: 且（主框架 / 无 target / 链接点击）
+→ WKNavigationActionPolicyDownload
+```
+
+导航响应：
+
 ```objc
 !navigationResponse.canShowMIMEType
 || Content-Disposition 含 attachment（忽略大小写）
@@ -114,12 +124,42 @@ BrowserDownloadManager  ←── WKDownloadDelegate
 
 其余主文档导航 `Allow`，由 WebKit 内联展示。
 
+`window.open(blob:)` / 右键另存等没有导航下载策略时，回退到页内读取 Blob（见 §3.3）。
+
 ### 3.2 落盘规则
 
 1. 目录 = 用户「下载」文件夹（`NSDownloadsDirectory`）  
-2. 文件名优先 `suggestedFilename`，非法字符替换为 `_`  
-3. 目标路径**必须不存在**（WebKit 要求）；已存在则 `name-1.ext`、`name-2.ext`…  
-4. `completionHandler(nil)` 仅用于用户取消或无法创建目录  
+2. 文件名优先级（与 Safari 一致）：  
+   `<a download>` → `Content-Disposition` 的 `filename*` / `filename` → WebKit `suggestedFilename` → URL 末段 → MIME / 魔数默认名  
+3. 无扩展名时按 MIME 补全（zip / pdf / 常见办公文档等）  
+4. 目标路径**必须不存在**（WebKit 要求）；已存在则 `name-1.ext`、`name-2.ext`…  
+5. `completionHandler(nil)` 仅用于用户取消或无法创建目录  
+
+### 3.3 blob: 与页面内生成文件（V1.1）
+
+站点「在线生成再下载」（报表 zip、导出 xlsx 等）常见写法：
+
+```js
+const blob = await (await fetch('/export')).blob(); // 或前端打包
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = '合规监测报告_….zip';
+a.click();
+URL.revokeObjectURL(a.href); // 往往紧挨着 click
+```
+
+Safari 在点击当拍把导航标成下载，于 `revoke` 之前从页面 Blob 寄存器读数据，并用 `download` 属性作文件名。
+
+V1 的缺陷：所有 `blob:` 被 `Cancel` 后丢进豆包视频专用 JS（占位名 `video.mp4`，先请求 `get_play_info`，再 `fetch(blob)`）。`revoke` 已发生 → **Load failed**，且非视频会被拒。
+
+V1.1：
+
+| 路径 | 行为 |
+|------|------|
+| `<a download>` / `shouldPerformDownload` | `WKNavigationActionPolicyDownload`（Safari 同款，文件名来自 `downloadAttribute`） |
+| 其它 blob 主框架/链接 | 同样走 WK 原生下载；失败再 JS 回退 |
+| `window.open(blob:)` / 右键 | JS 读取：优先该 blob，接受任意 MIME；用 `download` 属性或魔数命名 |
+| 豆包 / 剪映等媒体站且无文档文件名 | 仍走 HTTPS / `get_play_info` 媒体回退 |
 
 ---
 
@@ -132,6 +172,8 @@ BrowserDownloadManager  ←── WKDownloadDelegate
 - [x] 完成项可拖到 Finder  
 - [x] 关窗时若有进行中下载会确认  
 - [x] 系统右键「下载链接的文件」进入同一列表  
+- [x] **V1.1** `<a download>` / blob 生成的 zip 等附件使用真实文件名落盘，不再变成 `video.mp4`  
+- [x] **V1.1** 流式 / 无 Content-Length 的附件仍走 WKDownload；失败时 blob 可 JS 回退  
 
 ### 实现文件
 

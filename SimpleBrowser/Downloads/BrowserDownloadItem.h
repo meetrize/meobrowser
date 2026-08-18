@@ -16,6 +16,10 @@ typedef NS_ENUM(NSInteger, BrowserDownloadState) {
 
 @property (nonatomic, strong, readonly) NSUUID *itemID;
 @property (nonatomic, copy) NSString *filename;
+/// `<a download>` / 调用方指定的文件名；落盘时优先于 URL 末段。
+@property (nonatomic, copy, nullable) NSString *preferredFilename;
+/// YES 时按媒体启发式校验（豆包等）；普通附件 / zip 必须为 NO。
+@property (nonatomic, assign) BOOL requiresMediaContent;
 @property (nonatomic, copy, nullable) NSString *sourceHost;
 @property (nonatomic, strong, nullable) NSURL *sourceURL;
 @property (nonatomic, strong, nullable) NSURL *destinationURL;

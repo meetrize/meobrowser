@@ -154,7 +154,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 
 | 功能 | 说明 |
 |------|------|
-| **下载列表** | 显示进度、打开所在文件夹、取消（见 [download-design.md](download-design.md) V1） |
+| **下载列表** | 显示进度、打开所在文件夹、取消（见 [download-design.md](download-design.md) V1.1） |
 | **「链接另存为」** | V1：系统右键「下载链接的文件」，静默写入 Downloads |
 | **拖拽下载项到 Finder / 终端** | V1 已支持拖到 Finder |
 
@@ -214,7 +214,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 - [x] 多窗口 + 窗口级会话（见 [multi-window-development-plan.md](multi-window-development-plan.md)）
 - [ ] 分屏（双 WebView）
 - [ ] 代理与 Cookie 管理
-- [x] 下载管理基础版（V1：见 [download-design.md](download-design.md)）
+- [x] 下载管理基础版（V1.1：见 [download-design.md](download-design.md)）
 - [ ] 复制 Markdown 链接、环境分组
 
 ### M4 — 体验深化（持续）

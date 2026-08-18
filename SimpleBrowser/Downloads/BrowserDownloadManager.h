@@ -31,9 +31,19 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDownloadManagerDidChangeNotifi
 
 /// 接管来自 WKWebView 的 WKDownload（didBecomeDownload）。
 - (void)takeOwnershipOfDownload:(WKDownload *)download;
+- (void)takeOwnershipOfDownload:(WKDownload *)download
+             suggestedFilename:(nullable NSString *)suggestedFilename;
 
 /// 主动发起下载（例如将来扩展菜单）；不问路径，写入 Downloads。
 - (void)startDownloadWithURL:(NSURL *)url fromWebView:(WKWebView *)webView;
+- (void)startDownloadWithURL:(NSURL *)url
+          suggestedFilename:(nullable NSString *)suggestedFilename
+                fromWebView:(WKWebView *)webView;
+
+/// Safari 对齐：`<a download>` 等应走 WKNavigationActionPolicyDownload。
++ (BOOL)shouldDownloadNavigationAction:(WKNavigationAction *)navigationAction;
+/// `<a download="…">` 文件名；当前 SDK 头文件可能未声明该属性，运行时读取。
++ (nullable NSString *)downloadAttributeFromNavigationAction:(WKNavigationAction *)navigationAction;
 
 - (void)cancelItem:(BrowserDownloadItem *)item;
 - (void)revealItemInFinder:(BrowserDownloadItem *)item;

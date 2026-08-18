@@ -207,6 +207,9 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 - (BOOL)openURLInExternalApplicationIfNeeded:(nullable NSURL *)url;
 - (void)openURLInExternalApplication:(NSURL *)url;
 - (void)beginBlobDownloadFromURL:(nullable NSURL *)url inWebView:(nullable WKWebView *)webView;
+- (void)beginBlobDownloadFromURL:(nullable NSURL *)url
+              suggestedFilename:(nullable NSString *)suggestedFilename
+                       inWebView:(nullable WKWebView *)webView;
 - (void)openAcceptedURLsInBrowser:(NSArray<NSURL *> *)urls;
 @end
 
@@ -4245,14 +4248,26 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         return;
     }
 
+    // Safari 对齐：`<a download>` / blob 附件走 WK 原生下载，而不是整页打开或视频专用 JS。
+    if (@available(macOS 11.3, *)) {
+        if ([BrowserDownloadManager shouldDownloadNavigationAction:navigationAction]) {
+            decisionHandler(WKNavigationActionPolicyDownload);
+            return;
+        }
+    }
+
     // blob: 点击下载 / 主框架导航：勿整页打开（会失败并显示 Plug-in handled load），改走下载。
     if ([requestURL.scheme.lowercaseString isEqualToString:@"blob"]) {
         BOOL treatAsDownload = isMainFrame
             || navigationAction.targetFrame == nil
             || navigationAction.navigationType == WKNavigationTypeLinkActivated;
         if (treatAsDownload) {
+            NSString *downloadName = nil;
+            if (@available(macOS 11.3, *)) {
+                downloadName = [BrowserDownloadManager downloadAttributeFromNavigationAction:navigationAction];
+            }
             decisionHandler(WKNavigationActionPolicyCancel);
-            [self beginBlobDownloadFromURL:requestURL inWebView:webView];
+            [self beginBlobDownloadFromURL:requestURL suggestedFilename:downloadName inWebView:webView];
             return;
         }
     }
@@ -4332,9 +4347,9 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
 navigationAction:(WKNavigationAction *)navigationAction
 didBecomeDownload:(WKDownload *)download {
     (void)webView;
-    (void)navigationAction;
     if (@available(macOS 11.3, *)) {
-        [self.downloadManager takeOwnershipOfDownload:download];
+        NSString *name = [BrowserDownloadManager downloadAttributeFromNavigationAction:navigationAction];
+        [self.downloadManager takeOwnershipOfDownload:download suggestedFilename:name];
         if (!self.downloadPanelVisible) {
             [self showDownloadsPanel];
         }
@@ -4729,10 +4744,16 @@ didFailNavigation:(WKNavigation *)navigation
 }
 
 - (void)beginBlobDownloadFromURL:(NSURL *)url inWebView:(WKWebView *)webView {
+    [self beginBlobDownloadFromURL:url suggestedFilename:nil inWebView:webView];
+}
+
+- (void)beginBlobDownloadFromURL:(NSURL *)url
+              suggestedFilename:(NSString *)suggestedFilename
+                       inWebView:(WKWebView *)webView {
     if (!url || !webView) {
         return;
     }
-    [self.downloadManager startDownloadWithURL:url fromWebView:webView];
+    [self.downloadManager startDownloadWithURL:url suggestedFilename:suggestedFilename fromWebView:webView];
     if (!self.downloadPanelVisible) {
         [self showDownloadsPanel];
     }
@@ -4772,8 +4793,14 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 
     if (!navigationAction.targetFrame || !navigationAction.targetFrame.isMainFrame) {
         NSURL *url = navigationAction.request.URL;
-        if ([url.scheme.lowercaseString isEqualToString:@"blob"]) {
-            [self beginBlobDownloadFromURL:url inWebView:webView];
+        NSString *downloadName = nil;
+        BOOL performDownload = NO;
+        if (@available(macOS 11.3, *)) {
+            downloadName = [BrowserDownloadManager downloadAttributeFromNavigationAction:navigationAction];
+            performDownload = navigationAction.shouldPerformDownload;
+        }
+        if (performDownload || [url.scheme.lowercaseString isEqualToString:@"blob"]) {
+            [self beginBlobDownloadFromURL:url suggestedFilename:downloadName inWebView:webView];
             return nil;
         }
         if ([self openURLInExternalApplicationIfNeeded:url]) {
