@@ -19,6 +19,7 @@ static const NSUInteger kSuggestionLimit = 8;
 @property (nonatomic, strong) dispatch_block_t pendingQueryBlock;
 @property (nonatomic, strong) dispatch_block_t pendingDismissBlock;
 @property (nonatomic, assign) BOOL installed;
+@property (nonatomic, strong, nullable) id localMouseMonitor;
 @property (nonatomic, assign) BOOL applyingInlineAutocomplete;
 @property (nonatomic, assign) BOOL hasActiveInlineAutocomplete;
 /// 用户用 Backspace/Delete 清掉内联补全后，同一查询不再自动补上，直到输入变化。
@@ -266,6 +267,7 @@ static const NSUInteger kSuggestionLimit = 8;
                           query:trimmed
                  selectedIndex:self.selectedIndex
                     anchorRect:[self anchorRectOnScreen]];
+    [self installOutsideClickDismissMonitor];
     [self applyInlineAutocompleteIfPossible];
 }
 
@@ -480,6 +482,7 @@ static const NSUInteger kSuggestionLimit = 8;
 
 - (void)dismissPanelImmediately {
     [self cancelPendingDismiss];
+    [self removeOutsideClickDismissMonitor];
     self.panelVisible = NO;
     self.matches = @[];
     self.currentQuery = @"";
@@ -489,6 +492,47 @@ static const NSUInteger kSuggestionLimit = 8;
     self.suppressedForQuery = nil;
     self.pendingDeleteSuppressesInline = NO;
     [self.panel dismissPanel];
+}
+
+/// 点击建议面板与地址栏之外时关闭面板，不改地址栏文字（与设计文档一致）。
+- (void)installOutsideClickDismissMonitor {
+    if (self.localMouseMonitor) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    self.localMouseMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
+                                              handler:^NSEvent *(NSEvent *event) {
+            BrowserAddressBarAutocompleteController *strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.panelVisible) {
+                return event;
+            }
+            NSWindow *eventWindow = event.window;
+            if (eventWindow == strongSelf.panel) {
+                return event;
+            }
+            NSPoint screenPoint = eventWindow
+                ? [eventWindow convertPointToScreen:event.locationInWindow]
+                : [NSEvent mouseLocation];
+            if (NSPointInRect(screenPoint, strongSelf.panel.frame)) {
+                return event;
+            }
+            // 点在地址栏内继续编辑，不关面板。
+            NSRect addressExclusion = NSInsetRect([strongSelf anchorRectOnScreen], -4, -4);
+            if (!NSEqualRects(addressExclusion, NSZeroRect) &&
+                NSPointInRect(screenPoint, addressExclusion)) {
+                return event;
+            }
+            [strongSelf dismissPanelImmediately];
+            return event;
+        }];
+}
+
+- (void)removeOutsideClickDismissMonitor {
+    if (self.localMouseMonitor) {
+        [NSEvent removeMonitor:self.localMouseMonitor];
+        self.localMouseMonitor = nil;
+    }
 }
 
 - (void)scheduleDismissAfterFocusLoss {
