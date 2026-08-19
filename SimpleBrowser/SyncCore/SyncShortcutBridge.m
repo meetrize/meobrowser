@@ -56,6 +56,9 @@ static NSString * const kSyncShortcutMetaKey = @"meo.sync.shortcutMeta";
         @"kind": item.isFolder ? @"folder" : @"link",
         @"folderId": item.folderID ?: @"",
         @"iconURL": item.iconURLString ?: @"",
+        @"iconStyle": item.usesCustomLetterIcon ? BrowserShortcutIconStyleLetter : BrowserShortcutIconStyleAuto,
+        @"iconLetter": item.iconLetter ?: @"",
+        @"iconColorIndex": @(item.iconColorIndex),
     };
     return record;
 }
@@ -167,6 +170,11 @@ static NSString * const kSyncShortcutMetaKey = @"meo.sync.shortcutMeta";
                                             sortOrder:[p[@"order"] integerValue]];
             item.itemID = rec.recordID;
             item.folderID = p[@"folderId"] ?: @"";
+            item.iconStyle = [p[@"iconStyle"] isKindOfClass:[NSString class]] ? p[@"iconStyle"] : BrowserShortcutIconStyleAuto;
+            item.iconLetter = [p[@"iconLetter"] isKindOfClass:[NSString class]] ? p[@"iconLetter"] : @"";
+            if ([p[@"iconColorIndex"] respondsToSelector:@selector(integerValue)]) {
+                item.iconColorIndex = [p[@"iconColorIndex"] integerValue];
+            }
         }
         if (item) {
             [active addObject:item];

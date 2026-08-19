@@ -1656,6 +1656,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [BrowserShortcutStore addShortcutWithTitle:title
                                        urlString:urlString
                                    iconURLString:@""
+                                       iconStyle:BrowserShortcutIconStyleAuto
+                                      iconLetter:@""
+                                  iconColorIndex:0
                                      toShortcuts:shortcuts];
         // 星标加入后立即返回；图标后台瀑布拉取并回写（不阻塞 ★ 状态）。
         NSString *pageURLForFavicon = urlString;

@@ -1,6 +1,7 @@
 #import "BrowserShortcutCellView.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserShortcutStore.h"
+#import "BrowserShortcutIconPalette.h"
 #import "BrowserLaunchpadAppearance.h"
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutFolderOverlay.h"
@@ -48,14 +49,6 @@ static NSColor *BrowserShortcutFolderPlateColor(NSAppearance *appearance) {
     return [NSColor colorWithCalibratedWhite:1.0 alpha:0.38];
 }
 
-/// 「添加」格：比文件夹更淡一档，保持可点但更克制。
-static NSColor *BrowserShortcutAddCellPlateColor(NSAppearance *appearance) {
-    if (BrowserShortcutAppearanceIsDark(appearance)) {
-        return [NSColor colorWithCalibratedWhite:1.0 alpha:0.10];
-    }
-    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.06];
-}
-
 static NSColor *ColorFromURLString(NSString *urlString) {
     NSUInteger hash = urlString.hash;
     CGFloat hue = (CGFloat)(hash % 360) / 360.0;
@@ -63,15 +56,25 @@ static NSColor *ColorFromURLString(NSString *urlString) {
 }
 
 static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
-    if (item.title.length > 0) {
-        return [[item.title substringToIndex:1] uppercaseString];
+    if (item.usesCustomLetterIcon && item.iconLetter.length > 0) {
+        return item.iconLetter;
     }
-    NSURL *url = [NSURL URLWithString:item.urlString];
-    NSString *host = url.host.length > 0 ? url.host : @"?";
-    if ([host hasPrefix:@"www."]) {
-        host = [host substringFromIndex:4];
+    return [BrowserShortcutIconPalette defaultLetterForTitle:item.title urlString:item.urlString];
+}
+
+static NSColor *DisplayPlateColorForShortcut(BrowserShortcutItem *item) {
+    if (item.usesCustomLetterIcon) {
+        return [BrowserShortcutIconPalette colorAtIndex:item.iconColorIndex];
     }
-    return [[host substringToIndex:1] uppercaseString];
+    return ColorFromURLString(item.urlString);
+}
+
+/// 「添加」格：比文件夹更淡一档，保持可点但更克制。
+static NSColor *BrowserShortcutAddCellPlateColor(NSAppearance *appearance) {
+    if (BrowserShortcutAppearanceIsDark(appearance)) {
+        return [NSColor colorWithCalibratedWhite:1.0 alpha:0.10];
+    }
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.06];
 }
 
 /// 悬停 tip / 无障碍用的展示用 host（去掉 www.）。
@@ -108,7 +111,7 @@ static BOOL BrowserShortcutTitleRepresentsHost(NSString *title, NSString *host) 
 }
 
 static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) {
-    if (shortcut == nil || shortcut.isFolder || shortcut.iconURLString.length > 0) {
+    if (shortcut == nil || shortcut.isFolder || shortcut.usesCustomLetterIcon || shortcut.iconURLString.length > 0) {
         return;
     }
     NSString *host = BrowserFaviconHostFromURLString(shortcut.urlString);
@@ -331,8 +334,12 @@ static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) 
     self.imageView.hidden = YES;
     self.letterLabel.hidden = NO;
     self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
-    self.backdropView.fillColor = ColorFromURLString(shortcut.urlString);
+    self.backdropView.fillColor = DisplayPlateColorForShortcut(shortcut);
     [self applyTileImagePaddingForPreRounded:NO];
+
+    if (shortcut.usesCustomLetterIcon) {
+        return;
+    }
 
     NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
@@ -358,7 +365,7 @@ static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) 
 
 - (void)retryIconLoadIfStillPending {
     BrowserShortcutItem *shortcut = self.boundShortcut;
-    if (shortcut == nil || shortcut.iconURLString.length > 0) {
+    if (shortcut == nil || shortcut.usesCustomLetterIcon || shortcut.iconURLString.length > 0) {
         return;
     }
     if (![self isShowingLetterFallback]) {
@@ -797,7 +804,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     self.letterLabel.stringValue = DisplayLetterForShortcut(shortcut);
     self.letterLabel.textColor = [NSColor whiteColor];
     self.letterLabel.hidden = NO;
-    [self updateIconFillColor:ColorFromURLString(shortcut.urlString)];
+    [self updateIconFillColor:DisplayPlateColorForShortcut(shortcut)];
 }
 
 - (void)applyLoadedIconImage:(NSImage *)image {
@@ -817,6 +824,9 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     NSUInteger token = self.iconLoadToken;
     self.boundHost = BrowserFaviconHostFromURLString(shortcut.urlString);
     [self applyLetterFallbackForShortcut:shortcut];
+    if (shortcut.usesCustomLetterIcon) {
+        return;
+    }
     NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
     [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
@@ -825,6 +835,9 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
                                                         completion:^(NSImage *image) {
         BrowserShortcutCellContentView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.iconLoadToken != token || !image) {
+            return;
+        }
+        if (strongSelf.shortcut.usesCustomLetterIcon) {
             return;
         }
         [strongSelf applyLoadedIconImage:image];
@@ -858,7 +871,7 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
         }
         return;
     }
-    if (self.shortcut.iconURLString.length > 0) {
+    if (self.shortcut.usesCustomLetterIcon || self.shortcut.iconURLString.length > 0) {
         return;
     }
     if (![self isShowingLetterFallback]) {

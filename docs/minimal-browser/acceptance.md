@@ -202,6 +202,55 @@ SimpleBrowser/Favicon/
 
 ---
 
+## 快捷方式自定义色块验收（GLY-0～GLY-4 · 2026-08-19）
+
+> 对照 [new-tab-shortcut-letter-icon-design.md](new-tab-shortcut-letter-icon-design.md)  
+> 开发计划：[new-tab-shortcut-letter-icon-development-plan.md](new-tab-shortcut-letter-icon-development-plan.md)
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| 全量编译 | `make browser` | 通过 |
+| Palette 入链 | Makefile 含 `BrowserShortcutIconPalette.m` | 通过 |
+
+### 功能验收
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 编辑双模式 | 右键「编辑…」→ 自动 / 自定义色块 | 通过（逻辑） | `BrowserShortcutEditorSheet` |
+| 16 色色板 | 4×4 点选 + 预览即时更新 | 通过（逻辑） | `BrowserShortcutIconPalette` |
+| 自定义展示 | `iconStyle=letter` 显示色块+字母，不拉 Favicon | 通过（逻辑） | `BrowserShortcutCellView` |
+| 切回自动 | 编辑选「自动」→ Favicon / 字母占位恢复 | 通过（逻辑） | Editor + Cell |
+| 旧数据兼容 | 无 `iconStyle` 键的快捷方式行为不变 | 通过（逻辑） | `itemFromDictionary:` 默认 `auto` |
+| 禁止 writeback | letter 模式不因展示回写 `iconURL` | 通过（逻辑） | `BrowserShortcutWritebackIconIfNeeded` |
+| 地址栏补全 | letter 项显示色块，不 triggerFetch | 通过（逻辑） | `BrowserShortcutSuggestionPanel` |
+| 同步透传 | SyncCore / Companion 含三字段 | 通过（逻辑） | `SyncShortcutBridge` / `CompanionShortcutSync` |
+| Android 对齐 | 编辑对话框 + Grid 同色板逻辑 | 通过（逻辑） | `ShortcutIconPalette.kt` 等 |
+| 重启持久化 | 手测 | 待手测 | `BrowserShortcutStore` UserDefaults |
+
+### 涉及文件
+
+```text
+SimpleBrowser/NewTab/
+├── BrowserShortcutIconPalette.h/.m
+├── BrowserShortcutItem.h/.m
+├── BrowserShortcutStore.h/.m
+├── BrowserShortcutEditorSheet.m
+└── BrowserShortcutCellView.m
+
+companion/.../newtab/
+├── ShortcutIconPalette.kt
+├── ShortcutStore.kt
+└── ShortcutIconHelper.kt
+```
+
+### 结论
+
+**GLY-0～GLY-4 实现完成**；Emoji / 预设图库 / 本地上传仍属 P1+ 延后项。
+
+---
+
 ## 登录助手 V1 验收（LA-0～LA-3 · 2026-07-15）
 
 > 对照 [auto-login-design.md](auto-login-design.md) · [auto-login-development-plan.md](auto-login-development-plan.md)  

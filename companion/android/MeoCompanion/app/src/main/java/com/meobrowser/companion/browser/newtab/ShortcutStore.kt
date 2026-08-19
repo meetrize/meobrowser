@@ -15,10 +15,16 @@ data class ShortcutItem(
     var kind: String = "link",
     var folderId: String = "",
     var iconURL: String = "",
+    var iconStyle: String = ShortcutIconPalette.STYLE_AUTO,
+    var iconLetter: String = "",
+    var iconColorIndex: Int = 0,
     var updatedAt: Long = System.currentTimeMillis() / 1000,
     var deviceId: String = "",
     var deleted: Boolean = false
 ) {
+    val usesCustomLetterIcon: Boolean
+        get() = kind != "folder" && iconStyle == ShortcutIconPalette.STYLE_LETTER
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("title", title)
@@ -27,6 +33,12 @@ data class ShortcutItem(
         put("kind", kind)
         put("folderId", folderId)
         put("iconURL", iconURL)
+        put(
+            "iconStyle",
+            if (usesCustomLetterIcon) ShortcutIconPalette.STYLE_LETTER else ShortcutIconPalette.STYLE_AUTO
+        )
+        put("iconLetter", iconLetter)
+        put("iconColorIndex", ShortcutIconPalette.clampedIndex(iconColorIndex))
         put("updatedAt", updatedAt)
         put("deviceId", deviceId)
         put("deleted", deleted)
@@ -41,6 +53,10 @@ data class ShortcutItem(
             kind = o.optString("kind", "link"),
             folderId = o.optString("folderId"),
             iconURL = o.optString("iconURL"),
+            iconStyle = o.optString("iconStyle", ShortcutIconPalette.STYLE_AUTO)
+                .ifBlank { ShortcutIconPalette.STYLE_AUTO },
+            iconLetter = ShortcutIconPalette.normalizedLetter(o.optString("iconLetter")),
+            iconColorIndex = ShortcutIconPalette.clampedIndex(o.optInt("iconColorIndex", 0)),
             updatedAt = o.optLong("updatedAt", System.currentTimeMillis() / 1000),
             deviceId = o.optString("deviceId"),
             deleted = o.optBoolean("deleted", false)

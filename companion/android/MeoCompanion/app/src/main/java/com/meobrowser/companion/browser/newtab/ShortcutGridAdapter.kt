@@ -57,7 +57,7 @@ class ShortcutGridAdapter(
         val item = items[position]
         holder.title.text = item.title
 
-        val color = ShortcutIconHelper.colorFor(item.url, item.title)
+        val color = ShortcutIconPalette.displayColor(item)
         val letterBg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = radiusPx
@@ -78,33 +78,38 @@ class ShortcutGridAdapter(
         holder.letter.visibility = View.VISIBLE
         holder.letter.background = null
         holder.letter.setTextColor(ShortcutIconHelper.contrastLetterColor(color))
-        holder.letter.text = ShortcutIconHelper.letter(item.title, item.url)
+        holder.letter.text = ShortcutIconPalette.displayLetter(item)
 
-        ShortcutIconHelper.bindFavicon(holder.icon, item) { cached ->
-            if (holder.icon.tag != item.id) return@bindFavicon
-            holder.letter.visibility = View.GONE
-            when (cached.fit) {
-                ShortcutIconHelper.FitStyle.INSET -> {
-                    // 透明/异形：白底 + 四周留白
-                    val white = GradientDrawable().apply {
-                        shape = GradientDrawable.RECTANGLE
-                        cornerRadius = radiusPx
-                        setColor(0xFFFFFFFF.toInt())
+        if (item.usesCustomLetterIcon) {
+            holder.icon.visibility = View.INVISIBLE
+            holder.icon.tag = item.id
+        } else {
+            ShortcutIconHelper.bindFavicon(holder.icon, item) { cached ->
+                if (holder.icon.tag != item.id) return@bindFavicon
+                holder.letter.visibility = View.GONE
+                when (cached.fit) {
+                    ShortcutIconHelper.FitStyle.INSET -> {
+                        // 透明/异形：白底 + 四周留白
+                        val white = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = radiusPx
+                            setColor(0xFFFFFFFF.toInt())
+                        }
+                        holder.frame.background = white
+                        holder.frame.clipToOutline = true
+                        holder.icon.setPadding(insetPad, insetPad, insetPad, insetPad)
+                        holder.icon.scaleType = ImageView.ScaleType.FIT_CENTER
                     }
-                    holder.frame.background = white
-                    holder.frame.clipToOutline = true
-                    holder.icon.setPadding(insetPad, insetPad, insetPad, insetPad)
-                    holder.icon.scaleType = ImageView.ScaleType.FIT_CENTER
+                    ShortcutIconHelper.FitStyle.FILL -> {
+                        // 矩形色块：铺满圆角矩形
+                        holder.frame.background = letterBg
+                        holder.frame.clipToOutline = true
+                        holder.icon.setPadding(0, 0, 0, 0)
+                        holder.icon.scaleType = ImageView.ScaleType.CENTER_CROP
+                    }
                 }
-                ShortcutIconHelper.FitStyle.FILL -> {
-                    // 矩形色块：铺满圆角矩形
-                    holder.frame.background = letterBg
-                    holder.frame.clipToOutline = true
-                    holder.icon.setPadding(0, 0, 0, 0)
-                    holder.icon.scaleType = ImageView.ScaleType.CENTER_CROP
-                }
+                holder.icon.setImageBitmap(cached.bitmap)
             }
-            holder.icon.setImageBitmap(cached.bitmap)
         }
 
         holder.itemView.setOnClickListener { onOpen(item) }

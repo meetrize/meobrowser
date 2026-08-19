@@ -1,5 +1,8 @@
 #import "BrowserShortcutItem.h"
 
+NSString * const BrowserShortcutIconStyleAuto = @"auto";
+NSString * const BrowserShortcutIconStyleLetter = @"letter";
+
 @implementation BrowserShortcutItem
 
 - (instancetype)init {
@@ -10,6 +13,9 @@
         _urlString = @"";
         _iconURLString = @"";
         _title = @"";
+        _iconStyle = BrowserShortcutIconStyleAuto;
+        _iconLetter = @"";
+        _iconColorIndex = 0;
     }
     return self;
 }
@@ -26,6 +32,9 @@
     item.sortOrder = sortOrder;
     item.kind = BrowserShortcutItemKindLink;
     item.folderID = @"";
+    item.iconStyle = BrowserShortcutIconStyleAuto;
+    item.iconLetter = @"";
+    item.iconColorIndex = 0;
     return item;
 }
 
@@ -38,6 +47,9 @@
     item.sortOrder = sortOrder;
     item.kind = BrowserShortcutItemKindFolder;
     item.folderID = @"";
+    item.iconStyle = BrowserShortcutIconStyleAuto;
+    item.iconLetter = @"";
+    item.iconColorIndex = 0;
     return item;
 }
 
@@ -49,8 +61,27 @@
     return self.folderID.length == 0;
 }
 
+- (BOOL)usesCustomLetterIcon {
+    if (self.isFolder) {
+        return NO;
+    }
+    return [self.iconStyle isEqualToString:BrowserShortcutIconStyleLetter];
+}
+
 - (void)setFolderID:(NSString *)folderID {
     _folderID = folderID ?: @"";
+}
+
+- (void)setIconStyle:(NSString *)iconStyle {
+    if ([iconStyle isEqualToString:BrowserShortcutIconStyleLetter]) {
+        _iconStyle = BrowserShortcutIconStyleLetter;
+    } else {
+        _iconStyle = BrowserShortcutIconStyleAuto;
+    }
+}
+
+- (void)setIconLetter:(NSString *)iconLetter {
+    _iconLetter = iconLetter ?: @"";
 }
 
 @end

@@ -54,13 +54,35 @@
             android:textColor="#FF6B7280"
             android:textSize="12sp" />
 
+        <RadioGroup
+            android:id="@+id/shortcutIconStyleGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <RadioButton
+                android:id="@+id/shortcutIconStyleAuto"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/shortcut_icon_style_auto" />
+
+            <RadioButton
+                android:id="@+id/shortcutIconStyleLetter"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:text="@string/shortcut_icon_style_letter" />
+        </RadioGroup>
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
+            android:gravity="top"
             android:orientation="horizontal">
 
             <FrameLayout
+                android:id="@+id/shortcutIconPreviewFrame"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
                 android:background="@drawable/bg_shortcut_icon_white"
@@ -79,31 +101,86 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:gravity="center"
-                    android:textColor="#FF6B7280"
+                    android:textColor="#FFFFFFFF"
                     android:textSize="16sp"
                     android:textStyle="bold" />
             </FrameLayout>
 
-            <EditText
-                android:id="@+id/shortcutIconUrlInput"
+            <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="10dp"
                 android:layout_weight="1"
-                android:hint="@string/shortcut_hint_icon"
-                android:inputType="textUri"
-                android:maxLines="1"
-                android:importantForAutofill="no" />
-        </LinearLayout>
+                android:orientation="vertical">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/shortcutFetchIconButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:text="@string/shortcut_fetch_icon"
-            android:textAllCaps="false" />
+                <LinearLayout
+                    android:id="@+id/shortcutAutoIconRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <EditText
+                        android:id="@+id/shortcutIconUrlInput"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="@string/shortcut_hint_icon"
+                        android:inputType="textUri"
+                        android:maxLines="1"
+                        android:importantForAutofill="no" />
+                </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/shortcutFetchIconButton"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end"
+                    android:text="@string/shortcut_fetch_icon"
+                    android:textAllCaps="false" />
+
+                <LinearLayout
+                    android:id="@+id/shortcutLetterOptions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/shortcut_field_letter"
+                            android:textColor="#FF6B7280"
+                            android:textSize="12sp" />
+
+                        <EditText
+                            android:id="@+id/shortcutLetterInput"
+                            android:layout_width="56dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:hint="A"
+                            android:inputType="text"
+                            android:maxLines="1"
+                            android:importantForAutofill="no" />
+                    </LinearLayout>
+
+                    <GridLayout
+                        android:id="@+id/shortcutColorGrid"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:columnCount="4"
+                        android:rowCount="4" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
 
         <TextView
             android:id="@+id/shortcutEditError"

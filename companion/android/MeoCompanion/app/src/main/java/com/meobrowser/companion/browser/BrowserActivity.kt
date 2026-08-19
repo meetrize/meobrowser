@@ -47,6 +47,7 @@ import com.meobrowser.companion.R
 import com.meobrowser.companion.browser.download.DownloadHub
 import com.meobrowser.companion.browser.newtab.ShortcutGridAdapter
 import com.meobrowser.companion.browser.newtab.ShortcutIconHelper
+import com.meobrowser.companion.browser.newtab.ShortcutIconPalette
 import com.meobrowser.companion.browser.newtab.ShortcutItem
 import com.meobrowser.companion.browser.newtab.ShortcutStore
 import com.meobrowser.companion.browser.store.BookmarkStore
@@ -869,14 +870,32 @@ class BrowserActivity : AppCompatActivity() {
         val titleInput = view.findViewById<EditText>(R.id.shortcutTitleInput)
         val urlInput = view.findViewById<EditText>(R.id.shortcutUrlInput)
         val iconUrlInput = view.findViewById<EditText>(R.id.shortcutIconUrlInput)
+        val letterInput = view.findViewById<EditText>(R.id.shortcutLetterInput)
+        val styleGroup = view.findViewById<android.widget.RadioGroup>(R.id.shortcutIconStyleGroup)
+        val styleAuto = view.findViewById<android.widget.RadioButton>(R.id.shortcutIconStyleAuto)
+        val styleLetter = view.findViewById<android.widget.RadioButton>(R.id.shortcutIconStyleLetter)
+        val autoRow = view.findViewById<View>(R.id.shortcutAutoIconRow)
+        val letterOptions = view.findViewById<View>(R.id.shortcutLetterOptions)
+        val colorGrid = view.findViewById<android.widget.GridLayout>(R.id.shortcutColorGrid)
+        val previewFrame = view.findViewById<android.widget.FrameLayout>(R.id.shortcutIconPreviewFrame)
         val preview = view.findViewById<android.widget.ImageView>(R.id.shortcutIconPreview)
         val letter = view.findViewById<TextView>(R.id.shortcutIconLetter)
         val fetchBtn = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.shortcutFetchIconButton)
         val errorView = view.findViewById<TextView>(R.id.shortcutEditError)
 
+        var usingLetterStyle = existing?.usesCustomLetterIcon == true
+        var selectedColorIndex = ShortcutIconPalette.clampedIndex(existing?.iconColorIndex ?: 0)
+
         titleInput.setText(existing?.title.orEmpty())
         urlInput.setText(existing?.url.orEmpty())
         iconUrlInput.setText(existing?.iconURL.orEmpty())
+        letterInput.setText(
+            existing?.iconLetter?.takeIf { it.isNotBlank() }
+                ?: ShortcutIconPalette.defaultLetter(
+                    existing?.title.orEmpty(),
+                    existing?.url.orEmpty()
+                )
+        )
 
         fun showError(msg: String?) {
             if (msg.isNullOrBlank()) {
@@ -888,10 +907,37 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
 
+        fun applyLetterPreview() {
+            val density = resources.displayMetrics.density
+            val color = ShortcutIconPalette.colorAtIndex(selectedColorIndex)
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 8f * density
+                setColor(color)
+            }
+            previewFrame.background = bg
+            preview.setImageDrawable(null)
+            letter.visibility = View.VISIBLE
+            letter.setTextColor(Color.WHITE)
+            val text = ShortcutIconPalette.normalizedLetter(letterInput.text?.toString()).ifBlank {
+                ShortcutIconPalette.defaultLetter(
+                    titleInput.text?.toString().orEmpty(),
+                    urlInput.text?.toString().orEmpty()
+                )
+            }
+            letter.text = text
+        }
+
         fun applyPreview(cached: ShortcutIconHelper.CachedIcon?) {
+            if (usingLetterStyle) {
+                applyLetterPreview()
+                return
+            }
+            previewFrame.setBackgroundResource(R.drawable.bg_shortcut_icon_white)
             if (cached == null) {
                 preview.setImageDrawable(null)
                 letter.visibility = View.VISIBLE
+                letter.setTextColor(0xFF6B7280.toInt())
                 letter.text = ShortcutIconHelper.letter(
                     titleInput.text?.toString().orEmpty(),
                     urlInput.text?.toString().orEmpty()
@@ -912,7 +958,12 @@ class BrowserActivity : AppCompatActivity() {
         }
 
         fun refreshPreview() {
+            if (usingLetterStyle) {
+                applyLetterPreview()
+                return
+            }
             letter.visibility = View.VISIBLE
+            letter.setTextColor(0xFF6B7280.toInt())
             letter.text = ShortcutIconHelper.letter(
                 titleInput.text?.toString().orEmpty(),
                 urlInput.text?.toString().orEmpty()
@@ -922,13 +973,91 @@ class BrowserActivity : AppCompatActivity() {
                 urlInput.text?.toString().orEmpty(),
                 iconUrlInput.text?.toString().orEmpty()
             ) { cached ->
-                applyPreview(cached)
+                if (!usingLetterStyle) applyPreview(cached)
             }
         }
 
-        refreshPreview()
+        fun applyStyleUi() {
+            styleAuto.isChecked = !usingLetterStyle
+            styleLetter.isChecked = usingLetterStyle
+            autoRow.visibility = if (usingLetterStyle) View.GONE else View.VISIBLE
+            fetchBtn.visibility = if (usingLetterStyle) View.GONE else View.VISIBLE
+            letterOptions.visibility = if (usingLetterStyle) View.VISIBLE else View.GONE
+            iconUrlInput.isEnabled = !usingLetterStyle
+            letterInput.isEnabled = usingLetterStyle
+            refreshPreview()
+        }
+
+        val density = resources.displayMetrics.density
+        val swatchSize = (28 * density).toInt()
+        val swatchMargin = (4 * density).toInt()
+        colorGrid.removeAllViews()
+        for (i in 0 until ShortcutIconPalette.COLOR_COUNT) {
+            val swatch = View(this).apply {
+                layoutParams = android.widget.GridLayout.LayoutParams().apply {
+                    width = swatchSize
+                    height = swatchSize
+                    setMargins(swatchMargin, swatchMargin, swatchMargin, swatchMargin)
+                }
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(ShortcutIconPalette.colorAtIndex(i))
+                    if (i == selectedColorIndex) {
+                        setStroke((2 * density).toInt(), Color.WHITE)
+                    }
+                }
+                setOnClickListener {
+                    selectedColorIndex = i
+                    for (c in 0 until colorGrid.childCount) {
+                        val child = colorGrid.getChildAt(c)
+                        (child.background as? GradientDrawable)?.setStroke(
+                            if (c == selectedColorIndex) (2 * density).toInt() else 0,
+                            Color.WHITE
+                        )
+                    }
+                    applyLetterPreview()
+                }
+            }
+            colorGrid.addView(swatch)
+        }
+
+        styleGroup.setOnCheckedChangeListener { _, checkedId ->
+            val wantLetter = checkedId == R.id.shortcutIconStyleLetter
+            if (wantLetter == usingLetterStyle) {
+                applyStyleUi()
+                return@setOnCheckedChangeListener
+            }
+            usingLetterStyle = wantLetter
+            if (wantLetter) {
+                if (letterInput.text.isNullOrBlank()) {
+                    letterInput.setText(
+                        ShortcutIconPalette.defaultLetter(
+                            titleInput.text?.toString().orEmpty(),
+                            urlInput.text?.toString().orEmpty()
+                        )
+                    )
+                }
+                if (existing?.usesCustomLetterIcon != true) {
+                    selectedColorIndex = ShortcutIconPalette.defaultIndexForUrl(
+                        urlInput.text?.toString().orEmpty()
+                    )
+                }
+            }
+            applyStyleUi()
+        }
+
+        letterInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                if (usingLetterStyle) applyLetterPreview()
+            }
+        })
+
+        applyStyleUi()
 
         fetchBtn.setOnClickListener {
+            if (usingLetterStyle) return@setOnClickListener
             val pageUrl = UrlNavigator.normalize(urlInput.text?.toString().orEmpty())
             if (UrlNavigator.isNewTabUrl(pageUrl) || pageUrl.isBlank()) {
                 showError("请先输入有效的网址，再自动获取图标")
@@ -943,6 +1072,7 @@ class BrowserActivity : AppCompatActivity() {
             ) { ok, iconUrl, cached, message ->
                 fetchBtn.isEnabled = true
                 fetchBtn.text = getString(R.string.shortcut_fetch_icon)
+                if (usingLetterStyle) return@fetchForEditor
                 if (!ok || iconUrl == null || cached == null) {
                     showError(message)
                     return@fetchForEditor
@@ -974,19 +1104,38 @@ class BrowserActivity : AppCompatActivity() {
                     showError("请输入有效的网址")
                     return@setOnClickListener
                 }
-                val iconURL = when {
-                    iconRaw.isBlank() -> ""
-                    iconRaw.startsWith("http://") || iconRaw.startsWith("https://") -> iconRaw
-                    else -> {
-                        showError("请输入有效的图标链接（http/https）")
-                        return@setOnClickListener
+                val iconURL = if (usingLetterStyle) {
+                    when {
+                        iconRaw.isBlank() -> existing?.iconURL.orEmpty()
+                        iconRaw.startsWith("http://") || iconRaw.startsWith("https://") -> iconRaw
+                        else -> existing?.iconURL.orEmpty()
                     }
+                } else {
+                    when {
+                        iconRaw.isBlank() -> ""
+                        iconRaw.startsWith("http://") || iconRaw.startsWith("https://") -> iconRaw
+                        else -> {
+                            showError("请输入有效的图标链接（http/https）")
+                            return@setOnClickListener
+                        }
+                    }
+                }
+                var letterValue = ShortcutIconPalette.normalizedLetter(letterInput.text?.toString())
+                if (usingLetterStyle && letterValue.isBlank()) {
+                    letterValue = ShortcutIconPalette.defaultLetter(title, url)
                 }
                 val order = existing?.order ?: shortcutStore.loadActive().size
                 val item = (existing ?: ShortcutItem(title = title, url = url, order = order)).copy(
                     title = title,
                     url = url,
                     iconURL = iconURL,
+                    iconStyle = if (usingLetterStyle) {
+                        ShortcutIconPalette.STYLE_LETTER
+                    } else {
+                        ShortcutIconPalette.STYLE_AUTO
+                    },
+                    iconLetter = letterValue,
+                    iconColorIndex = ShortcutIconPalette.clampedIndex(selectedColorIndex),
                     order = order,
                     updatedAt = System.currentTimeMillis() / 1000,
                     deviceId = shortcutStore.deviceId()

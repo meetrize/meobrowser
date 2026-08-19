@@ -1,6 +1,7 @@
 #import "BrowserShortcutEditorSheet.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserShortcutStore.h"
+#import "BrowserShortcutIconPalette.h"
 #import "BrowserFaviconService.h"
 #import "BrowserFaviconUtil.h"
 #import "SBTextField.h"
@@ -9,14 +10,25 @@
 @property (nonatomic, strong) SBTextField *titleField;
 @property (nonatomic, strong) SBTextField *urlField;
 @property (nonatomic, strong) SBTextField *iconURLField;
+@property (nonatomic, strong) SBTextField *letterField;
 @property (nonatomic, strong) NSButton *fetchIconButton;
-@property (nonatomic, strong) NSImageView *iconPreview;
+@property (nonatomic, strong) NSButton *autoStyleButton;
+@property (nonatomic, strong) NSButton *letterStyleButton;
+@property (nonatomic, strong) NSView *autoIconRow;
+@property (nonatomic, strong) NSView *letterOptionsView;
+@property (nonatomic, strong) NSStackView *colorGrid;
+@property (nonatomic, strong) NSMutableArray<NSButton *> *colorButtons;
+@property (nonatomic, strong) NSView *iconPreviewPlate;
+@property (nonatomic, strong) NSImageView *iconPreviewImage;
+@property (nonatomic, strong) NSTextField *iconPreviewLetter;
 @property (nonatomic, strong) NSTextField *errorLabel;
 @property (nonatomic, copy, nullable) BrowserShortcutEditorCompletionHandler completion;
 @property (nonatomic, strong, nullable) BrowserShortcutItem *editingShortcut;
 @property (nonatomic, strong, nullable) BrowserShortcutEditorPanelController *selfRetain;
 @property (nonatomic, copy, nullable) NSString *fetchingHost;
 @property (nonatomic, assign) BOOL fetchingIcon;
+@property (nonatomic, assign) BOOL usingLetterStyle;
+@property (nonatomic, assign) NSInteger selectedColorIndex;
 @end
 
 @implementation BrowserShortcutEditorPanelController
@@ -24,7 +36,11 @@
 - (instancetype)initForAdding {
     self = [super initWithWindow:nil];
     if (self) {
+        _usingLetterStyle = NO;
+        _selectedColorIndex = 0;
         [self buildWindowWithTitle:@"添加快捷方式"];
+        [self applyStyleModeUI];
+        [self refreshIconPreview];
     }
     return self;
 }
@@ -33,19 +49,24 @@
     self = [super initWithWindow:nil];
     if (self) {
         _editingShortcut = shortcut;
+        _usingLetterStyle = shortcut.usesCustomLetterIcon;
+        _selectedColorIndex = [BrowserShortcutIconPalette clampedIndex:shortcut.iconColorIndex];
         [self buildWindowWithTitle:@"编辑快捷方式"];
         self.titleField.stringValue = shortcut.title;
         self.urlField.stringValue = shortcut.urlString;
         self.iconURLField.stringValue = shortcut.iconURLString;
+        NSString *letter = shortcut.iconLetter.length > 0
+            ? shortcut.iconLetter
+            : [BrowserShortcutIconPalette defaultLetterForTitle:shortcut.title urlString:shortcut.urlString];
+        self.letterField.stringValue = letter;
+        [self applyStyleModeUI];
         [self refreshIconPreview];
     }
     return self;
 }
 
 - (void)buildWindowWithTitle:(NSString *)title {
-    // 高度略大于表单内容即可；多余竖直空间交给 root 的 gravity 间隙
-    // （表单区与按钮之间），不要撑开 NSGridView 的行间距。
-    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 240)
+    NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 360)
                                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -54,58 +75,150 @@
 
     NSTextField *titleCaption = [NSTextField labelWithString:@"名称"];
     NSTextField *urlCaption = [NSTextField labelWithString:@"网址"];
-    NSTextField *iconCaption = [NSTextField labelWithString:@"图标链接"];
+    NSTextField *iconCaption = [NSTextField labelWithString:@"图标"];
 
     self.titleField = [SBTextField standardField];
     self.urlField = [SBTextField standardField];
     self.urlField.placeholderString = @"https://example.com";
     self.iconURLField = [SBTextField standardField];
     self.iconURLField.placeholderString = @"https://example.com/favicon.ico（可选）";
+    self.letterField = [SBTextField standardField];
+    self.letterField.placeholderString = @"字母";
     self.titleField.delegate = self;
     self.urlField.delegate = self;
     self.iconURLField.delegate = self;
+    self.letterField.delegate = self;
 
-    // 带 bezel 的单行框需要稳定行高，避免被 grid / fitting 压扁裁切。
     static const CGFloat kFieldHeight = 22.0;
-    for (NSTextField *field in @[self.titleField, self.urlField, self.iconURLField]) {
+    for (NSTextField *field in @[self.titleField, self.urlField, self.iconURLField, self.letterField]) {
         field.translatesAutoresizingMaskIntoConstraints = NO;
         [field.heightAnchor constraintEqualToConstant:kFieldHeight].active = YES;
         [field setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                         forOrientation:NSLayoutConstraintOrientationVertical];
     }
+    [self.letterField.widthAnchor constraintEqualToConstant:48].active = YES;
 
     self.fetchIconButton = [NSButton buttonWithTitle:@"自动获取" target:self action:@selector(onFetchIcon:)];
     self.fetchIconButton.bezelStyle = NSBezelStyleRounded;
     [self.fetchIconButton setContentHuggingPriority:NSLayoutPriorityDefaultHigh
                                      forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *iconRow = [NSStackView stackViewWithViews:@[self.iconURLField, self.fetchIconButton]];
-    iconRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    iconRow.alignment = NSLayoutAttributeCenterY;
-    iconRow.spacing = 8;
-    iconRow.distribution = NSStackViewDistributionFill;
-    [self.iconURLField setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.autoStyleButton = [NSButton radioButtonWithTitle:@"自动（Favicon）"
+                                                   target:self
+                                                   action:@selector(onStyleChanged:)];
+    self.letterStyleButton = [NSButton radioButtonWithTitle:@"自定义色块"
+                                                     target:self
+                                                     action:@selector(onStyleChanged:)];
 
-    self.iconPreview = [[NSImageView alloc] initWithFrame:NSZeroRect];
-    self.iconPreview.imageScaling = NSImageScaleProportionallyUpOrDown;
-    self.iconPreview.wantsLayer = YES;
-    self.iconPreview.layer.cornerRadius = 6.0;
-    self.iconPreview.layer.masksToBounds = YES;
-    self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
-    self.iconPreview.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *styleRow = [NSStackView stackViewWithViews:@[self.autoStyleButton, self.letterStyleButton]];
+    styleRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    styleRow.alignment = NSLayoutAttributeCenterY;
+    styleRow.spacing = 16;
+
+    self.iconPreviewPlate = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.iconPreviewPlate.wantsLayer = YES;
+    self.iconPreviewPlate.layer.cornerRadius = 8.0;
+    self.iconPreviewPlate.layer.masksToBounds = YES;
+    self.iconPreviewPlate.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+    self.iconPreviewPlate.translatesAutoresizingMaskIntoConstraints = NO;
     [NSLayoutConstraint activateConstraints:@[
-        [self.iconPreview.widthAnchor constraintEqualToConstant:32],
-        [self.iconPreview.heightAnchor constraintEqualToConstant:32],
+        [self.iconPreviewPlate.widthAnchor constraintEqualToConstant:40],
+        [self.iconPreviewPlate.heightAnchor constraintEqualToConstant:40],
     ]];
 
-    NSStackView *iconPreviewRow = [NSStackView stackViewWithViews:@[self.iconPreview, iconRow]];
-    iconPreviewRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    iconPreviewRow.alignment = NSLayoutAttributeCenterY;
-    iconPreviewRow.spacing = 10;
-    iconPreviewRow.distribution = NSStackViewDistributionFill;
-    [iconRow setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.iconPreviewImage = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.iconPreviewImage.imageScaling = NSImageScaleProportionallyUpOrDown;
+    self.iconPreviewImage.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.iconPreviewLetter = [NSTextField labelWithString:@""];
+    self.iconPreviewLetter.font = [NSFont systemFontOfSize:18 weight:NSFontWeightSemibold];
+    self.iconPreviewLetter.textColor = NSColor.whiteColor;
+    self.iconPreviewLetter.alignment = NSTextAlignmentCenter;
+    self.iconPreviewLetter.translatesAutoresizingMaskIntoConstraints = NO;
+    self.iconPreviewLetter.hidden = YES;
+
+    [self.iconPreviewPlate addSubview:self.iconPreviewImage];
+    [self.iconPreviewPlate addSubview:self.iconPreviewLetter];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.iconPreviewImage.topAnchor constraintEqualToAnchor:self.iconPreviewPlate.topAnchor],
+        [self.iconPreviewImage.leadingAnchor constraintEqualToAnchor:self.iconPreviewPlate.leadingAnchor],
+        [self.iconPreviewImage.trailingAnchor constraintEqualToAnchor:self.iconPreviewPlate.trailingAnchor],
+        [self.iconPreviewImage.bottomAnchor constraintEqualToAnchor:self.iconPreviewPlate.bottomAnchor],
+        [self.iconPreviewLetter.centerXAnchor constraintEqualToAnchor:self.iconPreviewPlate.centerXAnchor],
+        [self.iconPreviewLetter.centerYAnchor constraintEqualToAnchor:self.iconPreviewPlate.centerYAnchor],
+    ]];
+
+    NSStackView *iconURLRow = [NSStackView stackViewWithViews:@[self.iconURLField, self.fetchIconButton]];
+    iconURLRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    iconURLRow.alignment = NSLayoutAttributeCenterY;
+    iconURLRow.spacing = 8;
+    iconURLRow.distribution = NSStackViewDistributionFill;
+    [self.iconURLField setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.autoIconRow = iconURLRow;
+
+    NSTextField *letterCaption = [NSTextField labelWithString:@"字母"];
+    NSStackView *letterRow = [NSStackView stackViewWithViews:@[letterCaption, self.letterField]];
+    letterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    letterRow.alignment = NSLayoutAttributeCenterY;
+    letterRow.spacing = 8;
+
+    self.colorButtons = [NSMutableArray array];
+    NSMutableArray<NSView *> *colorRows = [NSMutableArray array];
+    for (NSInteger row = 0; row < 4; row++) {
+        NSMutableArray<NSView *> *rowButtons = [NSMutableArray array];
+        for (NSInteger col = 0; col < 4; col++) {
+            NSInteger index = row * 4 + col;
+            NSButton *swatch = [[NSButton alloc] initWithFrame:NSZeroRect];
+            swatch.bordered = NO;
+            swatch.wantsLayer = YES;
+            swatch.layer.cornerRadius = 10.0;
+            swatch.layer.masksToBounds = YES;
+            swatch.layer.backgroundColor = [BrowserShortcutIconPalette colorAtIndex:index].CGColor;
+            swatch.tag = index;
+            swatch.target = self;
+            swatch.action = @selector(onColorSwatch:);
+            swatch.translatesAutoresizingMaskIntoConstraints = NO;
+            [NSLayoutConstraint activateConstraints:@[
+                [swatch.widthAnchor constraintEqualToConstant:20],
+                [swatch.heightAnchor constraintEqualToConstant:20],
+            ]];
+            [self.colorButtons addObject:swatch];
+            [rowButtons addObject:swatch];
+        }
+        NSStackView *rowStack = [NSStackView stackViewWithViews:rowButtons];
+        rowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        rowStack.spacing = 6;
+        [colorRows addObject:rowStack];
+    }
+    self.colorGrid = [NSStackView stackViewWithViews:colorRows];
+    self.colorGrid.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.colorGrid.spacing = 6;
+    self.colorGrid.alignment = NSLayoutAttributeLeading;
+
+    NSStackView *letterOptions = [NSStackView stackViewWithViews:@[letterRow, self.colorGrid]];
+    letterOptions.orientation = NSUserInterfaceLayoutOrientationVertical;
+    letterOptions.alignment = NSLayoutAttributeLeading;
+    letterOptions.spacing = 8;
+    self.letterOptionsView = letterOptions;
+
+    NSStackView *iconBody = [NSStackView stackViewWithViews:@[
+        styleRow,
+        self.autoIconRow,
+        self.letterOptionsView,
+    ]];
+    iconBody.orientation = NSUserInterfaceLayoutOrientationVertical;
+    iconBody.alignment = NSLayoutAttributeLeading;
+    iconBody.spacing = 8;
+    iconBody.distribution = NSStackViewDistributionFill;
+
+    NSStackView *iconPreviewColumn = [NSStackView stackViewWithViews:@[self.iconPreviewPlate, iconBody]];
+    iconPreviewColumn.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    iconPreviewColumn.alignment = NSLayoutAttributeTop;
+    iconPreviewColumn.spacing = 12;
+    iconPreviewColumn.distribution = NSStackViewDistributionFill;
+    [iconBody setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.errorLabel = [NSTextField labelWithString:@""];
     self.errorLabel.textColor = [NSColor systemRedColor];
@@ -120,14 +233,14 @@
     NSGridView *grid = [NSGridView gridViewWithViews:@[
         @[titleCaption, self.titleField],
         @[urlCaption, self.urlField],
-        @[iconCaption, iconPreviewRow],
+        @[iconCaption, iconPreviewColumn],
     ]];
     grid.columnSpacing = 12;
     grid.rowSpacing = 10;
-    [grid columnAtIndex:0].width = 64;
+    [grid columnAtIndex:0].width = 48;
     [grid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
     for (NSInteger row = 0; row < grid.numberOfRows; row++) {
-        [grid rowAtIndex:row].yPlacement = NSGridCellPlacementCenter;
+        [grid rowAtIndex:row].yPlacement = NSGridCellPlacementTop;
     }
     [grid setContentHuggingPriority:NSLayoutPriorityDefaultHigh
                      forOrientation:NSLayoutConstraintOrientationVertical];
@@ -139,7 +252,6 @@
     buttons.alignment = NSLayoutAttributeCenterY;
     buttons.spacing = 8;
 
-    // GravityAreas：表单置顶、按钮沉底，窗口略高时空隙落在二者之间，不拉大表单行距。
     NSStackView *root = [[NSStackView alloc] initWithFrame:NSZeroRect];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
     root.spacing = 12;
@@ -160,6 +272,34 @@
     ]];
 
     self.window = panel;
+}
+
+- (void)applyStyleModeUI {
+    self.autoStyleButton.state = self.usingLetterStyle ? NSControlStateValueOff : NSControlStateValueOn;
+    self.letterStyleButton.state = self.usingLetterStyle ? NSControlStateValueOn : NSControlStateValueOff;
+    self.autoIconRow.hidden = self.usingLetterStyle;
+    self.letterOptionsView.hidden = !self.usingLetterStyle;
+    self.iconURLField.enabled = !self.usingLetterStyle;
+    self.fetchIconButton.enabled = !self.usingLetterStyle && !self.fetchingIcon;
+    self.letterField.enabled = self.usingLetterStyle;
+    [self updateColorSelectionChrome];
+}
+
+- (void)updateColorSelectionChrome {
+    for (NSButton *button in self.colorButtons) {
+        BOOL selected = (button.tag == self.selectedColorIndex);
+        button.layer.borderWidth = selected ? 2.0 : 0.0;
+        button.layer.borderColor = selected ? NSColor.whiteColor.CGColor : nil;
+        if (selected) {
+            button.layer.shadowOpacity = 0.35;
+            button.layer.shadowRadius = 2.0;
+            button.layer.shadowOffset = CGSizeMake(0, -0.5);
+            button.layer.masksToBounds = NO;
+        } else {
+            button.layer.shadowOpacity = 0;
+            button.layer.masksToBounds = YES;
+        }
+    }
 }
 
 - (void)presentOnWindow:(NSWindow *)parentWindow {
@@ -211,9 +351,36 @@
     [self dismissSheetWithReturnCode:NSModalResponseCancel];
 }
 
+- (void)onStyleChanged:(NSButton *)sender {
+    BOOL wantLetter = (sender == self.letterStyleButton);
+    if (wantLetter == self.usingLetterStyle) {
+        [self applyStyleModeUI];
+        return;
+    }
+    self.usingLetterStyle = wantLetter;
+    if (wantLetter) {
+        if (self.letterField.stringValue.length == 0) {
+            self.letterField.stringValue = [BrowserShortcutIconPalette defaultLetterForTitle:self.titleField.stringValue
+                                                                                   urlString:self.urlField.stringValue];
+        }
+        if (self.editingShortcut == nil || !self.editingShortcut.usesCustomLetterIcon) {
+            self.selectedColorIndex = [BrowserShortcutIconPalette defaultIndexForURLString:self.urlField.stringValue];
+        }
+        [self cancelInFlightFetch];
+    }
+    [self applyStyleModeUI];
+    [self refreshIconPreview];
+}
+
+- (void)onColorSwatch:(NSButton *)sender {
+    self.selectedColorIndex = [BrowserShortcutIconPalette clampedIndex:sender.tag];
+    [self updateColorSelectionChrome];
+    [self refreshIconPreview];
+}
+
 - (void)onFetchIcon:(id)sender {
     (void)sender;
-    if (self.fetchingIcon) {
+    if (self.fetchingIcon || self.usingLetterStyle) {
         return;
     }
 
@@ -244,36 +411,67 @@
         if (error != nil && error.code == BrowserFaviconErrorCancelled) {
             return;
         }
+        if (strongSelf.usingLetterStyle) {
+            return;
+        }
         if (image == nil || iconURL.absoluteString.length == 0) {
             [strongSelf showError:@"未能获取图标，可手动填写"];
             return;
         }
 
         strongSelf.iconURLField.stringValue = iconURL.absoluteString;
-        strongSelf.iconPreview.image = image;
-        strongSelf.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+        [strongSelf showAutoPreviewImage:image];
         strongSelf.errorLabel.hidden = YES;
     }];
 }
 
 - (void)setFetchingIcon:(BOOL)fetchingIcon {
     _fetchingIcon = fetchingIcon;
-    self.fetchIconButton.enabled = !fetchingIcon;
+    if (!self.usingLetterStyle) {
+        self.fetchIconButton.enabled = !fetchingIcon;
+    }
     self.fetchIconButton.title = fetchingIcon ? @"获取中…" : @"自动获取";
 }
 
+- (void)showAutoPreviewImage:(NSImage *)image {
+    self.iconPreviewImage.image = image;
+    self.iconPreviewImage.hidden = NO;
+    self.iconPreviewLetter.hidden = YES;
+    self.iconPreviewPlate.layer.backgroundColor = NSColor.clearColor.CGColor;
+}
+
+- (void)showLetterPreview {
+    NSString *letter = [BrowserShortcutIconPalette normalizedLetterFromString:self.letterField.stringValue];
+    if (letter.length == 0) {
+        letter = [BrowserShortcutIconPalette defaultLetterForTitle:self.titleField.stringValue
+                                                         urlString:self.urlField.stringValue];
+    }
+    self.iconPreviewImage.image = nil;
+    self.iconPreviewImage.hidden = YES;
+    self.iconPreviewLetter.hidden = NO;
+    self.iconPreviewLetter.stringValue = letter;
+    NSColor *color = [BrowserShortcutIconPalette colorAtIndex:self.selectedColorIndex];
+    self.iconPreviewPlate.layer.backgroundColor = color.CGColor;
+}
+
 - (void)refreshIconPreview {
+    if (self.usingLetterStyle) {
+        [self showLetterPreview];
+        return;
+    }
+
     NSString *iconURL = self.iconURLField.stringValue;
     NSString *pageURL = self.urlField.stringValue;
-    self.iconPreview.image = nil;
-    self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+    self.iconPreviewImage.image = nil;
+    self.iconPreviewImage.hidden = NO;
+    self.iconPreviewLetter.hidden = YES;
+    self.iconPreviewPlate.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
 
     NSString *host = BrowserFaviconHostFromURLString(pageURL);
     if (host.length > 0) {
         NSImage *cached = [[BrowserFaviconService sharedService] cachedImageForHost:host];
         if (cached != nil) {
-            self.iconPreview.image = cached;
-            self.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+            [self showAutoPreviewImage:cached];
             return;
         }
     }
@@ -286,14 +484,13 @@
                                                       triggerFetch:NO
                                                         completion:^(NSImage *image) {
         BrowserShortcutEditorPanelController *strongSelf = weakSelf;
-        if (strongSelf == nil || image == nil) {
+        if (strongSelf == nil || image == nil || strongSelf.usingLetterStyle) {
             return;
         }
         if (![strongSelf.iconURLField.stringValue isEqualToString:iconURL]) {
             return;
         }
-        strongSelf.iconPreview.image = image;
-        strongSelf.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+        [strongSelf showAutoPreviewImage:image];
     }];
 }
 
@@ -315,10 +512,29 @@
     }
 
     NSString *normalizedIconURL = nil;
-    if (![BrowserShortcutStore validateIconURLString:iconInput normalizedURL:&normalizedIconURL]) {
-        [self showError:@"请输入有效的图标链接，需包含 http/https 与域名"];
-        return;
+    if (!self.usingLetterStyle) {
+        if (![BrowserShortcutStore validateIconURLString:iconInput normalizedURL:&normalizedIconURL]) {
+            [self showError:@"请输入有效的图标链接，需包含 http/https 与域名"];
+            return;
+        }
+    } else {
+        // 自定义色块时保留已有 iconURL，不因空/无效链接挡保存。
+        if (iconInput.length > 0 &&
+            [BrowserShortcutStore validateIconURLString:iconInput normalizedURL:&normalizedIconURL]) {
+            // keep normalized
+        } else if (self.editingShortcut != nil && self.editingShortcut.iconURLString.length > 0) {
+            normalizedIconURL = self.editingShortcut.iconURLString;
+        } else {
+            normalizedIconURL = @"";
+        }
     }
+
+    NSString *style = self.usingLetterStyle ? BrowserShortcutIconStyleLetter : BrowserShortcutIconStyleAuto;
+    NSString *letter = [BrowserShortcutIconPalette normalizedLetterFromString:self.letterField.stringValue];
+    if (self.usingLetterStyle && letter.length == 0) {
+        letter = [BrowserShortcutIconPalette defaultLetterForTitle:title urlString:normalizedURL];
+    }
+    NSInteger colorIndex = [BrowserShortcutIconPalette clampedIndex:self.selectedColorIndex];
 
     BrowserShortcutItem *result = nil;
     if (self.editingShortcut) {
@@ -332,6 +548,9 @@
                                        iconURLString:normalizedIconURL ?: @""
                                           sortOrder:0];
     }
+    result.iconStyle = style;
+    result.iconLetter = letter;
+    result.iconColorIndex = colorIndex;
 
     if (self.completion) {
         self.completion(result);
@@ -345,21 +564,30 @@
 }
 
 - (void)controlTextDidChange:(NSNotification *)obj {
-    (void)obj;
+    if (obj.object == self.letterField || obj.object == self.titleField) {
+        if (self.usingLetterStyle) {
+            [self refreshIconPreview];
+        }
+        return;
+    }
     if (obj.object == self.iconURLField || obj.object == self.urlField) {
-        // 输入变化时不自动请求网络，仅在有 host 缓存时刷新预览。
+        if (self.usingLetterStyle) {
+            return;
+        }
         NSString *host = BrowserFaviconHostFromURLString(self.urlField.stringValue);
         if (host.length > 0) {
             NSImage *cached = [[BrowserFaviconService sharedService] cachedImageForHost:host];
             if (cached != nil) {
-                self.iconPreview.image = cached;
-                self.iconPreview.layer.backgroundColor = NSColor.clearColor.CGColor;
+                [self showAutoPreviewImage:cached];
                 return;
             }
         }
         if (self.iconURLField.stringValue.length == 0) {
-            self.iconPreview.image = nil;
-            self.iconPreview.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+            self.iconPreviewImage.image = nil;
+            self.iconPreviewLetter.hidden = YES;
+            self.iconPreviewPlate.layer.backgroundColor = NSColor.quaternaryLabelColor.CGColor;
+        } else {
+            [self refreshIconPreview];
         }
     }
 }

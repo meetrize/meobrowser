@@ -1,5 +1,6 @@
 #import "BrowserShortcutSuggestionPanel.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserShortcutIconPalette.h"
 #import "BrowserFaviconService.h"
 
 @class BrowserShortcutSuggestionRowView;
@@ -34,15 +35,17 @@ static NSColor *ColorFromURLString(NSString *urlString) {
 }
 
 static NSString *DisplayLetterForShortcut(BrowserShortcutItem *item) {
-    if (item.title.length > 0) {
-        return [[item.title substringToIndex:1] uppercaseString];
+    if (item.usesCustomLetterIcon && item.iconLetter.length > 0) {
+        return item.iconLetter;
     }
-    NSURL *url = [NSURL URLWithString:item.urlString];
-    NSString *host = url.host.length > 0 ? url.host : @"?";
-    if ([host hasPrefix:@"www."]) {
-        host = [host substringFromIndex:4];
+    return [BrowserShortcutIconPalette defaultLetterForTitle:item.title urlString:item.urlString];
+}
+
+static NSColor *DisplayPlateColorForShortcut(BrowserShortcutItem *item) {
+    if (item.usesCustomLetterIcon) {
+        return [BrowserShortcutIconPalette colorAtIndex:item.iconColorIndex];
     }
-    return [[host substringToIndex:1] uppercaseString];
+    return ColorFromURLString(item.urlString);
 }
 
 static NSString *DisplayHostForShortcut(BrowserShortcutItem *item) {
@@ -143,7 +146,7 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
 }
 
 - (void)configureWithItem:(BrowserShortcutItem *)item {
-    self.layer.backgroundColor = ColorFromURLString(item.urlString).CGColor;
+    self.layer.backgroundColor = DisplayPlateColorForShortcut(item).CGColor;
     self.letterLabel.stringValue = DisplayLetterForShortcut(item);
     self.imageView.hidden = YES;
     self.letterLabel.hidden = NO;
@@ -162,6 +165,11 @@ static NSAttributedString *HighlightedString(NSString *text, NSString *query, NS
     } else {
         self.sourceBadgeView.hidden = YES;
         self.sourceBadgeView.image = nil;
+    }
+
+    if (item.usesCustomLetterIcon) {
+        self.loadToken = item.urlString ?: @"";
+        return;
     }
 
     // 补全行不主动打第三方瀑布，仅用磁盘缓存 / 已有 iconURL（避免输入时风暴）。

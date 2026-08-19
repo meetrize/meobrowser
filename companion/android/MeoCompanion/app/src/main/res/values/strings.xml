@@ -63,7 +63,10 @@
     <string name="fgs_channel_name">Meo 互联</string>
     <string name="shortcut_field_title">名称</string>
     <string name="shortcut_field_url">网址</string>
-    <string name="shortcut_field_icon">图标链接</string>
+    <string name="shortcut_field_icon">图标</string>
+    <string name="shortcut_field_letter">字母</string>
+    <string name="shortcut_icon_style_auto">自动（Favicon）</string>
+    <string name="shortcut_icon_style_letter">自定义色块</string>
     <string name="shortcut_hint_title">标题</string>
     <string name="shortcut_hint_url">https://example.com</string>
     <string name="shortcut_hint_icon">https://example.com/favicon.ico（可选）</string>

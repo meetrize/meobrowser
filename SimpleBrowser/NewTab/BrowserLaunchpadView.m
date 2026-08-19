@@ -1007,6 +1007,9 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         [BrowserShortcutStore addShortcutWithTitle:item.title
                                          urlString:item.urlString
                                      iconURLString:item.iconURLString
+                                         iconStyle:item.iconStyle
+                                        iconLetter:item.iconLetter
+                                    iconColorIndex:item.iconColorIndex
                                        toShortcuts:weakSelf.mutableShortcuts];
         [weakSelf reloadCollectionView];
     }];
@@ -1031,6 +1034,9 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
                                              title:item.title
                                          urlString:item.urlString
                                      iconURLString:item.iconURLString
+                                         iconStyle:item.iconStyle
+                                        iconLetter:item.iconLetter
+                                    iconColorIndex:item.iconColorIndex
                                        inShortcuts:weakSelf.mutableShortcuts];
         [weakSelf reloadShortcuts];
     }];

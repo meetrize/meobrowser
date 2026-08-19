@@ -88,10 +88,10 @@ object ShortcutIconHelper {
 
     fun contrastLetterColor(@Suppress("UNUSED_PARAMETER") bg: Int): Int = Color.WHITE
 
-    /** 预热：把磁盘命中灌入内存，未命中的后台下载。 */
     fun prefetch(items: List<ShortcutItem>) {
         if (diskDir == null) return
         items.forEach { item ->
+            if (item.usesCustomLetterIcon) return@forEach
             val cacheKey = cacheKeyFor(item) ?: return@forEach
             if (memory.containsKey(cacheKey)) return@forEach
             executor.execute {
@@ -123,6 +123,7 @@ object ShortcutIconHelper {
     /**
      * 绑定 favicon。命中缓存时同步回调；否则后台拉取并写磁盘。
      * [onLoaded] 在主线程调用。
+     * 自定义色块图标时不拉取。
      */
     fun bindFavicon(
         imageView: ImageView,
@@ -131,6 +132,7 @@ object ShortcutIconHelper {
     ) {
         imageView.setImageDrawable(null)
         imageView.tag = item.id
+        if (item.usesCustomLetterIcon) return
         val cacheKey = cacheKeyFor(item) ?: return
 
         memory[cacheKey]?.let {

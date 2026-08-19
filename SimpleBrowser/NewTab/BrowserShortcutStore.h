@@ -23,12 +23,18 @@ extern NSNotificationName const BrowserShortcutStoreDidChangeNotification;
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
                                 iconURLString:(NSString *)iconURLString
+                                    iconStyle:(NSString *)iconStyle
+                                   iconLetter:(NSString *)iconLetter
+                               iconColorIndex:(NSInteger)iconColorIndex
                                   toShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 + (void)updateShortcutWithID:(NSString *)itemID
                        title:(NSString *)title
                    urlString:(NSString *)urlString
                iconURLString:(NSString *)iconURLString
+                   iconStyle:(NSString *)iconStyle
+                  iconLetter:(NSString *)iconLetter
+              iconColorIndex:(NSInteger)iconColorIndex
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts;
 
 /// 按页面 URL 匹配 link 快捷方式并回写 iconURL；找到则保存并返回 YES。

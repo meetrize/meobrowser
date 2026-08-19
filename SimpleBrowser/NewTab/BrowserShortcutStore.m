@@ -1,5 +1,6 @@
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
+#import "BrowserShortcutIconPalette.h"
 
 static NSString * const kShortcutItemsKey = @"shortcutItems";
 static NSString * const kShortcutPayloadVersionKey = @"version";
@@ -8,6 +9,9 @@ static NSString * const kShortcutItemIDKey = @"id";
 static NSString * const kShortcutTitleKey = @"title";
 static NSString * const kShortcutURLKey = @"url";
 static NSString * const kShortcutIconURLKey = @"iconURL";
+static NSString * const kShortcutIconStyleKey = @"iconStyle";
+static NSString * const kShortcutIconLetterKey = @"iconLetter";
+static NSString * const kShortcutIconColorIndexKey = @"iconColorIndex";
 static NSString * const kShortcutOrderKey = @"order";
 static NSString * const kShortcutKindKey = @"kind";
 static NSString * const kShortcutFolderIDKey = @"folderID";
@@ -177,6 +181,9 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
 + (BrowserShortcutItem *)addShortcutWithTitle:(NSString *)title
                                     urlString:(NSString *)urlString
                                 iconURLString:(NSString *)iconURLString
+                                    iconStyle:(NSString *)iconStyle
+                                   iconLetter:(NSString *)iconLetter
+                               iconColorIndex:(NSInteger)iconColorIndex
                                   toShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     NSArray<BrowserShortcutItem *> *topLevel = [self topLevelShortcuts:shortcuts];
     NSInteger order = (NSInteger)topLevel.count;
@@ -184,6 +191,9 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
                                                          urlString:urlString
                                                       iconURLString:iconURLString
                                                          sortOrder:order];
+    item.iconStyle = iconStyle ?: BrowserShortcutIconStyleAuto;
+    item.iconLetter = [BrowserShortcutIconPalette normalizedLetterFromString:iconLetter];
+    item.iconColorIndex = [BrowserShortcutIconPalette clampedIndex:iconColorIndex];
     [shortcuts addObject:item];
     [self saveShortcuts:shortcuts];
     return item;
@@ -193,12 +203,18 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
                        title:(NSString *)title
                    urlString:(NSString *)urlString
                iconURLString:(NSString *)iconURLString
+                   iconStyle:(NSString *)iconStyle
+                  iconLetter:(NSString *)iconLetter
+              iconColorIndex:(NSInteger)iconColorIndex
                  inShortcuts:(NSMutableArray<BrowserShortcutItem *> *)shortcuts {
     for (BrowserShortcutItem *item in shortcuts) {
         if ([item.itemID isEqualToString:itemID] && !item.isFolder) {
             item.title = [title copy];
             item.urlString = [urlString copy];
             item.iconURLString = [iconURLString copy];
+            item.iconStyle = iconStyle ?: BrowserShortcutIconStyleAuto;
+            item.iconLetter = [BrowserShortcutIconPalette normalizedLetterFromString:iconLetter];
+            item.iconColorIndex = [BrowserShortcutIconPalette clampedIndex:iconColorIndex];
             break;
         }
     }
@@ -214,6 +230,9 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
     if (item == nil || item.isFolder) {
         return NO;
     }
+    if (item.usesCustomLetterIcon) {
+        return NO;
+    }
     NSString *icon = iconURLString ?: @"";
     if ([item.iconURLString isEqualToString:icon]) {
         return YES;
@@ -222,6 +241,9 @@ static NSArray<BrowserShortcutItem *> *sCachedShortcuts = nil;
                          title:item.title
                      urlString:item.urlString
                  iconURLString:icon
+                     iconStyle:item.iconStyle
+                    iconLetter:item.iconLetter
+                iconColorIndex:item.iconColorIndex
                    inShortcuts:shortcuts];
     return YES;
 }
@@ -679,11 +701,17 @@ toTopLevelAtOrder:(NSInteger)order
 
 + (NSDictionary *)dictionaryFromItem:(BrowserShortcutItem *)item {
     NSString *kindValue = item.isFolder ? kShortcutKindFolderValue : kShortcutKindLinkValue;
+    NSString *style = [item.iconStyle isEqualToString:BrowserShortcutIconStyleLetter]
+        ? BrowserShortcutIconStyleLetter
+        : BrowserShortcutIconStyleAuto;
     return @{
         kShortcutItemIDKey: item.itemID ?: @"",
         kShortcutTitleKey: item.title ?: @"",
         kShortcutURLKey: item.urlString ?: @"",
         kShortcutIconURLKey: item.iconURLString ?: @"",
+        kShortcutIconStyleKey: style,
+        kShortcutIconLetterKey: item.iconLetter ?: @"",
+        kShortcutIconColorIndexKey: @([BrowserShortcutIconPalette clampedIndex:item.iconColorIndex]),
         kShortcutOrderKey: @(item.sortOrder),
         kShortcutKindKey: kindValue,
         kShortcutFolderIDKey: item.folderID ?: @"",
@@ -700,6 +728,16 @@ toTopLevelAtOrder:(NSInteger)order
     item.urlString = [url isKindOfClass:[NSString class]] ? url : @"";
     id iconURL = dictionary[kShortcutIconURLKey];
     item.iconURLString = [iconURL isKindOfClass:[NSString class]] ? iconURL : @"";
+    id iconStyle = dictionary[kShortcutIconStyleKey];
+    item.iconStyle = [iconStyle isKindOfClass:[NSString class]] ? iconStyle : BrowserShortcutIconStyleAuto;
+    id iconLetter = dictionary[kShortcutIconLetterKey];
+    item.iconLetter = [iconLetter isKindOfClass:[NSString class]]
+        ? [BrowserShortcutIconPalette normalizedLetterFromString:iconLetter]
+        : @"";
+    id iconColorIndex = dictionary[kShortcutIconColorIndexKey];
+    item.iconColorIndex = [iconColorIndex respondsToSelector:@selector(integerValue)]
+        ? [BrowserShortcutIconPalette clampedIndex:[iconColorIndex integerValue]]
+        : 0;
     id order = dictionary[kShortcutOrderKey];
     item.sortOrder = [order respondsToSelector:@selector(integerValue)] ? [order integerValue] : 0;
 
@@ -717,6 +755,9 @@ toTopLevelAtOrder:(NSInteger)order
     if (item.isFolder) {
         item.folderID = @"";
         item.urlString = @"";
+        item.iconStyle = BrowserShortcutIconStyleAuto;
+        item.iconLetter = @"";
+        item.iconColorIndex = 0;
     }
     return item;
 }
