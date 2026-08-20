@@ -9,6 +9,9 @@
 #import "BrowserTabStripView.h"
 #import "BrowserTabStripChromeActionsView.h"
 #import "BrowserChromeActionItem.h"
+#import "BrowserStatusItemController.h"
+#import "BrowserTransparentModeController.h"
+#import "BrowserTransparentModePreferences.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -154,7 +157,9 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) BrowserTabStripChromeActionsView *chromeActionsView;
+@property (nonatomic, strong) BrowserTransparentModeController *transparentModeController;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
+@property (nonatomic, assign) BOOL transparentModeAccessoryRemoved;
 @property (nonatomic, strong) NSView *tabStripAccessoryRoot;
 @property (nonatomic, strong) NSLayoutConstraint *tabStripAccessoryHeightConstraint;
 @property (nonatomic, strong) NSStackView *toolbar;
@@ -389,6 +394,12 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
+        _transparentModeController = [[BrowserTransparentModeController alloc] init];
+        _transparentModeController.windowController = self;
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(transparentModePreferencesDidChange:)
+                                                     name:BrowserTransparentModePreferencesDidChangeNotification
+                                                   object:nil];
         _pageTranslationController = [[BrowserPageTranslationController alloc] init];
         __weak typeof(self) weakSelf = self;
         _pageTranslationController.uiStateDidChangeHandler = ^{
@@ -437,6 +448,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
     [self.findBarController configureWebViewConfiguration:configuration];
+    [BrowserTransparentModeController installPageStyleUserScriptOnConfiguration:configuration];
 }
 
 - (void)applyWebInspectionPreferenceToLiveWebViews {
@@ -618,6 +630,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self applyAlwaysOnTopWindowLevel];
     [self scheduleTrafficLightPositioning];
+}
+
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    if (self.transparentModeEnabled) {
+        [self setTransparentModeEnabled:NO];
+    }
 }
 
 - (void)windowDidResize:(NSNotification *)notification {
@@ -994,6 +1015,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)wireChromeActionButtons {
+    NSButton *transparentButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionTransparentModeID];
+    transparentButton.target = self;
+    transparentButton.action = @selector(toggleTransparentMode:);
+
     NSButton *compactButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionCompactModeID];
     compactButton.target = self;
     compactButton.action = @selector(toggleCompactMode:);
@@ -1011,6 +1036,164 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)toggleAlwaysOnTop:(id)sender {
     (void)sender;
     [self setAlwaysOnTopEnabled:!self.alwaysOnTopEnabled];
+}
+
+/// TM-1：隐藏全部 chrome + 窗口透明；页面「只留字」在 TM-2。
+- (void)toggleTransparentMode:(id)sender {
+    (void)sender;
+    [self setTransparentModeEnabled:!self.transparentModeEnabled];
+}
+
+- (void)setTransparentModeEnabled:(BOOL)transparentModeEnabled {
+    if (transparentModeEnabled && (self.window.styleMask & NSWindowStyleMaskFullScreen)) {
+        [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionTransparentModeID];
+        return;
+    }
+
+    if (_transparentModeEnabled == transparentModeEnabled) {
+        [self.chromeActionsView setOn:transparentModeEnabled forItemID:BrowserChromeActionTransparentModeID];
+        return;
+    }
+
+    _transparentModeEnabled = transparentModeEnabled;
+    [self.chromeActionsView setOn:transparentModeEnabled forItemID:BrowserChromeActionTransparentModeID];
+
+    if (transparentModeEnabled) {
+        [self enterTransparentModeChrome];
+    } else {
+        [self exitTransparentModeChrome];
+    }
+
+    [[BrowserStatusItemController sharedController] refreshMenuAppearance];
+    [self schedulePersistTabSession];
+}
+
+- (NSArray<WKWebView *> *)liveWebViewsForTransparentMode {
+    NSMutableArray<WKWebView *> *views = [NSMutableArray array];
+    for (BrowserTab *tab in self.tabController.tabs) {
+        if (tab.webView) {
+            [views addObject:tab.webView];
+        }
+    }
+    return [views copy];
+}
+
+- (void)setStandardWindowButtonsHidden:(BOOL)hidden {
+    static const NSWindowButton kButtons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+    for (NSUInteger i = 0; i < sizeof(kButtons) / sizeof(kButtons[0]); i++) {
+        NSButton *button = [self.window standardWindowButton:kButtons[i]];
+        button.hidden = hidden;
+    }
+}
+
+- (void)dismissTransientUIForTransparentMode {
+    [self.findBarController hideFindBarClearingHighlights:YES];
+    if (self.isTabOverviewVisible) {
+        [self hideTabOverview];
+    }
+    if (self.downloadPanelVisible && self.downloadPanel.isVisible) {
+        [self.downloadPanel dismissPanel];
+        self.downloadPanelVisible = NO;
+    }
+    if ([self.addressAutocompleteController isPanelVisible]) {
+        [self.addressAutocompleteController dismissPanel];
+    }
+    // 验证码面板若打开则关掉
+    if (self.captchaAssistController) {
+        NSNumber *visible = nil;
+        @try {
+            visible = [self.captchaAssistController valueForKey:@"panelVisible"];
+        } @catch (__unused NSException *ex) {
+            visible = nil;
+        }
+        if (visible.boolValue) {
+            [self.captchaAssistController toggleCaptchaAssistPanel:nil];
+        }
+    }
+}
+
+- (void)enterTransparentModeChrome {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+
+    self.addressBarPeekActive = NO;
+    [self dismissTransientUIForTransparentMode];
+
+    [self.trailingSidebarSlot hideAllAnimated:NO];
+
+    [self.transparentModeController captureSnapshotFromWindow:window
+                                            contentContainer:self.contentContainer];
+
+    // 移除标签条 accessory，避免透明态仍占 titlebar 高度
+    NSArray<NSTitlebarAccessoryViewController *> *accessories = window.titlebarAccessoryViewControllers;
+    NSUInteger accessoryIndex = [accessories indexOfObject:self.tabStripAccessory];
+    if (accessoryIndex != NSNotFound) {
+        [window removeTitlebarAccessoryViewControllerAtIndex:accessoryIndex];
+        self.transparentModeAccessoryRemoved = YES;
+    } else {
+        self.transparentModeAccessoryRemoved = NO;
+    }
+
+    [self setStandardWindowButtonsHidden:YES];
+    self.toolbar.hidden = YES;
+
+    [self.transparentModeController applyWindowTransparency:window
+                                          contentContainer:self.contentContainer
+                                                  webViews:[self liveWebViewsForTransparentMode]];
+
+    self.launchpadView.hidden = YES;
+    [self syncTransparentPageStyleForSelection];
+
+    [window.contentView layoutSubtreeIfNeeded];
+}
+
+- (void)exitTransparentModeChrome {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+
+    for (WKWebView *webView in [self liveWebViewsForTransparentMode]) {
+        [self.transparentModeController removeTransparentPageStyleFromWebView:webView];
+    }
+
+    [self.transparentModeController restoreWindowAppearance:window
+                                          contentContainer:self.contentContainer
+                                                  webViews:[self liveWebViewsForTransparentMode]];
+
+    if (self.transparentModeAccessoryRemoved && self.tabStripAccessory) {
+        if (![window.titlebarAccessoryViewControllers containsObject:self.tabStripAccessory]) {
+            [window addTitlebarAccessoryViewController:self.tabStripAccessory];
+        }
+        self.transparentModeAccessoryRemoved = NO;
+    }
+
+    [self setStandardWindowButtonsHidden:NO];
+
+    // 重放精简布局（布尔值在透明期间未改）
+    if (self.compactModeEnabled) {
+        [self moveNavButtonsToTabStrip];
+    } else {
+        [self moveNavButtonsToToolbar];
+    }
+    self.tabStripView.compactMetricsEnabled = self.compactModeEnabled;
+    self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
+    [self applyToolbarVisibilityForCompactState];
+    [self applyAlwaysOnTopWindowLevel];
+
+    // NTP launchpad 显隐由 refreshTabsUI 接管
+    [self refreshTabsUI];
+
+    [window.contentView layoutSubtreeIfNeeded];
+    [self.tabStripView layoutSubtreeIfNeeded];
+    [self scheduleTrafficLightPositioning];
+    [self collapseSystemTitlebarDecoration];
 }
 
 - (void)setAlwaysOnTopEnabled:(BOOL)alwaysOnTopEnabled {
@@ -1091,11 +1274,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)applyToolbarVisibilityForCompactState {
+    if (self.transparentModeEnabled) {
+        self.toolbar.hidden = YES;
+        return;
+    }
     BOOL showToolbar = !self.compactModeEnabled || self.addressBarPeekActive;
     self.toolbar.hidden = !showToolbar;
 }
 
 - (void)beginAddressBarPeek {
+    if (self.transparentModeEnabled) {
+        return;
+    }
     if (!self.compactModeEnabled) {
         return;
     }
@@ -1127,6 +1317,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)focusAddressBar:(id)sender {
     (void)sender;
+    if (self.transparentModeEnabled) {
+        return;
+    }
     if (self.compactModeEnabled) {
         [self beginAddressBarPeek];
     }
@@ -1895,6 +2088,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)applyChromeStateFromSessionDictionary:(nullable NSDictionary *)session {
     BOOL compact = NO;
     BOOL alwaysOnTop = NO;
+    BOOL transparent = NO;
     if ([session isKindOfClass:[NSDictionary class]]) {
         NSNumber *compactValue = session[BrowserWindowSessionCompactModeKey];
         if ([compactValue isKindOfClass:[NSNumber class]]) {
@@ -1904,9 +2098,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if ([alwaysOnTopValue isKindOfClass:[NSNumber class]]) {
             alwaysOnTop = alwaysOnTopValue.boolValue;
         }
+        NSNumber *transparentValue = session[BrowserWindowSessionTransparentModeKey];
+        if ([transparentValue isKindOfClass:[NSNumber class]]) {
+            transparent = transparentValue.boolValue;
+        }
     }
     [self setCompactModeEnabled:compact];
     [self setAlwaysOnTopEnabled:alwaysOnTop];
+    [self setTransparentModeEnabled:transparent];
 }
 
 - (NSDictionary *)sessionDictionary {
@@ -1936,6 +2135,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if (self.alwaysOnTopEnabled) {
             empty[BrowserWindowSessionAlwaysOnTopKey] = @YES;
         }
+        if (self.transparentModeEnabled) {
+            empty[BrowserWindowSessionTransparentModeKey] = @YES;
+        }
         if (self.window) {
             empty[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
         }
@@ -1959,6 +2161,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if (self.alwaysOnTopEnabled) {
         session[BrowserWindowSessionAlwaysOnTopKey] = @YES;
+    }
+    if (self.transparentModeEnabled) {
+        session[BrowserWindowSessionTransparentModeKey] = @YES;
     }
     return [session copy];
 }
@@ -2105,7 +2310,48 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.contentContainer addSubview:webView];
     }
     [self pinWebViewLayoutInSuperview:webView];
+    [self applyTransparentAppearanceIfNeededForWebView:webView];
     [self observeFullscreenStateForSelectedTab];
+}
+
+- (void)applyTransparentAppearanceIfNeededForWebView:(WKWebView *)webView {
+    if (!self.transparentModeEnabled || !webView) {
+        return;
+    }
+    [self.transparentModeController applyWindowTransparency:self.window
+                                          contentContainer:self.contentContainer
+                                                  webViews:@[webView]];
+    if (webView == self.webView) {
+        [self.transparentModeController applyTransparentPageStyleToWebView:webView];
+    }
+}
+
+/// 仅对当前可见 WebView 注入透明模式样式；其它存活页移除，避免切回脏样式。
+- (void)syncTransparentPageStyleForSelection {
+    if (!self.transparentModeEnabled) {
+        return;
+    }
+    BrowserTab *selected = self.tabController.selectedTab;
+    WKWebView *selectedWebView = selected.isNewTabPage ? nil : selected.webView;
+    for (BrowserTab *tab in self.tabController.tabs) {
+        WKWebView *webView = tab.webView;
+        if (!webView) {
+            continue;
+        }
+        if (webView == selectedWebView) {
+            [self.transparentModeController applyTransparentPageStyleToWebView:webView];
+        } else {
+            [self.transparentModeController removeTransparentPageStyleFromWebView:webView];
+        }
+    }
+}
+
+- (void)transparentModePreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    if (!self.transparentModeEnabled) {
+        return;
+    }
+    [self syncTransparentPageStyleForSelection];
 }
 
 - (void)refreshTabsUI {
@@ -2143,8 +2389,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     BOOL showLaunchpad = selectedTab.isNewTabPage;
-    self.launchpadView.hidden = !showLaunchpad;
-    if (showLaunchpad) {
+    self.launchpadView.hidden = !showLaunchpad || self.transparentModeEnabled;
+    if (showLaunchpad && !self.transparentModeEnabled) {
         [self.launchpadView reloadShortcuts];
     }
 
@@ -2178,6 +2424,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.lastSelectedTabIDForAddressFocus = selectedID;
     if (selectionChanged && selectedTab.isNewTabPage) {
         [self focusAddressBarForNewTabPage];
+    }
+
+    if (self.transparentModeEnabled) {
+        [self syncTransparentPageStyleForSelection];
     }
 }
 
@@ -3269,6 +3519,13 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     }
     if (action == @selector(toggleAlwaysOnTop:)) {
         menuItem.state = self.alwaysOnTopEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    if (action == @selector(toggleTransparentMode:)) {
+        if (self.window.styleMask & NSWindowStyleMaskFullScreen) {
+            return NO;
+        }
+        menuItem.state = self.transparentModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
         return YES;
     }
     if (action == @selector(focusAddressBar:)) {
@@ -4775,6 +5032,9 @@ didBecomeDownload:(WKDownload *)download {
         [self.findBarController noteNavigationFinishedInWebView:webView];
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
         [self updateReloadStopButtonAppearance];
+        if (self.transparentModeEnabled) {
+            [self.transparentModeController applyTransparentPageStyleToWebView:webView];
+        }
     }
 }
 

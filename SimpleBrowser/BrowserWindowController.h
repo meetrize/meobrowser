@@ -51,9 +51,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)toggleCompactMode:(nullable id)sender;
 - (void)toggleAlwaysOnTop:(nullable id)sender;
+- (void)toggleTransparentMode:(nullable id)sender;
 - (void)focusAddressBar:(nullable id)sender;
 @property (nonatomic, assign, getter=isCompactModeEnabled) BOOL compactModeEnabled;
 @property (nonatomic, assign, getter=isAlwaysOnTopEnabled) BOOL alwaysOnTopEnabled;
+@property (nonatomic, assign, getter=isTransparentModeEnabled) BOOL transparentModeEnabled;
 
 /// 供 LoginAssistController 打开助手侧栏。
 - (void)setAssistSidebarVisible:(BOOL)visible

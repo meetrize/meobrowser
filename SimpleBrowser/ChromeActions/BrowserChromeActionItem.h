@@ -2,6 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+FOUNDATION_EXPORT NSString * const BrowserChromeActionTransparentModeID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionCompactModeID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionAlwaysOnTopID;
 

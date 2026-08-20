@@ -24,6 +24,12 @@ static const CGFloat kChromeActionSymbolPointSize = 12.0;
 
 + (NSArray<BrowserChromeActionItem *> *)defaultItems {
     return @[
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionTransparentModeID
+                                 symbolName:@"cube.transparent"
+                               onSymbolName:@"cube.transparent"
+                                    toolTip:@"透明模式"
+                                  onToolTip:@"退出透明模式"
+                                    toggles:YES],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionCompactModeID
                                  symbolName:@"rectangle.topthird.inset.filled"
                                onSymbolName:@"rectangle.topthird.inset.filled"

@@ -15,6 +15,7 @@
 #import "BrowserHistoryStore.h"
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserUserAgent.h"
+#import "BrowserStatusItemController.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -65,6 +66,7 @@
         }
     }
     [self flushPendingExternalURLs];
+    [[BrowserStatusItemController sharedController] install];
 }
 
 - (BrowserWindowController *)createBrowserWindowWithSession:(NSDictionary *)session {

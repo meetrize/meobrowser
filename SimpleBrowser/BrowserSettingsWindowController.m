@@ -7,6 +7,7 @@
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserWebInspector.h"
 #import "BrowserDownloadPreferences.h"
+#import "BrowserTransparentModePreferences.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -46,6 +47,12 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSButton *resetDownloadDirectoryButton;
 @property (nonatomic, strong) NSTextField *downloadDirectoryHintLabel;
 
+@property (nonatomic, strong) NSColorWell *transparentTextColorWell;
+@property (nonatomic, strong) NSButton *transparentTextColorLightPresetButton;
+@property (nonatomic, strong) NSButton *transparentTextColorDarkPresetButton;
+@property (nonatomic, strong) NSButton *transparentTextColorResetButton;
+@property (nonatomic, strong) NSTextField *transparentModeHintLabel;
+
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
 @property (nonatomic, strong) NSButton *reloadShortcutResetButton;
@@ -73,7 +80,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 520)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 580)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -106,6 +113,10 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(downloadPreferencesDidChange:)
                                                      name:BrowserDownloadPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(transparentModePreferencesDidChange:)
+                                                     name:BrowserTransparentModePreferencesDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -220,6 +231,37 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     downloadRow.alignment = NSLayoutAttributeCenterY;
     self.downloadDirectoryHintLabel = [self makeHint:@"将文件保存到此文件夹，不再询问。"];
     [self refreshDownloadDirectoryUI];
+
+    NSTextField *transparentCaption = [self makeCaption:@"透明模式文字颜色"];
+    self.transparentTextColorWell = [[NSColorWell alloc] initWithFrame:NSZeroRect];
+    self.transparentTextColorWell.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.transparentTextColorWell.widthAnchor constraintEqualToConstant:44].active = YES;
+    [self.transparentTextColorWell.heightAnchor constraintEqualToConstant:24].active = YES;
+    self.transparentTextColorWell.target = self;
+    self.transparentTextColorWell.action = @selector(transparentTextColorWellChanged:);
+    self.transparentTextColorLightPresetButton = [NSButton buttonWithTitle:@"浅色"
+                                                                   target:self
+                                                                   action:@selector(transparentTextColorLightPresetClicked:)];
+    self.transparentTextColorLightPresetButton.bezelStyle = NSBezelStyleRounded;
+    self.transparentTextColorDarkPresetButton = [NSButton buttonWithTitle:@"深色"
+                                                                  target:self
+                                                                  action:@selector(transparentTextColorDarkPresetClicked:)];
+    self.transparentTextColorDarkPresetButton.bezelStyle = NSBezelStyleRounded;
+    self.transparentTextColorResetButton = [NSButton buttonWithTitle:@"恢复默认"
+                                                             target:self
+                                                             action:@selector(transparentTextColorResetClicked:)];
+    self.transparentTextColorResetButton.bezelStyle = NSBezelStyleRounded;
+    NSStackView *transparentColorRow = [NSStackView stackViewWithViews:@[
+        self.transparentTextColorWell,
+        self.transparentTextColorLightPresetButton,
+        self.transparentTextColorDarkPresetButton,
+        self.transparentTextColorResetButton,
+    ]];
+    transparentColorRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    transparentColorRow.spacing = 10;
+    transparentColorRow.alignment = NSLayoutAttributeCenterY;
+    self.transparentModeHintLabel = [self makeHint:@"进入透明模式后，页面文字使用此颜色；图片保持显示。修改后对已开启透明模式的窗口立即生效。"];
+    [self refreshTransparentModeColorUI];
 
     // —— 云同步 ——
     self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
@@ -358,9 +400,11 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                 views:@[
                     searchGrid, searchHint, browserCaption, browserRow, browserHint,
                     downloadCaption, downloadRow, self.downloadDirectoryHintLabel,
+                    transparentCaption, transparentColorRow, self.transparentModeHintLabel,
                 ]
             toTabView:self.tabView
-           widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel]];
+           widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel,
+                        transparentColorRow, self.transparentModeHintLabel]];
 
     [self addTabNamed:@"云同步"
            identifier:BrowserSettingsTabSync
@@ -410,6 +454,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self refreshKeyboardShortcutUI];
     [self refreshLocationPermissionHint];
     [self refreshDownloadDirectoryUI];
+    [self refreshTransparentModeColorUI];
 }
 
 - (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
@@ -892,6 +937,41 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self refreshDownloadDirectoryUI];
 }
 
+- (void)transparentModePreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshTransparentModeColorUI];
+}
+
+- (void)refreshTransparentModeColorUI {
+    if (!self.transparentTextColorWell) {
+        return;
+    }
+    self.transparentTextColorWell.color = [BrowserTransparentModePreferences textColor];
+}
+
+- (void)transparentTextColorWellChanged:(id)sender {
+    (void)sender;
+    [BrowserTransparentModePreferences setTextColor:self.transparentTextColorWell.color];
+}
+
+- (void)transparentTextColorLightPresetClicked:(id)sender {
+    (void)sender;
+    [BrowserTransparentModePreferences setTextColor:[NSColor colorWithSRGBRed:0.95 green:0.95 blue:0.95 alpha:1.0]];
+    [self refreshTransparentModeColorUI];
+}
+
+- (void)transparentTextColorDarkPresetClicked:(id)sender {
+    (void)sender;
+    [BrowserTransparentModePreferences setTextColor:[NSColor colorWithSRGBRed:0.1 green:0.1 blue:0.1 alpha:1.0]];
+    [self refreshTransparentModeColorUI];
+}
+
+- (void)transparentTextColorResetClicked:(id)sender {
+    (void)sender;
+    [BrowserTransparentModePreferences resetTextColorToDefault];
+    [self refreshTransparentModeColorUI];
+}
+
 - (void)refreshDownloadDirectoryUI {
     BrowserDownloadPreferences *prefs = [BrowserDownloadPreferences sharedPreferences];
     self.downloadPathLabel.stringValue = prefs.displayPath ?: @"~/Downloads";
@@ -952,6 +1032,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self refreshServerSyncUI];
     [self refreshKeyboardShortcutUI];
     [self refreshDownloadDirectoryUI];
+    [self refreshTransparentModeColorUI];
     [super showWindow:sender];
 }
 

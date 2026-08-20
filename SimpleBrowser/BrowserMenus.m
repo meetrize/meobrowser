@@ -130,6 +130,11 @@
                                                    keyEquivalent:@""];
             compactMode.target = nil;
 
+            NSMenuItem *transparentMode = [viewMenu addItemWithTitle:@"透明模式"
+                                                              action:@selector(toggleTransparentMode:)
+                                                       keyEquivalent:@""];
+            transparentMode.target = nil;
+
             [viewMenu addItem:[NSMenuItem separatorItem]];
 
             NSMenuItem *zoomIn = [viewMenu addItemWithTitle:@"放大"
