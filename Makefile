@@ -27,6 +27,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserUserAgent.m \
                    $(BROWSER_SRC_DIR)/BrowserRiskHostPolicy.m \
                    $(BROWSER_SRC_DIR)/BrowserMenus.m \
+                   $(BROWSER_SRC_DIR)/MeoContextMenuLocalizer.m \
                    $(BROWSER_SRC_DIR)/BrowserSettingsWindowController.m \
                    $(BROWSER_SRC_DIR)/BrowserTransientToast.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTab.m \

@@ -1,5 +1,6 @@
 #import "BrowserWebView.h"
 #import "BrowsingPreferences.h"
+#import "MeoContextMenuLocalizer.h"
 
 // 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
 static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
@@ -444,6 +445,8 @@ static NSString *MeoScrollToFragmentJS(void) {
                                                  keyEquivalent:@""];
     viewSource.target = self;
     [menu addItem:viewSource];
+
+    [MeoContextMenuLocalizer localizeMenu:menu];
 }
 
 - (void)didCloseMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
