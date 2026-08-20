@@ -1068,6 +1068,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self schedulePersistTabSession];
 }
 
+- (BOOL)shouldSuppressContextMenuForTransparentRightDrag {
+    return self.transparentModeEnabled
+        && self.transparentModeController.shouldSuppressContextMenuForRightDrag;
+}
+
 - (NSArray<WKWebView *> *)liveWebViewsForTransparentMode {
     NSMutableArray<WKWebView *> *views = [NSMutableArray array];
     for (BrowserTab *tab in self.tabController.tabs) {
@@ -1149,6 +1154,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     self.launchpadView.hidden = YES;
     [self syncTransparentPageStyleForSelection];
+    [self.transparentModeController setWindowRightDragMoveEnabled:YES];
 
     [window.contentView layoutSubtreeIfNeeded];
 }
@@ -1158,6 +1164,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (!window) {
         return;
     }
+
+    [self.transparentModeController setWindowRightDragMoveEnabled:NO];
 
     for (WKWebView *webView in [self liveWebViewsForTransparentMode]) {
         [self.transparentModeController removeTransparentPageStyleFromWebView:webView];

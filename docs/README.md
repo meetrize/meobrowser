@@ -14,6 +14,8 @@
 | [minimal-browser/tab-strip-chrome-actions-development-plan.md](minimal-browser/tab-strip-chrome-actions-development-plan.md) | 标签栏右侧 Chrome 动作区 — 分阶段开发计划（CA-0～CA-2） |
 | [minimal-browser/transparent-mode-design.md](minimal-browser/transparent-mode-design.md) | 透明模式 — 全 UI 隐藏、只留网页文字、菜单栏进出 |
 | [minimal-browser/transparent-mode-development-plan.md](minimal-browser/transparent-mode-development-plan.md) | 透明模式 — 分阶段开发计划（TM-0～TM-2） |
+| [minimal-browser/transparent-mode-right-drag-move-design.md](minimal-browser/transparent-mode-right-drag-move-design.md) | 透明模式 — 右键拖拽移窗（保留普通右键菜单） |
+| [minimal-browser/transparent-mode-right-drag-move-development-plan.md](minimal-browser/transparent-mode-right-drag-move-development-plan.md) | 透明模式右键拖窗 — 分阶段开发计划（RD-0～RD-2） |
 | [minimal-browser/tab-drag-ghost-design.md](minimal-browser/tab-drag-ghost-design.md) | 标签拖拽跟随阴影 — 条内排序 / 拖出新窗交互方案 |
 | [minimal-browser/tab-drag-ghost-development-plan.md](minimal-browser/tab-drag-ghost-development-plan.md) | 标签拖拽跟随阴影 — 分阶段开发计划（DG-0～DG-2） |
 | [minimal-browser/tab-cross-window-drop-design.md](minimal-browser/tab-cross-window-drop-design.md) | 跨窗口拖放标签 — 占位槽与真迁移方案 |

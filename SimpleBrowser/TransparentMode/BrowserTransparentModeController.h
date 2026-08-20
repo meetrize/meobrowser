@@ -33,6 +33,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 移除透明模式页面样式。
 - (void)removeTransparentPageStyleFromWebView:(nullable WKWebView *)webView;
 
+/// 透明态启停网页区右键拖窗监视器。
+- (void)setWindowRightDragMoveEnabled:(BOOL)enabled;
+
+/// 本次右键手势已拖拽移窗时，应抑制 WebKit 上下文菜单。
+@property (nonatomic, assign, readonly) BOOL shouldSuppressContextMenuForRightDrag;
+
 @end
 
 NS_ASSUME_NONNULL_END

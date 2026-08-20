@@ -1,6 +1,7 @@
 #import "BrowserTransparentModeController.h"
 #import "BrowserWindowController.h"
 #import "BrowserTransparentModePreferences.h"
+#import "BrowserTransparentModeWindowDragMonitor.h"
 
 @interface BrowserTransparentModeSnapshot : NSObject
 @property (nonatomic, assign) BOOL opaque;
@@ -25,9 +26,35 @@
 
 @interface BrowserTransparentModeController ()
 @property (nonatomic, strong, nullable) BrowserTransparentModeSnapshot *snapshot;
+@property (nonatomic, strong) BrowserTransparentModeWindowDragMonitor *windowDragMonitor;
 @end
 
 @implementation BrowserTransparentModeController
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _windowDragMonitor = [[BrowserTransparentModeWindowDragMonitor alloc] init];
+    }
+    return self;
+}
+
+- (void)setWindowController:(BrowserWindowController *)windowController {
+    _windowController = windowController;
+    self.windowDragMonitor.windowController = windowController;
+}
+
+- (BOOL)shouldSuppressContextMenuForRightDrag {
+    return self.windowDragMonitor.shouldSuppressContextMenu;
+}
+
+- (void)setWindowRightDragMoveEnabled:(BOOL)enabled {
+    if (enabled) {
+        [self.windowDragMonitor install];
+    } else {
+        [self.windowDragMonitor uninstall];
+    }
+}
 
 - (BOOL)hasSnapshot {
     return self.snapshot != nil;

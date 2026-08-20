@@ -1,6 +1,7 @@
 #import "BrowserWebView.h"
 #import "BrowsingPreferences.h"
 #import "MeoContextMenuLocalizer.h"
+#import "BrowserWindowController.h"
 
 // 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
 static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
@@ -365,6 +366,16 @@ static NSString *MeoScrollToFragmentJS(void) {
 }
 
 - (void)willOpenMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
+    id controller = self.window.windowController;
+    if ([controller isKindOfClass:[BrowserWindowController class]] &&
+        [(BrowserWindowController *)controller shouldSuppressContextMenuForTransparentRightDrag]) {
+        [menu cancelTracking];
+        while (menu.numberOfItems > 0) {
+            [menu removeItemAtIndex:0];
+        }
+        return;
+    }
+
     [super willOpenMenu:menu withEvent:event];
 
     self.contextMenuEvent = event;
