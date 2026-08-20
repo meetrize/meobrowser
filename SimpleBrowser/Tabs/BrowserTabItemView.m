@@ -200,6 +200,13 @@ NSColor *BrowserTabActiveFillColor(void) {
         tipY = NSMaxY(screenRect) + 6.0;
     }
     [self.panel setFrameOrigin:NSMakePoint(tipX, tipY)];
+    NSWindow *parent = view.window;
+    if (parent) {
+        NSInteger minLevel = (NSInteger)parent.level + 1;
+        if ((NSInteger)self.panel.level < minLevel) {
+            self.panel.level = (NSWindowLevel)minLevel;
+        }
+    }
     [self.panel orderFront:nil];
 }
 

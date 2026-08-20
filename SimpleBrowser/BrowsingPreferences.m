@@ -25,6 +25,8 @@ NSString * const BrowserWindowSessionTabsKey = @"tabs";
 NSString * const BrowserWindowSessionSelectedIndexKey = @"selectedIndex";
 NSString * const BrowserWindowSessionPinnedCountKey = @"pinnedCount";
 NSString * const BrowserWindowSessionFrameKey = @"frame";
+NSString * const BrowserWindowSessionCompactModeKey = @"compactMode";
+NSString * const BrowserWindowSessionAlwaysOnTopKey = @"alwaysOnTop";
 
 @implementation BrowsingPreferences
 
@@ -159,6 +161,15 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
     id frameValue = raw[BrowserWindowSessionFrameKey];
     if ([frameValue isKindOfClass:[NSString class]] && ((NSString *)frameValue).length > 0) {
         session[BrowserWindowSessionFrameKey] = frameValue;
+    }
+
+    id compactValue = raw[BrowserWindowSessionCompactModeKey];
+    if ([compactValue isKindOfClass:[NSNumber class]] && ((NSNumber *)compactValue).boolValue) {
+        session[BrowserWindowSessionCompactModeKey] = @YES;
+    }
+    id alwaysOnTopValue = raw[BrowserWindowSessionAlwaysOnTopKey];
+    if ([alwaysOnTopValue isKindOfClass:[NSNumber class]] && ((NSNumber *)alwaysOnTopValue).boolValue) {
+        session[BrowserWindowSessionAlwaysOnTopKey] = @YES;
     }
     return [session copy];
 }

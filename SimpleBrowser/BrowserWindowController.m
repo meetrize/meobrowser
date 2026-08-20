@@ -7,6 +7,8 @@
 #import "BrowserLocalFileSupport.h"
 #import "BrowserTabController.h"
 #import "BrowserTabStripView.h"
+#import "BrowserTabStripChromeActionsView.h"
+#import "BrowserChromeActionItem.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -151,7 +153,13 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
+@property (nonatomic, strong) BrowserTabStripChromeActionsView *chromeActionsView;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
+@property (nonatomic, strong) NSView *tabStripAccessoryRoot;
+@property (nonatomic, strong) NSLayoutConstraint *tabStripAccessoryHeightConstraint;
+@property (nonatomic, strong) NSStackView *toolbar;
+@property (nonatomic, strong) NSStackView *navButtons;
+@property (nonatomic, assign) BOOL addressBarPeekActive;
 @property (nonatomic, strong) NSView *contentContainer;
 @property (nonatomic, strong) NSStackView *contentRowStack;
 @property (nonatomic, strong) PhoneNotificationSidebarController *notificationSidebarController;
@@ -504,8 +512,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [window.contentView layoutSubtreeIfNeeded];
     [self.tabStripView layoutSubtreeIfNeeded];
 
-    if (NSHeight(self.tabStripView.bounds) < BrowserTabStripHeight - 0.5 ||
-        NSHeight(self.tabStripView.frame) < BrowserTabStripHeight - 0.5) {
+    CGFloat expectedHeight = self.tabStripView.effectiveStripHeight;
+    if (NSHeight(self.tabStripView.bounds) < expectedHeight - 0.5 ||
+        NSHeight(self.tabStripView.frame) < expectedHeight - 0.5) {
         return NO;
     }
 
@@ -603,6 +612,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+- (void)windowDidExitFullScreen:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    [self applyAlwaysOnTopWindowLevel];
+    [self scheduleTrafficLightPositioning];
+}
+
 - (void)windowDidResize:(NSNotification *)notification {
     if (notification.object != self.window) {
         return;
@@ -663,6 +680,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabStripView setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                forOrientation:NSLayoutConstraintOrientationVertical];
 
+    self.chromeActionsView = [[BrowserTabStripChromeActionsView alloc] initWithFrame:NSZeroRect];
+    self.tabStripView.chromeActionsView = self.chromeActionsView;
+    [self wireChromeActionButtons];
+
     self.backButton = [self toolbarIconButtonWithSymbol:@"chevron.left"
                                                 toolTip:@"后退"
                                                  action:@selector(goBack:)];
@@ -673,12 +694,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                   toolTip:@"刷新"
                                                    action:@selector(reloadPage:)];
 
-    NSStackView *navButtons = [NSStackView stackViewWithViews:@[
+    self.navButtons = [NSStackView stackViewWithViews:@[
         self.backButton, self.forwardButton, self.reloadButton
     ]];
-    navButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    navButtons.spacing = 2;
-    navButtons.translatesAutoresizingMaskIntoConstraints = NO;
+    self.navButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.navButtons.spacing = 2;
+    self.navButtons.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.addressField = [SBTextField standardField];
     self.addressField.placeholderString = @"输入网址";
@@ -779,17 +800,17 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                                  securityBadge:self.securityBadgeButton
                                                                    actionGroup:self.addressBarActionGroup];
 
-    NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        navButtons, self.addressBarRow
+    self.toolbar = [NSStackView stackViewWithViews:@[
+        self.navButtons, self.addressBarRow
     ]];
-    toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    toolbar.spacing = 10;
-    toolbar.edgeInsets = NSEdgeInsetsMake(6, 8, 8, 8);
-    toolbar.distribution = NSStackViewDistributionFill;
-    [toolbar setContentHuggingPriority:NSLayoutPriorityRequired
-                        forOrientation:NSLayoutConstraintOrientationVertical];
-    toolbar.wantsLayer = YES;
-    toolbar.layer.backgroundColor = BrowserTabActiveFillColor().CGColor;
+    self.toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.toolbar.spacing = 10;
+    self.toolbar.edgeInsets = NSEdgeInsetsMake(6, 8, 8, 8);
+    self.toolbar.distribution = NSStackViewDistributionFill;
+    [self.toolbar setContentHuggingPriority:NSLayoutPriorityRequired
+                             forOrientation:NSLayoutConstraintOrientationVertical];
+    self.toolbar.wantsLayer = YES;
+    self.toolbar.layer.backgroundColor = BrowserTabActiveFillColor().CGColor;
 
     BrowserFileDropContentView *dropContainer = [[BrowserFileDropContentView alloc] initWithFrame:NSZeroRect];
     dropContainer.browserController = self;
@@ -884,17 +905,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     ]];
 
     // 标签条挂到标题栏 accessory：系统在该区域把事件交给标签，而非拖窗。
-    NSView *accessoryRoot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, BrowserTabStripHeight)];
+    NSView *accessoryRoot = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 800, BrowserTabStripHeightRegular)];
     accessoryRoot.wantsLayer = YES;
     accessoryRoot.layer.backgroundColor = BrowserTabStripFillColor().CGColor;
+    self.tabStripAccessoryRoot = accessoryRoot;
     self.tabStripView.translatesAutoresizingMaskIntoConstraints = NO;
     [accessoryRoot addSubview:self.tabStripView];
+    NSLayoutConstraint *accessoryHeight =
+        [accessoryRoot.heightAnchor constraintEqualToConstant:BrowserTabStripHeightRegular];
+    self.tabStripAccessoryHeightConstraint = accessoryHeight;
     [NSLayoutConstraint activateConstraints:@[
         [self.tabStripView.topAnchor constraintEqualToAnchor:accessoryRoot.topAnchor],
         [self.tabStripView.leadingAnchor constraintEqualToAnchor:accessoryRoot.leadingAnchor],
         [self.tabStripView.trailingAnchor constraintEqualToAnchor:accessoryRoot.trailingAnchor],
         [self.tabStripView.bottomAnchor constraintEqualToAnchor:accessoryRoot.bottomAnchor],
-        [accessoryRoot.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
+        accessoryHeight,
     ]];
 
     self.tabStripAccessory = [[NSTitlebarAccessoryViewController alloc] init];
@@ -905,7 +930,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self collapseSystemTitlebarDecoration];
 
     NSStackView *rootStack = [NSStackView stackViewWithViews:@[
-        toolbar, self.contentRowStack
+        self.toolbar, self.contentRowStack
     ]];
     rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     rootStack.spacing = 0;
@@ -966,6 +991,147 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [button.heightAnchor constraintEqualToConstant:28],
     ]];
     return button;
+}
+
+- (void)wireChromeActionButtons {
+    NSButton *compactButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionCompactModeID];
+    compactButton.target = self;
+    compactButton.action = @selector(toggleCompactMode:);
+
+    NSButton *pinButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionAlwaysOnTopID];
+    pinButton.target = self;
+    pinButton.action = @selector(toggleAlwaysOnTop:);
+}
+
+- (void)toggleCompactMode:(id)sender {
+    (void)sender;
+    [self setCompactModeEnabled:!self.compactModeEnabled];
+}
+
+- (void)toggleAlwaysOnTop:(id)sender {
+    (void)sender;
+    [self setAlwaysOnTopEnabled:!self.alwaysOnTopEnabled];
+}
+
+- (void)setAlwaysOnTopEnabled:(BOOL)alwaysOnTopEnabled {
+    _alwaysOnTopEnabled = alwaysOnTopEnabled;
+    [self.chromeActionsView setOn:alwaysOnTopEnabled forItemID:BrowserChromeActionAlwaysOnTopID];
+    [self applyAlwaysOnTopWindowLevel];
+}
+
+- (void)applyAlwaysOnTopWindowLevel {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+    // 全屏空间内浮动 level 语义弱化；退出全屏后再应用。
+    if (window.styleMask & NSWindowStyleMaskFullScreen) {
+        return;
+    }
+    window.level = self.alwaysOnTopEnabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
+}
+
+/// 保证附属浮层不低于父窗，避免置顶后被压在下面。
+- (void)ensureFloatingPanel:(NSWindow *)panel aboveParentWindow:(NSWindow *)parent {
+    if (!panel || !parent) {
+        return;
+    }
+    NSInteger minLevel = (NSInteger)parent.level + 1;
+    if ((NSInteger)panel.level < minLevel) {
+        panel.level = (NSWindowLevel)minLevel;
+    }
+}
+
+- (void)setCompactModeEnabled:(BOOL)compactModeEnabled {
+    if (_compactModeEnabled == compactModeEnabled) {
+        [self.chromeActionsView setOn:compactModeEnabled forItemID:BrowserChromeActionCompactModeID];
+        return;
+    }
+
+    // Peek 中关闭精简：退出 compact 并保持工具栏展开
+    if (!compactModeEnabled && self.addressBarPeekActive) {
+        self.addressBarPeekActive = NO;
+    }
+
+    _compactModeEnabled = compactModeEnabled;
+    [self.chromeActionsView setOn:compactModeEnabled forItemID:BrowserChromeActionCompactModeID];
+
+    if (compactModeEnabled) {
+        [self moveNavButtonsToTabStrip];
+    } else {
+        [self moveNavButtonsToToolbar];
+    }
+
+    self.tabStripView.compactMetricsEnabled = compactModeEnabled;
+    self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
+    [self applyToolbarVisibilityForCompactState];
+    [self.window.contentView layoutSubtreeIfNeeded];
+    [self.tabStripView layoutSubtreeIfNeeded];
+    [self scheduleTrafficLightPositioning];
+}
+
+- (void)moveNavButtonsToTabStrip {
+    if (self.tabStripView.leadingNavigationView == self.navButtons) {
+        self.reloadButton.hidden = YES;
+        return;
+    }
+    [self.navButtons removeFromSuperview];
+    self.reloadButton.hidden = YES;
+    self.tabStripView.leadingNavigationView = self.navButtons;
+}
+
+- (void)moveNavButtonsToToolbar {
+    if (self.tabStripView.leadingNavigationView == self.navButtons) {
+        self.tabStripView.leadingNavigationView = nil;
+    }
+    self.reloadButton.hidden = NO;
+    if (![self.toolbar.arrangedSubviews containsObject:self.navButtons]) {
+        [self.toolbar insertArrangedSubview:self.navButtons atIndex:0];
+    }
+}
+
+- (void)applyToolbarVisibilityForCompactState {
+    BOOL showToolbar = !self.compactModeEnabled || self.addressBarPeekActive;
+    self.toolbar.hidden = !showToolbar;
+}
+
+- (void)beginAddressBarPeek {
+    if (!self.compactModeEnabled) {
+        return;
+    }
+    self.addressBarPeekActive = YES;
+    [self applyToolbarVisibilityForCompactState];
+}
+
+- (void)endAddressBarPeekResigning:(BOOL)resignFirstResponder {
+    if (!self.addressBarPeekActive) {
+        if (resignFirstResponder) {
+            [self resignAddressBarFocusIfNeeded];
+        }
+        return;
+    }
+    self.addressBarPeekActive = NO;
+    [self applyToolbarVisibilityForCompactState];
+    if (resignFirstResponder) {
+        [self resignAddressBarFocusIfNeeded];
+    }
+}
+
+- (void)resignAddressBarFocusIfNeeded {
+    NSResponder *first = self.window.firstResponder;
+    NSText *editor = self.addressField.currentEditor;
+    if (first == self.addressField || first == editor) {
+        [self.window makeFirstResponder:self.webView ?: (NSResponder *)self.window];
+    }
+}
+
+- (void)focusAddressBar:(id)sender {
+    (void)sender;
+    if (self.compactModeEnabled) {
+        [self beginAddressBarPeek];
+    }
+    [self.window makeFirstResponder:self.addressField];
+    [self.addressField selectText:nil];
 }
 
 - (void)installDownloadBadgeOnButton:(NSButton *)button {
@@ -1336,6 +1502,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSRect buttonRect = [self.downloadButton convertRect:self.downloadButton.bounds toView:nil];
     NSRect screenRect = [self.window convertRectToScreen:buttonRect];
     self.downloadPanel.dismissExclusionRectOnScreen = NSInsetRect(screenRect, -4, -4);
+    [self ensureFloatingPanel:self.downloadPanel aboveParentWindow:self.window];
     [self.downloadPanel presentAnchoredToRect:screenRect ofWindow:self.window];
     self.downloadPanelVisible = YES;
 }
@@ -1705,6 +1872,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSArray *tabs = session[BrowserWindowSessionTabsKey];
     if (![tabs isKindOfClass:[NSArray class]] || tabs.count == 0) {
         [self.tabController addNewTab];
+        [self applyChromeStateFromSessionDictionary:session];
         return;
     }
 
@@ -1721,6 +1889,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController restoreTabsFromEntries:tabs
                                  selectedIndex:selectedIndex
                                    pinnedCount:pinnedCount];
+    [self applyChromeStateFromSessionDictionary:session];
+}
+
+- (void)applyChromeStateFromSessionDictionary:(nullable NSDictionary *)session {
+    BOOL compact = NO;
+    BOOL alwaysOnTop = NO;
+    if ([session isKindOfClass:[NSDictionary class]]) {
+        NSNumber *compactValue = session[BrowserWindowSessionCompactModeKey];
+        if ([compactValue isKindOfClass:[NSNumber class]]) {
+            compact = compactValue.boolValue;
+        }
+        NSNumber *alwaysOnTopValue = session[BrowserWindowSessionAlwaysOnTopKey];
+        if ([alwaysOnTopValue isKindOfClass:[NSNumber class]]) {
+            alwaysOnTop = alwaysOnTopValue.boolValue;
+        }
+    }
+    [self setCompactModeEnabled:compact];
+    [self setAlwaysOnTopEnabled:alwaysOnTop];
 }
 
 - (NSDictionary *)sessionDictionary {
@@ -1739,11 +1925,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     if (entries.count == 0) {
-        return @{
+        NSMutableDictionary *empty = [@{
             BrowserWindowSessionTabsKey: @[BrowserTabSessionNewTabMarker],
             BrowserWindowSessionSelectedIndexKey: @0,
             BrowserWindowSessionPinnedCountKey: @0,
-        };
+        } mutableCopy];
+        if (self.compactModeEnabled) {
+            empty[BrowserWindowSessionCompactModeKey] = @YES;
+        }
+        if (self.alwaysOnTopEnabled) {
+            empty[BrowserWindowSessionAlwaysOnTopKey] = @YES;
+        }
+        if (self.window) {
+            empty[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
+        }
+        return [empty copy];
     }
 
     NSInteger selectedIndex = [self.tabController indexOfSelectedTab];
@@ -1757,6 +1953,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     session[BrowserWindowSessionPinnedCountKey] = @(self.tabController.pinnedTabCount);
     if (self.window) {
         session[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
+    }
+    if (self.compactModeEnabled) {
+        session[BrowserWindowSessionCompactModeKey] = @YES;
+    }
+    if (self.alwaysOnTopEnabled) {
+        session[BrowserWindowSessionAlwaysOnTopKey] = @YES;
     }
     return [session copy];
 }
@@ -2453,11 +2655,13 @@ didRequestTransferTabID:(NSUUID *)tabID
 - (void)autocompleteController:(BrowserAddressBarAutocompleteController *)controller openURL:(NSURL *)url {
     (void)controller;
     [self launchpadView:self.launchpadView openURL:url];
+    [self endAddressBarPeekResigning:YES];
 }
 
 - (void)autocompleteController:(BrowserAddressBarAutocompleteController *)controller openURLInNewTab:(NSURL *)url {
     (void)controller;
     [self launchpadView:self.launchpadView openURLInNewTab:url];
+    [self endAddressBarPeekResigning:YES];
 }
 
 - (NSWindow *)windowForAutocompleteController:(BrowserAddressBarAutocompleteController *)controller {
@@ -3059,6 +3263,17 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
     SEL action = menuItem.action;
+    if (action == @selector(toggleCompactMode:)) {
+        menuItem.state = self.compactModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    if (action == @selector(toggleAlwaysOnTop:)) {
+        menuItem.state = self.alwaysOnTopEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    if (action == @selector(focusAddressBar:)) {
+        return YES;
+    }
     if (action == @selector(reloadPage:) || action == @selector(hardReloadPage:)) {
         return [self canReloadCurrentPage];
     }
@@ -3200,6 +3415,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         return;
     }
     if ([self openURLInExternalApplicationIfNeeded:url]) {
+        [self endAddressBarPeekResigning:YES];
         return;
     }
 
@@ -3210,6 +3426,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [tab loadURL:url];
         [self refreshTabsUI];
     }
+    [self endAddressBarPeekResigning:YES];
 }
 
 - (nullable NSURL *)normalizedURLFromString:(NSString *)input {
@@ -3338,6 +3555,24 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (notification.object == self.addressField) {
         self.addressFieldIsEditing = NO;
         [self updateSecurityBadgeVisibility];
+        if (self.addressBarPeekActive) {
+            __weak typeof(self) weakSelf = self;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (!strongSelf || !strongSelf.addressBarPeekActive || strongSelf.addressFieldIsEditing) {
+                    return;
+                }
+                if ([strongSelf.addressAutocompleteController isPanelVisible]) {
+                    return;
+                }
+                NSResponder *first = strongSelf.window.firstResponder;
+                NSText *editor = strongSelf.addressField.currentEditor;
+                if (first == strongSelf.addressField || first == editor) {
+                    return;
+                }
+                [strongSelf endAddressBarPeekResigning:NO];
+            });
+        }
     }
 }
 
@@ -3351,6 +3586,12 @@ doCommandBySelector:(SEL)commandSelector {
         if (commandSelector == @selector(insertNewline:)) {
             [self loadAddressBarURL];
             return YES;
+        }
+        if (commandSelector == @selector(cancelOperation:)) {
+            if (self.addressBarPeekActive) {
+                [self endAddressBarPeekResigning:YES];
+                return YES;
+            }
         }
     }
     return NO;
@@ -3941,7 +4182,7 @@ doCommandBySelector:(SEL)commandSelector {
         if (!tab.isNewTabPage) {
             return;
         }
-        [strongSelf.window makeFirstResponder:strongSelf.addressField];
+        [strongSelf focusAddressBar:nil];
     });
 }
 

@@ -3,14 +3,19 @@
 #import "BrowserTabItemView.h"
 #import "BrowserTabDragGhostController.h"
 #import "BrowserTabDropPlaceholderView.h"
+#import "BrowserTabStripChromeActionsView.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 
-const CGFloat BrowserTabStripHeight = 36.0;
+const CGFloat BrowserTabStripHeightRegular = 36.0;
+const CGFloat BrowserTabStripHeightCompact = 32.0;
+const CGFloat BrowserTabStripHeight = 36.0; // 兼容旧引用 = Regular
 
-static const CGFloat kTrafficLightLeadingInset = 78.0;
-/// 标签顶部与条上缘间距（比早期 3pt 略大）
-static const CGFloat kTabTopInset = 5.0;
+static const CGFloat kTrafficLightLeadingInsetRegular = 78.0;
+static const CGFloat kTrafficLightLeadingInsetCompact = 72.0;
+static const CGFloat kTabTopInsetRegular = 5.0;
+/// 精简模式与常态同为顶部 5pt inset；高度 = 条高 − inset，底边贴齐、不铺满。
+static const CGFloat kTabTopInsetCompact = 5.0;
 static const CGFloat kTrailingDragWidth = 16.0;
 static const CGFloat kTabSpacing = 2.0;
 static const CGFloat kOverflowButtonWidth = 22.0;
@@ -167,6 +172,16 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
 @property (nonatomic, strong) NSView *tabsContentView;
 @property (nonatomic, strong) NSButton *overflowButton;
 @property (nonatomic, strong) NSButton *addTabButton;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *tabsClipTrailingToTrailingDrag;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *tabsClipTrailingToChromeActions;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *chromeActionsTrailingToTrailingDrag;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *chromeActionsCenterY;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *chromeActionsWidthConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *heightConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *leadingDragWidthConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *tabsClipLeadingConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *leadingNavLeadingConstraint;
+@property (nonatomic, strong, nullable) NSLayoutConstraint *leadingNavCenterYConstraint;
 @property (nonatomic, strong) NSMutableArray<BrowserTabItemView *> *tabItems;
 @property (nonatomic, strong) NSMapTable<BrowserTabItemView *, NSUUID *> *tabItemIDs;
 @property (nonatomic, strong) NSMapTable<NSUUID *, BrowserTabItemView *> *tabItemsByID;
@@ -205,10 +220,61 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
 - (NSView *)hitTest:(NSPoint)point {
     NSPoint local = [self convertPoint:point fromView:self.superview];
     // 左侧交通灯区域穿透，避免盖住关闭/最小化/最大化按钮
-    if (local.x < kTrafficLightLeadingInset) {
+    if (local.x < [self effectiveTrafficLightInset]) {
         return nil;
     }
     return [super hitTest:point];
+}
+
+- (CGFloat)effectiveStripHeight {
+    return self.compactMetricsEnabled ? BrowserTabStripHeightCompact : BrowserTabStripHeightRegular;
+}
+
+- (CGFloat)effectiveTrafficLightInset {
+    return self.compactMetricsEnabled ? kTrafficLightLeadingInsetCompact : kTrafficLightLeadingInsetRegular;
+}
+
+- (CGFloat)effectiveTabTopInset {
+    return self.compactMetricsEnabled ? kTabTopInsetCompact : kTabTopInsetRegular;
+}
+
+/// 标签纵向：以实际条高为准；顶 inset 后底边贴齐（不铺满条高）。
+- (void)tabVerticalMetricsWithStripHeight:(CGFloat *)outStripHeight
+                                topInset:(CGFloat *)outTopInset
+                               tabHeight:(CGFloat *)outTabHeight {
+    CGFloat stripH = NSHeight(self.bounds);
+    if (stripH < 1.0) {
+        stripH = [self effectiveStripHeight];
+    }
+    CGFloat topInset = [self effectiveTabTopInset];
+    if (outStripHeight) {
+        *outStripHeight = stripH;
+    }
+    if (outTopInset) {
+        *outTopInset = topInset;
+    }
+    if (outTabHeight) {
+        *outTabHeight = MAX(stripH - topInset, 1.0);
+    }
+}
+
+- (CGFloat)leadingNavigationReservedWidth {
+    NSView *nav = self.leadingNavigationView;
+    if (!nav || nav.hidden) {
+        return 0;
+    }
+    CGFloat width = NSWidth(nav.bounds);
+    if (width < 1.0) {
+        width = nav.fittingSize.width;
+    }
+    if (width < 1.0) {
+        return 0;
+    }
+    return width + kChromeGap;
+}
+
+- (CGFloat)tabsClipLeadingOffset {
+    return [self effectiveTrafficLightInset] + [self leadingNavigationReservedWidth] + kChromeGap;
 }
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
@@ -277,8 +343,25 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
         [self addSubview:_overflowButton];
         [self addSubview:_addTabButton];
 
+        NSLayoutConstraint *tabsClipTrailing =
+            [_tabsClipView.trailingAnchor constraintEqualToAnchor:_trailingDragArea.leadingAnchor];
+        _tabsClipTrailingToTrailingDrag = tabsClipTrailing;
+
+        NSLayoutConstraint *heightConstraint =
+            [self.heightAnchor constraintEqualToConstant:BrowserTabStripHeightRegular];
+        _heightConstraint = heightConstraint;
+
+        NSLayoutConstraint *leadingWidth =
+            [_leadingDragArea.widthAnchor constraintEqualToConstant:kTrafficLightLeadingInsetRegular];
+        _leadingDragWidthConstraint = leadingWidth;
+
+        NSLayoutConstraint *tabsClipLeading =
+            [_tabsClipView.leadingAnchor constraintEqualToAnchor:_leadingDragArea.trailingAnchor
+                                                       constant:kChromeGap];
+        _tabsClipLeadingConstraint = tabsClipLeading;
+
         [NSLayoutConstraint activateConstraints:@[
-            [self.heightAnchor constraintEqualToConstant:BrowserTabStripHeight],
+            heightConstraint,
 
             [_backgroundView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_backgroundView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
@@ -288,12 +371,12 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
             [_leadingDragArea.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
             [_leadingDragArea.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_leadingDragArea.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_leadingDragArea.widthAnchor constraintEqualToConstant:kTrafficLightLeadingInset],
+            leadingWidth,
 
-            [_tabsClipView.leadingAnchor constraintEqualToAnchor:_leadingDragArea.trailingAnchor constant:kChromeGap],
+            tabsClipLeading,
             [_tabsClipView.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_tabsClipView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [_tabsClipView.trailingAnchor constraintEqualToAnchor:_trailingDragArea.leadingAnchor],
+            tabsClipTrailing,
 
             [_trailingDragArea.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [_trailingDragArea.topAnchor constraintEqualToAnchor:self.topAnchor],
@@ -311,6 +394,162 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
         [self updateStripAppearance];
     }
     return self;
+}
+
+- (CGFloat)chromeActionsReservedWidth {
+    NSView *actions = self.chromeActionsView;
+    if (!actions || actions.hidden) {
+        return 0;
+    }
+    CGFloat width = 0;
+    if ([actions isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
+        width = [(BrowserTabStripChromeActionsView *)actions preferredWidth];
+    } else {
+        width = NSWidth(actions.bounds);
+        if (width < 1.0) {
+            width = actions.fittingSize.width;
+        }
+    }
+    if (width < 1.0) {
+        return 0;
+    }
+    return width + kChromeGap;
+}
+
+- (void)setChromeActionsView:(NSView *)chromeActionsView {
+    if (_chromeActionsView == chromeActionsView) {
+        return;
+    }
+
+    if (_chromeActionsView) {
+        [_chromeActionsView removeFromSuperview];
+    }
+    if (self.tabsClipTrailingToChromeActions) {
+        self.tabsClipTrailingToChromeActions.active = NO;
+        self.tabsClipTrailingToChromeActions = nil;
+    }
+    if (self.chromeActionsTrailingToTrailingDrag) {
+        self.chromeActionsTrailingToTrailingDrag.active = NO;
+        self.chromeActionsTrailingToTrailingDrag = nil;
+    }
+    if (self.chromeActionsCenterY) {
+        self.chromeActionsCenterY.active = NO;
+        self.chromeActionsCenterY = nil;
+    }
+    if (self.chromeActionsWidthConstraint) {
+        self.chromeActionsWidthConstraint.active = NO;
+        self.chromeActionsWidthConstraint = nil;
+    }
+
+    _chromeActionsView = chromeActionsView;
+
+    if (!chromeActionsView) {
+        self.tabsClipTrailingToTrailingDrag.active = YES;
+        [self invalidateTabLayoutCache];
+        [self setNeedsLayout:YES];
+        return;
+    }
+
+    chromeActionsView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:chromeActionsView positioned:NSWindowAbove relativeTo:self.tabsClipView];
+    // 保证 ▾ / + 仍叠在动作区之上，避免重叠时点不到
+    [self addSubview:self.overflowButton];
+    [self addSubview:self.addTabButton];
+
+    self.tabsClipTrailingToTrailingDrag.active = NO;
+
+    CGFloat actionsWidth = 0;
+    if ([chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
+        actionsWidth = [(BrowserTabStripChromeActionsView *)chromeActionsView preferredWidth];
+    }
+    if (actionsWidth < 1.0) {
+        actionsWidth = chromeActionsView.fittingSize.width;
+    }
+
+    self.tabsClipTrailingToChromeActions =
+        [self.tabsClipView.trailingAnchor constraintEqualToAnchor:chromeActionsView.leadingAnchor
+                                                         constant:-kChromeGap];
+    self.chromeActionsTrailingToTrailingDrag =
+        [chromeActionsView.trailingAnchor constraintEqualToAnchor:self.trailingDragArea.leadingAnchor];
+    self.chromeActionsCenterY =
+        [chromeActionsView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
+    self.chromeActionsWidthConstraint =
+        [chromeActionsView.widthAnchor constraintEqualToConstant:MAX(actionsWidth, 1)];
+
+    [NSLayoutConstraint activateConstraints:@[
+        self.tabsClipTrailingToChromeActions,
+        self.chromeActionsTrailingToTrailingDrag,
+        self.chromeActionsCenterY,
+        self.chromeActionsWidthConstraint,
+    ]];
+
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
+}
+
+- (void)setLeadingNavigationView:(NSView *)leadingNavigationView {
+    if (_leadingNavigationView == leadingNavigationView) {
+        return;
+    }
+
+    if (_leadingNavigationView) {
+        [_leadingNavigationView removeFromSuperview];
+    }
+    if (self.leadingNavLeadingConstraint) {
+        self.leadingNavLeadingConstraint.active = NO;
+        self.leadingNavLeadingConstraint = nil;
+    }
+    if (self.leadingNavCenterYConstraint) {
+        self.leadingNavCenterYConstraint.active = NO;
+        self.leadingNavCenterYConstraint = nil;
+    }
+    self.tabsClipLeadingConstraint.active = NO;
+
+    _leadingNavigationView = leadingNavigationView;
+
+    if (!leadingNavigationView) {
+        self.tabsClipLeadingConstraint =
+            [self.tabsClipView.leadingAnchor constraintEqualToAnchor:self.leadingDragArea.trailingAnchor
+                                                            constant:kChromeGap];
+        self.tabsClipLeadingConstraint.active = YES;
+        [self invalidateTabLayoutCache];
+        [self setNeedsLayout:YES];
+        return;
+    }
+
+    leadingNavigationView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:leadingNavigationView positioned:NSWindowAbove relativeTo:self.leadingDragArea];
+    [self addSubview:self.overflowButton];
+    [self addSubview:self.addTabButton];
+
+    self.leadingNavLeadingConstraint =
+        [leadingNavigationView.leadingAnchor constraintEqualToAnchor:self.leadingDragArea.trailingAnchor
+                                                            constant:kChromeGap];
+    self.leadingNavCenterYConstraint =
+        [leadingNavigationView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
+    self.tabsClipLeadingConstraint =
+        [self.tabsClipView.leadingAnchor constraintEqualToAnchor:leadingNavigationView.trailingAnchor
+                                                        constant:kChromeGap];
+
+    [NSLayoutConstraint activateConstraints:@[
+        self.leadingNavLeadingConstraint,
+        self.leadingNavCenterYConstraint,
+        self.tabsClipLeadingConstraint,
+    ]];
+
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
+}
+
+- (void)setCompactMetricsEnabled:(BOOL)compactMetricsEnabled {
+    if (_compactMetricsEnabled == compactMetricsEnabled) {
+        return;
+    }
+    _compactMetricsEnabled = compactMetricsEnabled;
+    self.heightConstraint.constant = [self effectiveStripHeight];
+    self.leadingDragWidthConstraint.constant = [self effectiveTrafficLightInset];
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
 }
 
 - (NSButton *)makeOverflowButton {
@@ -526,9 +765,10 @@ NSColor *BrowserTabStripFillColor(void) {
 
 /// 将 ▾ / + 贴到末个可见标签右侧（坐标相对标签条）
 - (void)placeChromeButtonsAfterContentWidth:(CGFloat)contentW needsOverflow:(BOOL)needsOverflow {
-    CGFloat clipLeading = kTrafficLightLeadingInset + kChromeGap;
-    CGFloat buttonY = floor((BrowserTabStripHeight - kAddButtonHeight) * 0.5);
+    CGFloat clipLeading = [self tabsClipLeadingOffset];
+    CGFloat buttonY = floor(([self effectiveStripHeight] - kAddButtonHeight) * 0.5);
     CGFloat cursor = clipLeading + MAX(contentW, 0);
+    CGFloat chromeActionsWidth = [self chromeActionsReservedWidth];
 
     if (needsOverflow) {
         cursor += 2.0;
@@ -539,8 +779,8 @@ NSColor *BrowserTabStripFillColor(void) {
         cursor += 2.0;
     }
 
-    // 不要紧贴右缘越界：预留 trailing 拖拽带
-    CGFloat maxAddX = NSWidth(self.bounds) - kTrailingDragWidth - kAddButtonWidth;
+    // 不要紧贴右缘越界：预留 trailing 拖拽带与右侧 Chrome 动作区
+    CGFloat maxAddX = NSWidth(self.bounds) - kTrailingDragWidth - chromeActionsWidth - kAddButtonWidth;
     if (cursor > maxAddX) {
         cursor = MAX(clipLeading, maxAddX);
     }
@@ -558,14 +798,16 @@ NSColor *BrowserTabStripFillColor(void) {
 
 - (void)updateTabFrames {
     NSUInteger total = self.tabItems.count;
-    // 为「+」预留占位后，中间可供「标签 + 可选箭头」的宽度
-    // leading(78)+4 + middle + 4 + add(24) + trailing(16) = bounds.width
-    CGFloat reservedChrome = kTrafficLightLeadingInset + kChromeGap + kChromeGap + kAddButtonWidth + kTrailingDragWidth;
+    // 为「+」与右侧 Chrome 动作区预留占位后，中间可供「标签 + 可选箭头」的宽度
+    // leading(78)+4 + middle + 4 + add(24) + [gap+chromeActions] + trailing(16) = bounds.width
+    CGFloat chromeActionsWidth = [self chromeActionsReservedWidth];
+    CGFloat reservedChrome = [self tabsClipLeadingOffset] + kChromeGap + kAddButtonWidth
+        + chromeActionsWidth + kTrailingDragWidth;
     CGFloat stripMiddle = NSWidth(self.bounds) - reservedChrome;
 
     if (total == 0 || stripMiddle < 1.0) {
         [self setOverflowVisible:NO];
-        self.tabsContentView.frame = NSMakeRect(0, 0, 1, BrowserTabStripHeight);
+        self.tabsContentView.frame = NSMakeRect(0, 0, 1, [self effectiveStripHeight]);
         [self.overflowTabIDs removeAllObjects];
         [self placeChromeButtonsAfterContentWidth:0 needsOverflow:NO];
         return;
@@ -588,8 +830,11 @@ NSColor *BrowserTabStripFillColor(void) {
     CGFloat ideal = visibleLen > 0 ? (available - spacingTotal) / (CGFloat)visibleLen : BrowserTabItemMinWidth;
     CGFloat tabWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
     CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : 0;
-    // isFlipped：y=0 在顶；标签下移 kTabTopInset，高度不铺满
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    // isFlipped：y=0 在顶。顶 inset（常态/精简均为 5pt），高度 = 条高 − inset，底边贴齐。
+    CGFloat stripH = 0;
+    CGFloat topInset = 0;
+    CGFloat tabHeight = 0;
+    [self tabVerticalMetricsWithStripHeight:&stripH topInset:&topInset tabHeight:&tabHeight];
 
     BOOL geometryChanged = fabs(tabWidth - self.lastLaidOutTabWidth) > 0.5
         || fabs(available - self.lastLaidOutAvailableWidth) > 0.5
@@ -611,10 +856,11 @@ NSColor *BrowserTabStripFillColor(void) {
                 // 拖拽中的标签保留纵向布局，横向由拖拽逻辑更新
                 item.hidden = NO;
                 NSRect frame = item.frame;
-                frame.origin.y = kTabTopInset;
+                frame.origin.y = topInset;
                 frame.size.width = tabWidth;
                 frame.size.height = tabHeight;
                 item.frame = frame;
+                [item setTabHeight:tabHeight];
                 [item applyAvailableWidth:tabWidth];
                 x += tabWidth + kTabSpacing;
                 continue;
@@ -622,7 +868,8 @@ NSColor *BrowserTabStripFillColor(void) {
 
             item.hidden = !visible;
             if (visible) {
-                item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+                item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+                [item setTabHeight:tabHeight];
                 [item applyAvailableWidth:tabWidth];
                 x += tabWidth + kTabSpacing;
             } else {
@@ -634,7 +881,7 @@ NSColor *BrowserTabStripFillColor(void) {
             }
         }
 
-        self.tabsContentView.frame = NSMakeRect(0, 0, MAX(contentW, 1), BrowserTabStripHeight);
+        self.tabsContentView.frame = NSMakeRect(0, 0, MAX(contentW, 1), stripH);
         self.lastLaidOutTabWidth = tabWidth;
         self.lastLaidOutAvailableWidth = available;
         self.lastLaidOutTabCount = total;
@@ -887,7 +1134,9 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 - (void)layoutTabsExcludingDraggedItem:(BrowserTabItemView *)dragged {
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat topInset = 0;
+    CGFloat tabHeight = 0;
+    [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
     CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     for (BrowserTabItemView *item in self.tabItems) {
@@ -896,7 +1145,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
             continue;
         }
         if (!item.hidden) {
-            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
         }
         x += tabWidth + kTabSpacing;
@@ -904,7 +1154,9 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 - (void)layoutTabsCollapsingDraggedItem:(BrowserTabItemView *)dragged {
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat topInset = 0;
+    CGFloat tabHeight = 0;
+    [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
     CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     for (BrowserTabItemView *item in self.tabItems) {
@@ -912,7 +1164,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
             continue;
         }
         if (!item.hidden) {
-            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
         }
         x += tabWidth + kTabSpacing;
@@ -920,7 +1173,9 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 - (void)layoutTabsInsertingPlaceholderAtIndex:(NSUInteger)index {
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat topInset = 0;
+    CGFloat tabHeight = 0;
+    [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
     CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     NSUInteger slot = 0;
@@ -928,27 +1183,30 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
     for (BrowserTabItemView *item in self.tabItems) {
         if (slot == index && !placedPlaceholder) {
-            self.foreignPlaceholder.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            self.foreignPlaceholder.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
             self.foreignPlaceholder.hidden = NO;
             x += tabWidth + kTabSpacing;
             placedPlaceholder = YES;
         }
         if (!item.hidden) {
-            item.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+            item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
         }
         x += tabWidth + kTabSpacing;
         slot++;
     }
     if (!placedPlaceholder) {
-        self.foreignPlaceholder.frame = NSMakeRect(x, kTabTopInset, tabWidth, tabHeight);
+        self.foreignPlaceholder.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
         self.foreignPlaceholder.hidden = NO;
     }
 
     CGFloat contentW = MAX(x + (placedPlaceholder ? 0 : (tabWidth + kTabSpacing)), 1);
     NSRect contentFrame = self.tabsContentView.frame;
     contentFrame.size.width = MAX(contentW, NSWidth(self.tabsClipView.bounds));
-    contentFrame.size.height = BrowserTabStripHeight;
+    CGFloat stripH = 0;
+    [self tabVerticalMetricsWithStripHeight:&stripH topInset:NULL tabHeight:NULL];
+    contentFrame.size.height = stripH;
     self.tabsContentView.frame = contentFrame;
 }
 
@@ -1023,9 +1281,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 - (NSRect)screenRectForTabSlotAtIndex:(NSUInteger)index size:(NSSize)size {
     NSWindow *window = self.window;
     CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
-    CGFloat tabHeight = BrowserTabStripHeight - kTabTopInset;
+    CGFloat topInset = 0;
+    CGFloat tabHeight = 0;
+    [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
     CGFloat x = index * (tabWidth + kTabSpacing);
-    NSRect localInContent = NSMakeRect(x, kTabTopInset, size.width > 0 ? size.width : tabWidth,
+    NSRect localInContent = NSMakeRect(x, topInset, size.width > 0 ? size.width : tabWidth,
                                        size.height > 0 ? size.height : tabHeight);
     NSRect inWindow = [self.tabsContentView convertRect:localInContent toView:nil];
     if (!window) {

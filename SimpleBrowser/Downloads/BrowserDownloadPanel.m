@@ -484,6 +484,12 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     }
 
     [self setFrame:panelFrame display:YES];
+    if (ownerWindow) {
+        NSInteger minLevel = (NSInteger)ownerWindow.level + 1;
+        if ((NSInteger)self.level < minLevel) {
+            self.level = (NSWindowLevel)minLevel;
+        }
+    }
     [self orderFrontRegardless];
     [self installDismissalMonitors];
 }

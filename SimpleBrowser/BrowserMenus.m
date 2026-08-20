@@ -51,6 +51,11 @@
                                                        keyEquivalent:@""];
             openInNewWindow.target = nil;
 
+            NSMenuItem *openLocation = [fileMenu addItemWithTitle:@"打开位置…"
+                                                           action:@selector(focusAddressBar:)
+                                                    keyEquivalent:@"l"];
+            openLocation.target = nil;
+
             NSMenuItem *downloads = [fileMenu addItemWithTitle:@"下载"
                                                         action:@selector(toggleDownloadsPanel:)
                                                  keyEquivalent:@"j"];
@@ -119,6 +124,11 @@
                                                   keyEquivalent:@"r"];
             hardReload.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
             hardReload.target = nil;
+
+            NSMenuItem *compactMode = [viewMenu addItemWithTitle:@"精简模式"
+                                                          action:@selector(toggleCompactMode:)
+                                                   keyEquivalent:@""];
+            compactMode.target = nil;
 
             [viewMenu addItem:[NSMenuItem separatorItem]];
 
@@ -271,6 +281,27 @@
                 [mainMenu addItem:tabMenuItem];
             } else {
                 [mainMenu insertItem:tabMenuItem atIndex:windowIndex];
+            }
+        }
+
+        // 窗口：在系统「窗口」菜单顶部插入「窗口置顶」
+        NSInteger windowMenuIndex = [self indexOfMenuTitled:@"窗口"];
+        if (windowMenuIndex != NSNotFound) {
+            NSMenu *windowMenu = mainMenu.itemArray[windowMenuIndex].submenu;
+            BOOL hasPin = NO;
+            for (NSMenuItem *item in windowMenu.itemArray) {
+                if (item.action == @selector(toggleAlwaysOnTop:)) {
+                    hasPin = YES;
+                    break;
+                }
+            }
+            if (!hasPin) {
+                NSMenuItem *pinItem = [[NSMenuItem alloc] initWithTitle:@"窗口置顶"
+                                                                 action:@selector(toggleAlwaysOnTop:)
+                                                          keyEquivalent:@""];
+                pinItem.target = nil;
+                [windowMenu insertItem:pinItem atIndex:0];
+                [windowMenu insertItem:[NSMenuItem separatorItem] atIndex:1];
             }
         }
     });

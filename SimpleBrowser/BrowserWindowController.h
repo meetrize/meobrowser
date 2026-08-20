@@ -49,6 +49,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)isTabOverviewVisible;
 - (void)updateTabOverviewButtonAppearance;
 
+- (void)toggleCompactMode:(nullable id)sender;
+- (void)toggleAlwaysOnTop:(nullable id)sender;
+- (void)focusAddressBar:(nullable id)sender;
+@property (nonatomic, assign, getter=isCompactModeEnabled) BOOL compactModeEnabled;
+@property (nonatomic, assign, getter=isAlwaysOnTopEnabled) BOOL alwaysOnTopEnabled;
+
 /// 供 LoginAssistController 打开助手侧栏。
 - (void)setAssistSidebarVisible:(BOOL)visible
               revealingRecipeID:(nullable NSString *)recipeID

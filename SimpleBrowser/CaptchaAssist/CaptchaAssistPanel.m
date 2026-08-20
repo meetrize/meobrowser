@@ -175,6 +175,12 @@
         y = NSMaxY(anchorRectOnScreen) + 8;
     }
     [self setFrameOrigin:NSMakePoint(x, y)];
+    if (ownerWindow) {
+        NSInteger minLevel = (NSInteger)ownerWindow.level + 1;
+        if ((NSInteger)self.level < minLevel) {
+            self.level = (NSWindowLevel)minLevel;
+        }
+    }
     [self makeKeyAndOrderFront:nil];
     [self installDismissMonitor];
 }
