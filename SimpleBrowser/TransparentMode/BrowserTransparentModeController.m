@@ -222,43 +222,85 @@
     [configuration.userContentController addUserScript:script];
 }
 
-+ (NSString *)jsonStringForCSSColor:(NSString *)cssColor {
-    NSString *value = cssColor.length > 0 ? cssColor : @"#f2f2f2";
++ (NSString *)jsonStringForObject:(id)object fallback:(NSString *)fallback {
+    if (!object) {
+        return fallback;
+    }
     NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@[value] options:0 error:&error];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
     if (!data || error) {
-        return @"\"#f2f2f2\"";
+        return fallback;
     }
-    NSString *arrayJSON = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (arrayJSON.length < 2) {
-        return @"\"#f2f2f2\"";
-    }
-    return [arrayJSON substringWithRange:NSMakeRange(1, arrayJSON.length - 2)];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return json.length > 0 ? json : fallback;
 }
 
-- (void)evaluatePageStyleScript:(NSString *)invocation onWebView:(WKWebView *)webView {
++ (NSString *)jsonStringForCSSColor:(NSString *)cssColor {
+    NSString *value = cssColor.length > 0 ? cssColor : @"#f2f2f2";
+    return [self jsonStringForObject:@[value] fallback:@"[\"#f2f2f2\"]"];
+}
+
+- (void)evaluatePageStyleScript:(NSString *)invocation
+                      onWebView:(WKWebView *)webView
+                  withBootstrap:(BOOL)withBootstrap {
     if (!webView || invocation.length == 0) {
         return;
     }
-    // 若 document-start 已装好则只调 API；否则先 bootstrap 再调用。
-    NSString *bootstrap = [[self class] pageStyleScriptSource];
-    NSString *source = [NSString stringWithFormat:
-                          @"(function(){\n%@\n%@\n})();",
-                          bootstrap, invocation];
+    NSString *source = invocation;
+    if (withBootstrap) {
+        NSString *bootstrap = [[self class] pageStyleScriptSource];
+        source = [NSString stringWithFormat:@"(function(){\n%@\n%@\n})();", bootstrap, invocation];
+    }
     [webView evaluateJavaScript:source completionHandler:nil];
 }
 
+- (void)evaluatePageStyleScript:(NSString *)invocation onWebView:(WKWebView *)webView {
+    [self evaluatePageStyleScript:invocation onWebView:webView withBootstrap:YES];
+}
+
+- (NSString *)pageStyleOptionsJSON {
+    NSDictionary *options = [BrowserTransparentModePreferences pageStyleApplyOptions];
+    return [[self class] jsonStringForObject:options
+                                    fallback:@"{\"color\":\"#f2f2f2\",\"shadowColor\":\"#000000\",\"shadowStrength\":0.9,\"shadowRadius\":3}"];
+}
+
 - (void)applyTransparentPageStyleToWebView:(WKWebView *)webView {
-    NSString *colorJSON = [[self class] jsonStringForCSSColor:[BrowserTransparentModePreferences textColorCSSHex]];
+    NSString *optionsJSON = [self pageStyleOptionsJSON];
     NSString *invocation = [NSString stringWithFormat:
-                            @"window.__MeoTransparentMode && window.__MeoTransparentMode.apply(%@);",
-                            colorJSON];
-    [self evaluatePageStyleScript:invocation onWebView:webView];
+                            @"window.__MeoTransparentMode.apply(%@);",
+                            optionsJSON];
+    [self evaluatePageStyleScript:invocation onWebView:webView withBootstrap:YES];
+}
+
+- (void)refreshTransparentPageStyleOnWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    NSString *optionsJSON = [self pageStyleOptionsJSON];
+    // 轻量路径：不重复注入整包 bootstrap，只调 refresh；无 API 时回退 apply
+    NSString *invocation = [NSString stringWithFormat:
+                            @"(function(){var m=window.__MeoTransparentMode;"
+                            @"if(m&&typeof m.refresh==='function'){m.refresh(%@);return 1;}"
+                            @"return 0;})();",
+                            optionsJSON];
+    [webView evaluateJavaScript:invocation completionHandler:^(id result, NSError *error) {
+        BOOL ok = (error == nil)
+            && [result respondsToSelector:@selector(boolValue)]
+            && [result boolValue];
+        if (!ok) {
+            [self applyTransparentPageStyleToWebView:webView];
+        }
+    }];
 }
 
 - (void)removeTransparentPageStyleFromWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    // 带 bootstrap，确保用到含「恢复原样式 / Canvas 重绘」的最新 remove
     [self evaluatePageStyleScript:@"window.__MeoTransparentMode && window.__MeoTransparentMode.remove();"
-                        onWebView:webView];
+                        onWebView:webView
+                    withBootstrap:YES];
 }
 
 @end

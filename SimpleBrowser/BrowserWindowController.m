@@ -1165,6 +1165,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
 
+    // 取消待执行的风格 refresh，避免退出后仍把设置色写回页面
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(refreshTransparentPageStyleForSelection)
+                                               object:nil];
+
     [self.transparentModeController setWindowRightDragMoveEnabled:NO];
 
     for (WKWebView *webView in [self liveWebViewsForTransparentMode]) {
@@ -2354,12 +2359,30 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+/// 设置面板改风格时用轻量 refresh，避免全页遍历 / 多次像素重绘造成白屏卡顿。
+- (void)refreshTransparentPageStyleForSelection {
+    if (!self.transparentModeEnabled) {
+        return;
+    }
+    BrowserTab *selected = self.tabController.selectedTab;
+    WKWebView *webView = selected.isNewTabPage ? nil : selected.webView;
+    if (!webView) {
+        return;
+    }
+    [self.transparentModeController refreshTransparentPageStyleOnWebView:webView];
+}
+
 - (void)transparentModePreferencesDidChange:(NSNotification *)note {
     (void)note;
     if (!self.transparentModeEnabled) {
         return;
     }
-    [self syncTransparentPageStyleForSelection];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(refreshTransparentPageStyleForSelection)
+                                               object:nil];
+    [self performSelector:@selector(refreshTransparentPageStyleForSelection)
+               withObject:nil
+               afterDelay:0.05];
 }
 
 - (void)refreshTabsUI {

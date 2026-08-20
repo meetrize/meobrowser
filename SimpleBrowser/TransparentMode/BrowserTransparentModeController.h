@@ -30,6 +30,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 向页面注入透明模式样式（统一文字色；媒体保持可见）。
 - (void)applyTransparentPageStyleToWebView:(nullable WKWebView *)webView;
 
+/// 仅刷新样式参数（设置滑杆等）；不跑全页重绘，尽量实时。
+- (void)refreshTransparentPageStyleOnWebView:(nullable WKWebView *)webView;
+
 /// 移除透明模式页面样式。
 - (void)removeTransparentPageStyleFromWebView:(nullable WKWebView *)webView;
 

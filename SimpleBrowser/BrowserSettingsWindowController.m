@@ -48,9 +48,14 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSTextField *downloadDirectoryHintLabel;
 
 @property (nonatomic, strong) NSColorWell *transparentTextColorWell;
-@property (nonatomic, strong) NSButton *transparentTextColorLightPresetButton;
-@property (nonatomic, strong) NSButton *transparentTextColorDarkPresetButton;
+@property (nonatomic, strong) NSColorWell *transparentShadowColorWell;
 @property (nonatomic, strong) NSButton *transparentTextColorResetButton;
+@property (nonatomic, strong) NSSlider *transparentShadowStrengthSlider;
+@property (nonatomic, strong) NSTextField *transparentShadowStrengthValueLabel;
+@property (nonatomic, strong) NSSlider *transparentShadowRadiusSlider;
+@property (nonatomic, strong) NSTextField *transparentShadowRadiusValueLabel;
+@property (nonatomic, strong) NSButton *transparentShadowResetButton;
+@property (nonatomic, strong) NSStackView *transparentStylePresetRow;
 @property (nonatomic, strong) NSTextField *transparentModeHintLabel;
 
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
@@ -80,7 +85,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 580)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 760)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -232,35 +237,102 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.downloadDirectoryHintLabel = [self makeHint:@"将文件保存到此文件夹，不再询问。"];
     [self refreshDownloadDirectoryUI];
 
-    NSTextField *transparentCaption = [self makeCaption:@"透明模式文字颜色"];
+    NSTextField *stylePresetCaption = [self makeCaption:@"配色风格"];
+    NSMutableArray<NSView *> *presetButtons = [NSMutableArray array];
+    for (NSDictionary *preset in [BrowserTransparentModePreferences availableStylePresets]) {
+        NSString *title = preset[BrowserTransparentModeStylePresetTitleKey] ?: @"预设";
+        NSString *presetID = preset[BrowserTransparentModeStylePresetIDKey] ?: @"";
+        NSButton *button = [NSButton buttonWithTitle:title
+                                              target:self
+                                              action:@selector(transparentStylePresetClicked:)];
+        button.bezelStyle = NSBezelStyleRounded;
+        button.identifier = presetID;
+        [presetButtons addObject:button];
+    }
+    self.transparentStylePresetRow = [NSStackView stackViewWithViews:presetButtons];
+    self.transparentStylePresetRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.transparentStylePresetRow.spacing = 10;
+    self.transparentStylePresetRow.alignment = NSLayoutAttributeCenterY;
+
+    NSTextField *transparentCaption = [self makeCaption:@"文字颜色"];
     self.transparentTextColorWell = [[NSColorWell alloc] initWithFrame:NSZeroRect];
     self.transparentTextColorWell.translatesAutoresizingMaskIntoConstraints = NO;
     [self.transparentTextColorWell.widthAnchor constraintEqualToConstant:44].active = YES;
     [self.transparentTextColorWell.heightAnchor constraintEqualToConstant:24].active = YES;
     self.transparentTextColorWell.target = self;
     self.transparentTextColorWell.action = @selector(transparentTextColorWellChanged:);
-    self.transparentTextColorLightPresetButton = [NSButton buttonWithTitle:@"浅色"
-                                                                   target:self
-                                                                   action:@selector(transparentTextColorLightPresetClicked:)];
-    self.transparentTextColorLightPresetButton.bezelStyle = NSBezelStyleRounded;
-    self.transparentTextColorDarkPresetButton = [NSButton buttonWithTitle:@"深色"
-                                                                  target:self
-                                                                  action:@selector(transparentTextColorDarkPresetClicked:)];
-    self.transparentTextColorDarkPresetButton.bezelStyle = NSBezelStyleRounded;
-    self.transparentTextColorResetButton = [NSButton buttonWithTitle:@"恢复默认"
+    self.transparentTextColorResetButton = [NSButton buttonWithTitle:@"恢复默认字色"
                                                              target:self
                                                              action:@selector(transparentTextColorResetClicked:)];
     self.transparentTextColorResetButton.bezelStyle = NSBezelStyleRounded;
     NSStackView *transparentColorRow = [NSStackView stackViewWithViews:@[
         self.transparentTextColorWell,
-        self.transparentTextColorLightPresetButton,
-        self.transparentTextColorDarkPresetButton,
         self.transparentTextColorResetButton,
     ]];
     transparentColorRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     transparentColorRow.spacing = 10;
     transparentColorRow.alignment = NSLayoutAttributeCenterY;
-    self.transparentModeHintLabel = [self makeHint:@"进入透明模式后，页面文字使用此颜色；图片保持显示。修改后对已开启透明模式的窗口立即生效。"];
+
+    NSTextField *shadowColorCaption = [self makeCaption:@"阴影颜色"];
+    self.transparentShadowColorWell = [[NSColorWell alloc] initWithFrame:NSZeroRect];
+    self.transparentShadowColorWell.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.transparentShadowColorWell.widthAnchor constraintEqualToConstant:44].active = YES;
+    [self.transparentShadowColorWell.heightAnchor constraintEqualToConstant:24].active = YES;
+    self.transparentShadowColorWell.target = self;
+    self.transparentShadowColorWell.action = @selector(transparentShadowColorWellChanged:);
+    NSStackView *shadowColorRow = [NSStackView stackViewWithViews:@[self.transparentShadowColorWell]];
+    shadowColorRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    shadowColorRow.spacing = 10;
+    shadowColorRow.alignment = NSLayoutAttributeCenterY;
+
+    self.transparentModeHintLabel = [self makeHint:@"进入透明模式后，页面文字使用所选颜色与阴影。点「月光 / 墨影 / 暖阅 / 青辉」可一键套用整套配色；修改后对已开启透明模式的窗口立即生效。"];
+
+    NSTextField *shadowStrengthCaption = [self makeCaption:@"文字阴影深浅"];
+    self.transparentShadowStrengthSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    self.transparentShadowStrengthSlider.minValue = 0;
+    self.transparentShadowStrengthSlider.maxValue = 100;
+    self.transparentShadowStrengthSlider.numberOfTickMarks = 0;
+    self.transparentShadowStrengthSlider.continuous = YES;
+    self.transparentShadowStrengthSlider.target = self;
+    self.transparentShadowStrengthSlider.action = @selector(transparentShadowStrengthChanged:);
+    self.transparentShadowStrengthSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.transparentShadowStrengthSlider.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
+    self.transparentShadowStrengthValueLabel = [NSTextField labelWithString:@"90%"];
+    self.transparentShadowStrengthValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+    self.transparentShadowStrengthValueLabel.textColor = [NSColor secondaryLabelColor];
+    NSStackView *shadowStrengthRow = [NSStackView stackViewWithViews:@[
+        self.transparentShadowStrengthSlider, self.transparentShadowStrengthValueLabel
+    ]];
+    shadowStrengthRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    shadowStrengthRow.spacing = 12;
+    shadowStrengthRow.alignment = NSLayoutAttributeCenterY;
+
+    NSTextField *shadowRadiusCaption = [self makeCaption:@"文字阴影大小"];
+    self.transparentShadowRadiusSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    self.transparentShadowRadiusSlider.minValue = 0;
+    self.transparentShadowRadiusSlider.maxValue = 24;
+    self.transparentShadowRadiusSlider.numberOfTickMarks = 0;
+    self.transparentShadowRadiusSlider.continuous = YES;
+    self.transparentShadowRadiusSlider.target = self;
+    self.transparentShadowRadiusSlider.action = @selector(transparentShadowRadiusChanged:);
+    self.transparentShadowRadiusSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.transparentShadowRadiusSlider.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
+    self.transparentShadowRadiusValueLabel = [NSTextField labelWithString:@"3 pt"];
+    self.transparentShadowRadiusValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+    self.transparentShadowRadiusValueLabel.textColor = [NSColor secondaryLabelColor];
+    self.transparentShadowResetButton = [NSButton buttonWithTitle:@"阴影恢复默认"
+                                                          target:self
+                                                          action:@selector(transparentShadowResetClicked:)];
+    self.transparentShadowResetButton.bezelStyle = NSBezelStyleRounded;
+    NSStackView *shadowRadiusRow = [NSStackView stackViewWithViews:@[
+        self.transparentShadowRadiusSlider,
+        self.transparentShadowRadiusValueLabel,
+        self.transparentShadowResetButton,
+    ]];
+    shadowRadiusRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    shadowRadiusRow.spacing = 12;
+    shadowRadiusRow.alignment = NSLayoutAttributeCenterY;
+
     [self refreshTransparentModeColorUI];
 
     // —— 云同步 ——
@@ -400,11 +472,18 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                 views:@[
                     searchGrid, searchHint, browserCaption, browserRow, browserHint,
                     downloadCaption, downloadRow, self.downloadDirectoryHintLabel,
-                    transparentCaption, transparentColorRow, self.transparentModeHintLabel,
+                    stylePresetCaption, self.transparentStylePresetRow,
+                    transparentCaption, transparentColorRow,
+                    shadowColorCaption, shadowColorRow,
+                    shadowStrengthCaption, shadowStrengthRow,
+                    shadowRadiusCaption, shadowRadiusRow,
+                    self.transparentModeHintLabel,
                 ]
             toTabView:self.tabView
            widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel,
-                        transparentColorRow, self.transparentModeHintLabel]];
+                        self.transparentStylePresetRow, transparentColorRow, shadowColorRow,
+                        shadowStrengthRow, shadowRadiusRow,
+                        self.transparentModeHintLabel]];
 
     [self addTabNamed:@"云同步"
            identifier:BrowserSettingsTabSync
@@ -947,6 +1026,21 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         return;
     }
     self.transparentTextColorWell.color = [BrowserTransparentModePreferences textColor];
+    if (self.transparentShadowColorWell) {
+        self.transparentShadowColorWell.color = [BrowserTransparentModePreferences textShadowColor];
+    }
+    if (self.transparentShadowStrengthSlider) {
+        CGFloat strength = [BrowserTransparentModePreferences textShadowStrength];
+        self.transparentShadowStrengthSlider.doubleValue = strength * 100.0;
+        self.transparentShadowStrengthValueLabel.stringValue =
+            [NSString stringWithFormat:@"%.0f%%", strength * 100.0];
+    }
+    if (self.transparentShadowRadiusSlider) {
+        CGFloat radius = [BrowserTransparentModePreferences textShadowRadius];
+        self.transparentShadowRadiusSlider.doubleValue = radius;
+        self.transparentShadowRadiusValueLabel.stringValue =
+            [NSString stringWithFormat:@"%.0f pt", radius];
+    }
 }
 
 - (void)transparentTextColorWellChanged:(id)sender {
@@ -954,21 +1048,46 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [BrowserTransparentModePreferences setTextColor:self.transparentTextColorWell.color];
 }
 
-- (void)transparentTextColorLightPresetClicked:(id)sender {
+- (void)transparentShadowColorWellChanged:(id)sender {
     (void)sender;
-    [BrowserTransparentModePreferences setTextColor:[NSColor colorWithSRGBRed:0.95 green:0.95 blue:0.95 alpha:1.0]];
-    [self refreshTransparentModeColorUI];
-}
-
-- (void)transparentTextColorDarkPresetClicked:(id)sender {
-    (void)sender;
-    [BrowserTransparentModePreferences setTextColor:[NSColor colorWithSRGBRed:0.1 green:0.1 blue:0.1 alpha:1.0]];
-    [self refreshTransparentModeColorUI];
+    [BrowserTransparentModePreferences setTextShadowColor:self.transparentShadowColorWell.color];
 }
 
 - (void)transparentTextColorResetClicked:(id)sender {
     (void)sender;
     [BrowserTransparentModePreferences resetTextColorToDefault];
+    [self refreshTransparentModeColorUI];
+}
+
+- (void)transparentStylePresetClicked:(id)sender {
+    NSButton *button = [sender isKindOfClass:[NSButton class]] ? (NSButton *)sender : nil;
+    NSString *presetID = button.identifier;
+    if (presetID.length == 0) {
+        return;
+    }
+    [BrowserTransparentModePreferences applyStylePresetWithID:presetID];
+    [self refreshTransparentModeColorUI];
+}
+
+- (void)transparentShadowStrengthChanged:(id)sender {
+    (void)sender;
+    CGFloat strength = self.transparentShadowStrengthSlider.doubleValue / 100.0;
+    self.transparentShadowStrengthValueLabel.stringValue =
+        [NSString stringWithFormat:@"%.0f%%", strength * 100.0];
+    [BrowserTransparentModePreferences setTextShadowStrength:strength];
+}
+
+- (void)transparentShadowRadiusChanged:(id)sender {
+    (void)sender;
+    CGFloat radius = self.transparentShadowRadiusSlider.doubleValue;
+    self.transparentShadowRadiusValueLabel.stringValue =
+        [NSString stringWithFormat:@"%.0f pt", radius];
+    [BrowserTransparentModePreferences setTextShadowRadius:radius];
+}
+
+- (void)transparentShadowResetClicked:(id)sender {
+    (void)sender;
+    [BrowserTransparentModePreferences resetTextShadowToDefault];
     [self refreshTransparentModeColorUI];
 }
 

@@ -275,6 +275,8 @@ BrowserWindowSessionTransparentModeKey = @"transparentMode"
 | 风险 | 缓解 |
 |------|------|
 | 站点 CSS 权重极高 | `!important` + 导航后重注；失败可接受 |
+| 设置滑杆卡顿 / 白屏 | 偏好变更走 `refresh`（只改 stylesheet / CSS filter）；禁止反复 bootstrap、`paintAll`、resize/scroll nudge |
+| 退出后字色需刷新才恢复 | Canvas 用 SVG `feColorMatrix` + `drop-shadow` 只改显示，不改像素；退出卸滤镜即恢复；并卸掉旧 `fillText` hook |
 | 透明窗点击「穿透」到下层 App | V1 不 ignoresMouseEvents；需要点下层时先退出或点 Dock |
 | 录屏/隐私 | 透明可能映出桌面内容；不额外处理 |
 | Status Item 重复创建 | 单例 + dispatch_once |
