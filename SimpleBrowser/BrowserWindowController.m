@@ -771,14 +771,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.selectsAllOnMouseFocus = YES;
     self.addressField.delegate = self;
     self.addressField.translatesAutoresizingMaskIntoConstraints = NO;
-    // 地址栏单独加厚文字上边距；快捷方式编辑 / 设置等仍用默认贴顶。
-    self.addressField.compactTextTopInset = 5.0;
-    // 未编辑上移 2pt；编辑态改为垂直居中（见 centersCompactTextWhenEditing）。
-    self.addressField.compactTextUpwardBias = 2.0;
+    // 地址栏单独调文字边距；快捷方式编辑 / 设置等仍用默认贴顶。
+    // topInset 与 upwardBias 合成：有效上边距 = max(0, topInset - upwardBias) → 1pt 下移。
+    self.addressField.compactTextTopInset = 6.0;
+    self.addressField.compactTextUpwardBias = 6.0;
+    // 外框仍 25；文字区向下多扩 1pt，避免下移后字底被 bezel 裁切。
+    self.addressField.compactTextBottomExtend = 1.0;
+    // 编辑态：垂直居中后再上移 2pt（略偏下时的光学修正）。
     self.addressField.centersCompactTextWhenEditing = YES;
+    self.addressField.compactTextUpwardBiasWhenEditing = 1.0;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [self.addressField.heightAnchor constraintEqualToConstant:28].active = YES;
+    // 灰色圆角 bezel 高度（导航按钮仍为 28）。
+    [self.addressField.heightAnchor constraintEqualToConstant:25].active = YES;
 
     self.bookmarkButton = [self makeBookmarkButton];
     self.translateButton = [self makeTranslateButton];

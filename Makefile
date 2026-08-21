@@ -198,9 +198,28 @@ BROWSER_BINARY := $(BROWSER_BUNDLE)/Contents/MacOS/$(BROWSER_EXECUTABLE)
 SDK_PATH := $(shell xcrun --show-sdk-path 2>/dev/null)
 CC := clang
 CFLAGS := -Wall -Wextra -O2 -fobjc-arc -I$(SRC_DIR)
-BROWSER_CFLAGS := -Wall -Wextra -O2 -fobjc-arc -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
+
+# MEO_INJECT=1：-O0 + -interposable，供 InjectionIII 方法级热替换（需安装 InjectionIII.app）
+MEO_INJECT ?= 0
+BROWSER_OPT := -O2
+BROWSER_INJECT_CFLAGS :=
+BROWSER_INJECT_LDFLAGS :=
+ifeq ($(MEO_INJECT),1)
+BROWSER_OPT := -O0 -g
+BROWSER_INJECT_CFLAGS := -DMEO_ENABLE_INJECTION=1
+BROWSER_INJECT_LDFLAGS := -Xlinker -interposable
+endif
+
+BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
-BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation
+BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation $(BROWSER_INJECT_LDFLAGS)
+
+# 增量编译：每个 .m → build/obj/browser/.../*.o
+BROWSER_OBJ_DIR := $(BUILD_DIR)/obj/browser
+BROWSER_OBJECTS := $(patsubst %.m,$(BROWSER_OBJ_DIR)/%.o,$(BROWSER_SOURCES))
+BROWSER_DEPFILES := $(BROWSER_OBJECTS:%.o=%.d)
+BROWSER_RES_STAMP := $(BROWSER_RES_DIR)/.res-stamp
+BROWSER_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Open-source ibtool (works without full Xcode); Apple ibtool preferred if available
 IBTOOL_PY := tools/ibtool
@@ -284,7 +303,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 
-.PHONY: all browser clean run run-browser stats stats-browser stats-all verify setup-tools
+.PHONY: all browser clean run run-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools
 
 all: $(BINARY) $(NIB_OUT)
 
@@ -293,11 +312,24 @@ $(BINARY): $(SOURCES) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -isysroot $(SDK_PATH) $(SOURCES) $(LDFLAGS) -o $(BINARY)
 	$(call WRITE_INFO_PLIST,$(APP_BUNDLE),$(APP_NAME))
 
-browser: $(BROWSER_BINARY)
+browser:
+	@$(MAKE) -j$(BROWSER_JOBS) $(BROWSER_BINARY)
 
-$(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC) Makefile | $(BUILD_DIR)
+$(BROWSER_OBJ_DIR)/%.o: %.m
+	@mkdir -p $(dir $@)
+	$(CC) $(BROWSER_CFLAGS) -MMD -MP -MF $(@:.o=.d) -isysroot $(SDK_PATH) -c $< -o $@
+
+$(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
+		$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html \
+		$(BROWSER_SRC_DIR)/LoginAssist/FormMemo/form-memo-test.html \
+		$(BROWSER_SRC_DIR)/CaptchaAssist/captcha-assist-test.html \
+		$(BROWSER_SRC_DIR)/FindInPage/Resources/find-in-page.js \
+		$(BROWSER_SRC_DIR)/Translation/Resources/page-translation.js \
+		$(BROWSER_SRC_DIR)/TransparentMode/Resources/transparent-mode-style.js \
+		$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json \
+		$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py \
+		| $(BUILD_DIR)
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS $(BROWSER_RES_DIR)
-	$(CC) $(BROWSER_CFLAGS) -isysroot $(SDK_PATH) $(BROWSER_SOURCES) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
 	cp "$(BROWSER_ICON_SRC)" "$(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns"
 	cp "$(BROWSER_SRC_DIR)/LoginAssist/login-assist-test.html" "$(BROWSER_RES_DIR)/login-assist-test.html"
@@ -310,6 +342,11 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 	cp "$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json" "$(BROWSER_RES_DIR)/PhoneRules/simple_rules.json"
 	mkdir -p "$(BROWSER_RES_DIR)/CaptchaAssist/helpers"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py" "$(BROWSER_RES_DIR)/CaptchaAssist/helpers/captcha_helper.py"
+	@touch "$@"
+
+$(BROWSER_BINARY): $(BROWSER_OBJECTS) $(BROWSER_RES_STAMP) $(BROWSER_ENTITLEMENTS) Makefile
+	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
+	$(CC) $(BROWSER_OBJECTS) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
 		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \
@@ -317,6 +354,8 @@ $(BROWSER_BINARY): $(BROWSER_SOURCES) $(BROWSER_ENTITLEMENTS) $(BROWSER_ICON_SRC
 		echo "Ad-hoc signing $(BROWSER_BUNDLE) without restricted entitlements (local dev)"; \
 		codesign --force --sign - "$(BROWSER_BUNDLE)"; \
 	fi
+
+-include $(BROWSER_DEPFILES)
 
 $(NIB_OUT): $(XIB_SRC) | $(RES_DIR)
 ifeq ($(IBTOOL_APP),)
@@ -344,6 +383,14 @@ run: all
 
 run-browser: browser
 	open $(BROWSER_BUNDLE)
+
+# 保存 .m/.h 后自动 make browser 并重启 App（见 tools/watch-browser.sh）
+watch-browser:
+	./tools/watch-browser.sh
+
+# 增量编译 + InjectionIII（有则热替换）/ 否则快速重启（见 tools/live-browser.sh）
+live-browser:
+	./tools/live-browser.sh
 
 stats: all
 	@echo "Launching $(APP_NAME) and sampling memory..."

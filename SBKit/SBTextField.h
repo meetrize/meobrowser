@@ -25,11 +25,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) CGFloat compactTextUpwardBias;
 
 /// 编辑中（field editor）时的上移像素。默认 0。
-/// 若开启 `centersCompactTextWhenEditing`，本属性在编辑态被忽略。
+/// 与 `centersCompactTextWhenEditing` 可叠加：先垂直居中，再上移本值。
 @property (nonatomic) CGFloat compactTextUpwardBiasWhenEditing;
 
 /// 编辑态将 field editor 垂直居中（地址栏推荐）。默认 NO。
 @property (nonatomic) BOOL centersCompactTextWhenEditing;
+
+/// 在控件外框不变的前提下，将文字绘制区向下多扩若干 pt（吃掉底部 bezel 内边距）。
+/// 用于非编辑态下移文字后字底被裁；默认 0。
+@property (nonatomic) CGFloat compactTextBottomExtend;
 
 /// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
 - (void)syncFieldEditorFrameWithContentInsets;

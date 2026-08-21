@@ -94,6 +94,8 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     }
     SBTextField *field = (SBTextField *)controlView;
     area = SBTextFieldApplyCompactInsets(area);
+    // 先下扩文字区（外框不变），再应用上边距，避免字底下移后被裁。
+    area = SBTextFieldApplyBottomExtend(area, field.compactTextBottomExtend, controlView);
     area = SBTextFieldApplyTopInsetWithUpwardBias(area,
                                                  field.compactTextTopInset,
                                                  upwardBias,
@@ -103,12 +105,20 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
 
 - (NSRect)verticallyCenteredEditingRectForBounds:(NSRect)theRect {
     NSRect area = [self textAreaRectForBounds:theRect];
+    NSView *controlView = self.controlView;
     area = SBTextFieldApplyCompactInsets(area);
+    if ([controlView isKindOfClass:[SBTextField class]]) {
+        area = SBTextFieldApplyBottomExtend(area,
+                                            ((SBTextField *)controlView).compactTextBottomExtend,
+                                            controlView);
+    }
     CGFloat lineHeight = SBTextFieldLineHeight(self.font);
     if (lineHeight < 1.0) {
         lineHeight = NSHeight(area);
     }
-    return SBTextFieldVerticallyCenteredRect(area, lineHeight);
+    NSRect centered = SBTextFieldVerticallyCenteredRect(area, lineHeight);
+    // 居中后再上移（光学微调；地址栏可用 compactTextUpwardBiasWhenEditing）。
+    return SBTextFieldApplyUpwardBias(centered, [self editingUpwardBias], controlView);
 }
 
 - (CGFloat)idleUpwardBias {
@@ -302,6 +312,16 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return;
     }
     _centersCompactTextWhenEditing = centersCompactTextWhenEditing;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCompactTextBottomExtend:(CGFloat)compactTextBottomExtend {
+    CGFloat value = MAX(0.0, compactTextBottomExtend);
+    if (fabs(_compactTextBottomExtend - value) < 0.25) {
+        return;
+    }
+    _compactTextBottomExtend = value;
     [self setNeedsDisplay:YES];
     [self syncFieldEditorFrameWithContentInsets];
 }

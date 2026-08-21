@@ -27,8 +27,24 @@
     BOOL _isTerminating;
 }
 
-- (void)applicationWillFinishLaunching:(NSNotification *)notification {
+	- (void)applicationWillFinishLaunching:(NSNotification *)notification {
     (void)notification;
+#if defined(MEO_ENABLE_INJECTION) && MEO_ENABLE_INJECTION
+    {
+        NSString *bundlePath = @"/Applications/InjectionIII.app/Contents/Resources/macOSInjection.bundle";
+        NSBundle *injection = [NSBundle bundleWithPath:bundlePath];
+        if (injection) {
+            NSError *error = nil;
+            if ([injection loadAndReturnError:&error]) {
+                NSLog(@"[MeoInject] macOSInjection.bundle 已加载 — 保存 .m 后由 InjectionIII 热替换（无需重启）");
+            } else {
+                NSLog(@"[MeoInject] 加载失败: %@", error);
+            }
+        } else {
+            NSLog(@"[MeoInject] 未找到 %@ — 请安装 InjectionIII.app 到 /Applications", bundlePath);
+        }
+    }
+#endif
     // 地址栏等工具按钮悬停时立刻显示功能名 Tooltip（单位：毫秒）
     NSMutableDictionary *defaults = [@{@"NSInitialToolTipDelay": @1} mutableCopy];
 #if DEBUG

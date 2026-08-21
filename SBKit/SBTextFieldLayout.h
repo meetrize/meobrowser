@@ -30,4 +30,7 @@ NSRect SBTextFieldTopAlignedTitleRect(NSRect area, NSFont * _Nullable font, NSVi
 /// 将给定高度的内容框在 area 内垂直居中（编辑态 field editor 用）。
 NSRect SBTextFieldVerticallyCenteredRect(NSRect area, CGFloat contentHeight);
 
+/// 在不改变控件 bounds 的前提下，把文字区向下扩展（非 flipped：origin.y 下移并加高）。
+NSRect SBTextFieldApplyBottomExtend(NSRect area, CGFloat extend, NSView * _Nullable controlView);
+
 NS_ASSUME_NONNULL_END

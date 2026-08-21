@@ -105,3 +105,23 @@ NSRect SBTextFieldVerticallyCenteredRect(NSRect area, CGFloat contentHeight) {
     centered.origin.y = NSMinY(area) + floor((NSHeight(area) - height) / 2.0);
     return centered;
 }
+
+NSRect SBTextFieldApplyBottomExtend(NSRect area, CGFloat extend, NSView *controlView) {
+    if (extend <= 0.0 || NSIsEmptyRect(area) || !controlView) {
+        return area;
+    }
+    NSRect bounds = controlView.bounds;
+    BOOL flipped = controlView.isFlipped;
+    if (flipped) {
+        CGFloat room = MAX(0.0, NSMaxY(bounds) - NSMaxY(area));
+        CGFloat delta = MIN(extend, room);
+        area.size.height += delta;
+    } else {
+        // 视觉下方 = 更小的 y：下扩 = 降低 origin 并增加 height。
+        CGFloat room = MAX(0.0, NSMinY(area) - NSMinY(bounds));
+        CGFloat delta = MIN(extend, room);
+        area.origin.y -= delta;
+        area.size.height += delta;
+    }
+    return area;
+}
