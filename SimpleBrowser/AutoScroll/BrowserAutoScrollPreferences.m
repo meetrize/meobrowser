@@ -5,8 +5,8 @@ NSNotificationName const BrowserAutoScrollPreferencesDidChangeNotification =
 
 static NSString * const kSpeedKey = @"BrowserAutoScrollSpeedPxPerSec";
 static const CGFloat kDefaultSpeed = 80.0;
-static const CGFloat kMinSpeed = 20.0;
-static const CGFloat kMaxSpeed = 500.0;
+static const CGFloat kMinSpeed = 10.0;
+static const CGFloat kMaxSpeed = 200.0;
 
 @implementation BrowserAutoScrollPreferences
 

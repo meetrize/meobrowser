@@ -6,7 +6,7 @@ FOUNDATION_EXPORT NSNotificationName const BrowserAutoScrollPreferencesDidChange
 
 @interface BrowserAutoScrollPreferences : NSObject
 
-/// 像素/秒，范围 20～500，默认 80。
+/// 像素/秒，范围 10～200，默认 80。
 + (CGFloat)speedPxPerSec;
 + (void)setSpeedPxPerSec:(CGFloat)speed;
 

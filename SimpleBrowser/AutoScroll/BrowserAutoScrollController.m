@@ -11,6 +11,7 @@
 @property (nonatomic, strong, nullable) id mouseMoveGlobalMonitor;
 @property (nonatomic, assign) NSTimeInterval lastTickTime;
 @property (nonatomic, assign) BOOL pausedForPointerInside;
+@property (nonatomic, assign) CGFloat pendingScrollPx;
 @end
 
 @implementation BrowserAutoScrollController
@@ -47,6 +48,7 @@
         [self startTicking];
     } else {
         self.pausedForPointerInside = NO;
+        self.pendingScrollPx = 0;
         [self tearDownTimerAndMonitor];
     }
 }
@@ -61,6 +63,7 @@
     }
     _enabled = NO;
     self.pausedForPointerInside = NO;
+    self.pendingScrollPx = 0;
     [self tearDownTimerAndMonitor];
     if (self.didDisableHandler) {
         self.didDisableHandler();
@@ -100,8 +103,12 @@
         return;
     }
     self.pausedForPointerInside = inside;
-    if (!inside) {
+    if (inside) {
+        // 入窗暂停：清零累积，恢复时从干净状态开始
+        self.pendingScrollPx = 0;
+    } else {
         // 移出后恢复：重置时间戳，避免一次大步长跳动
+        self.pendingScrollPx = 0;
         self.lastTickTime = [NSDate timeIntervalSinceReferenceDate];
     }
 }
@@ -109,6 +116,7 @@
 - (void)startTicking {
     [self tearDownTimerAndMonitor];
     self.lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    self.pendingScrollPx = 0;
     self.pausedForPointerInside = [self isPointerInsideTargetWindowAtScreenLocation:[NSEvent mouseLocation]];
 
     __weak typeof(self) weakSelf = self;
@@ -182,11 +190,14 @@
     if (dt <= 0 || dt > 1.0) {
         dt = 1.0 / 30.0;
     }
+
     CGFloat speed = [BrowserAutoScrollPreferences speedPxPerSec];
-    CGFloat delta = speed * (CGFloat)dt;
-    if (delta < 0.5) {
+    self.pendingScrollPx += speed * (CGFloat)dt;
+    if (self.pendingScrollPx < 1.0) {
         return;
     }
+    CGFloat step = floor(self.pendingScrollPx);
+    self.pendingScrollPx -= step;
 
     NSString *script = [NSString stringWithFormat:
                         @"(function(){"
@@ -200,7 +211,7 @@
                         @"var atBottom=(after>=max-1)||(after<=before+0.5&&before>=max-2);"
                         @"return {ok:1,atBottom:atBottom?1:0,max:max,before:before,after:after};"
                         @"})()",
-                        (double)delta];
+                        (double)step];
 
     __weak typeof(self) weakSelf = self;
     [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {

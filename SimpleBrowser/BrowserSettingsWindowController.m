@@ -346,8 +346,8 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 
     NSTextField *autoScrollCaption = [self makeCaption:@"自动滚动速度"];
     self.autoScrollSpeedSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
-    self.autoScrollSpeedSlider.minValue = 20;
-    self.autoScrollSpeedSlider.maxValue = 500;
+    self.autoScrollSpeedSlider.minValue = 10;
+    self.autoScrollSpeedSlider.maxValue = 200;
     self.autoScrollSpeedSlider.numberOfTickMarks = 0;
     self.autoScrollSpeedSlider.continuous = YES;
     self.autoScrollSpeedSlider.target = self;
@@ -363,7 +363,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     autoScrollRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     autoScrollRow.spacing = 12;
     autoScrollRow.alignment = NSLayoutAttributeCenterY;
-    self.autoScrollHintLabel = [self makeHint:@"标签栏「更多 → 自动滚动」开启后生效；调节滑杆时若正在滚动，速度立即变化。"];
+    self.autoScrollHintLabel = [self makeHint:@"约 10～200 像素/秒。标签栏「更多 → 自动滚动」开启后生效；调节滑杆时若正在滚动，速度立即变化。"];
     [self refreshAutoScrollSpeedUI];
 
     // —— 云同步 ——

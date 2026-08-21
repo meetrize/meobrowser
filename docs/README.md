@@ -20,6 +20,8 @@
 | [minimal-browser/transparent-mode-chrome-autohide-development-plan.md](minimal-browser/transparent-mode-chrome-autohide-development-plan.md) | 透明模式自动藏壳 — 分阶段开发计划（TH-0～TH-2） |
 | [minimal-browser/chrome-more-menu-design.md](minimal-browser/chrome-more-menu-design.md) | 标签栏更多菜单 — 自动滚动 / 大小窗预设 |
 | [minimal-browser/chrome-more-menu-development-plan.md](minimal-browser/chrome-more-menu-development-plan.md) | 标签栏更多菜单 — 分阶段开发计划（MO-0～MO-3） |
+| [minimal-browser/auto-scroll-speed-refinement-design.md](minimal-browser/auto-scroll-speed-refinement-design.md) | 自动滚动速度精细化 — 10～200 px/s 与慢速引擎 |
+| [minimal-browser/auto-scroll-speed-refinement-development-plan.md](minimal-browser/auto-scroll-speed-refinement-development-plan.md) | 自动滚动速度精细化 — AS-0～AS-2 |
 | [minimal-browser/transparent-mode-right-drag-move-design.md](minimal-browser/transparent-mode-right-drag-move-design.md) | 透明模式 — 右键拖拽移窗（保留普通右键菜单） |
 | [minimal-browser/transparent-mode-right-drag-move-development-plan.md](minimal-browser/transparent-mode-right-drag-move-development-plan.md) | 透明模式右键拖窗 — 分阶段开发计划（RD-0～RD-2） |
 | [minimal-browser/afk-mode-design.md](minimal-browser/afk-mode-design.md) | 摸鱼模式 — 鼠标移出视觉隐藏、移入按原形态还原（不做点击穿透） |
