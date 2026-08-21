@@ -772,9 +772,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.delegate = self;
     self.addressField.translatesAutoresizingMaskIntoConstraints = NO;
     // 地址栏单独调文字边距；快捷方式编辑 / 设置等仍用默认贴顶。
-    // topInset 与 upwardBias 合成：有效上边距 = max(0, topInset - upwardBias) → 1pt 下移。
+    // topInset 与 upwardBias 合成：有效上边距 = max(0, topInset - upwardBias) → 2pt（整体再下移 2）。
     self.addressField.compactTextTopInset = 6.0;
-    self.addressField.compactTextUpwardBias = 6.0;
+    self.addressField.compactTextUpwardBias = 3.0;
     // 外框仍 25；文字区向下多扩 1pt，避免下移后字底被 bezel 裁切。
     self.addressField.compactTextBottomExtend = 1.0;
     // 编辑态：垂直居中后再上移 2pt（略偏下时的光学修正）。
@@ -782,8 +782,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.compactTextUpwardBiasWhenEditing = 1.0;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
-    // 胶囊外框：地址栏 RowView 垫一层 sibling 半圆描边（半径=高/2）。
+    // 胶囊外框：地址栏 RowView 垫一层 sibling 浅灰胶囊（无描边）。
     self.addressField.usesCapsuleBezel = YES;
+    // 半圆端头留白；与编辑态共用（再右移 2pt → 8）。
+    self.addressField.leadingContentInset = 8.0;
+    self.addressField.focusRingType = NSFocusRingTypeNone;
     [self.addressField.heightAnchor constraintEqualToConstant:25].active = YES;
 
     self.bookmarkButton = [self makeBookmarkButton];

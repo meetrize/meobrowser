@@ -160,11 +160,71 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         && ((SBTextField *)controlView).usesCapsuleBezel;
 }
 
+- (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
+    if ([self usesCapsuleBezel]) {
+        // 胶囊外框由 sibling chrome 画；文字按完整 bounds 计算 inset。
+        [self drawInteriorWithFrame:controlView.bounds inView:controlView];
+        return;
+    }
+    [super drawWithFrame:cellFrame inView:controlView];
+}
+
+- (void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
+    if (![controlView isKindOfClass:[SBTextField class]]) {
+        [super drawInteriorWithFrame:cellFrame inView:controlView];
+        return;
+    }
+    SBTextField *field = (SBTextField *)controlView;
+    if (field.leadingContentInset < 0.5 && field.trailingContentInset < 0.5 && !field.usesCapsuleBezel) {
+        [super drawInteriorWithFrame:cellFrame inView:controlView];
+        return;
+    }
+
+    // 编辑中只显示 field editor，禁止 cell 再画一遍（否则会上下错 1pt 重影）。
+    if (field.currentEditor != nil) {
+        return;
+    }
+
+    // 自己画文字：与编辑态共用同一套水平 inset（见 compactTextRect / leadingContentInset）。
+    NSRect titleRect = [self idleTitleRectForControlView:controlView];
+    if (NSIsEmptyRect(titleRect) || NSWidth(titleRect) < 1.0) {
+        return;
+    }
+
+    if (self.stringValue.length == 0) {
+        NSAttributedString *placeholder = self.placeholderAttributedString;
+        if (!placeholder && self.placeholderString.length > 0) {
+            NSDictionary *attrs = @{
+                NSForegroundColorAttributeName: NSColor.placeholderTextColor,
+                NSFontAttributeName: self.font ?: [NSFont systemFontOfSize:NSFont.systemFontSize],
+            };
+            placeholder = [[NSAttributedString alloc] initWithString:self.placeholderString
+                                                          attributes:attrs];
+        }
+        [placeholder drawInRect:titleRect];
+        return;
+    }
+
+    NSMutableAttributedString *text = [self.attributedStringValue mutableCopy];
+    if (text.length == 0) {
+        return;
+    }
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = self.lineBreakMode;
+    style.alignment = self.alignment;
+    [text addAttribute:NSParagraphStyleAttributeName value:style range:NSMakeRange(0, text.length)];
+    [text drawInRect:titleRect];
+}
+
 - (NSRect)drawingRectForBounds:(NSRect)theRect {
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
         SBTextField *field = (SBTextField *)controlView;
+        if (field.usesCapsuleBezel) {
+            // 与非编辑 titleRect 一致，避免 syncFieldEditor 又改回居中矩形。
+            return [self idleTitleRectForControlView:controlView];
+        }
         if (field.currentEditor && [self centersWhenEditing]) {
             return [self verticallyCenteredEditingRectForBounds:theRect];
         }
@@ -189,21 +249,15 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
                editor:(NSText *)textObj
              delegate:(nullable id)delegate
                 event:(nullable NSEvent *)event {
-    NSRect adjusted = rect;
-    if ([controlView isKindOfClass:[SBTextField class]] &&
-        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        if ([self centersWhenEditing]) {
-            adjusted = [self verticallyCenteredEditingRectForBounds:controlView.bounds];
-        } else {
-            adjusted = [self compactTextRectForBounds:controlView.bounds
-                                          upwardBias:[self editingUpwardBias]];
-        }
-    } else {
-        adjusted = [self drawingRectForBounds:controlView.bounds];
-    }
+    NSRect adjusted = [self editingFrameForControlView:controlView];
     [self prepareFieldEditor:textObj];
     [super editWithFrame:adjusted inView:controlView editor:textObj delegate:delegate event:event];
     [self prepareFieldEditor:textObj];
+    // 系统有时会忽略传入 frame，再写一次，保证与非编辑态同一套 inset。
+    if (!NSEqualRects(textObj.frame, adjusted)) {
+        textObj.frame = adjusted;
+    }
+    [controlView setNeedsDisplay:YES];
 }
 
 - (void)selectWithFrame:(NSRect)rect
@@ -212,18 +266,7 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
                delegate:(nullable id)delegate
                   start:(NSInteger)selStart
                  length:(NSInteger)selLength {
-    NSRect adjusted = rect;
-    if ([controlView isKindOfClass:[SBTextField class]] &&
-        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        if ([self centersWhenEditing]) {
-            adjusted = [self verticallyCenteredEditingRectForBounds:controlView.bounds];
-        } else {
-            adjusted = [self compactTextRectForBounds:controlView.bounds
-                                          upwardBias:[self editingUpwardBias]];
-        }
-    } else {
-        adjusted = [self drawingRectForBounds:controlView.bounds];
-    }
+    NSRect adjusted = [self editingFrameForControlView:controlView];
     [self prepareFieldEditor:textObj];
     [super selectWithFrame:adjusted
                     inView:controlView
@@ -232,6 +275,40 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
                      start:selStart
                     length:selLength];
     [self prepareFieldEditor:textObj];
+    if (!NSEqualRects(textObj.frame, adjusted)) {
+        textObj.frame = adjusted;
+    }
+    [controlView setNeedsDisplay:YES];
+}
+
+- (NSRect)editingFrameForControlView:(NSView *)controlView {
+    if (![controlView isKindOfClass:[SBTextField class]]) {
+        return [self drawingRectForBounds:controlView.bounds];
+    }
+    SBTextField *field = (SBTextField *)controlView;
+    // 胶囊地址栏：编辑框与非编辑 titleRect 完全重合，避免进入编辑时上下跳 1pt。
+    if (field.usesCapsuleBezel) {
+        return [self idleTitleRectForControlView:controlView];
+    }
+    if (field.usesCompactVerticalTextInsets && [self centersWhenEditing]) {
+        return [self verticallyCenteredEditingRectForBounds:controlView.bounds];
+    }
+    if (field.usesCompactVerticalTextInsets) {
+        return [self compactTextRectForBounds:controlView.bounds
+                                  upwardBias:[self editingUpwardBias]];
+    }
+    return [self drawingRectForBounds:controlView.bounds];
+}
+
+- (NSRect)idleTitleRectForControlView:(NSView *)controlView {
+    // 与 editingFrame 共用水平 inset（leading/trailing + compact H），只在垂直方向用非编辑 bias。
+    if (![controlView isKindOfClass:[SBTextField class]] ||
+        !((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        return [self titleRectForBounds:controlView.bounds];
+    }
+    NSRect compact = [self compactTextRectForBounds:controlView.bounds
+                                        upwardBias:[self idleUpwardBias]];
+    return SBTextFieldTopAlignedTitleRect(compact, self.font, controlView);
 }
 
 @end
@@ -380,7 +457,8 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     [super setBezeled:NO];
     [super setBordered:NO];
     self.drawsBackground = NO;
-    self.focusRingType = NSFocusRingTypeExterior;
+    self.focusRingType = NSFocusRingTypeNone;
+    self.cell.focusRingType = NSFocusRingTypeNone;
     [self setNeedsDisplay:YES];
 }
 
@@ -403,9 +481,10 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         [super drawRect:dirtyRect];
         return;
     }
-    // 外框由 RowView 的 capsule chrome 画；这里绝不能走 super（会画出 SquareBezel 盖住半圆）。
+    // 外框由 RowView chrome 画。必须传完整 bounds，让 cell 的
+    // drawingRect/titleRect（含 leadingContentInset）只计算一次。
     NSTextFieldCell *cell = (NSTextFieldCell *)self.cell;
-    [cell drawInteriorWithFrame:[cell drawingRectForBounds:self.bounds] inView:self];
+    [cell drawInteriorWithFrame:self.bounds inView:self];
 }
 
 - (void)layout {

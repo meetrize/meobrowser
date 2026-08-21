@@ -20,22 +20,24 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
-    NSRect strokeRect = NSInsetRect(self.bounds, 0.5, 0.5);
-    CGFloat radius = NSHeight(strokeRect) * 0.5;
+    NSRect fillRect = self.bounds;
+    CGFloat radius = NSHeight(fillRect) * 0.5;
     if (radius < 0.5) {
         return;
     }
-    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:strokeRect
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:fillRect
                                                          xRadius:radius
                                                          yRadius:radius];
     NSAppearance *appearance = self.effectiveAppearance ?: NSAppearance.currentDrawingAppearance;
     [appearance performAsCurrentDrawingAppearance:^{
-        [[NSColor textBackgroundColor] setFill];
+        // 浅灰填充、无描边（深浅色自适应）。
+        NSAppearanceName match =
+            [appearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
+        NSColor *fill = ([match isEqualToString:NSAppearanceNameDarkAqua]
+                             ? [NSColor colorWithWhite:1.0 alpha:0.10]
+                             : [NSColor colorWithWhite:0.0 alpha:0.06]);
+        [fill setFill];
         [path fill];
-        // 稍加重，便于和旧 SquareBezel 小圆角区分（两端应为半圆）。
-        [[[NSColor secondaryLabelColor] colorWithAlphaComponent:0.7] setStroke];
-        path.lineWidth = 1.25;
-        [path stroke];
     }];
 }
 
@@ -89,6 +91,8 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
             addressField.bordered = NO;
             addressField.drawsBackground = NO;
             addressField.wantsLayer = NO;
+            addressField.focusRingType = NSFocusRingTypeNone;
+            addressField.cell.focusRingType = NSFocusRingTypeNone;
         }
 
         [self addSubview:addressField];
