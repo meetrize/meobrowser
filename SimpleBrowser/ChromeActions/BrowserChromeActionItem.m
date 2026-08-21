@@ -97,7 +97,7 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
         [BrowserChromeActionItem itemWithID:BrowserChromeActionScrollSpeedID
                                  symbolName:@"slider.horizontal.3"
                                onSymbolName:nil
-                                    toolTip:@"滚动速度…"
+                                    toolTip:@"设置"
                                   onToolTip:nil
                                     toggles:NO],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionWindowLayoutID
