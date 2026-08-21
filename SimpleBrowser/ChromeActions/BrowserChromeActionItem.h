@@ -6,6 +6,7 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionAfkModeID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionTransparentModeID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionCompactModeID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionAlwaysOnTopID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionMoreMenuID;
 
 @interface BrowserChromeActionItem : NSObject
 

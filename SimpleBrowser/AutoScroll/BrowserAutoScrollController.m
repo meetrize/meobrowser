@@ -1,0 +1,162 @@
+#import "BrowserAutoScrollController.h"
+#import "BrowserAutoScrollPreferences.h"
+#import "BrowserWindowController.h"
+#import "BrowserTabController.h"
+#import "BrowserTab.h"
+
+@interface BrowserAutoScrollController ()
+@property (nonatomic, strong, nullable) NSTimer *tickTimer;
+@property (nonatomic, strong, nullable) id scrollWheelMonitor;
+@property (nonatomic, assign) NSTimeInterval lastTickTime;
+@end
+
+@implementation BrowserAutoScrollController
+
+- (void)dealloc {
+    [self tearDownTimerAndMonitor];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(preferencesDidChange:)
+                                                     name:BrowserAutoScrollPreferencesDidChangeNotification
+                                                   object:nil];
+    }
+    return self;
+}
+
+- (void)preferencesDidChange:(NSNotification *)note {
+    (void)note;
+    if (self.enabled) {
+        [self applySpeedFromPreferences];
+    }
+}
+
+- (void)setEnabled:(BOOL)enabled {
+    if (_enabled == enabled) {
+        return;
+    }
+    _enabled = enabled;
+    if (enabled) {
+        [self startTicking];
+    } else {
+        [self tearDownTimerAndMonitor];
+    }
+}
+
+- (void)applySpeedFromPreferences {
+    // 速度在每次 tick 读取 preferences，无需额外状态
+}
+
+- (void)stopBecauseInterrupted {
+    if (!self.enabled) {
+        return;
+    }
+    _enabled = NO;
+    [self tearDownTimerAndMonitor];
+    if (self.didDisableHandler) {
+        self.didDisableHandler();
+    }
+}
+
+- (void)stopBecauseReachedBottom {
+    [self stopBecauseInterrupted];
+}
+
+- (nullable WKWebView *)activeWebView {
+    BrowserTab *tab = self.windowController.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return tab.webView;
+}
+
+- (void)startTicking {
+    [self tearDownTimerAndMonitor];
+    self.lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    __weak typeof(self) weakSelf = self;
+    self.tickTimer = [NSTimer timerWithTimeInterval:1.0 / 30.0
+                                            repeats:YES
+                                              block:^(NSTimer *timer) {
+        (void)timer;
+        [weakSelf tick];
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:self.tickTimer forMode:NSRunLoopCommonModes];
+
+    self.scrollWheelMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel
+                                              handler:^NSEvent *(NSEvent *event) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.enabled) {
+                return event;
+            }
+            if (event.window == strongSelf.windowController.window) {
+                [strongSelf stopBecauseInterrupted];
+            }
+            return event;
+        }];
+}
+
+- (void)tearDownTimerAndMonitor {
+    [self.tickTimer invalidate];
+    self.tickTimer = nil;
+    if (self.scrollWheelMonitor) {
+        [NSEvent removeMonitor:self.scrollWheelMonitor];
+        self.scrollWheelMonitor = nil;
+    }
+}
+
+- (void)tick {
+    if (!self.enabled) {
+        return;
+    }
+    WKWebView *webView = [self activeWebView];
+    if (!webView) {
+        return;
+    }
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval dt = now - self.lastTickTime;
+    self.lastTickTime = now;
+    if (dt <= 0 || dt > 1.0) {
+        dt = 1.0 / 30.0;
+    }
+    CGFloat speed = [BrowserAutoScrollPreferences speedPxPerSec];
+    CGFloat delta = speed * (CGFloat)dt;
+    if (delta < 0.5) {
+        return;
+    }
+
+    NSString *script = [NSString stringWithFormat:
+                        @"(function(){"
+                        @"var e=document.scrollingElement||document.documentElement||document.body;"
+                        @"if(!e)return {ok:0};"
+                        @"var max=Math.max(0,(e.scrollHeight|0)-(e.clientHeight|0));"
+                        @"var before=e.scrollTop||0;"
+                        @"if(max<=1)return {ok:1,atBottom:1,max:max};"
+                        @"e.scrollTop=before+(%f);"
+                        @"var after=e.scrollTop||0;"
+                        @"var atBottom=(after>=max-1)||(after<=before+0.5&&before>=max-2);"
+                        @"return {ok:1,atBottom:atBottom?1:0,max:max,before:before,after:after};"
+                        @"})()",
+                        (double)delta];
+
+    __weak typeof(self) weakSelf = self;
+    [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.enabled) {
+            return;
+        }
+        if (error || ![result isKindOfClass:[NSDictionary class]]) {
+            return;
+        }
+        NSDictionary *dict = (NSDictionary *)result;
+        if ([dict[@"atBottom"] respondsToSelector:@selector(boolValue)] && [dict[@"atBottom"] boolValue]) {
+            [strongSelf stopBecauseReachedBottom];
+        }
+    }];
+}
+
+@end

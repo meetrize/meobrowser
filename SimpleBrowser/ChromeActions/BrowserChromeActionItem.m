@@ -4,6 +4,7 @@ NSString * const BrowserChromeActionAfkModeID = @"afkMode";
 NSString * const BrowserChromeActionTransparentModeID = @"transparentMode";
 NSString * const BrowserChromeActionCompactModeID = @"compactMode";
 NSString * const BrowserChromeActionAlwaysOnTopID = @"alwaysOnTop";
+NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
 
 @implementation BrowserChromeActionItem
 

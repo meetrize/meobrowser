@@ -8,6 +8,7 @@
 #import "BrowserWebInspector.h"
 #import "BrowserDownloadPreferences.h"
 #import "BrowserTransparentModePreferences.h"
+#import "BrowserAutoScrollPreferences.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -57,6 +58,10 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSButton *transparentShadowResetButton;
 @property (nonatomic, strong) NSStackView *transparentStylePresetRow;
 @property (nonatomic, strong) NSTextField *transparentModeHintLabel;
+
+@property (nonatomic, strong) NSSlider *autoScrollSpeedSlider;
+@property (nonatomic, strong) NSTextField *autoScrollSpeedValueLabel;
+@property (nonatomic, strong) NSTextField *autoScrollHintLabel;
 
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
@@ -122,6 +127,10 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(transparentModePreferencesDidChange:)
                                                      name:BrowserTransparentModePreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(autoScrollPreferencesDidChange:)
+                                                     name:BrowserAutoScrollPreferencesDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -335,6 +344,28 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 
     [self refreshTransparentModeColorUI];
 
+    NSTextField *autoScrollCaption = [self makeCaption:@"自动滚动速度"];
+    self.autoScrollSpeedSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    self.autoScrollSpeedSlider.minValue = 20;
+    self.autoScrollSpeedSlider.maxValue = 500;
+    self.autoScrollSpeedSlider.numberOfTickMarks = 0;
+    self.autoScrollSpeedSlider.continuous = YES;
+    self.autoScrollSpeedSlider.target = self;
+    self.autoScrollSpeedSlider.action = @selector(autoScrollSpeedChanged:);
+    self.autoScrollSpeedSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.autoScrollSpeedSlider.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
+    self.autoScrollSpeedValueLabel = [NSTextField labelWithString:@"80 px/s"];
+    self.autoScrollSpeedValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+    self.autoScrollSpeedValueLabel.textColor = [NSColor secondaryLabelColor];
+    NSStackView *autoScrollRow = [NSStackView stackViewWithViews:@[
+        self.autoScrollSpeedSlider, self.autoScrollSpeedValueLabel
+    ]];
+    autoScrollRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    autoScrollRow.spacing = 12;
+    autoScrollRow.alignment = NSLayoutAttributeCenterY;
+    self.autoScrollHintLabel = [self makeHint:@"标签栏「更多 → 自动滚动」开启后生效；调节滑杆时若正在滚动，速度立即变化。"];
+    [self refreshAutoScrollSpeedUI];
+
     // —— 云同步 ——
     self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
     self.serverLoginBadge.boxType = NSBoxCustom;
@@ -478,12 +509,13 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                     shadowStrengthCaption, shadowStrengthRow,
                     shadowRadiusCaption, shadowRadiusRow,
                     self.transparentModeHintLabel,
+                    autoScrollCaption, autoScrollRow, self.autoScrollHintLabel,
                 ]
             toTabView:self.tabView
            widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel,
                         self.transparentStylePresetRow, transparentColorRow, shadowColorRow,
                         shadowStrengthRow, shadowRadiusRow,
-                        self.transparentModeHintLabel]];
+                        self.transparentModeHintLabel, autoScrollRow, self.autoScrollHintLabel]];
 
     [self addTabNamed:@"云同步"
            identifier:BrowserSettingsTabSync
@@ -1019,6 +1051,27 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 - (void)transparentModePreferencesDidChange:(NSNotification *)note {
     (void)note;
     [self refreshTransparentModeColorUI];
+}
+
+- (void)autoScrollPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshAutoScrollSpeedUI];
+}
+
+- (void)refreshAutoScrollSpeedUI {
+    if (!self.autoScrollSpeedSlider) {
+        return;
+    }
+    CGFloat speed = [BrowserAutoScrollPreferences speedPxPerSec];
+    self.autoScrollSpeedSlider.doubleValue = speed;
+    self.autoScrollSpeedValueLabel.stringValue =
+        [NSString stringWithFormat:@"%.0f px/s", speed];
+}
+
+- (void)autoScrollSpeedChanged:(id)sender {
+    (void)sender;
+    [BrowserAutoScrollPreferences setSpeedPxPerSec:self.autoScrollSpeedSlider.doubleValue];
+    [self refreshAutoScrollSpeedUI];
 }
 
 - (void)refreshTransparentModeColorUI {

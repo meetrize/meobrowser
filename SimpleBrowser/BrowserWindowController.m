@@ -1,4 +1,5 @@
 #import "BrowserWindowController.h"
+#import "BrowserSettingsWindowController.h"
 #import "AppDelegate.h"
 #import "BrowserAppInfo.h"
 #import "SBTextField.h"
@@ -14,6 +15,9 @@
 #import "BrowserTransparentModePreferences.h"
 #import "BrowserTransparentChromeAutoHideController.h"
 #import "BrowserAfkModeController.h"
+#import "BrowserAutoScrollController.h"
+#import "BrowserAutoScrollPreferences.h"
+#import "BrowserWindowLayoutPresetStore.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -162,6 +166,10 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTransparentModeController *transparentModeController;
 @property (nonatomic, strong) BrowserTransparentChromeAutoHideController *transparentChromeAutoHideController;
 @property (nonatomic, strong) BrowserAfkModeController *afkModeController;
+@property (nonatomic, strong) BrowserAutoScrollController *autoScrollController;
+@property (nonatomic, assign) BOOL smallLayoutTransparentSnapshotValid;
+@property (nonatomic, assign) BOOL smallLayoutTransparentSnapshot;
+@property (nonatomic, assign) BOOL applyingLayoutPreset;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
 @property (nonatomic, strong) NSView *tabStripAccessoryRoot;
 @property (nonatomic, strong) NSLayoutConstraint *tabStripAccessoryHeightConstraint;
@@ -408,6 +416,13 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         };
         _afkModeController = [[BrowserAfkModeController alloc] init];
         _afkModeController.windowController = self;
+        _autoScrollController = [[BrowserAutoScrollController alloc] init];
+        _autoScrollController.windowController = self;
+        __weak typeof(self) weakSelfForScroll = self;
+        _autoScrollController.didDisableHandler = ^{
+            (void)weakSelfForScroll;
+        };
+        _windowLayoutMode = BrowserWindowLayoutModeFree;
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(transparentModePreferencesDidChange:)
                                                      name:BrowserTransparentModePreferencesDidChangeNotification
@@ -665,6 +680,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.trailingSidebarSlot hideAllAnimated:YES];
         [self updateNotificationInboxButtonAppearance];
     }
+    [self schedulePersistLayoutPresetIfNeeded];
+}
+
+- (void)windowDidMove:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    [self schedulePersistLayoutPresetIfNeeded];
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -673,6 +696,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     [self.afkModeController forceDisableAndReveal];
     [self.transparentChromeAutoHideController forceDisableAndReveal];
+    self.autoScrollController.enabled = NO;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(persistLayoutPresetNow)
+                                               object:nil];
     [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
@@ -1047,6 +1074,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSButton *pinButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionAlwaysOnTopID];
     pinButton.target = self;
     pinButton.action = @selector(toggleAlwaysOnTop:);
+
+    NSButton *moreButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionMoreMenuID];
+    moreButton.target = self;
+    moreButton.action = @selector(showChromeMoreMenu:);
 }
 
 - (void)toggleCompactMode:(id)sender {
@@ -1089,6 +1120,195 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self schedulePersistTabSession];
 }
 
+#pragma mark - Chrome More Menu (自动滚动 / 窗口放大缩小)
+
+- (void)showChromeMoreMenu:(id)sender {
+    NSButton *button = nil;
+    if ([sender isKindOfClass:[NSButton class]]) {
+        button = (NSButton *)sender;
+    } else {
+        button = [self.chromeActionsView buttonForItemID:BrowserChromeActionMoreMenuID];
+    }
+    if (!button) {
+        return;
+    }
+
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"更多"];
+    menu.autoenablesItems = NO;
+
+    NSMenuItem *autoScroll = [[NSMenuItem alloc] initWithTitle:@"自动滚动"
+                                                        action:@selector(toggleAutoScrollFromMoreMenu:)
+                                                 keyEquivalent:@""];
+    autoScroll.target = self;
+    autoScroll.state = self.autoScrollController.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:autoScroll];
+
+    NSMenuItem *speedItem = [[NSMenuItem alloc] initWithTitle:@"滚动速度…"
+                                                       action:@selector(openAutoScrollSpeedSettings:)
+                                                keyEquivalent:@""];
+    speedItem.target = self;
+    [menu addItem:speedItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    BOOL fullscreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    BOOL isSmall = (self.windowLayoutMode == BrowserWindowLayoutModeSmall);
+    NSMenuItem *layoutItem = [[NSMenuItem alloc] initWithTitle:(isSmall ? @"窗口放大" : @"窗口缩小")
+                                                        action:@selector(toggleWindowLayoutZoomFromMoreMenu:)
+                                                 keyEquivalent:@""];
+    layoutItem.target = self;
+    layoutItem.enabled = !fullscreen;
+    [menu addItem:layoutItem];
+
+    NSRect bounds = button.bounds;
+    [menu popUpMenuPositioningItem:nil
+                        atLocation:NSMakePoint(NSMinX(bounds), NSMaxY(bounds) + 2)
+                            inView:button];
+}
+
+- (void)toggleAutoScrollFromMoreMenu:(id)sender {
+    (void)sender;
+    self.autoScrollController.enabled = !self.autoScrollController.enabled;
+}
+
+- (void)openAutoScrollSpeedSettings:(id)sender {
+    (void)sender;
+    id delegate = NSApp.delegate;
+    if ([delegate respondsToSelector:@selector(showBrowserSettingsSelectingTabIdentifier:)]) {
+        [(AppDelegate *)delegate showBrowserSettingsSelectingTabIdentifier:BrowserSettingsTabGeneral];
+    }
+}
+
+/// 单一菜单项切换：缩小态 → 放大；否则（自由/放大）→ 缩小。
+- (void)toggleWindowLayoutZoomFromMoreMenu:(id)sender {
+    (void)sender;
+    if (self.window.styleMask & NSWindowStyleMaskFullScreen) {
+        return;
+    }
+    if (self.windowLayoutMode == BrowserWindowLayoutModeSmall) {
+        [self applyLargeWindowLayoutMode];
+    } else {
+        [self applySmallWindowLayoutMode];
+    }
+}
+
+- (void)applyLargeWindowLayoutMode {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+
+    if (self.windowLayoutMode == BrowserWindowLayoutModeSmall) {
+        [self restoreTransparentSnapshotAfterLeavingSmallLayout];
+    }
+
+    self.windowLayoutMode = BrowserWindowLayoutModeLarge;
+    if ([BrowserWindowLayoutPresetStore hasLargeFramePreset]) {
+        NSRect frame = [BrowserWindowLayoutPresetStore clampFrame:[BrowserWindowLayoutPresetStore largeFramePreset]
+                                                 toVisibleScreen:window.screen];
+        self.applyingLayoutPreset = YES;
+        [window setFrame:frame display:YES animate:YES];
+        self.applyingLayoutPreset = NO;
+    } else {
+        [BrowserWindowLayoutPresetStore setLargeFramePreset:window.frame];
+    }
+}
+
+- (void)applySmallWindowLayoutMode {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+
+    if (self.windowLayoutMode != BrowserWindowLayoutModeSmall) {
+        self.smallLayoutTransparentSnapshot = self.transparentModeEnabled;
+        self.smallLayoutTransparentSnapshotValid = YES;
+    }
+
+    self.windowLayoutMode = BrowserWindowLayoutModeSmall;
+
+    NSRect targetFrame = NSZeroRect;
+    BOOL targetTransparent = YES;
+    if ([BrowserWindowLayoutPresetStore hasSmallFramePreset]) {
+        targetFrame = [BrowserWindowLayoutPresetStore smallFramePreset];
+        targetTransparent = [BrowserWindowLayoutPresetStore smallTransparentPreset];
+    } else {
+        targetFrame = [BrowserWindowLayoutPresetStore defaultSmallFrameOnScreen:window.screen
+                                                                     relativeTo:window.frame];
+        targetTransparent = YES;
+    }
+
+    NSInteger smallCount = 0;
+    for (NSWindow *other in NSApp.windows) {
+        id controller = other.windowController;
+        if (controller == self) {
+            continue;
+        }
+        if (![controller isKindOfClass:[BrowserWindowController class]]) {
+            continue;
+        }
+        if (((BrowserWindowController *)controller).windowLayoutMode == BrowserWindowLayoutModeSmall) {
+            smallCount += 1;
+        }
+    }
+    if (smallCount > 0) {
+        targetFrame.origin.x += 24.0 * smallCount;
+        targetFrame.origin.y += 24.0 * smallCount;
+    }
+    targetFrame = [BrowserWindowLayoutPresetStore clampFrame:targetFrame toVisibleScreen:window.screen];
+
+    self.applyingLayoutPreset = YES;
+    [window setFrame:targetFrame display:YES animate:YES];
+    self.applyingLayoutPreset = NO;
+
+    [self setTransparentModeEnabled:targetTransparent];
+
+    if (![BrowserWindowLayoutPresetStore hasSmallFramePreset]) {
+        [BrowserWindowLayoutPresetStore setSmallFramePreset:window.frame
+                                                transparent:self.transparentModeEnabled];
+    }
+}
+
+- (void)restoreTransparentSnapshotAfterLeavingSmallLayout {
+    if (!self.smallLayoutTransparentSnapshotValid) {
+        return;
+    }
+    BOOL snapshot = self.smallLayoutTransparentSnapshot;
+    self.smallLayoutTransparentSnapshotValid = NO;
+    if (self.transparentModeEnabled != snapshot) {
+        [self setTransparentModeEnabled:snapshot];
+    }
+}
+
+- (void)schedulePersistLayoutPresetIfNeeded {
+    if (self.applyingLayoutPreset || !self.window) {
+        return;
+    }
+    if (self.windowLayoutMode != BrowserWindowLayoutModeLarge
+        && self.windowLayoutMode != BrowserWindowLayoutModeSmall) {
+        return;
+    }
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(persistLayoutPresetNow)
+                                               object:nil];
+    [self performSelector:@selector(persistLayoutPresetNow)
+               withObject:nil
+               afterDelay:0.4];
+}
+
+- (void)persistLayoutPresetNow {
+    if (!self.window || self.applyingLayoutPreset) {
+        return;
+    }
+    NSRect frame = self.window.frame;
+    if (self.windowLayoutMode == BrowserWindowLayoutModeLarge) {
+        [BrowserWindowLayoutPresetStore setLargeFramePreset:frame];
+    } else if (self.windowLayoutMode == BrowserWindowLayoutModeSmall) {
+        [BrowserWindowLayoutPresetStore setSmallFramePreset:frame
+                                                transparent:self.transparentModeEnabled];
+    }
+}
+
 - (void)setTransparentModeEnabled:(BOOL)transparentModeEnabled {
     if (transparentModeEnabled && (self.window.styleMask & NSWindowStyleMaskFullScreen)) {
         [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionTransparentModeID];
@@ -1111,6 +1331,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     [[BrowserStatusItemController sharedController] refreshMenuAppearance];
     [self schedulePersistTabSession];
+    [self schedulePersistLayoutPresetIfNeeded];
 }
 
 - (BOOL)shouldSuppressContextMenuForTransparentRightDrag {
@@ -2773,6 +2994,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)tabControllerDidChange:(id)controller {
     (void)controller;
+    if (self.autoScrollController.enabled) {
+        self.autoScrollController.enabled = NO;
+    }
     [self refreshTabsUI];
     [self schedulePersistTabSession];
 }
@@ -5037,6 +5261,9 @@ didBecomeDownload:(WKDownload *)download {
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
         return;
+    }
+    if (webView == self.webView && self.autoScrollController.enabled) {
+        self.autoScrollController.enabled = NO;
     }
     [self cancelPreCommitNavigationWatchdogForWebView:webView];
     [tab markNavigationSessionCommitted];

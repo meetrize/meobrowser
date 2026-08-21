@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import "BrowserWindowLayoutPresetStore.h"
 
 @class BrowserTabController;
 @class BrowserTab;
@@ -58,6 +59,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, getter=isAlwaysOnTopEnabled) BOOL alwaysOnTopEnabled;
 @property (nonatomic, assign, getter=isTransparentModeEnabled) BOOL transparentModeEnabled;
 @property (nonatomic, assign, getter=isAfkModeEnabled) BOOL afkModeEnabled;
+@property (nonatomic, assign) BrowserWindowLayoutMode windowLayoutMode;
 
 /// 透明模式右键拖窗进行中时抑制 WebKit 上下文菜单。
 - (BOOL)shouldSuppressContextMenuForTransparentRightDrag;

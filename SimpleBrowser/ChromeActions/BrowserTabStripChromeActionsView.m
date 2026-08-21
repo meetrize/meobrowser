@@ -48,6 +48,12 @@ static const CGFloat kChromeActionSymbolPointSize = 12.0;
                                     toolTip:@"窗口置顶"
                                   onToolTip:@"取消置顶"
                                     toggles:YES],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionMoreMenuID
+                                 symbolName:@"ellipsis"
+                               onSymbolName:nil
+                                    toolTip:@"更多"
+                                  onToolTip:nil
+                                    toggles:NO],
     ];
 }
 
