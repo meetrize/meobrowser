@@ -9,9 +9,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, copy, readonly) NSArray<BrowserChromeActionItem *> *items;
 
+/// 兼容旧调用：当前 layout 下的可见项 + moreMenu。
 + (NSArray<BrowserChromeActionItem *> *)defaultItems;
 
+/// 按 LayoutStore 组装可见项（末尾固定 moreMenu）。
++ (NSArray<BrowserChromeActionItem *> *)itemsForCurrentLayout;
+
 - (void)reloadWithItems:(NSArray<BrowserChromeActionItem *> *)items;
+- (void)reloadFromLayoutStore;
 - (nullable NSButton *)buttonForItemID:(NSString *)itemID;
 - (void)setOn:(BOOL)on forItemID:(NSString *)itemID;
 - (BOOL)isOnForItemID:(NSString *)itemID;

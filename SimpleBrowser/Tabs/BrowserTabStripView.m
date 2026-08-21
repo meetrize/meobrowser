@@ -416,6 +416,22 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
     return width + kChromeGap;
 }
 
+- (void)refreshChromeActionsLayout {
+    if (!self.chromeActionsView || !self.chromeActionsWidthConstraint) {
+        return;
+    }
+    CGFloat actionsWidth = 0;
+    if ([self.chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
+        actionsWidth = [(BrowserTabStripChromeActionsView *)self.chromeActionsView preferredWidth];
+    }
+    if (actionsWidth < 1.0) {
+        actionsWidth = self.chromeActionsView.fittingSize.width;
+    }
+    self.chromeActionsWidthConstraint.constant = MAX(actionsWidth, 1);
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
+}
+
 - (void)setChromeActionsView:(NSView *)chromeActionsView {
     if (_chromeActionsView == chromeActionsView) {
         return;

@@ -1,10 +1,10 @@
 # 标签栏「更多」菜单 — 自动滚动 / 大小窗预设
 
 > 目标：在置顶图标**右侧**增加竖三点（⋯）入口；弹出菜单提供（1）页面自动竖向滚动（速度可设、滚动中改速即时生效）；（2）大窗 / 小窗模式切换与位置尺寸（及小窗透明态）预设记忆。  
-> 状态：**已完成（MO-0～MO-3）**  
+> 状态：**已完成（MO-0～MO-3）**；入口与菜单结构后续演进见 [chrome-actions-customize-design.md](chrome-actions-customize-design.md)（自动滚 / 速度 / 窗口缩放已升为可固定 Catalog 图标；⋯ 为单一图钉列表）。  
 > 开发计划：[chrome-more-menu-development-plan.md](chrome-more-menu-development-plan.md)  
 > Cursor 计划：[.cursor/plans/chrome-more-menu.plan.md](../../.cursor/plans/chrome-more-menu.plan.md)  
-> 关联：[tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md) · [transparent-mode-design.md](transparent-mode-design.md) · [multi-window-design.md](multi-window-design.md)
+> 关联：[tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md) · [transparent-mode-design.md](transparent-mode-design.md) · [multi-window-design.md](multi-window-design.md) · [chrome-actions-customize-design.md](chrome-actions-customize-design.md)
 
 ---
 

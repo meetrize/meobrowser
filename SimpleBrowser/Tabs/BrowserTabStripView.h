@@ -49,6 +49,9 @@ didRequestTransferTabID:(NSUUID *)tabID
 /// 标签条右侧 Chrome 动作区（精简 / 置顶等）；置于「+」与 trailing 拖窗带之间。
 @property (nonatomic, strong, nullable) NSView *chromeActionsView;
 
+/// 动作区图标增删后刷新宽度约束与标签布局。
+- (void)refreshChromeActionsLayout;
+
 /// 精简模式下的前进/后退容器；置于交通灯右侧。nil = 常态无左侧导航。
 @property (nonatomic, strong, nullable) NSView *leadingNavigationView;
 

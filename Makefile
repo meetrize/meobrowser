@@ -38,6 +38,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabDragGhostController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabDropPlaceholderView.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserChromeActionItem.m \
+                   $(BROWSER_SRC_DIR)/ChromeActions/BrowserChromeActionLayoutStore.m \
+                   $(BROWSER_SRC_DIR)/ChromeActions/BrowserChromeActionMenuRowView.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserTabStripChromeActionsView.m \
                    $(BROWSER_SRC_DIR)/AfkMode/BrowserAfkModeController.m \
                    $(BROWSER_SRC_DIR)/AutoScroll/BrowserAutoScrollPreferences.m \
