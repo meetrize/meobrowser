@@ -1,12 +1,17 @@
 #import "BrowserTabStripChromeActionsView.h"
 #import "BrowserChromeActionItem.h"
 #import "BrowserChromeActionLayoutStore.h"
+#import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kChromeActionButtonSize = 22.0;
 static const CGFloat kChromeActionSpacing = 2.0;
 static const CGFloat kChromeActionSymbolPointSize = 12.0;
 static const CGFloat kChromeActionReorderDragThreshold = 4.0;
 static const CGFloat kChromeActionMoreDropPadding = 4.0;
+static const CGFloat kChromeActionGhostPad = 14.0;
+static const CGFloat kChromeActionGhostScale = 1.12;
+static const CGFloat kChromeActionGhostAlpha = 0.92;
+static const CGFloat kChromeActionSourceDragAlpha = 0.28;
 
 @class BrowserTabStripChromeActionsView;
 
@@ -39,6 +44,10 @@ static const CGFloat kChromeActionMoreDropPadding = 4.0;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *onStateByID;
 @property (nonatomic, assign) BOOL isReordering;
 @property (nonatomic, assign) BOOL moreMenuDropHighlighted;
+@property (nonatomic, strong, nullable) NSPanel *dragGhostPanel;
+@property (nonatomic, strong, nullable) NSImageView *dragGhostImageView;
+@property (nonatomic, assign) NSPoint dragGhostGrabInSource;
+@property (nonatomic, assign) NSSize dragGhostSourceSize;
 @end
 
 @implementation BrowserTabStripChromeActionsView
@@ -215,6 +224,99 @@ static const CGFloat kChromeActionMoreDropPadding = 4.0;
 
 #pragma mark - Reorder / drop on ⋯
 
+- (void)endDragGhostImmediately {
+    if (self.dragGhostPanel) {
+        [self.dragGhostPanel orderOut:nil];
+        self.dragGhostPanel = nil;
+    }
+    self.dragGhostImageView = nil;
+    self.dragGhostSourceSize = NSZeroSize;
+    self.dragGhostGrabInSource = NSZeroPoint;
+}
+
+- (void)beginDragGhostFromButton:(BrowserTabStripChromeActionButton *)button
+                  windowPoint:(NSPoint)windowPoint {
+    [self endDragGhostImmediately];
+    if (!button || !button.window) {
+        return;
+    }
+
+    NSRect bounds = button.bounds;
+    if (NSWidth(bounds) < 1 || NSHeight(bounds) < 1) {
+        return;
+    }
+
+    NSPoint grabInSource = [button convertPoint:windowPoint fromView:nil];
+    self.dragGhostGrabInSource = grabInSource;
+    self.dragGhostSourceSize = bounds.size;
+
+    NSBitmapImageRep *rep = [button bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!rep) {
+        return;
+    }
+    [button cacheDisplayInRect:bounds toBitmapImageRep:rep];
+    NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
+    [image addRepresentation:rep];
+
+    CGFloat scaledW = bounds.size.width * kChromeActionGhostScale;
+    CGFloat scaledH = bounds.size.height * kChromeActionGhostScale;
+    NSRect panelRect = NSMakeRect(0, 0,
+                                  scaledW + kChromeActionGhostPad * 2.0,
+                                  scaledH + kChromeActionGhostPad * 2.0);
+
+    NSPanel *panel = [[NSPanel alloc] initWithContentRect:panelRect
+                                                styleMask:NSWindowStyleMaskBorderless
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    panel.opaque = NO;
+    panel.backgroundColor = [NSColor clearColor];
+    panel.hasShadow = NO;
+    panel.ignoresMouseEvents = YES;
+    panel.hidesOnDeactivate = NO;
+    panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorFullScreenAuxiliary;
+    NSWindow *parent = button.window;
+    NSInteger floating = (NSInteger)NSFloatingWindowLevel;
+    NSInteger minLevel = parent ? ((NSInteger)parent.level + 1) : floating;
+    panel.level = (NSWindowLevel)MAX(floating, minLevel);
+
+    NSView *content = panel.contentView;
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = [NSColor clearColor].CGColor;
+
+    NSRect imageFrame = NSMakeRect(kChromeActionGhostPad, kChromeActionGhostPad, scaledW, scaledH);
+    NSImageView *imageView = [[NSImageView alloc] initWithFrame:imageFrame];
+    imageView.image = image;
+    imageView.imageScaling = NSImageScaleAxesIndependently;
+    imageView.wantsLayer = YES;
+    imageView.alphaValue = kChromeActionGhostAlpha;
+    imageView.layer.masksToBounds = NO;
+    imageView.layer.cornerRadius = 4.0;
+    imageView.layer.shadowColor = [NSColor blackColor].CGColor;
+    imageView.layer.shadowOpacity = 0.45;
+    imageView.layer.shadowRadius = 10.0;
+    imageView.layer.shadowOffset = CGSizeMake(0, -3);
+    [content addSubview:imageView];
+
+    self.dragGhostPanel = panel;
+    self.dragGhostImageView = imageView;
+    [self moveDragGhostToWindowPoint:windowPoint inWindow:button.window];
+    [panel orderFront:nil];
+}
+
+- (void)moveDragGhostToWindowPoint:(NSPoint)windowPoint inWindow:(NSWindow *)window {
+    if (!self.dragGhostPanel || !window) {
+        return;
+    }
+    NSPoint screenPoint = [window convertPointToScreen:windowPoint];
+    CGFloat scale = kChromeActionGhostScale;
+    NSPoint origin = NSMakePoint(screenPoint.x - self.dragGhostGrabInSource.x * scale - kChromeActionGhostPad,
+                                 screenPoint.y - self.dragGhostGrabInSource.y * scale - kChromeActionGhostPad);
+    NSRect frame = self.dragGhostPanel.frame;
+    frame.origin = origin;
+    [self.dragGhostPanel setFrame:frame display:YES];
+}
+
 - (NSInteger)customButtonCount {
     NSInteger count = (NSInteger)self.stackView.arrangedSubviews.count;
     return MAX(0, count - 1); // 末尾固定 moreMenu
@@ -366,14 +468,17 @@ static const CGFloat kChromeActionMoreDropPadding = 4.0;
         if (!didReorder && (dx * dx + dy * dy) >= (kChromeActionReorderDragThreshold * kChromeActionReorderDragThreshold)) {
             didReorder = YES;
             self.isReordering = YES;
-            button.alphaValue = 0.55;
+            button.alphaValue = kChromeActionSourceDragAlpha;
             if (@available(macOS 10.14, *)) {
-                button.contentTintColor = [NSColor controlAccentColor];
+                button.contentTintColor = [NSColor tertiaryLabelColor];
             }
+            [self beginDragGhostFromButton:button windowPoint:now];
         }
         if (!didReorder) {
             continue;
         }
+
+        [self moveDragGhostToWindowPoint:now inWindow:self.window];
 
         if ([self isWindowPointOverMoreMenu:now]) {
             [self setMoreMenuDropHighlighted:YES];
@@ -393,6 +498,7 @@ static const CGFloat kChromeActionMoreDropPadding = 4.0;
     }
 
     NSString *draggedID = [button.itemID copy];
+    [self endDragGhostImmediately];
     button.highlighted = NO;
     button.alphaValue = 1.0;
     [self setMoreMenuDropHighlighted:NO];
