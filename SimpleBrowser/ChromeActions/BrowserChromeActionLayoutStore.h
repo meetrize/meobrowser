@@ -9,6 +9,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserChromeActionLayoutDidChangeNot
 
 + (NSArray<NSString *> *)defaultOrderedCustomActionIDs;
 
+/// 默认隐藏（地址栏迁入项）；冷启动 / 首次扩目录时写入。
++ (NSArray<NSString *> *)defaultHiddenCustomActionIDs;
+
 /// 完整用户序（含 hidden）；自动合并目录新增 id、清洗未知 id。
 + (NSArray<NSString *> *)orderedCustomActionIDs;
 + (void)setOrderedCustomActionIDs:(NSArray<NSString *> *)orderedIDs;
@@ -22,6 +25,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserChromeActionLayoutDidChangeNot
 
 /// 用新的可见子序列替换完整 order 中的可见槽位（hidden 槽位 id 不动）。
 + (NSArray<NSString *> *)orderedIDsByReplacingVisibleSubsequence:(NSArray<NSString *> *)visibleIDs;
+
+/// 将旧地址栏 order/hidden 迁入 Chrome LayoutStore（一次性）。
++ (void)migrateFromAddressBarPreferencesIfNeeded;
 
 @end
 

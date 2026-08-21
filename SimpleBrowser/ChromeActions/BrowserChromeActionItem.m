@@ -7,6 +7,22 @@ NSString * const BrowserChromeActionAlwaysOnTopID = @"alwaysOnTop";
 NSString * const BrowserChromeActionAutoScrollID = @"autoScroll";
 NSString * const BrowserChromeActionScrollSpeedID = @"scrollSpeed";
 NSString * const BrowserChromeActionWindowLayoutID = @"windowLayout";
+
+NSString * const BrowserChromeActionTabOverviewID = @"tabOverview";
+NSString * const BrowserChromeActionFindInPageID = @"findInPage";
+NSString * const BrowserChromeActionHistoryID = @"history";
+NSString * const BrowserChromeActionDownloadID = @"download";
+NSString * const BrowserChromeActionLoginAssistID = @"loginAssist";
+NSString * const BrowserChromeActionCompanionLinkID = @"companionLink";
+NSString * const BrowserChromeActionSendToPhoneID = @"sendToPhone";
+NSString * const BrowserChromeActionNotificationInboxID = @"notificationInbox";
+NSString * const BrowserChromeActionPhonePolicyID = @"phonePolicy";
+NSString * const BrowserChromeActionCaptchaAssistID = @"captchaAssist";
+NSString * const BrowserChromeActionRSSFeedID = @"rssFeed";
+NSString * const BrowserChromeActionShareID = @"share";
+NSString * const BrowserChromeActionScreenshotID = @"screenshot";
+NSString * const BrowserChromeActionExtensionID = @"extension";
+
 NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
 
 @implementation BrowserChromeActionItem
@@ -25,6 +41,25 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
     item.onToolTip = onToolTip;
     item.toggles = toggles;
     return item;
+}
+
++ (NSArray<NSString *> *)addressBarMigratedActionIDs {
+    return @[
+        BrowserChromeActionTabOverviewID,
+        BrowserChromeActionFindInPageID,
+        BrowserChromeActionHistoryID,
+        BrowserChromeActionDownloadID,
+        BrowserChromeActionLoginAssistID,
+        BrowserChromeActionCompanionLinkID,
+        BrowserChromeActionSendToPhoneID,
+        BrowserChromeActionNotificationInboxID,
+        BrowserChromeActionPhonePolicyID,
+        BrowserChromeActionCaptchaAssistID,
+        BrowserChromeActionRSSFeedID,
+        BrowserChromeActionShareID,
+        BrowserChromeActionScreenshotID,
+        BrowserChromeActionExtensionID,
+    ];
 }
 
 + (NSArray<BrowserChromeActionItem *> *)catalogItemsExcludingMoreMenu {
@@ -71,6 +106,91 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                     toolTip:@"窗口缩小"
                                   onToolTip:@"窗口放大"
                                     toggles:YES],
+
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionTabOverviewID
+                                 symbolName:@"square.grid.2x2"
+                               onSymbolName:nil
+                                    toolTip:@"标签概览"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionFindInPageID
+                                 symbolName:@"magnifyingglass"
+                               onSymbolName:nil
+                                    toolTip:@"查找"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionHistoryID
+                                 symbolName:@"clock"
+                               onSymbolName:nil
+                                    toolTip:@"历史"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionDownloadID
+                                 symbolName:@"arrow.down.circle"
+                               onSymbolName:nil
+                                    toolTip:@"下载"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionLoginAssistID
+                                 symbolName:@"key.horizontal"
+                               onSymbolName:nil
+                                    toolTip:@"登录助手"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionCompanionLinkID
+                                 symbolName:@"link"
+                               onSymbolName:nil
+                                    toolTip:@"互联"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionSendToPhoneID
+                                 symbolName:@"iphone.and.arrow.forward"
+                               onSymbolName:nil
+                                    toolTip:@"发送到手机"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionNotificationInboxID
+                                 symbolName:@"bell"
+                               onSymbolName:nil
+                                    toolTip:@"手机通知"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionPhonePolicyID
+                                 symbolName:@"phone.badge.waveform"
+                               onSymbolName:nil
+                                    toolTip:@"号码策略"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionCaptchaAssistID
+                                 symbolName:@"checkerboard.rectangle"
+                               onSymbolName:nil
+                                    toolTip:@"验证码助手"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionRSSFeedID
+                                 symbolName:@"dot.radiowaves.up.forward"
+                               onSymbolName:nil
+                                    toolTip:@"RSS"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionShareID
+                                 symbolName:@"square.and.arrow.up"
+                               onSymbolName:nil
+                                    toolTip:@"分享"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionScreenshotID
+                                 symbolName:@"camera"
+                               onSymbolName:nil
+                                    toolTip:@"截图"
+                                  onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionExtensionID
+                                 symbolName:@"puzzlepiece.extension"
+                               onSymbolName:nil
+                                    toolTip:@"扩展"
+                                  onToolTip:nil
+                                    toggles:NO],
     ];
 }
 

@@ -15,7 +15,7 @@
 | 自动下载 | 附件响应 / WebKit 无法展示的 MIME → `WKNavigationResponsePolicyDownload` |
 | 链接下载 | 系统右键菜单「下载链接的文件」→ `navigationAction:didBecomeDownload:` |
 | 静默落盘 | **永远不问路径**；写入 `~/Downloads`，重名自动加 `-1`、`-2`… |
-| 下载按钮 | 地址栏右侧 ActionGroup 首项；溢出时进「更多」菜单；进行中/完成角标 |
+| 下载按钮 | 标签栏 Chrome Catalog（`download`，默认隐藏，可从 ⋯ 固定）；进行中/完成角标；原地址栏 ActionGroup 入口已退役，见 [address-bar-tools-to-chrome-menu-design.md](address-bar-tools-to-chrome-menu-design.md) |
 | 下载面板 | 锚在按钮下方的 `NSPanel`（对齐地址栏补全浮层）；⌘J 开关 |
 | 列表操作 | 取消、在 Finder 中显示、用默认 App 打开；完成项可拖到 Finder |
 | 关窗提示 | 仍有进行中下载时确认后再关 |

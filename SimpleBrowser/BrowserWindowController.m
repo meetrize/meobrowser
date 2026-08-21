@@ -27,7 +27,6 @@
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserAddressBarAutocompleteController.h"
-#import "BrowserAddressBarActionGroup.h"
 #import "BrowserAddressBarRowView.h"
 #import "BrowserURLInputClassifier.h"
 #import "BrowserPageTranslationController.h"
@@ -60,6 +59,7 @@
 #import "BrowserTabLoadIsolator.h"
 #import "BrowserNavigationDiagnostics.h"
 #import "CompanionChannel.h"
+#import "CompanionLinkUI.h"
 #import "BrowserTransientToast.h"
 #import "PhoneNotificationSidebarController.h"
 #import "BrowserTrailingSidebarSlot.h"
@@ -201,7 +201,6 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSView *downloadBadgeView;
 @property (nonatomic, strong) BrowserDownloadProgressRingView *downloadProgressRingView;
 @property (nonatomic, strong) SBTextField *addressField;
-@property (nonatomic, strong) BrowserAddressBarActionGroup *addressBarActionGroup;
 @property (nonatomic, strong) BrowserAddressBarRowView *addressBarRow;
 @property (nonatomic, strong) BrowserAddressBarAutocompleteController *addressAutocompleteController;
 @property (nonatomic, weak) BrowserTab *lastAddressBarTab;
@@ -838,39 +837,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressAutocompleteController.delegate = self;
     [self.addressAutocompleteController install];
 
-    self.addressBarActionGroup = [[BrowserAddressBarActionGroup alloc] initWithFrame:NSZeroRect];
-    self.addressBarActionGroup.minimumAddressWidth = 120;
-    self.downloadButton = self.addressBarActionGroup.downloadButton;
-    self.downloadButton.target = self;
-    self.downloadButton.action = @selector(toggleDownloadsPanel:);
-    [self installDownloadBadgeOnButton:self.downloadButton];
-    [self installDownloadProgressRingOnButton:self.downloadButton];
-    __weak typeof(self) weakSelf = self;
-    self.addressBarActionGroup.augmentContextMenu = ^(NSString *itemID, NSMenu *menu) {
-        if ([itemID isEqualToString:@"loginAssist"]) {
-            [weakSelf.loginAssistController appendItemsToToolbarContextMenu:menu];
-        }
-    };
-    if (self.addressBarActionGroup.loginAssistButton) {
-        [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
-    }
-    if (self.addressBarActionGroup.captchaAssistButton) {
-        [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
-    }
-    if (self.addressBarActionGroup.feedButton) {
-        [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
-    }
-    [self wireFindInPageButton];
-    [self wireHistoryButton];
-    [self wireTabOverviewButton];
-    [self wireCompanionLinkButton];
-    [self wireSendToPhoneButton];
-    [self wirePhonePolicyButton];
-    [self wireNotificationInboxButton];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(addressBarActionOrderDidChange:)
-                                                 name:@"BrowserAddressBarActionOrderDidChangeNotification"
-                                               object:self.addressBarActionGroup];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(companionChannelStateDidChange:)
                                                  name:CompanionChannelStateDidChangeNotification
@@ -883,11 +849,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                              selector:@selector(phoneNotificationInboxRevealItem:)
                                                  name:PhoneNotificationInboxRevealItemNotification
                                                object:nil];
-    [self.addressBarActionGroup updateCompanionLinkAppearance];
+    [self updateChromeCompanionToolAppearance];
 
     self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
                                                                  securityBadge:self.securityBadgeButton
-                                                                   actionGroup:self.addressBarActionGroup];
+                                                                   actionGroup:nil];
 
     self.toolbar = [NSStackView stackViewWithViews:@[
         self.navButtons, self.addressBarRow
@@ -1088,6 +1054,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabStripView refreshChromeActionsLayout];
     [self wireChromeActionButtons];
     [self syncChromeActionButtonStates];
+    [self rewireMigratedToolbarActionsAfterChromeReload];
 }
 
 - (void)chromeActionLayoutDidChange:(NSNotification *)notification {
@@ -1127,6 +1094,68 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSButton *moreButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionMoreMenuID];
     moreButton.target = self;
     moreButton.action = @selector(showChromeMoreMenu:);
+
+    [self wireChromeButton:BrowserChromeActionTabOverviewID action:@selector(toggleTabOverview:)];
+    [self wireChromeButton:BrowserChromeActionFindInPageID action:@selector(toggleFindBar:)];
+    [self wireChromeButton:BrowserChromeActionHistoryID action:@selector(toggleHistoryPanel:)];
+    [self wireChromeButton:BrowserChromeActionDownloadID action:@selector(toggleDownloadsPanel:)];
+    [self wireChromeButton:BrowserChromeActionCompanionLinkID action:@selector(showCompanionLinkSettings:)];
+    [self wireChromeButton:BrowserChromeActionSendToPhoneID action:@selector(sendCurrentTabToPhone:)];
+    [self wireChromeButton:BrowserChromeActionPhonePolicyID action:@selector(showPhonePolicyPanel:)];
+    [self wireChromeButton:BrowserChromeActionNotificationInboxID action:@selector(toggleNotificationInboxSidebar:)];
+    [self wireChromeButton:BrowserChromeActionShareID action:@selector(showChromePlaceholderTool:)];
+    [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
+    [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(showChromePlaceholderTool:)];
+}
+
+- (void)wireChromeButton:(NSString *)itemID action:(SEL)action {
+    NSButton *button = [self.chromeActionsView buttonForItemID:itemID];
+    if (!button) {
+        return;
+    }
+    button.target = self;
+    button.action = action;
+}
+
+- (void)showChromePlaceholderTool:(id)sender {
+    (void)sender;
+    [BrowserTransientToast showMessage:@"即将推出" inWindow:self.window duration:1.6];
+}
+
+/// AT-1：Chrome 条上出现迁入工具后，重绑角标 / 登录点亮，并刷新外观。
+- (void)rewireMigratedToolbarActionsAfterChromeReload {
+    NSButton *chromeDownload = [self.chromeActionsView buttonForItemID:BrowserChromeActionDownloadID];
+    if (chromeDownload) {
+        self.downloadButton = chromeDownload;
+        [self installDownloadBadgeOnButton:chromeDownload];
+        [self installDownloadProgressRingOnButton:chromeDownload];
+        chromeDownload.target = self;
+        chromeDownload.action = @selector(toggleDownloadsPanel:);
+        [self updateDownloadButtonAppearance];
+    }
+
+    NSButton *chromeLogin = [self.chromeActionsView buttonForItemID:BrowserChromeActionLoginAssistID];
+    if (chromeLogin) {
+        [self.loginAssistController wireLoginButton:chromeLogin];
+    }
+    NSButton *chromeCaptcha = [self.chromeActionsView buttonForItemID:BrowserChromeActionCaptchaAssistID];
+    if (chromeCaptcha) {
+        [self.captchaAssistController wireCaptchaButton:chromeCaptcha];
+    }
+    NSButton *chromeFeed = [self.chromeActionsView buttonForItemID:BrowserChromeActionRSSFeedID];
+    if (chromeFeed) {
+        [self.feedAssistController wireFeedButton:chromeFeed];
+    }
+
+    NSButton *chromeNotify = [self.chromeActionsView buttonForItemID:BrowserChromeActionNotificationInboxID];
+    if (chromeNotify) {
+        [self installNotificationInboxBadgeOnButton:chromeNotify];
+    }
+
+    [self updateTabOverviewButtonAppearance];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+    [self updateChromeCompanionToolAppearance];
 }
 
 - (void)syncChromeActionButtonStates {
@@ -1256,6 +1285,71 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if ([itemID isEqualToString:BrowserChromeActionWindowLayoutID]) {
         [self toggleWindowLayoutZoomFromMoreMenu:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionTabOverviewID]) {
+        [self toggleTabOverview:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionFindInPageID]) {
+        [self toggleFindBar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionHistoryID]) {
+        [self toggleHistoryPanel:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionDownloadID]) {
+        [self toggleDownloadsPanel:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionLoginAssistID]) {
+        NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionLoginAssistID];
+        if (button.action && button.target) {
+            [NSApp sendAction:button.action to:button.target from:button];
+        } else {
+            [self.loginAssistController oneClickLogin:nil];
+        }
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionCaptchaAssistID]) {
+        NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionCaptchaAssistID];
+        if (button.action && button.target) {
+            [NSApp sendAction:button.action to:button.target from:button];
+        } else {
+            [self.captchaAssistController toggleCaptchaAssistPanel:nil];
+        }
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionRSSFeedID]) {
+        NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionRSSFeedID];
+        if (button.action && button.target) {
+            [NSApp sendAction:button.action to:button.target from:button];
+        } else {
+            [self.feedAssistController showFeedMenu:nil];
+        }
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionCompanionLinkID]) {
+        [self showCompanionLinkSettings:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionSendToPhoneID]) {
+        [self sendCurrentTabToPhone:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionPhonePolicyID]) {
+        [self showPhonePolicyPanel:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionNotificationInboxID]) {
+        [self toggleNotificationInboxSidebar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionShareID]
+        || [itemID isEqualToString:BrowserChromeActionScreenshotID]
+        || [itemID isEqualToString:BrowserChromeActionExtensionID]) {
+        [self showChromePlaceholderTool:nil];
         return;
     }
 }
@@ -1821,128 +1915,47 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 #pragma mark - Downloads
 
-- (void)wireFindInPageButton {
-    NSButton *button = self.addressBarActionGroup.findInPageButton;
-    if (!button) {
-        return;
-    }
-    button.target = self;
-    button.action = @selector(toggleFindBar:);
-}
-
-- (void)wireHistoryButton {
-    NSButton *button = self.addressBarActionGroup.historyButton;
-    if (!button) {
-        return;
-    }
-    button.target = self;
-    button.action = @selector(toggleHistoryPanel:);
-}
-
-- (void)wireTabOverviewButton {
-    NSButton *button = self.addressBarActionGroup.tabOverviewButton;
-    if (!button) {
-        return;
-    }
-    button.target = self;
-    button.action = @selector(toggleTabOverview:);
-    [self updateTabOverviewButtonAppearance];
-}
-
 - (void)updateTabOverviewButtonAppearance {
-    NSButton *button = self.addressBarActionGroup.tabOverviewButton;
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionTabOverviewID];
+    if (!button) {
+        return;
+    }
     BOOL visible = self.tabOverviewController.isVisible;
-    if (button) {
-        if (@available(macOS 10.14, *)) {
-            button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
-        }
-        if (@available(macOS 11.0, *)) {
-            NSString *symbol = visible ? @"square.grid.2x2.fill" : @"square.grid.2x2";
-            NSImageSymbolConfiguration *config =
-                [NSImageSymbolConfiguration configurationWithPointSize:15
-                                                                weight:NSFontWeightSemibold
-                                                                 scale:NSImageSymbolScaleMedium];
-            NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"标签概览"];
-            button.image = [image imageWithSymbolConfiguration:config];
-        }
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+    if (@available(macOS 11.0, *)) {
+        NSString *symbol = visible ? @"square.grid.2x2.fill" : @"square.grid.2x2";
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:15
+                                                            weight:NSFontWeightSemibold
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"标签概览"];
+        button.image = [image imageWithSymbolConfiguration:config];
     }
 }
 
-- (void)addressBarActionOrderDidChange:(NSNotification *)notification {
-    (void)notification;
-    // 重排后 downloadButton 可能仍是同一实例；角标在该按钮上。刷新引用与外观即可。
-    self.downloadButton = self.addressBarActionGroup.downloadButton;
-    if (self.downloadButton && self.downloadBadgeView.superview != self.downloadButton) {
-        [self.downloadBadgeView removeFromSuperview];
-        [self.downloadButton addSubview:self.downloadBadgeView];
-        [NSLayoutConstraint activateConstraints:@[
-            [self.downloadBadgeView.widthAnchor constraintEqualToConstant:7],
-            [self.downloadBadgeView.heightAnchor constraintEqualToConstant:7],
-            [self.downloadBadgeView.topAnchor constraintEqualToAnchor:self.downloadButton.topAnchor constant:3],
-            [self.downloadBadgeView.trailingAnchor constraintEqualToAnchor:self.downloadButton.trailingAnchor constant:-3],
-        ]];
-    }
-    if (self.downloadButton && self.downloadProgressRingView.superview != self.downloadButton) {
-        [self installDownloadProgressRingOnButton:self.downloadButton];
-    }
-    self.downloadButton.target = self;
-    self.downloadButton.action = @selector(toggleDownloadsPanel:);
-    [self updateDownloadButtonAppearance];
-    if (self.addressBarActionGroup.loginAssistButton) {
-        [self.loginAssistController wireLoginButton:self.addressBarActionGroup.loginAssistButton];
-    }
-    if (self.addressBarActionGroup.captchaAssistButton) {
-        [self.captchaAssistController wireCaptchaButton:self.addressBarActionGroup.captchaAssistButton];
-    }
-    if (self.addressBarActionGroup.feedButton) {
-        [self.feedAssistController wireFeedButton:self.addressBarActionGroup.feedButton];
-    }
-    [self wireFindInPageButton];
-    [self wireHistoryButton];
-    [self wireTabOverviewButton];
-    [self wireCompanionLinkButton];
-    [self wireSendToPhoneButton];
-    [self wirePhonePolicyButton];
-    [self wireNotificationInboxButton];
-    [self.addressBarActionGroup updateCompanionLinkAppearance];
-    [self updateNotificationInboxButtonAppearance];
-}
-
-- (void)wireCompanionLinkButton {
-    NSButton *button = self.addressBarActionGroup.companionLinkButton;
+- (void)updateNotificationInboxButtonAppearance {
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionNotificationInboxID];
     if (!button) {
         return;
     }
-    button.target = self;
-    button.action = @selector(showCompanionLinkSettings:);
-}
 
-- (void)wireSendToPhoneButton {
-    NSButton *button = self.addressBarActionGroup.sendToPhoneButton;
-    if (!button) {
-        return;
+    if (self.notificationInboxBadgeView.superview != button) {
+        [self installNotificationInboxBadgeOnButton:button];
     }
-    button.target = self;
-    button.action = @selector(sendCurrentTabToPhone:);
-}
 
-- (void)wirePhonePolicyButton {
-    NSButton *button = self.addressBarActionGroup.phonePolicyButton;
-    if (!button) {
-        return;
+    BOOL open = self.notificationSidebarController.visible;
+    NSUInteger unread = [[PhoneNotificationInboxStore sharedStore] unreadCount];
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = open ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
     }
-    button.target = self;
-    button.action = @selector(showPhonePolicyPanel:);
-}
-
-- (void)wireNotificationInboxButton {
-    NSButton *button = self.addressBarActionGroup.notificationInboxButton;
-    if (!button) {
-        return;
+    if (unread > 0) {
+        button.toolTip = [NSString stringWithFormat:@"手机通知 · %lu 条未读", (unsigned long)MIN(unread, 99)];
+    } else {
+        button.toolTip = open ? @"手机通知（已打开）" : @"手机通知";
     }
-    button.target = self;
-    button.action = @selector(toggleNotificationInboxSidebar:);
-    [self installNotificationInboxBadgeOnButton:button];
+    self.notificationInboxBadgeView.hidden = (unread == 0);
 }
 
 - (void)installNotificationInboxBadgeOnButton:(NSButton *)button {
@@ -1975,27 +1988,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.trailingSidebarSlot setNotificationVisible:open animated:YES];
     [self updateNotificationInboxButtonAppearance];
     [self updateHistoryButtonAppearance];
-}
-
-- (void)updateNotificationInboxButtonAppearance {
-    NSButton *button = self.addressBarActionGroup.notificationInboxButton;
-    if (!button) {
-        return;
-    }
-    if (self.notificationInboxBadgeView.superview != button) {
-        [self installNotificationInboxBadgeOnButton:button];
-    }
-    BOOL open = self.notificationSidebarController.visible;
-    NSUInteger unread = [[PhoneNotificationInboxStore sharedStore] unreadCount];
-    if (@available(macOS 10.14, *)) {
-        button.contentTintColor = open ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
-    }
-    self.notificationInboxBadgeView.hidden = (unread == 0);
-    if (unread > 0) {
-        button.toolTip = [NSString stringWithFormat:@"手机通知 · %lu 条未读", (unsigned long)MIN(unread, 99)];
-    } else {
-        button.toolTip = open ? @"手机通知（已打开）" : @"手机通知";
-    }
 }
 
 - (void)phoneNotificationInboxDidChange:(NSNotification *)notification {
@@ -2128,7 +2120,27 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)companionChannelStateDidChange:(NSNotification *)notification {
     (void)notification;
-    [self.addressBarActionGroup updateCompanionLinkAppearance];
+    [self updateChromeCompanionToolAppearance];
+}
+
+- (void)updateChromeCompanionToolAppearance {
+    CompanionLinkUIState state = [CompanionLinkUI stateFromChannel:[CompanionChannel sharedChannel]];
+    NSString *title = [CompanionLinkUI titleForChannel:[CompanionChannel sharedChannel]];
+    BOOL connected = (state == CompanionLinkUIStateConnected);
+
+    NSButton *link = [self.chromeActionsView buttonForItemID:BrowserChromeActionCompanionLinkID];
+    if (link) {
+        link.alphaValue = (state == CompanionLinkUIStateDisconnected) ? 0.7 : 1.0;
+        link.toolTip = [NSString stringWithFormat:@"互联 · %@", title];
+        link.accessibilityLabel = link.toolTip;
+    }
+    NSButton *send = [self.chromeActionsView buttonForItemID:BrowserChromeActionSendToPhoneID];
+    if (send) {
+        send.alphaValue = connected ? 1.0 : 0.7;
+        send.toolTip = connected ? @"发送到手机" : @"发送到手机（未连接）";
+        send.accessibilityLabel = send.toolTip;
+        send.enabled = connected;
+    }
 }
 
 - (void)toggleDownloadsPanel:(id)sender {
@@ -2150,7 +2162,13 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.downloadManager markAllCompletedAsRead];
     [self updateDownloadButtonAppearance];
 
-    NSRect buttonRect = [self.downloadButton convertRect:self.downloadButton.bounds toView:nil];
+    NSButton *anchor = self.downloadButton
+        ?: [self.chromeActionsView buttonForItemID:BrowserChromeActionDownloadID]
+        ?: [self.chromeActionsView buttonForItemID:BrowserChromeActionMoreMenuID];
+    if (!anchor) {
+        return;
+    }
+    NSRect buttonRect = [anchor convertRect:anchor.bounds toView:nil];
     NSRect screenRect = [self.window convertRectToScreen:buttonRect];
     self.downloadPanel.dismissExclusionRectOnScreen = NSInsetRect(screenRect, -4, -4);
     [self ensureFloatingPanel:self.downloadPanel aboveParentWindow:self.window];
@@ -2207,7 +2225,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)updateHistoryButtonAppearance {
-    NSButton *button = self.addressBarActionGroup.historyButton;
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionHistoryID];
     if (!button) {
         return;
     }
@@ -2235,6 +2253,13 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)updateDownloadButtonAppearance {
+    if (!self.downloadButton) {
+        self.downloadButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionDownloadID];
+    }
+    if (!self.downloadButton) {
+        return;
+    }
+
     NSUInteger active = self.downloadManager.activeCount;
     NSUInteger unread = self.downloadManager.unreadCompletedCount;
     BOOL busy = active > 0;

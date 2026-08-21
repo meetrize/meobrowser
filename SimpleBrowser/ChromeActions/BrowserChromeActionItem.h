@@ -9,6 +9,23 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionAlwaysOnTopID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionAutoScrollID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionScrollSpeedID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionWindowLayoutID;
+
+// 自地址栏迁入（AT-0）；不含 comment / pageSettings / copyLink
+FOUNDATION_EXPORT NSString * const BrowserChromeActionTabOverviewID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionFindInPageID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionHistoryID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionDownloadID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionLoginAssistID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionCompanionLinkID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionSendToPhoneID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionNotificationInboxID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionPhonePolicyID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionCaptchaAssistID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionRSSFeedID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionShareID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionScreenshotID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionExtensionID;
+
 FOUNDATION_EXPORT NSString * const BrowserChromeActionMoreMenuID;
 
 @interface BrowserChromeActionItem : NSObject
@@ -29,6 +46,9 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionMoreMenuID;
 
 /// 可定制目录（不含 moreMenu），固定默认序。
 + (NSArray<BrowserChromeActionItem *> *)catalogItemsExcludingMoreMenu;
+
+/// 自地址栏迁入、默认 hidden 的 id 列表。
++ (NSArray<NSString *> *)addressBarMigratedActionIDs;
 
 + (BrowserChromeActionItem *)moreMenuItem;
 

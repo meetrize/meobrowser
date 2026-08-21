@@ -3,7 +3,7 @@
 > 目标：标签栏右侧**全部**窗口级能力（含原 ⋯ 内的自动滚动 / 滚动速度 / 窗口缩放）统一为可固定图标；除 ⋯ 外可拖拽改序；拖到 ⋯ 藏入菜单；⋯ 菜单为**单一列表**（文字 + 右侧图钉），交互对齐 Chrome 扩展工具栏固定。  
 > 状态：**已实现（CP-0～CP-3）**  
 > 开发计划：[chrome-actions-customize-development-plan.md](chrome-actions-customize-development-plan.md)  
-> 关联：[tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md) · [chrome-more-menu-design.md](chrome-more-menu-design.md) · 地址栏 `BrowserAddressBarActionGroup`（已有拖拽排序 / 隐藏偏好）
+> 关联：[tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md) · [chrome-more-menu-design.md](chrome-more-menu-design.md) · [address-bar-tools-to-chrome-menu-design.md](address-bar-tools-to-chrome-menu-design.md)（地址栏工具已迁入本区；`BrowserAddressBarActionGroup` 工具职责退役）
 
 ---
 
@@ -40,7 +40,7 @@
 |------|------|
 | 拖拽 ⋯ 或把 ⋯ 挪到中间 | 溢出锚点必须最右 |
 | 菜单再拆「开关区 / 工具区」两段 | 与本需求冲突；统一列表 |
-| 地址栏 ActionGroup 与本区打通 | 语义不同；偏好键独立 |
+| ~~地址栏 ActionGroup 与本区打通~~ | **已推翻**：见 [address-bar-tools-to-chrome-menu-design.md](address-bar-tools-to-chrome-menu-design.md)；工具迁入本 Catalog，地址栏不再挂图标 |
 | 按窗口独立布局 | App 级 + 多窗通知（对齐地址栏） |
 | 第三方插件图标 | 仅内置 Catalog |
 | 窄窗自动溢出 | V1 仅用户主动藏；自动挤入后续 |

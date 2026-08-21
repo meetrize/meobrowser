@@ -1,6 +1,8 @@
 # 页面内查找（Find in Page）— 交互与实现方案
 
-> 目标：为 MeoBrowser 提供轻量、键盘可达的「在当前网页中查找」能力：工具栏按钮 + ⌘F 弹出浮动查找条，高亮全部匹配，支持上一处 / 下一处循环跳转；默认字面匹配（忽略大小写），并可一键切换到 `*` 通配符模式。  
+> 目标：为 MeoBrowser 提供轻量、键盘可达的「在当前网页中查找」能力：标签栏 Chrome 区「查找」按钮（可从 ⋯ 固定）+ ⌘F 弹出浮动查找条，高亮全部匹配，支持上一处 / 下一处循环跳转；默认字面匹配（忽略大小写），并可一键切换到 `*` 通配符模式。
+>
+> **入口变更**：原地址栏 ActionGroup 入口已迁至标签栏 ⋯ / Chrome Catalog（`findInPage`）；见 [address-bar-tools-to-chrome-menu-design.md](address-bar-tools-to-chrome-menu-design.md)。
 > 状态：**FI-0～FI-2 已实现**（2026-07-20）  
 > 开发计划：[find-in-page-development-plan.md](find-in-page-development-plan.md)  
 > 关联：[design.md](design.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [download-design.md](download-design.md)（浮层锚点范式） · [docs/sbkit/text-input.md](../sbkit/text-input.md)

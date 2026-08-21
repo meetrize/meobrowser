@@ -20,6 +20,7 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
     NSRect fillRect = self.bounds;
     CGFloat radius = NSHeight(fillRect) * 0.5;
     if (radius < 0.5) {
@@ -30,7 +31,6 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
                                                          yRadius:radius];
     NSAppearance *appearance = self.effectiveAppearance ?: NSAppearance.currentDrawingAppearance;
     [appearance performAsCurrentDrawingAppearance:^{
-        // 浅灰填充、无描边（深浅色自适应）。
         NSAppearanceName match =
             [appearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
         NSColor *fill = ([match isEqualToString:NSAppearanceNameDarkAqua]
@@ -63,11 +63,13 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
 
         self.translatesAutoresizingMaskIntoConstraints = NO;
         [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
-                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        actionGroup.layoutContainer = self;
+        if (actionGroup) {
+            actionGroup.layoutContainer = self;
+        }
 
         if (securityBadge) {
             [self addSubview:securityBadge];
@@ -80,13 +82,11 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
                                                            constant:0];
         }
 
-        // 胶囊描边作为地址栏的 sibling，垫在输入框下面；输入框本身无系统 bezel。
         if (addressField.usesCapsuleBezel) {
             BrowserAddressBarCapsuleChromeView *chrome = [[BrowserAddressBarCapsuleChromeView alloc] initWithFrame:NSZeroRect];
             chrome.translatesAutoresizingMaskIntoConstraints = NO;
             self.capsuleChrome = chrome;
             [self addSubview:chrome];
-            // 输入框保持透明，只显示文字与内嵌按钮。
             addressField.bezeled = NO;
             addressField.bordered = NO;
             addressField.drawsBackground = NO;
@@ -99,11 +99,6 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
         if (self.capsuleChrome) {
             [self addSubview:self.capsuleChrome positioned:NSWindowBelow relativeTo:addressField];
         }
-        [self addSubview:actionGroup];
-
-        BrowserAddressBarEdgeResizeView *resizeHandle = [[BrowserAddressBarEdgeResizeView alloc] initWithFrame:NSZeroRect];
-        resizeHandle.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:resizeHandle positioned:NSWindowAbove relativeTo:actionGroup];
 
         NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
         if (securityBadge) {
@@ -121,17 +116,38 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
         [constraints addObjectsFromArray:@[
             [addressField.topAnchor constraintEqualToAnchor:self.topAnchor],
             [addressField.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [addressField.trailingAnchor constraintEqualToAnchor:actionGroup.leadingAnchor],
-
-            [actionGroup.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [actionGroup.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [actionGroup.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-
-            [resizeHandle.trailingAnchor constraintEqualToAnchor:actionGroup.leadingAnchor],
-            [resizeHandle.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [resizeHandle.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
-            [resizeHandle.widthAnchor constraintEqualToConstant:kResizeHandleWidth],
         ]];
+
+        if (actionGroup) {
+            [self addSubview:actionGroup];
+            BrowserAddressBarEdgeResizeView *resizeHandle = [[BrowserAddressBarEdgeResizeView alloc] initWithFrame:NSZeroRect];
+            resizeHandle.translatesAutoresizingMaskIntoConstraints = NO;
+            [self addSubview:resizeHandle positioned:NSWindowAbove relativeTo:actionGroup];
+
+            [constraints addObjectsFromArray:@[
+                [addressField.trailingAnchor constraintEqualToAnchor:actionGroup.leadingAnchor],
+                [actionGroup.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+                [actionGroup.topAnchor constraintEqualToAnchor:self.topAnchor],
+                [actionGroup.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+                [resizeHandle.trailingAnchor constraintEqualToAnchor:actionGroup.leadingAnchor],
+                [resizeHandle.topAnchor constraintEqualToAnchor:self.topAnchor],
+                [resizeHandle.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+                [resizeHandle.widthAnchor constraintEqualToConstant:kResizeHandleWidth],
+            ]];
+
+            __weak BrowserAddressBarActionGroup *weakActionGroup = actionGroup;
+            resizeHandle.onDragBegan = ^{
+                [weakActionGroup beginWidthResize];
+            };
+            resizeHandle.onDrag = ^(CGFloat deltaX) {
+                [weakActionGroup applyWidthDelta:-deltaX];
+            };
+            resizeHandle.onDragEnded = ^{
+                [weakActionGroup endWidthResize];
+            };
+        } else {
+            [constraints addObject:[addressField.trailingAnchor constraintEqualToAnchor:self.trailingAnchor]];
+        }
 
         if (self.capsuleChrome) {
             BrowserAddressBarCapsuleChromeView *chrome = self.capsuleChrome;
@@ -144,17 +160,6 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
         }
 
         [NSLayoutConstraint activateConstraints:constraints];
-
-        __weak BrowserAddressBarActionGroup *weakActionGroup = actionGroup;
-        resizeHandle.onDragBegan = ^{
-            [weakActionGroup beginWidthResize];
-        };
-        resizeHandle.onDrag = ^(CGFloat deltaX) {
-            [weakActionGroup applyWidthDelta:-deltaX];
-        };
-        resizeHandle.onDragEnded = ^{
-            [weakActionGroup endWidthResize];
-        };
     }
     return self;
 }
