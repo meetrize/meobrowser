@@ -12,8 +12,12 @@
 | [minimal-browser/tab-strip-adaptive-width-design.md](minimal-browser/tab-strip-adaptive-width-design.md) | 标签栏自适应宽度 — Safari 向伸缩与横向滚动 |
 | [minimal-browser/tab-strip-chrome-actions-design.md](minimal-browser/tab-strip-chrome-actions-design.md) | 标签栏右侧 Chrome 动作区 — 精简模式 / 窗口置顶（可扩展） |
 | [minimal-browser/tab-strip-chrome-actions-development-plan.md](minimal-browser/tab-strip-chrome-actions-development-plan.md) | 标签栏右侧 Chrome 动作区 — 分阶段开发计划（CA-0～CA-2） |
-| [minimal-browser/transparent-mode-design.md](minimal-browser/transparent-mode-design.md) | 透明模式 — 全 UI 隐藏、只留网页文字、菜单栏进出 |
+| [minimal-browser/transparent-mode-design.md](minimal-browser/transparent-mode-design.md) | 透明模式 — 窗口/页面透明与字色；**壳显隐以 chrome-revision 为准** |
 | [minimal-browser/transparent-mode-development-plan.md](minimal-browser/transparent-mode-development-plan.md) | 透明模式 — 分阶段开发计划（TM-0～TM-2） |
+| [minimal-browser/transparent-mode-chrome-revision-design.md](minimal-browser/transparent-mode-chrome-revision-design.md) | 透明模式 Chrome 修订 — 保留标签栏、地址栏随精简 |
+| [minimal-browser/transparent-mode-chrome-revision-development-plan.md](minimal-browser/transparent-mode-chrome-revision-development-plan.md) | 透明模式 Chrome 修订 — 分阶段开发计划（TC-0～TC-2） |
+| [minimal-browser/transparent-mode-chrome-autohide-design.md](minimal-browser/transparent-mode-chrome-autohide-design.md) | 透明模式 — 鼠标移出自动藏标签条/地址栏 |
+| [minimal-browser/transparent-mode-chrome-autohide-development-plan.md](minimal-browser/transparent-mode-chrome-autohide-development-plan.md) | 透明模式自动藏壳 — 分阶段开发计划（TH-0～TH-2） |
 | [minimal-browser/transparent-mode-right-drag-move-design.md](minimal-browser/transparent-mode-right-drag-move-design.md) | 透明模式 — 右键拖拽移窗（保留普通右键菜单） |
 | [minimal-browser/transparent-mode-right-drag-move-development-plan.md](minimal-browser/transparent-mode-right-drag-move-development-plan.md) | 透明模式右键拖窗 — 分阶段开发计划（RD-0～RD-2） |
 | [minimal-browser/afk-mode-design.md](minimal-browser/afk-mode-design.md) | 摸鱼模式 — 鼠标移出视觉隐藏、移入按原形态还原（不做点击穿透） |

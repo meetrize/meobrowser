@@ -1,10 +1,14 @@
 # 透明模式（Overlay Reading）— 交互与实现方案
 
-> 目标：在标签栏 Chrome 动作区增加「透明模式」；开启后隐藏全部浏览器 UI，窗口与页面背景透明，仅保留网页文字可读；通过 macOS 菜单栏 Status Item 进出模式并支持退出应用。  
-> 状态：**首版已完成（TM-0～TM-2）**  
+> 目标：在标签栏 Chrome 动作区增加「透明模式」；开启后窗口与页面背景透明，正文可读；**壳显隐见修订文档（保留标签栏，地址栏随精简）**。  
+> 状态：**TM-0～TM-2 已完成；Chrome 修订 TC-0～TC-2 已完成**  
 > 开发计划：[transparent-mode-development-plan.md](transparent-mode-development-plan.md)  
+> **Chrome 修订**：[transparent-mode-chrome-revision-design.md](transparent-mode-chrome-revision-design.md) · [transparent-mode-chrome-revision-development-plan.md](transparent-mode-chrome-revision-development-plan.md)  
 > Cursor 计划：[.cursor/plans/transparent-mode.plan.md](../../.cursor/plans/transparent-mode.plan.md)  
 > 关联：[tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md) · [multi-window-design.md](multi-window-design.md) · [multi-tab-design.md](multi-tab-design.md)
+
+> **重要修订（覆盖下文「全 UI 隐藏」相关描述）**：进入透明后 **显示顶部标签栏与交通灯**；地址栏是否显示 **由精简模式决定**。细节与验收以 [transparent-mode-chrome-revision-design.md](transparent-mode-chrome-revision-design.md) 为准。  
+> **再修订**：透明态下鼠标移出窗口可 **自动隐藏标签条**（非精简时地址栏一并进出），见 [transparent-mode-chrome-autohide-design.md](transparent-mode-chrome-autohide-design.md)。
 
 ---
 

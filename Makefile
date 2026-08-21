@@ -44,6 +44,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/TransparentMode/BrowserTransparentModeController.m \
                    $(BROWSER_SRC_DIR)/TransparentMode/BrowserTransparentModePreferences.m \
                    $(BROWSER_SRC_DIR)/TransparentMode/BrowserTransparentModeWindowDragMonitor.m \
+                   $(BROWSER_SRC_DIR)/TransparentMode/BrowserTransparentChromeAutoHideController.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutItem.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutIconPalette.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserShortcutStore.m \

@@ -12,6 +12,7 @@
 #import "BrowserStatusItemController.h"
 #import "BrowserTransparentModeController.h"
 #import "BrowserTransparentModePreferences.h"
+#import "BrowserTransparentChromeAutoHideController.h"
 #import "BrowserAfkModeController.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
@@ -159,9 +160,9 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) BrowserTabStripChromeActionsView *chromeActionsView;
 @property (nonatomic, strong) BrowserTransparentModeController *transparentModeController;
+@property (nonatomic, strong) BrowserTransparentChromeAutoHideController *transparentChromeAutoHideController;
 @property (nonatomic, strong) BrowserAfkModeController *afkModeController;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
-@property (nonatomic, assign) BOOL transparentModeAccessoryRemoved;
 @property (nonatomic, strong) NSView *tabStripAccessoryRoot;
 @property (nonatomic, strong) NSLayoutConstraint *tabStripAccessoryHeightConstraint;
 @property (nonatomic, strong) NSStackView *toolbar;
@@ -398,6 +399,13 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
         _transparentModeController = [[BrowserTransparentModeController alloc] init];
         _transparentModeController.windowController = self;
+        _transparentChromeAutoHideController = [[BrowserTransparentChromeAutoHideController alloc] init];
+        _transparentChromeAutoHideController.windowController = self;
+        __weak typeof(self) weakSelfForAutoHide = self;
+        _transparentChromeAutoHideController.chromeRevealDidChangeHandler = ^{
+            __strong typeof(weakSelfForAutoHide) strongSelf = weakSelfForAutoHide;
+            [strongSelf applyChromeVisibilityForCurrentMode];
+        };
         _afkModeController = [[BrowserAfkModeController alloc] init];
         _afkModeController.windowController = self;
         [[NSNotificationCenter defaultCenter] addObserver:self
@@ -664,6 +672,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     [self.afkModeController forceDisableAndReveal];
+    [self.transparentChromeAutoHideController forceDisableAndReveal];
     [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
@@ -1171,18 +1180,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.transparentModeController captureSnapshotFromWindow:window
                                             contentContainer:self.contentContainer];
 
-    // 移除标签条 accessory，避免透明态仍占 titlebar 高度
-    NSArray<NSTitlebarAccessoryViewController *> *accessories = window.titlebarAccessoryViewControllers;
-    NSUInteger accessoryIndex = [accessories indexOfObject:self.tabStripAccessory];
-    if (accessoryIndex != NSNotFound) {
-        [window removeTitlebarAccessoryViewControllerAtIndex:accessoryIndex];
-        self.transparentModeAccessoryRemoved = YES;
-    } else {
-        self.transparentModeAccessoryRemoved = NO;
+    // TC：保留标签条与交通灯；地址栏跟随精简 + TH 自动藏壳
+    if (self.tabStripAccessory
+        && ![window.titlebarAccessoryViewControllers containsObject:self.tabStripAccessory]) {
+        [window addTitlebarAccessoryViewController:self.tabStripAccessory];
     }
 
-    [self setStandardWindowButtonsHidden:YES];
-    self.toolbar.hidden = YES;
+    if (self.compactModeEnabled) {
+        [self moveNavButtonsToTabStrip];
+    } else {
+        [self moveNavButtonsToToolbar];
+    }
+    self.tabStripView.compactMetricsEnabled = self.compactModeEnabled;
 
     [self.transparentModeController applyWindowTransparency:window
                                           contentContainer:self.contentContainer
@@ -1192,7 +1201,13 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self syncTransparentPageStyleForSelection];
     [self.transparentModeController setWindowRightDragMoveEnabled:YES];
 
+    self.transparentChromeAutoHideController.enabled = YES;
+    [self applyChromeVisibilityForCurrentMode];
+
     [window.contentView layoutSubtreeIfNeeded];
+    [self.tabStripView layoutSubtreeIfNeeded];
+    [self scheduleTrafficLightPositioning];
+    [self collapseSystemTitlebarDecoration];
 }
 
 - (void)exitTransparentModeChrome {
@@ -1206,6 +1221,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                              selector:@selector(refreshTransparentPageStyleForSelection)
                                                object:nil];
 
+    self.transparentChromeAutoHideController.enabled = NO;
+
     [self.transparentModeController setWindowRightDragMoveEnabled:NO];
 
     for (WKWebView *webView in [self liveWebViewsForTransparentMode]) {
@@ -1216,24 +1233,20 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                           contentContainer:self.contentContainer
                                                   webViews:[self liveWebViewsForTransparentMode]];
 
-    if (self.transparentModeAccessoryRemoved && self.tabStripAccessory) {
-        if (![window.titlebarAccessoryViewControllers containsObject:self.tabStripAccessory]) {
-            [window addTitlebarAccessoryViewController:self.tabStripAccessory];
-        }
-        self.transparentModeAccessoryRemoved = NO;
+    // 标签条在透明态一直保留；兜底确保 accessory 仍挂在窗上
+    if (self.tabStripAccessory
+        && ![window.titlebarAccessoryViewControllers containsObject:self.tabStripAccessory]) {
+        [window addTitlebarAccessoryViewController:self.tabStripAccessory];
     }
 
-    [self setStandardWindowButtonsHidden:NO];
-
-    // 重放精简布局（布尔值在透明期间未改）
+    // 重放精简布局（透明期间可能改过 compact）
     if (self.compactModeEnabled) {
         [self moveNavButtonsToTabStrip];
     } else {
         [self moveNavButtonsToToolbar];
     }
     self.tabStripView.compactMetricsEnabled = self.compactModeEnabled;
-    self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
-    [self applyToolbarVisibilityForCompactState];
+    [self applyChromeVisibilityForCurrentMode];
     [self applyAlwaysOnTopWindowLevel];
 
     // NTP launchpad 显隐由 refreshTabsUI 接管
@@ -1295,8 +1308,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     self.tabStripView.compactMetricsEnabled = compactModeEnabled;
-    self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
-    [self applyToolbarVisibilityForCompactState];
+    [self applyChromeVisibilityForCurrentMode];
     [self.window.contentView layoutSubtreeIfNeeded];
     [self.tabStripView layoutSubtreeIfNeeded];
     [self scheduleTrafficLightPositioning];
@@ -1322,24 +1334,50 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
-- (void)applyToolbarVisibilityForCompactState {
-    if (self.transparentModeEnabled) {
-        self.toolbar.hidden = YES;
-        return;
+/// 非透明：条/灯常显，地址栏跟精简。透明：条/灯随指针；地址栏精简永藏，非精简随指针；Peek 强制显栏。
+- (void)applyChromeVisibilityForCurrentMode {
+    BOOL transparent = self.transparentModeEnabled;
+    BOOL chromeRevealed = !transparent || self.transparentChromeAutoHideController.chromeRevealed;
+    BOOL showTabStrip = !transparent || chromeRevealed;
+
+    if (self.tabStripAccessoryRoot) {
+        self.tabStripAccessoryRoot.hidden = !showTabStrip;
     }
-    BOOL showToolbar = !self.compactModeEnabled || self.addressBarPeekActive;
+    CGFloat stripHeight = showTabStrip ? self.tabStripView.effectiveStripHeight : 0.0;
+    if (self.tabStripAccessoryHeightConstraint) {
+        self.tabStripAccessoryHeightConstraint.constant = stripHeight;
+    }
+    [self setStandardWindowButtonsHidden:!showTabStrip];
+
+    BOOL showToolbar = NO;
+    if (self.addressBarPeekActive) {
+        showToolbar = YES;
+    } else if (self.compactModeEnabled) {
+        showToolbar = NO;
+    } else if (!transparent) {
+        showToolbar = YES;
+    } else {
+        showToolbar = chromeRevealed;
+    }
     self.toolbar.hidden = !showToolbar;
+
+    [self.window.contentView layoutSubtreeIfNeeded];
+    if (showTabStrip) {
+        [self.tabStripView layoutSubtreeIfNeeded];
+        [self scheduleTrafficLightPositioning];
+    }
+}
+
+- (void)applyToolbarVisibilityForCompactState {
+    [self applyChromeVisibilityForCurrentMode];
 }
 
 - (void)beginAddressBarPeek {
-    if (self.transparentModeEnabled) {
-        return;
-    }
     if (!self.compactModeEnabled) {
         return;
     }
     self.addressBarPeekActive = YES;
-    [self applyToolbarVisibilityForCompactState];
+    [self applyChromeVisibilityForCurrentMode];
 }
 
 - (void)endAddressBarPeekResigning:(BOOL)resignFirstResponder {
@@ -1350,7 +1388,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     self.addressBarPeekActive = NO;
-    [self applyToolbarVisibilityForCompactState];
+    [self applyChromeVisibilityForCurrentMode];
     if (resignFirstResponder) {
         [self resignAddressBarFocusIfNeeded];
     }
@@ -1366,9 +1404,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)focusAddressBar:(id)sender {
     (void)sender;
-    if (self.transparentModeEnabled) {
-        return;
-    }
     if (self.compactModeEnabled) {
         [self beginAddressBarPeek];
     }
