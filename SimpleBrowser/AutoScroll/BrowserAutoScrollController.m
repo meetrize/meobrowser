@@ -7,7 +7,10 @@
 @interface BrowserAutoScrollController ()
 @property (nonatomic, strong, nullable) NSTimer *tickTimer;
 @property (nonatomic, strong, nullable) id scrollWheelMonitor;
+@property (nonatomic, strong, nullable) id mouseMoveLocalMonitor;
+@property (nonatomic, strong, nullable) id mouseMoveGlobalMonitor;
 @property (nonatomic, assign) NSTimeInterval lastTickTime;
+@property (nonatomic, assign) BOOL pausedForPointerInside;
 @end
 
 @implementation BrowserAutoScrollController
@@ -43,6 +46,7 @@
     if (enabled) {
         [self startTicking];
     } else {
+        self.pausedForPointerInside = NO;
         [self tearDownTimerAndMonitor];
     }
 }
@@ -56,6 +60,7 @@
         return;
     }
     _enabled = NO;
+    self.pausedForPointerInside = NO;
     [self tearDownTimerAndMonitor];
     if (self.didDisableHandler) {
         self.didDisableHandler();
@@ -74,9 +79,38 @@
     return tab.webView;
 }
 
+- (nullable NSWindow *)targetWindow {
+    return self.windowController.window;
+}
+
+- (BOOL)isPointerInsideTargetWindowAtScreenLocation:(NSPoint)screenLocation {
+    NSWindow *window = [self targetWindow];
+    if (!window || !window.isVisible) {
+        return NO;
+    }
+    return NSPointInRect(screenLocation, window.frame);
+}
+
+- (void)evaluatePointerAtScreenLocation:(NSPoint)screenLocation {
+    if (!self.enabled) {
+        return;
+    }
+    BOOL inside = [self isPointerInsideTargetWindowAtScreenLocation:screenLocation];
+    if (inside == self.pausedForPointerInside) {
+        return;
+    }
+    self.pausedForPointerInside = inside;
+    if (!inside) {
+        // 移出后恢复：重置时间戳，避免一次大步长跳动
+        self.lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    }
+}
+
 - (void)startTicking {
     [self tearDownTimerAndMonitor];
     self.lastTickTime = [NSDate timeIntervalSinceReferenceDate];
+    self.pausedForPointerInside = [self isPointerInsideTargetWindowAtScreenLocation:[NSEvent mouseLocation]];
+
     __weak typeof(self) weakSelf = self;
     self.tickTimer = [NSTimer timerWithTimeInterval:1.0 / 30.0
                                             repeats:YES
@@ -98,6 +132,23 @@
             }
             return event;
         }];
+
+    NSEventMask moveMask = NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDragged
+        | NSEventMaskOtherMouseDragged;
+    self.mouseMoveLocalMonitor =
+        [NSEvent addLocalMonitorForEventsMatchingMask:moveMask
+                                              handler:^NSEvent *(NSEvent *event) {
+            (void)event;
+            [weakSelf evaluatePointerAtScreenLocation:[NSEvent mouseLocation]];
+            return event;
+        }];
+    // 全局：指针从窗外移入/移出本窗时本进程不一定收到 local mouseMoved
+    self.mouseMoveGlobalMonitor =
+        [NSEvent addGlobalMonitorForEventsMatchingMask:moveMask
+                                               handler:^(NSEvent *event) {
+            (void)event;
+            [weakSelf evaluatePointerAtScreenLocation:[NSEvent mouseLocation]];
+        }];
 }
 
 - (void)tearDownTimerAndMonitor {
@@ -107,10 +158,18 @@
         [NSEvent removeMonitor:self.scrollWheelMonitor];
         self.scrollWheelMonitor = nil;
     }
+    if (self.mouseMoveLocalMonitor) {
+        [NSEvent removeMonitor:self.mouseMoveLocalMonitor];
+        self.mouseMoveLocalMonitor = nil;
+    }
+    if (self.mouseMoveGlobalMonitor) {
+        [NSEvent removeMonitor:self.mouseMoveGlobalMonitor];
+        self.mouseMoveGlobalMonitor = nil;
+    }
 }
 
 - (void)tick {
-    if (!self.enabled) {
+    if (!self.enabled || self.pausedForPointerInside) {
         return;
     }
     WKWebView *webView = [self activeWebView];
@@ -146,7 +205,7 @@
     __weak typeof(self) weakSelf = self;
     [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.enabled) {
+        if (!strongSelf || !strongSelf.enabled || strongSelf.pausedForPointerInside) {
             return;
         }
         if (error || ![result isKindOfClass:[NSDictionary class]]) {
