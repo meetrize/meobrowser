@@ -886,7 +886,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.toolbar.spacing = 10;
     // 上下边距一致：输入框上边缘到工具栏顶 = 下边缘到网页顶。
-    self.toolbar.edgeInsets = NSEdgeInsetsMake(8, 8, 8, 8);
+    self.toolbar.edgeInsets = NSEdgeInsetsMake(4, 8, 4, 8);
     self.toolbar.distribution = NSStackViewDistributionFill;
     [self.toolbar setContentHuggingPriority:NSLayoutPriorityRequired
                              forOrientation:NSLayoutConstraintOrientationVertical];
