@@ -17,6 +17,20 @@ NS_ASSUME_NONNULL_BEGIN
 /// 经 `SBTextInputConfiguration` / `standardField` 创建时默认 YES；仅特殊 UI 可关。
 @property (nonatomic) BOOL usesCompactVerticalTextInsets;
 
+/// 在紧凑文字区内，额外增加「距输入框上边缘」的空白。默认 0。
+/// 仅地址栏等高框需要光学留白时设置；不影响快捷方式编辑 / 设置等默认贴顶样式。
+@property (nonatomic) CGFloat compactTextTopInset;
+
+/// 相对当前紧凑布局，将文字整体上移的像素（未编辑时）。默认 0。
+@property (nonatomic) CGFloat compactTextUpwardBias;
+
+/// 编辑中（field editor）时的上移像素。默认 0。
+/// 若开启 `centersCompactTextWhenEditing`，本属性在编辑态被忽略。
+@property (nonatomic) CGFloat compactTextUpwardBiasWhenEditing;
+
+/// 编辑态将 field editor 垂直居中（地址栏推荐）。默认 NO。
+@property (nonatomic) BOOL centersCompactTextWhenEditing;
+
 /// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
 - (void)syncFieldEditorFrameWithContentInsets;
 

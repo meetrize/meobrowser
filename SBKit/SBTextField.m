@@ -85,25 +85,87 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     return area;
 }
 
-- (NSRect)drawingRectForBounds:(NSRect)theRect {
+- (NSRect)compactTextRectForBounds:(NSRect)theRect upwardBias:(CGFloat)upwardBias {
     NSRect area = [self textAreaRectForBounds:theRect];
+    NSView *controlView = self.controlView;
+    if (![controlView isKindOfClass:[SBTextField class]] ||
+        !((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        return area;
+    }
+    SBTextField *field = (SBTextField *)controlView;
+    area = SBTextFieldApplyCompactInsets(area);
+    area = SBTextFieldApplyTopInsetWithUpwardBias(area,
+                                                 field.compactTextTopInset,
+                                                 upwardBias,
+                                                 controlView);
+    return area;
+}
+
+- (NSRect)verticallyCenteredEditingRectForBounds:(NSRect)theRect {
+    NSRect area = [self textAreaRectForBounds:theRect];
+    area = SBTextFieldApplyCompactInsets(area);
+    CGFloat lineHeight = SBTextFieldLineHeight(self.font);
+    if (lineHeight < 1.0) {
+        lineHeight = NSHeight(area);
+    }
+    return SBTextFieldVerticallyCenteredRect(area, lineHeight);
+}
+
+- (CGFloat)idleUpwardBias {
+    NSView *controlView = self.controlView;
+    if (![controlView isKindOfClass:[SBTextField class]]) {
+        return 0;
+    }
+    return ((SBTextField *)controlView).compactTextUpwardBias;
+}
+
+- (CGFloat)editingUpwardBias {
+    NSView *controlView = self.controlView;
+    if (![controlView isKindOfClass:[SBTextField class]]) {
+        return 0;
+    }
+    return ((SBTextField *)controlView).compactTextUpwardBiasWhenEditing;
+}
+
+- (BOOL)centersWhenEditing {
+    NSView *controlView = self.controlView;
+    return [controlView isKindOfClass:[SBTextField class]]
+        && ((SBTextField *)controlView).centersCompactTextWhenEditing;
+}
+
+- (void)prepareFieldEditor:(NSText *)textObj {
+    if (![textObj isKindOfClass:[NSTextView class]]) {
+        return;
+    }
+    NSTextView *textView = (NSTextView *)textObj;
+    textView.textContainerInset = NSMakeSize(0, 0);
+    if (textView.textContainer) {
+        textView.textContainer.lineFragmentPadding = 0;
+    }
+}
+
+- (NSRect)drawingRectForBounds:(NSRect)theRect {
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        return SBTextFieldApplyCompactInsets(area);
+        SBTextField *field = (SBTextField *)controlView;
+        if (field.currentEditor && [self centersWhenEditing]) {
+            return [self verticallyCenteredEditingRectForBounds:theRect];
+        }
+        CGFloat bias = field.currentEditor ? [self editingUpwardBias] : [self idleUpwardBias];
+        return [self compactTextRectForBounds:theRect upwardBias:bias];
     }
-    return [super drawingRectForBounds:area];
+    return [super drawingRectForBounds:[self textAreaRectForBounds:theRect]];
 }
 
 - (NSRect)titleRectForBounds:(NSRect)theRect {
-    NSRect area = [self textAreaRectForBounds:theRect];
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        NSRect compact = SBTextFieldApplyCompactInsets(area);
+        NSRect compact = [self compactTextRectForBounds:theRect upwardBias:[self idleUpwardBias]];
         return SBTextFieldTopAlignedTitleRect(compact, self.font, controlView);
     }
-    return [super titleRectForBounds:area];
+    return [super titleRectForBounds:[self textAreaRectForBounds:theRect]];
 }
 
 - (void)editWithFrame:(NSRect)rect
@@ -111,8 +173,21 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
                editor:(NSText *)textObj
              delegate:(nullable id)delegate
                 event:(nullable NSEvent *)event {
-    NSRect adjusted = [self drawingRectForBounds:controlView.bounds];
+    NSRect adjusted = rect;
+    if ([controlView isKindOfClass:[SBTextField class]] &&
+        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        if ([self centersWhenEditing]) {
+            adjusted = [self verticallyCenteredEditingRectForBounds:controlView.bounds];
+        } else {
+            adjusted = [self compactTextRectForBounds:controlView.bounds
+                                          upwardBias:[self editingUpwardBias]];
+        }
+    } else {
+        adjusted = [self drawingRectForBounds:controlView.bounds];
+    }
+    [self prepareFieldEditor:textObj];
     [super editWithFrame:adjusted inView:controlView editor:textObj delegate:delegate event:event];
+    [self prepareFieldEditor:textObj];
 }
 
 - (void)selectWithFrame:(NSRect)rect
@@ -121,13 +196,26 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
                delegate:(nullable id)delegate
                   start:(NSInteger)selStart
                  length:(NSInteger)selLength {
-    NSRect adjusted = [self drawingRectForBounds:controlView.bounds];
+    NSRect adjusted = rect;
+    if ([controlView isKindOfClass:[SBTextField class]] &&
+        ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
+        if ([self centersWhenEditing]) {
+            adjusted = [self verticallyCenteredEditingRectForBounds:controlView.bounds];
+        } else {
+            adjusted = [self compactTextRectForBounds:controlView.bounds
+                                          upwardBias:[self editingUpwardBias]];
+        }
+    } else {
+        adjusted = [self drawingRectForBounds:controlView.bounds];
+    }
+    [self prepareFieldEditor:textObj];
     [super selectWithFrame:adjusted
                     inView:controlView
                     editor:textObj
                   delegate:delegate
                      start:selStart
                     length:selLength];
+    [self prepareFieldEditor:textObj];
 }
 
 @end
@@ -175,6 +263,45 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return;
     }
     _usesCompactVerticalTextInsets = usesCompactVerticalTextInsets;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCompactTextTopInset:(CGFloat)compactTextTopInset {
+    CGFloat value = MAX(0.0, compactTextTopInset);
+    if (fabs(_compactTextTopInset - value) < 0.25) {
+        return;
+    }
+    _compactTextTopInset = value;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCompactTextUpwardBias:(CGFloat)compactTextUpwardBias {
+    CGFloat value = MAX(0.0, compactTextUpwardBias);
+    if (fabs(_compactTextUpwardBias - value) < 0.25) {
+        return;
+    }
+    _compactTextUpwardBias = value;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCompactTextUpwardBiasWhenEditing:(CGFloat)compactTextUpwardBiasWhenEditing {
+    CGFloat value = MAX(0.0, compactTextUpwardBiasWhenEditing);
+    if (fabs(_compactTextUpwardBiasWhenEditing - value) < 0.25) {
+        return;
+    }
+    _compactTextUpwardBiasWhenEditing = value;
+    [self setNeedsDisplay:YES];
+    [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCentersCompactTextWhenEditing:(BOOL)centersCompactTextWhenEditing {
+    if (_centersCompactTextWhenEditing == centersCompactTextWhenEditing) {
+        return;
+    }
+    _centersCompactTextWhenEditing = centersCompactTextWhenEditing;
     [self setNeedsDisplay:YES];
     [self syncFieldEditorFrameWithContentInsets];
 }

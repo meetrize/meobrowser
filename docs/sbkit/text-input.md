@@ -112,7 +112,8 @@ AI 与协作者请遵循：
 矮高度（约 22–28 pt）+ `NSTextFieldSquareBezel` 时，系统默认垂直 inset 过大易导致文字偏下、下行被裁切。
 
 - **默认**：`SBTextField` / `SBSecureTextField` 经 `standardField` 或 `SBTextInputConfiguration` 创建时，`usesCompactVerticalTextInsets = YES`
-- 边距常量：`SBTextFieldLayout`（水平 3pt / 垂直 2pt）；仅特殊 UI 可关该属性
+- 边距常量：`SBTextFieldLayout`（水平 3pt / 垂直 1pt）；仅特殊 UI 可关该属性
+- 地址栏单独加厚上边距：`compactTextTopInset`（默认 0；勿在编辑 sheet / 设置里设置）
 - 方案：[text-field-vertical-insets-design.md](text-field-vertical-insets-design.md) · [text-field-vertical-insets-development-plan.md](text-field-vertical-insets-development-plan.md)
 - **禁止**为修裁切而加高业务侧 `heightAnchor`
 

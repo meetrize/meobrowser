@@ -771,8 +771,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.selectsAllOnMouseFocus = YES;
     self.addressField.delegate = self;
     self.addressField.translatesAutoresizingMaskIntoConstraints = NO;
+    // 地址栏单独加厚文字上边距；快捷方式编辑 / 设置等仍用默认贴顶。
+    self.addressField.compactTextTopInset = 5.0;
+    // 未编辑上移 2pt；编辑态改为垂直居中（见 centersCompactTextWhenEditing）。
+    self.addressField.compactTextUpwardBias = 2.0;
+    self.addressField.centersCompactTextWhenEditing = YES;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.addressField.heightAnchor constraintEqualToConstant:28].active = YES;
 
     self.bookmarkButton = [self makeBookmarkButton];
     self.translateButton = [self makeTranslateButton];
@@ -870,7 +876,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     ]];
     self.toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.toolbar.spacing = 10;
-    self.toolbar.edgeInsets = NSEdgeInsetsMake(6, 8, 8, 8);
+    // 上下边距一致：输入框上边缘到工具栏顶 = 下边缘到网页顶。
+    self.toolbar.edgeInsets = NSEdgeInsetsMake(8, 8, 8, 8);
     self.toolbar.distribution = NSStackViewDistributionFill;
     [self.toolbar setContentHuggingPriority:NSLayoutPriorityRequired
                              forOrientation:NSLayoutConstraintOrientationVertical];
