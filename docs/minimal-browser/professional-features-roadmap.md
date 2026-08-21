@@ -166,7 +166,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | **AppleScript / Shortcuts 基础** | P2 | 打开 URL、新建标签——与 macOS 自动化生态衔接 |
 | **URL Scheme** | P2 | `meobrowser://open?url=` 供 Alfred/Raycast 调用 |
 | **复制为 cURL** | P3 | 从 Inspector 或简化版网络面板导出 |
-| **每站点 User CSS/JS** | P3 | 轻量 userscript，改文档站样式、隐藏干扰元素 |
+| **每站点 User CSS/JS（页面插件）** | P3 | Stylish+TM 合一 Pack；方案见 [page-pack-design.md](page-pack-design.md) · [page-pack-development-plan.md](page-pack-development-plan.md) |
 | **站点登录助手（一键/自动登录）** | P2 | 按站点 Recipe：账密一键、可选短信 OTP / 二维码减负；非完整密码管理器。见 [auto-login-design.md](auto-login-design.md) |
 | **登录表单内联助手** | P2 | 检测登录表单、字段内钥匙入口、系统密码填充、成功后询问保存 Recipe。见 [login-form-inline-design.md](login-form-inline-design.md) |
 | **站点表单备忘（多字段填入）** | P2 | 按 URL 关联常用文本，普通表单一键填入；与登录 Recipe 平行。见 [site-form-memo-design.md](site-form-memo-design.md) |

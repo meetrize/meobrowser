@@ -2,6 +2,7 @@
 #import "PhoneNotificationSidebarController.h"
 #import "AssistSidebarController.h"
 #import "BrowserHistorySidebarController.h"
+#import "PagePackSidebarController.h"
 
 @implementation BrowserTrailingSidebarSlot
 
@@ -15,6 +16,9 @@
     if (self.historySidebar.visible) {
         return BrowserTrailingSidebarKindHistory;
     }
+    if (self.pagePackSidebar.visible) {
+        return BrowserTrailingSidebarKindPagePack;
+    }
     return BrowserTrailingSidebarKindNone;
 }
 
@@ -27,6 +31,9 @@
     }
     if (kind != BrowserTrailingSidebarKindHistory && self.historySidebar.visible) {
         [self.historySidebar setVisible:NO animated:animated];
+    }
+    if (kind != BrowserTrailingSidebarKindPagePack && self.pagePackSidebar.visible) {
+        [self.pagePackSidebar setVisible:NO animated:animated];
     }
 }
 
@@ -57,6 +64,15 @@
     }
 }
 
+- (void)setPagePackVisible:(BOOL)visible animated:(BOOL)animated {
+    if (visible) {
+        [self hideOthersExcept:BrowserTrailingSidebarKindPagePack animated:animated];
+        [self.pagePackSidebar setVisible:YES animated:animated];
+    } else {
+        [self.pagePackSidebar setVisible:NO animated:animated];
+    }
+}
+
 - (void)hideAllAnimated:(BOOL)animated {
     if (self.notificationSidebar.visible) {
         [self.notificationSidebar setVisible:NO animated:animated];
@@ -66,6 +82,9 @@
     }
     if (self.historySidebar.visible) {
         [self.historySidebar setVisible:NO animated:animated];
+    }
+    if (self.pagePackSidebar.visible) {
+        [self.pagePackSidebar setVisible:NO animated:animated];
     }
 }
 

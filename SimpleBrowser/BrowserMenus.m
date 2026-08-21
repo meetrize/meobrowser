@@ -202,6 +202,12 @@
             notificationInbox.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
             notificationInbox.target = nil;
 
+            NSMenuItem *pagePack = [viewMenu addItemWithTitle:@"页面插件"
+                                                       action:@selector(togglePagePackSidebar:)
+                                                keyEquivalent:@"p"];
+            pagePack.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            pagePack.target = nil;
+
             viewMenuItem.submenu = viewMenu;
             NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
             if (windowIndex == NSNotFound) {

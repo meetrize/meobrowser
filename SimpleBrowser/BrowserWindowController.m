@@ -36,6 +36,8 @@
 #import "BrowserDownloadProgressRingView.h"
 #import "BrowserHistoryStore.h"
 #import "BrowserHistorySidebarController.h"
+#import "PagePackSidebarController.h"
+#import "PagePackInjector.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
 #import "BrowserTabOverviewController.h"
@@ -160,7 +162,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @implementation BrowserPendingNavigationError
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, PagePackSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -183,6 +185,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) PhoneNotificationSidebarController *notificationSidebarController;
 @property (nonatomic, strong) AssistSidebarController *assistSidebarController;
 @property (nonatomic, strong) BrowserHistorySidebarController *historySidebarController;
+@property (nonatomic, strong) PagePackSidebarController *pagePackSidebarController;
 @property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
@@ -902,16 +905,26 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.historySidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.pagePackSidebarController = [[PagePackSidebarController alloc] init];
+    self.pagePackSidebarController.delegate = self;
+    self.pagePackSidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.pagePackSidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.pagePackSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.trailingSidebarSlot = [[BrowserTrailingSidebarSlot alloc] init];
     self.trailingSidebarSlot.notificationSidebar = self.notificationSidebarController;
     self.trailingSidebarSlot.assistSidebar = self.assistSidebarController;
     self.trailingSidebarSlot.historySidebar = self.historySidebarController;
+    self.trailingSidebarSlot.pagePackSidebar = self.pagePackSidebarController;
 
     self.contentRowStack = [NSStackView stackViewWithViews:@[
         self.contentContainer,
         self.notificationSidebarController.view,
         self.assistSidebarController.view,
-        self.historySidebarController.view
+        self.historySidebarController.view,
+        self.pagePackSidebarController.view
     ]];
     self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.contentRowStack.spacing = 0;
@@ -1105,7 +1118,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionNotificationInboxID action:@selector(toggleNotificationInboxSidebar:)];
     [self wireChromeButton:BrowserChromeActionShareID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
-    [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(showChromePlaceholderTool:)];
+    [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(togglePagePackSidebar:)];
 }
 
 - (void)wireChromeButton:(NSString *)itemID action:(SEL)action {
@@ -1347,9 +1360,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     if ([itemID isEqualToString:BrowserChromeActionShareID]
-        || [itemID isEqualToString:BrowserChromeActionScreenshotID]
-        || [itemID isEqualToString:BrowserChromeActionExtensionID]) {
+        || [itemID isEqualToString:BrowserChromeActionScreenshotID]) {
         [self showChromePlaceholderTool:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionExtensionID]) {
+        [self togglePagePackSidebar:nil];
         return;
     }
 }
@@ -2222,6 +2238,68 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)historySidebar:(BrowserHistorySidebarController *)controller didChangeWidth:(CGFloat)width {
     (void)controller;
     (void)width;
+}
+
+#pragma mark - Page Pack Sidebar
+
+- (void)togglePagePackSidebar:(id)sender {
+    (void)sender;
+    BOOL open = !self.pagePackSidebarController.visible;
+    [self.trailingSidebarSlot setPagePackVisible:open animated:YES];
+    [self updatePagePackButtonAppearance];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+}
+
+- (void)pagePackSidebarDidRequestClose:(PagePackSidebarController *)controller {
+    (void)controller;
+    [self.trailingSidebarSlot setPagePackVisible:NO animated:YES];
+    [self updatePagePackButtonAppearance];
+}
+
+- (void)pagePackSidebar:(PagePackSidebarController *)controller didChangeWidth:(CGFloat)width {
+    (void)controller;
+    (void)width;
+}
+
+- (NSURL *)pagePackSidebarCurrentURL:(PagePackSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return [BrowserWebView publicURLFromInternalURL:self.webView.URL] ?: self.webView.URL;
+}
+
+- (WKWebView *)pagePackSidebarCurrentWebView:(PagePackSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return self.webView;
+}
+
+- (void)pagePackSidebarDidRequestReloadPage:(PagePackSidebarController *)controller {
+    (void)controller;
+    [self reloadPage:nil];
+}
+
+- (void)reloadPagePackSidebarIfVisible {
+    if (self.pagePackSidebarController.visible) {
+        [self.pagePackSidebarController reloadForCurrentURL];
+    }
+}
+
+- (void)updatePagePackButtonAppearance {
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionExtensionID];
+    if (!button) {
+        return;
+    }
+    BOOL visible = self.pagePackSidebarController.visible;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
 }
 
 - (void)updateHistoryButtonAppearance {
@@ -4104,6 +4182,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(toggleHistoryPanel:)) {
         return YES;
     }
+    if (action == @selector(togglePagePackSidebar:)) {
+        return YES;
+    }
     return YES;
 }
 
@@ -4274,6 +4355,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [self updateSecurityBadgeVisibility];
         [self.loginAssistController updateForURL:nil];
         [self reloadAssistSidebarIfVisible];
+        [self reloadPagePackSidebarIfVisible];
         [self.captchaAssistController updateForURL:nil];
         [self.feedAssistController updateForURL:nil];
         return;
@@ -4294,6 +4376,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self updateSecurityBadgeVisibility];
     [self.loginAssistController updateForURL:webView.URL];
     [self reloadAssistSidebarIfVisible];
+    [self reloadPagePackSidebarIfVisible];
     [self.captchaAssistController updateForURL:webView.URL];
     [self.feedAssistController updateForURL:webView.URL];
 }
@@ -5508,6 +5591,9 @@ didBecomeDownload:(WKDownload *)download {
     }
     NSURL *commitURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
     [self.pageTranslationController webViewDidCommitNavigation:webView URL:commitURL];
+    [[PagePackInjector sharedInjector] injectMatchingPacksIntoWebView:webView
+                                                                   URL:commitURL
+                                                                 phase:PagePackInjectionPhaseDocumentStart];
 
     // commit 时 title 可能已有；先刷一次标签，后续 sync / 延迟再补全。
     if (!tab.isNewTabPage && webView.title.length > 0 && ![tab.title isEqualToString:webView.title]) {
@@ -5552,12 +5638,17 @@ didBecomeDownload:(WKDownload *)download {
     [tab endMainFrameNavigation:navigation];
     [self syncFromWebView:webView];
     [self.feedAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
+    NSURL *finishURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    [[PagePackInjector sharedInjector] injectMatchingPacksIntoWebView:webView
+                                                                   URL:finishURL
+                                                                 phase:PagePackInjectionPhaseDocumentEnd];
     if (webView == self.webView) {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.findBarController noteNavigationFinishedInWebView:webView];
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
         [self updateReloadStopButtonAppearance];
+        [self reloadPagePackSidebarIfVisible];
         if (self.transparentModeEnabled) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
         }

@@ -39,6 +39,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)toggleAssistSidebar:(nullable id)sender;
 - (void)showAssistSidebar:(nullable id)sender;
 - (void)toggleNotificationInboxSidebar:(nullable id)sender;
+- (void)togglePagePackSidebar:(nullable id)sender;
 - (void)oneClickLogin:(nullable id)sender;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;

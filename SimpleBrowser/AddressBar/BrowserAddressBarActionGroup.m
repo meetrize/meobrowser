@@ -220,7 +220,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         @{@"id": @"share", @"symbol": @"square.and.arrow.up", @"tip": @"分享"},
         @{@"id": @"screenshot", @"symbol": @"camera", @"tip": @"截图"},
         @{@"id": @"comment", @"symbol": @"text.bubble", @"tip": @"评论"},
-        @{@"id": @"extension", @"symbol": @"puzzlepiece.extension", @"tip": @"扩展"},
+        @{@"id": @"extension", @"symbol": @"puzzlepiece.extension", @"tip": @"页面插件"},
         @{@"id": @"pageSettings", @"symbol": @"gearshape", @"tip": @"页面设置"},
         @{@"id": @"copyLink", @"symbol": @"doc.on.doc", @"tip": @"复制链接"},
     ];

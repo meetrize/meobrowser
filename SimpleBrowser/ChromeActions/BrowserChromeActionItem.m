@@ -58,7 +58,6 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
         BrowserChromeActionRSSFeedID,
         BrowserChromeActionShareID,
         BrowserChromeActionScreenshotID,
-        BrowserChromeActionExtensionID,
     ];
 }
 
@@ -188,7 +187,7 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
         [BrowserChromeActionItem itemWithID:BrowserChromeActionExtensionID
                                  symbolName:@"puzzlepiece.extension"
                                onSymbolName:nil
-                                    toolTip:@"扩展"
+                                    toolTip:@"页面插件"
                                   onToolTip:nil
                                     toggles:NO],
     ];
