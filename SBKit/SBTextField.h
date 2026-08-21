@@ -35,6 +35,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 用于非编辑态下移文字后字底被裁；默认 0。
 @property (nonatomic) CGFloat compactTextBottomExtend;
 
+/// 使用自绘半圆胶囊外框（两端半径 = 高度/2），替代 SquareBezel。默认 NO；地址栏可开。
+@property (nonatomic) BOOL usesCapsuleBezel;
+
 /// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
 - (void)syncFieldEditorFrameWithContentInsets;
 

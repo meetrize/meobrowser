@@ -5,10 +5,47 @@
 static const CGFloat kResizeHandleWidth = 10.0;
 static const CGFloat kSecurityBadgeSpacing = 6.0;
 
+/// 画在地址栏「下面」的半圆胶囊描边（不依赖 NSTextField 自己的 bezel 绘制）。
+@interface BrowserAddressBarCapsuleChromeView : NSView
+@end
+
+@implementation BrowserAddressBarCapsuleChromeView
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSRect strokeRect = NSInsetRect(self.bounds, 0.5, 0.5);
+    CGFloat radius = NSHeight(strokeRect) * 0.5;
+    if (radius < 0.5) {
+        return;
+    }
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:strokeRect
+                                                         xRadius:radius
+                                                         yRadius:radius];
+    NSAppearance *appearance = self.effectiveAppearance ?: NSAppearance.currentDrawingAppearance;
+    [appearance performAsCurrentDrawingAppearance:^{
+        [[NSColor textBackgroundColor] setFill];
+        [path fill];
+        // 稍加重，便于和旧 SquareBezel 小圆角区分（两端应为半圆）。
+        [[[NSColor secondaryLabelColor] colorWithAlphaComponent:0.7] setStroke];
+        path.lineWidth = 1.25;
+        [path stroke];
+    }];
+}
+
+@end
+
 @interface BrowserAddressBarRowView ()
 @property (nonatomic, strong, nullable) NSLayoutConstraint *securityBadgeWidthConstraint;
 @property (nonatomic, strong, nullable) NSLayoutConstraint *securityBadgeSpacingConstraint;
 @property (nonatomic, assign) CGFloat securityBadgeIntrinsicWidth;
+@property (nonatomic, strong, nullable) BrowserAddressBarCapsuleChromeView *capsuleChrome;
 @end
 
 @implementation BrowserAddressBarRowView
@@ -41,7 +78,23 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
                                                            constant:0];
         }
 
+        // 胶囊描边作为地址栏的 sibling，垫在输入框下面；输入框本身无系统 bezel。
+        if (addressField.usesCapsuleBezel) {
+            BrowserAddressBarCapsuleChromeView *chrome = [[BrowserAddressBarCapsuleChromeView alloc] initWithFrame:NSZeroRect];
+            chrome.translatesAutoresizingMaskIntoConstraints = NO;
+            self.capsuleChrome = chrome;
+            [self addSubview:chrome];
+            // 输入框保持透明，只显示文字与内嵌按钮。
+            addressField.bezeled = NO;
+            addressField.bordered = NO;
+            addressField.drawsBackground = NO;
+            addressField.wantsLayer = NO;
+        }
+
         [self addSubview:addressField];
+        if (self.capsuleChrome) {
+            [self addSubview:self.capsuleChrome positioned:NSWindowBelow relativeTo:addressField];
+        }
         [self addSubview:actionGroup];
 
         BrowserAddressBarEdgeResizeView *resizeHandle = [[BrowserAddressBarEdgeResizeView alloc] initWithFrame:NSZeroRect];
@@ -75,6 +128,17 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
             [resizeHandle.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
             [resizeHandle.widthAnchor constraintEqualToConstant:kResizeHandleWidth],
         ]];
+
+        if (self.capsuleChrome) {
+            BrowserAddressBarCapsuleChromeView *chrome = self.capsuleChrome;
+            [constraints addObjectsFromArray:@[
+                [chrome.leadingAnchor constraintEqualToAnchor:addressField.leadingAnchor],
+                [chrome.trailingAnchor constraintEqualToAnchor:addressField.trailingAnchor],
+                [chrome.topAnchor constraintEqualToAnchor:addressField.topAnchor],
+                [chrome.bottomAnchor constraintEqualToAnchor:addressField.bottomAnchor],
+            ]];
+        }
+
         [NSLayoutConstraint activateConstraints:constraints];
 
         __weak BrowserAddressBarActionGroup *weakActionGroup = actionGroup;

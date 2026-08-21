@@ -154,6 +154,12 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     }
 }
 
+- (BOOL)usesCapsuleBezel {
+    NSView *controlView = self.controlView;
+    return [controlView isKindOfClass:[SBTextField class]]
+        && ((SBTextField *)controlView).usesCapsuleBezel;
+}
+
 - (NSRect)drawingRectForBounds:(NSRect)theRect {
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
@@ -324,6 +330,98 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     _compactTextBottomExtend = value;
     [self setNeedsDisplay:YES];
     [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setUsesCapsuleBezel:(BOOL)usesCapsuleBezel {
+    if (_usesCapsuleBezel == usesCapsuleBezel) {
+        return;
+    }
+    _usesCapsuleBezel = usesCapsuleBezel;
+    [self applyCapsuleBezelStyle];
+}
+
+- (void)setBezeled:(BOOL)bezeled {
+    [super setBezeled:_usesCapsuleBezel ? NO : bezeled];
+}
+
+- (void)setBordered:(BOOL)bordered {
+    [super setBordered:_usesCapsuleBezel ? NO : bordered];
+}
+
+- (void)setBezelStyle:(NSTextFieldBezelStyle)bezelStyle {
+    if (_usesCapsuleBezel) {
+        // 忽略 SquareBezel 回写；外框改由 drawRect 画胶囊。
+        [super setBezelStyle:NSTextFieldSquareBezel];
+        [super setBezeled:NO];
+        [super setBordered:NO];
+        return;
+    }
+    [super setBezelStyle:bezelStyle];
+}
+
+- (void)applyCapsuleBezelStyle {
+    if (!_usesCapsuleBezel) {
+        self.wantsLayer = NO;
+        [super setBezelStyle:NSTextFieldSquareBezel];
+        [super setBezeled:YES];
+        [super setBordered:YES];
+        self.drawsBackground = YES;
+        self.focusRingType = NSFocusRingTypeDefault;
+        [self setNeedsDisplay:YES];
+        return;
+    }
+
+    // 系统 bezel 关掉；半圆描边由 BrowserAddressBarCapsuleChromeView（sibling）绘制。
+    // 新系统 RoundedBezel ≈ SquareBezel，不能当胶囊用。
+    self.wantsLayer = NO;
+    if (self.layer) {
+        self.layer = nil;
+    }
+    [super setBezeled:NO];
+    [super setBordered:NO];
+    self.drawsBackground = NO;
+    self.focusRingType = NSFocusRingTypeExterior;
+    [self setNeedsDisplay:YES];
+}
+
+- (BOOL)isOpaque {
+    if (_usesCapsuleBezel) {
+        return NO;
+    }
+    return [super isOpaque];
+}
+
+- (BOOL)wantsUpdateLayer {
+    if (_usesCapsuleBezel) {
+        return NO;
+    }
+    return [super wantsUpdateLayer];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    if (!_usesCapsuleBezel) {
+        [super drawRect:dirtyRect];
+        return;
+    }
+    // 外框由 RowView 的 capsule chrome 画；这里绝不能走 super（会画出 SquareBezel 盖住半圆）。
+    NSTextFieldCell *cell = (NSTextFieldCell *)self.cell;
+    [cell drawInteriorWithFrame:[cell drawingRectForBounds:self.bounds] inView:self];
+}
+
+- (void)layout {
+    [super layout];
+    if (_usesCapsuleBezel) {
+        [super setBezeled:NO];
+        [super setBordered:NO];
+        self.wantsLayer = NO;
+    }
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (_usesCapsuleBezel) {
+        [self applyCapsuleBezelStyle];
+    }
 }
 
 - (void)syncFieldEditorFrameWithContentInsets {

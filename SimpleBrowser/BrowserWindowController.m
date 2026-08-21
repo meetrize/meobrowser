@@ -782,7 +782,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.compactTextUpwardBiasWhenEditing = 1.0;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
-    // 灰色圆角 bezel 高度（导航按钮仍为 28）。
+    // 胶囊外框：地址栏 RowView 垫一层 sibling 半圆描边（半径=高/2）。
+    self.addressField.usesCapsuleBezel = YES;
     [self.addressField.heightAnchor constraintEqualToConstant:25].active = YES;
 
     self.bookmarkButton = [self makeBookmarkButton];

@@ -52,8 +52,9 @@ has_injection() {
 }
 
 kill_app() {
+  # 同时杀掉 build/ 与 /Applications 副本，避免 Dock 仍显示旧包。
   local pids
-  pids="$(pgrep -f "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true)"
+  pids="$(pgrep -f "${APP_NAME}.app/Contents/MacOS/${APP_NAME}" 2>/dev/null || true)"
   if [[ -z "${pids}" ]]; then
     return 0
   fi
@@ -63,6 +64,23 @@ kill_app() {
   sleep 0.2
   # shellcheck disable=SC2086
   kill -9 ${pids} 2>/dev/null || true
+}
+
+# Dock / Spotlight 常打开 /Applications/MeoBrowser.app；开发包在 build/。
+# 若能写 Applications 则同步；否则大声提醒，避免「改了没变化」。
+sync_applications_copy() {
+  local dest="/Applications/${APP_NAME}.app"
+  if [[ ! -d "${dest}" ]]; then
+    return 0
+  fi
+  if [[ ! -w "${dest}" ]] && [[ ! -w /Applications ]]; then
+    echo "[$(ts)] ⚠ 检测到 ${dest}（无写权限），Dock 可能仍打开旧包"
+    echo "[$(ts)]   请只使用本次启动的窗口，或手动删除/覆盖 Applications 中的 MeoBrowser.app"
+    return 0
+  fi
+  echo "[$(ts)] 同步到 ${dest}（供 Dock 使用）"
+  rm -rf "${dest}"
+  ditto "${APP_BUNDLE}" "${dest}"
 }
 
 app_running() {
@@ -141,8 +159,9 @@ build_and_apply() {
 
   if [[ "${do_relaunch}" -eq 1 ]]; then
     kill_app
+    sync_applications_copy || echo "[$(ts)] ⚠ 未能同步 /Applications（可手动 open ${APP_BUNDLE}）"
     echo "[$(ts)] 启动 ${APP_BUNDLE}"
-    open "${APP_BUNDLE}"
+    open -n "${APP_BUNDLE}"
   fi
 }
 
