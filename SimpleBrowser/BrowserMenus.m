@@ -130,6 +130,11 @@
                                                    keyEquivalent:@""];
             compactMode.target = nil;
 
+            NSMenuItem *afkMode = [viewMenu addItemWithTitle:@"摸鱼模式"
+                                                      action:@selector(toggleAfkMode:)
+                                               keyEquivalent:@""];
+            afkMode.target = nil;
+
             NSMenuItem *transparentMode = [viewMenu addItemWithTitle:@"透明模式"
                                                               action:@selector(toggleTransparentMode:)
                                                        keyEquivalent:@""];

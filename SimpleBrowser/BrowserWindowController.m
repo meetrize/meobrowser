@@ -12,6 +12,7 @@
 #import "BrowserStatusItemController.h"
 #import "BrowserTransparentModeController.h"
 #import "BrowserTransparentModePreferences.h"
+#import "BrowserAfkModeController.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -158,6 +159,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
 @property (nonatomic, strong) BrowserTabStripChromeActionsView *chromeActionsView;
 @property (nonatomic, strong) BrowserTransparentModeController *transparentModeController;
+@property (nonatomic, strong) BrowserAfkModeController *afkModeController;
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
 @property (nonatomic, assign) BOOL transparentModeAccessoryRemoved;
 @property (nonatomic, strong) NSView *tabStripAccessoryRoot;
@@ -396,6 +398,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
         _transparentModeController = [[BrowserTransparentModeController alloc] init];
         _transparentModeController.windowController = self;
+        _afkModeController = [[BrowserAfkModeController alloc] init];
+        _afkModeController.windowController = self;
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(transparentModePreferencesDidChange:)
                                                      name:BrowserTransparentModePreferencesDidChangeNotification
@@ -639,6 +643,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.transparentModeEnabled) {
         [self setTransparentModeEnabled:NO];
     }
+    if (self.afkModeEnabled) {
+        [self setAfkModeEnabled:NO];
+    }
 }
 
 - (void)windowDidResize:(NSNotification *)notification {
@@ -656,6 +663,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (notification.object != self.window) {
         return;
     }
+    [self.afkModeController forceDisableAndReveal];
     [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
@@ -1015,6 +1023,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)wireChromeActionButtons {
+    NSButton *afkButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionAfkModeID];
+    afkButton.target = self;
+    afkButton.action = @selector(toggleAfkMode:);
+
     NSButton *transparentButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionTransparentModeID];
     transparentButton.target = self;
     transparentButton.action = @selector(toggleTransparentMode:);
@@ -1042,6 +1054,30 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)toggleTransparentMode:(id)sender {
     (void)sender;
     [self setTransparentModeEnabled:!self.transparentModeEnabled];
+}
+
+- (void)toggleAfkMode:(id)sender {
+    (void)sender;
+    [self setAfkModeEnabled:!self.afkModeEnabled];
+}
+
+- (void)setAfkModeEnabled:(BOOL)afkModeEnabled {
+    if (afkModeEnabled && (self.window.styleMask & NSWindowStyleMaskFullScreen)) {
+        [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionAfkModeID];
+        return;
+    }
+
+    if (_afkModeEnabled == afkModeEnabled) {
+        [self.chromeActionsView setOn:afkModeEnabled forItemID:BrowserChromeActionAfkModeID];
+        return;
+    }
+
+    _afkModeEnabled = afkModeEnabled;
+    [self.chromeActionsView setOn:afkModeEnabled forItemID:BrowserChromeActionAfkModeID];
+    self.afkModeController.enabled = afkModeEnabled;
+
+    [[BrowserStatusItemController sharedController] refreshMenuAppearance];
+    [self schedulePersistTabSession];
 }
 
 - (void)setTransparentModeEnabled:(BOOL)transparentModeEnabled {
@@ -2102,6 +2138,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL compact = NO;
     BOOL alwaysOnTop = NO;
     BOOL transparent = NO;
+    BOOL afk = NO;
     if ([session isKindOfClass:[NSDictionary class]]) {
         NSNumber *compactValue = session[BrowserWindowSessionCompactModeKey];
         if ([compactValue isKindOfClass:[NSNumber class]]) {
@@ -2115,10 +2152,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if ([transparentValue isKindOfClass:[NSNumber class]]) {
             transparent = transparentValue.boolValue;
         }
+        NSNumber *afkValue = session[BrowserWindowSessionAfkModeKey];
+        if ([afkValue isKindOfClass:[NSNumber class]]) {
+            afk = afkValue.boolValue;
+        }
     }
     [self setCompactModeEnabled:compact];
     [self setAlwaysOnTopEnabled:alwaysOnTop];
     [self setTransparentModeEnabled:transparent];
+    [self setAfkModeEnabled:afk];
 }
 
 - (NSDictionary *)sessionDictionary {
@@ -2151,6 +2193,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if (self.transparentModeEnabled) {
             empty[BrowserWindowSessionTransparentModeKey] = @YES;
         }
+        if (self.afkModeEnabled) {
+            empty[BrowserWindowSessionAfkModeKey] = @YES;
+        }
         if (self.window) {
             empty[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
         }
@@ -2177,6 +2222,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if (self.transparentModeEnabled) {
         session[BrowserWindowSessionTransparentModeKey] = @YES;
+    }
+    if (self.afkModeEnabled) {
+        session[BrowserWindowSessionAfkModeKey] = @YES;
     }
     return [session copy];
 }
@@ -3557,6 +3605,13 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
             return NO;
         }
         menuItem.state = self.transparentModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    if (action == @selector(toggleAfkMode:)) {
+        if (self.window.styleMask & NSWindowStyleMaskFullScreen) {
+            return NO;
+        }
+        menuItem.state = self.afkModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
         return YES;
     }
     if (action == @selector(focusAddressBar:)) {

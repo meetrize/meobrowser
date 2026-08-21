@@ -6,6 +6,7 @@
 @interface BrowserStatusItemController () <NSMenuDelegate>
 @property (nonatomic, strong, nullable) NSStatusItem *statusItem;
 @property (nonatomic, strong, nullable) NSMenuItem *toggleTransparentItem;
+@property (nonatomic, strong, nullable) NSMenuItem *toggleAfkItem;
 @property (nonatomic, assign) BOOL installed;
 @end
 
@@ -34,12 +35,19 @@
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"MeoBrowser"];
     menu.delegate = self;
 
-    NSMenuItem *toggle = [[NSMenuItem alloc] initWithTitle:@"进入透明模式"
-                                                    action:@selector(toggleTransparentModeFromStatusItem:)
-                                             keyEquivalent:@""];
-    toggle.target = self;
-    self.toggleTransparentItem = toggle;
-    [menu addItem:toggle];
+    NSMenuItem *toggleTransparent = [[NSMenuItem alloc] initWithTitle:@"进入透明模式"
+                                                               action:@selector(toggleTransparentModeFromStatusItem:)
+                                                        keyEquivalent:@""];
+    toggleTransparent.target = self;
+    self.toggleTransparentItem = toggleTransparent;
+    [menu addItem:toggleTransparent];
+
+    NSMenuItem *toggleAfk = [[NSMenuItem alloc] initWithTitle:@"进入摸鱼模式"
+                                                       action:@selector(toggleAfkModeFromStatusItem:)
+                                                keyEquivalent:@""];
+    toggleAfk.target = self;
+    self.toggleAfkItem = toggleAfk;
+    [menu addItem:toggleAfk];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -93,10 +101,17 @@
 
 - (void)refreshMenuAppearance {
     BrowserWindowController *wc = [self targetBrowserWindowController];
-    BOOL on = wc.isTransparentModeEnabled;
-    self.toggleTransparentItem.title = on ? @"退出透明模式" : @"进入透明模式";
-    self.toggleTransparentItem.state = on ? NSControlStateValueOn : NSControlStateValueOff;
-    self.toggleTransparentItem.enabled = (wc != nil);
+    BOOL hasWindow = (wc != nil);
+
+    BOOL transparentOn = wc.isTransparentModeEnabled;
+    self.toggleTransparentItem.title = transparentOn ? @"退出透明模式" : @"进入透明模式";
+    self.toggleTransparentItem.state = transparentOn ? NSControlStateValueOn : NSControlStateValueOff;
+    self.toggleTransparentItem.enabled = hasWindow;
+
+    BOOL afkOn = wc.isAfkModeEnabled;
+    self.toggleAfkItem.title = afkOn ? @"退出摸鱼模式" : @"进入摸鱼模式";
+    self.toggleAfkItem.state = afkOn ? NSControlStateValueOn : NSControlStateValueOff;
+    self.toggleAfkItem.enabled = hasWindow;
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
@@ -111,6 +126,16 @@
         return;
     }
     [wc toggleTransparentMode:sender];
+    [self refreshMenuAppearance];
+}
+
+- (void)toggleAfkModeFromStatusItem:(id)sender {
+    (void)sender;
+    BrowserWindowController *wc = [self targetBrowserWindowController];
+    if (!wc) {
+        return;
+    }
+    [wc toggleAfkMode:sender];
     [self refreshMenuAppearance];
 }
 

@@ -24,6 +24,12 @@ static const CGFloat kChromeActionSymbolPointSize = 12.0;
 
 + (NSArray<BrowserChromeActionItem *> *)defaultItems {
     return @[
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionAfkModeID
+                                 symbolName:@"eye"
+                               onSymbolName:@"eye.slash"
+                                    toolTip:@"摸鱼模式"
+                                  onToolTip:@"退出摸鱼模式"
+                                    toggles:YES],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionTransparentModeID
                                  symbolName:@"cube.transparent"
                                onSymbolName:@"cube.transparent"

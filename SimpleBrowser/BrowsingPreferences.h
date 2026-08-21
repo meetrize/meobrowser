@@ -9,7 +9,7 @@ extern NSString * const BrowserSearchEngineGoogle;
 extern NSString * const BrowserSearchEngineBing;
 extern NSString * const BrowserSearchEngineBaidu;
 
-/// 窗口会话字典键（tabs / selectedIndex / pinnedCount / frame / compactMode / alwaysOnTop / transparentMode）。
+/// 窗口会话字典键（tabs / selectedIndex / pinnedCount / frame / compactMode / alwaysOnTop / transparentMode / afkMode）。
 extern NSString * const BrowserWindowSessionTabsKey;
 extern NSString * const BrowserWindowSessionSelectedIndexKey;
 extern NSString * const BrowserWindowSessionPinnedCountKey;
@@ -17,6 +17,7 @@ extern NSString * const BrowserWindowSessionFrameKey;
 extern NSString * const BrowserWindowSessionCompactModeKey;
 extern NSString * const BrowserWindowSessionAlwaysOnTopKey;
 extern NSString * const BrowserWindowSessionTransparentModeKey;
+extern NSString * const BrowserWindowSessionAfkModeKey;
 
 @interface BrowsingPreferences : NSObject
 

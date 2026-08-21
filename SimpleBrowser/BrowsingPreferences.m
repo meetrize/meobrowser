@@ -28,6 +28,7 @@ NSString * const BrowserWindowSessionFrameKey = @"frame";
 NSString * const BrowserWindowSessionCompactModeKey = @"compactMode";
 NSString * const BrowserWindowSessionAlwaysOnTopKey = @"alwaysOnTop";
 NSString * const BrowserWindowSessionTransparentModeKey = @"transparentMode";
+NSString * const BrowserWindowSessionAfkModeKey = @"afkMode";
 
 @implementation BrowsingPreferences
 
@@ -175,6 +176,10 @@ NSString * const BrowserWindowSessionTransparentModeKey = @"transparentMode";
     id transparentValue = raw[BrowserWindowSessionTransparentModeKey];
     if ([transparentValue isKindOfClass:[NSNumber class]] && ((NSNumber *)transparentValue).boolValue) {
         session[BrowserWindowSessionTransparentModeKey] = @YES;
+    }
+    id afkValue = raw[BrowserWindowSessionAfkModeKey];
+    if ([afkValue isKindOfClass:[NSNumber class]] && ((NSNumber *)afkValue).boolValue) {
+        session[BrowserWindowSessionAfkModeKey] = @YES;
     }
     return [session copy];
 }
