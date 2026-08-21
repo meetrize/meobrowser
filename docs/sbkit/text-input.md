@@ -107,6 +107,15 @@ AI 与协作者请遵循：
 - **全局**：`.cursor/rules/global-development.mdc` — 新功能输入框一律用 `SBTextField` / `SBTextView`
 - **细节**：`.cursor/rules/appkit-text-input.mdc`
 
+## 垂直文字边距（矮输入框）
+
+矮高度（约 22–28 pt）+ `NSTextFieldSquareBezel` 时，系统默认垂直 inset 过大易导致文字偏下、下行被裁切。
+
+- **默认**：`SBTextField` / `SBSecureTextField` 经 `standardField` 或 `SBTextInputConfiguration` 创建时，`usesCompactVerticalTextInsets = YES`
+- 边距常量：`SBTextFieldLayout`（水平 3pt / 垂直 2pt）；仅特殊 UI 可关该属性
+- 方案：[text-field-vertical-insets-design.md](text-field-vertical-insets-design.md) · [text-field-vertical-insets-development-plan.md](text-field-vertical-insets-development-plan.md)
+- **禁止**为修裁切而加高业务侧 `heightAnchor`
+
 ## 当前采用情况
 
 | 应用 | 菜单 | 输入控件 |

@@ -183,6 +183,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaPipeline.m \
                    $(SBKIT_DIR)/SBApplicationMenus.m \
                    $(SBKIT_DIR)/SBTextInputConfiguration.m \
+                   $(SBKIT_DIR)/SBTextFieldLayout.m \
                    $(SBKIT_DIR)/SBTextField.m \
                    $(SBKIT_DIR)/SBSecureTextField.m \
                    $(SBKIT_DIR)/SBTextView.m

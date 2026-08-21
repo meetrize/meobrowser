@@ -298,7 +298,6 @@ typedef NS_ENUM(NSInteger, PhoneNotificationSidebarRowKind) {
     search.translatesAutoresizingMaskIntoConstraints = NO;
     search.placeholderString = @"搜索通知…";
     search.delegate = self;
-    search.usesCompactVerticalTextInsets = YES;
 
     NSSegmentedControl *bucket = [NSSegmentedControl segmentedControlWithLabels:@[@"全部", @"未读", @"验证码", @"今日", @"钉选"]
                                                                    trackingMode:NSSegmentSwitchTrackingSelectOne

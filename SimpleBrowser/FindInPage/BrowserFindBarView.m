@@ -92,8 +92,6 @@
     self.queryField.delegate = self;
     self.queryField.font = [NSFont systemFontOfSize:13];
     self.queryField.trailingContentInset = 22;
-    // 矮输入框内默认 bezel 文字上下 inset 过大，底部易被裁切。
-    self.queryField.usesCompactVerticalTextInsets = YES;
     [self.queryField.widthAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
     [self.queryField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                 forOrientation:NSLayoutConstraintOrientationHorizontal];

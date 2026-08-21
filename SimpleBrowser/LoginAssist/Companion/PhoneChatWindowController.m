@@ -158,7 +158,6 @@ static NSMutableDictionary<NSString *, PhoneChatWindowController *> *sOpenWindow
     SBTextField *field = [SBTextField standardField];
     field.translatesAutoresizingMaskIntoConstraints = NO;
     field.placeholderString = @"输入回复，⌘↩ 发送";
-    field.usesCompactVerticalTextInsets = YES;
     field.delegate = self;
     field.target = self;
     field.action = @selector(sendClicked:);

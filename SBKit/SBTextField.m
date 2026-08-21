@@ -1,4 +1,5 @@
 #import "SBTextField.h"
+#import "SBTextFieldLayout.h"
 #import "SBTextInputConfiguration.h"
 
 @interface SBStandardTextFieldCell : NSTextFieldCell
@@ -89,8 +90,7 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        // 水平保留少量 bezel 边距；垂直留 2pt，避免 24pt 高输入框裁切下行。
-        return NSInsetRect(area, 3.0, 2.0);
+        return SBTextFieldApplyCompactInsets(area);
     }
     return [super drawingRectForBounds:area];
 }
@@ -100,7 +100,8 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     NSView *controlView = self.controlView;
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
-        return NSInsetRect(area, 3.0, 2.0);
+        NSRect compact = SBTextFieldApplyCompactInsets(area);
+        return SBTextFieldTopAlignedTitleRect(compact, self.font, controlView);
     }
     return [super titleRectForBounds:area];
 }

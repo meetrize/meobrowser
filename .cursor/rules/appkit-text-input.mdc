@@ -33,6 +33,7 @@ alwaysApply: true
 - [ ] 自定义样式写在 `SBTextInputConfiguration` 或子类 `init`，不散落在 ViewController
 - [ ] 回车等特殊键在 delegate 中处理，不破坏标准编辑快捷键
 - [ ] 若新建独立 App target，Makefile 链接 `SBKit/*.m` 并加 `-ISBKit`
+- [ ] 矮框文字裁切：走 SBKit 默认紧凑垂直 inset；**禁止**为修裁切加高 `heightAnchor`
 
 ## 支持的快捷键（由系统 + 编辑菜单提供）
 

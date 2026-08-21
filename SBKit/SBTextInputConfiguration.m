@@ -1,4 +1,6 @@
 #import "SBTextInputConfiguration.h"
+#import "SBTextField.h"
+#import "SBSecureTextField.h"
 
 @implementation SBTextInputConfiguration
 
@@ -10,10 +12,16 @@
     textField.font = [NSFont systemFontOfSize:13];
     textField.cell.wraps = NO;
     textField.cell.scrollable = YES;
+    if ([textField isKindOfClass:[SBTextField class]]) {
+        ((SBTextField *)textField).usesCompactVerticalTextInsets = YES;
+    }
 }
 
 + (void)configureSecureTextField:(NSSecureTextField *)textField {
     [self configureSingleLineTextField:textField];
+    if ([textField isKindOfClass:[SBSecureTextField class]]) {
+        ((SBSecureTextField *)textField).usesCompactVerticalTextInsets = YES;
+    }
 }
 
 + (void)configureMultiLineTextView:(NSTextView *)textView {

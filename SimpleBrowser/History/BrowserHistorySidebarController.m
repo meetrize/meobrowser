@@ -358,7 +358,6 @@ typedef NS_ENUM(NSInteger, BrowserHistorySidebarRowKind) {
     search.translatesAutoresizingMaskIntoConstraints = NO;
     search.placeholderString = @"搜索标题或网址…";
     search.delegate = self;
-    search.usesCompactVerticalTextInsets = YES;
 
     NSSegmentedControl *scope = [NSSegmentedControl segmentedControlWithLabels:@[@"全部", @"今天", @"7 天"]
                                                                    trackingMode:NSSegmentSwitchTrackingSelectOne
