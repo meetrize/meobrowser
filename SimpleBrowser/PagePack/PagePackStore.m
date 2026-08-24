@@ -74,6 +74,11 @@ NSNotificationName const PagePackStoreDidChangeNotification = @"PagePackStoreDid
     }
 }
 
+- (void)reloadFromDisk {
+    [self loadFromDisk];
+    [[NSNotificationCenter defaultCenter] postNotificationName:PagePackStoreDidChangeNotification object:self];
+}
+
 - (BOOL)persistIndex:(NSError **)error {
     NSMutableArray *list = [NSMutableArray arrayWithCapacity:self.packs.count];
     for (PagePack *pack in self.packs) {

@@ -11,6 +11,9 @@ FOUNDATION_EXPORT NSNotificationName const PagePackStoreDidChangeNotification;
 
 + (instancetype)sharedStore;
 
+/// 从磁盘重新加载 index（外部改 Pack / 多进程写入后调用）。
+- (void)reloadFromDisk;
+
 - (NSArray<PagePack *> *)allPacks;
 - (nullable PagePack *)packWithID:(NSString *)packID;
 - (NSArray<PagePack *> *)packsMatchingURL:(nullable NSURL *)url;

@@ -736,6 +736,8 @@ typedef NS_ENUM(NSInteger, PagePackSidebarScope) {
 }
 
 - (void)reloadForCurrentURL {
+    // 侧栏打开/刷新时先跟磁盘对齐，避免外部改 Pack 或旧编辑态保存冲掉新文件。
+    [[PagePackStore sharedStore] reloadFromDisk];
     NSURL *url = [self currentURL];
     NSArray<PagePack *> *enabledMatched = [[PagePackStore sharedStore] enabledPacksMatchingURL:url];
     self.badgeLabel.stringValue = [NSString stringWithFormat:@"本页生效 · %lu", (unsigned long)enabledMatched.count];
