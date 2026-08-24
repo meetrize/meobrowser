@@ -31,6 +31,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserSettingsWindowController.m \
                    $(BROWSER_SRC_DIR)/BrowserTransientToast.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTab.m \
+                   $(BROWSER_SRC_DIR)/Tabs/BrowserBackgroundMediaController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserWebView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \

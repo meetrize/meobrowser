@@ -9,6 +9,7 @@ static const NSUInteger kRecentlyClosedTabLimit = 20;
 static const NSUInteger kMaxLiveWebViews = 8;
 static const NSUInteger kMaxLiveWebViewsGlobal = 12;
 static const NSTimeInterval kHibernateIdleSeconds = 600.0; // 10 minutes
+static const NSTimeInterval kHibernateIdleSecondsMediaHeavy = 90.0;
 static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 @interface BrowserRecentlyClosedEntry : NSObject
@@ -513,7 +514,8 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         if ([BrowserRiskHostPolicy URLIsHibernationProtected:protectURL]) {
             continue;
         }
-        if (now - tab.lastActiveTimestamp >= kHibernateIdleSeconds) {
+        NSTimeInterval idleLimit = tab.mediaHeavy ? kHibernateIdleSecondsMediaHeavy : kHibernateIdleSeconds;
+        if (now - tab.lastActiveTimestamp >= idleLimit) {
             [tab hibernate];
             changed = YES;
         }
@@ -568,7 +570,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     return nil;
 }
 
-/// 预算淘汰优先级：非保护优先；同级再比非 key 窗、再比最久未活动。
+/// 预算淘汰优先级：非保护优先；mediaHeavy 更易被杀；同级再比非 key 窗、再比最久未活动。
 + (NSInteger)hibernationVictimRankForTab:(BrowserTab *)tab isNonKeyWindow:(BOOL)isNonKey {
     NSURL *url = tab.webView.URL ?: tab.restorableURL;
     BOOL protectedHost = [BrowserRiskHostPolicy URLIsHibernationProtected:url];
@@ -576,6 +578,9 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     NSInteger rank = 0;
     if (protectedHost) {
         rank += 100;
+    }
+    if (!tab.mediaHeavy) {
+        rank += 5;
     }
     if (!isNonKey) {
         rank += 10;
@@ -639,6 +644,10 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         if (aProtected != bProtected) {
             // 非保护排前（先休眠）。
             return aProtected ? NSOrderedDescending : NSOrderedAscending;
+        }
+        if (a.mediaHeavy != b.mediaHeavy) {
+            // mediaHeavy 排前（先休眠）。
+            return a.mediaHeavy ? NSOrderedAscending : NSOrderedDescending;
         }
         if (a.lastActiveTimestamp < b.lastActiveTimestamp) {
             return NSOrderedAscending;

@@ -33,6 +33,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, copy, nullable) NSString *pendingHTMLString;
 /// 最近一次被选中的时间（用于休眠策略）。
 @property (nonatomic, assign) NSTimeInterval lastActiveTimestamp;
+/// 失活时检测到活跃媒体（或曾 pause 到元素）；用于跳过昂贵快照与加速休眠。
+@property (nonatomic, assign) BOOL mediaHeavy;
 /// 当前主文档连接安全态（用于地址栏「连接不安全」指示）。
 @property (nonatomic, assign) BrowserConnectionSecurityState connectionSecurityState;
 /// 页面内查找会话（查询词 / 模式 / 计数）；高亮在 WebView 文档侧。

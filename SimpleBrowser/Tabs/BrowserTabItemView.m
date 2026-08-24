@@ -7,7 +7,9 @@ const CGFloat BrowserTabPinnedWidth = 108.0;
 
 static const CGFloat kDefaultTabHeight = 31.0;
 static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
-static const CGFloat kReorderDragThreshold = 4.0;
+/// 提高阈值 + 时间门控，避免主线程卡顿时微抖把单击判成拖拽。
+static const CGFloat kReorderDragThreshold = 10.0;
+static const NSTimeInterval kReorderDragMinDuration = 0.15;
 static const CGFloat kPinIconSize = 12.0;
 static const CGFloat kLeadingPadding = 8.0;
 static const CGFloat kTitleAfterPinGap = 4.0;
@@ -587,6 +589,7 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
 
     NSPoint start = event.locationInWindow;
+    NSTimeInterval mouseDownTime = event.timestamp;
     BOOL dragging = NO;
     NSEventMask mask = NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp;
 
@@ -604,7 +607,8 @@ NSColor *BrowserTabActiveFillColor(void) {
             CGFloat deltaY = next.locationInWindow.y - start.y;
             CGFloat distance = hypot(deltaX, deltaY);
             if (!dragging) {
-                if (distance < kReorderDragThreshold) {
+                NSTimeInterval held = next.timestamp - mouseDownTime;
+                if (distance < kReorderDragThreshold || held < kReorderDragMinDuration) {
                     continue;
                 }
                 dragging = YES;

@@ -225,6 +225,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     [webView removeFromSuperview];
     self.webView = nil;
     self.isLoading = NO;
+    self.mediaHeavy = NO;
     self.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
     [self clearNavigationSession];
     [self.mainFrameNavigations removeAllObjects];

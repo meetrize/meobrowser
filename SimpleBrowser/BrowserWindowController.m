@@ -23,6 +23,7 @@
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
+#import "BrowserBackgroundMediaController.h"
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
@@ -231,6 +232,12 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, assign) BOOL addressFieldIsEditing;
 /// 上次 refreshTabsUI 时的选中标签，用于判断是否切到新标签页后再聚焦地址栏。
 @property (nonatomic, strong, nullable) NSUUID *lastSelectedTabIDForAddressFocus;
+/// refreshTabsUI 代际：延后 chrome 刷新时校验仍指向同一选中标签。
+@property (nonatomic, assign) NSInteger refreshTabsUIGeneration;
+/// estimatedProgress UI 合并。
+@property (nonatomic, assign) NSTimeInterval lastProgressUIUpdateTime;
+@property (nonatomic, assign) double lastProgressUIValue;
+@property (nonatomic, strong, nullable) dispatch_block_t pendingProgressUIBlock;
 /// 自定义应用协议（如 OAuth 回调 minimax-hub-cn://）应交系统打开，而非在 WebView 内加载。
 + (BOOL)shouldHandOffURLToExternalApplication:(nullable NSURL *)url;
 - (BOOL)openURLInExternalApplicationIfNeeded:(nullable NSURL *)url;
@@ -2947,18 +2954,50 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)refreshTabsUI {
     BrowserTab *selectedTab = self.tabController.selectedTab;
+    self.refreshTabsUIGeneration += 1;
+    NSInteger generation = self.refreshTabsUIGeneration;
+    NSUUID *selectedIDAtStart = selectedTab.tabID;
 
     // 仅挂载当前标签的 WebView；其余离屏但仍可常驻（休眠由 TabController 销毁）。
-    // 即将 detach 的存活页先写入缩略图缓存（异步，不阻塞切页）。
+    // 重页：先 pause 媒体；确认无媒体后再异步 takeSnapshot（不堵切页关键路径）。
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
         }
         WKWebView *wv = tab.webView;
-        if (wv != nil && wv.superview == self.contentContainer && !tab.isNewTabPage) {
-            [self.tabOverviewController.thumbnailCache captureFromWebView:wv
-                                                                 forTabID:tab.tabID
-                                                               completion:nil];
+        BOOL wasAttached = (wv != nil && wv.superview == self.contentContainer && !tab.isNewTabPage);
+        if (wasAttached && wv != nil) {
+            __weak typeof(self) weakSelf = self;
+            __weak BrowserTab *weakTab = tab;
+            __weak WKWebView *weakWebView = wv;
+            NSUUID *tabID = tab.tabID;
+            BOOL alreadyHeavy = tab.mediaHeavy;
+            [BrowserBackgroundMediaController pauseMediaInWebView:wv
+                                                       completion:^(BOOL foundMedia) {
+                                                           typeof(self) strongSelf = weakSelf;
+                                                           BrowserTab *strongTab = weakTab;
+                                                           WKWebView *strongWebView = weakWebView;
+                                                           if (!strongSelf || !strongTab) {
+                                                               return;
+                                                           }
+                                                           if (foundMedia) {
+                                                               strongTab.mediaHeavy = YES;
+                                                               return;
+                                                           }
+                                                           if (alreadyHeavy || strongTab.mediaHeavy) {
+                                                               return;
+                                                           }
+                                                           if (strongTab == strongSelf.tabController.selectedTab) {
+                                                               return;
+                                                           }
+                                                           if (strongWebView == nil || strongWebView != strongTab.webView) {
+                                                               return;
+                                                           }
+                                                           [strongSelf.tabOverviewController.thumbnailCache
+                                                               captureFromWebView:strongWebView
+                                                                          forTabID:tabID
+                                                                        completion:nil];
+                                                       }];
         }
         [self detachWebViewIfNeeded:wv];
     }
@@ -2981,9 +3020,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     BOOL showLaunchpad = selectedTab.isNewTabPage;
     self.launchpadView.hidden = !showLaunchpad || self.transparentModeEnabled;
-    if (showLaunchpad && !self.transparentModeEnabled) {
-        [self.launchpadView reloadShortcuts];
-    }
 
     [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
     [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
@@ -2993,7 +3029,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if (self.tabOverviewController.isVisible) {
         [self.tabOverviewController bringToFront];
-        [self.tabOverviewController reloadFromTabController];
     }
     [self.findBarController syncWithSelectedTab];
     [self observeLoadingProgressForSelectedTab];
@@ -3005,9 +3040,6 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self updateTabStripDisplay];
     [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
-    [self syncCertificateWarningVisibilityForSelectedTab];
-    [self syncNavigationErrorVisibilityForSelectedTab];
-    [self updateTabOverviewButtonAppearance];
 
     NSUUID *selectedID = selectedTab.tabID;
     BOOL selectionChanged = selectedID != nil
@@ -3017,14 +3049,40 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self focusAddressBarForNewTabPage];
     }
 
-    if (self.transparentModeEnabled) {
-        [self syncTransparentPageStyleForSelection];
-    }
+    // 非关键 chrome：下一 runloop，避免占满 mouseDown→切页关键路径。
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (strongSelf.refreshTabsUIGeneration != generation) {
+            return;
+        }
+        BrowserTab *stillSelected = strongSelf.tabController.selectedTab;
+        if (selectedIDAtStart != nil && ![stillSelected.tabID isEqual:selectedIDAtStart]) {
+            return;
+        }
+        BOOL showLP = stillSelected.isNewTabPage;
+        if (showLP && !strongSelf.transparentModeEnabled) {
+            [strongSelf.launchpadView reloadShortcuts];
+        }
+        if (strongSelf.tabOverviewController.isVisible) {
+            [strongSelf.tabOverviewController reloadFromTabController];
+        }
+        [strongSelf syncCertificateWarningVisibilityForSelectedTab];
+        [strongSelf syncNavigationErrorVisibilityForSelectedTab];
+        [strongSelf updateTabOverviewButtonAppearance];
+        if (strongSelf.transparentModeEnabled) {
+            [strongSelf syncTransparentPageStyleForSelection];
+        }
+    });
 }
 
 #pragma mark - Loading Progress
 
 - (void)stopObservingLoadingProgress {
+    [self cancelPendingProgressUIUpdate];
     WKWebView *webView = self.observedProgressWebView;
     if (!webView) {
         return;
@@ -3177,11 +3235,66 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     double progress = webView.estimatedProgress;
     // hash 恢复后 stop() 可能不走 didFinish；进度到 1 或已非 loading 时收尾 UI。
     if (tab.isLoading && (!webView.isLoading || progress >= 1.0)) {
+        [self cancelPendingProgressUIUpdate];
         [self syncFromWebView:webView];
         return;
     }
+
+    BOOL terminal = (progress >= 1.0) || (!webView.isLoading && !tab.isLoading);
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    BOOL smallDelta = fabs(progress - self.lastProgressUIValue) < 0.02;
+    BOOL tooSoon = (now - self.lastProgressUIUpdateTime) < 0.08;
+    if (!terminal && smallDelta && tooSoon) {
+        [self scheduleCoalescedProgressUIUpdate];
+        return;
+    }
+    [self applyProgressUIUpdate:progress animated:!terminal];
+}
+
+- (void)cancelPendingProgressUIUpdate {
+    if (self.pendingProgressUIBlock) {
+        dispatch_block_cancel(self.pendingProgressUIBlock);
+        self.pendingProgressUIBlock = nil;
+    }
+}
+
+- (void)scheduleCoalescedProgressUIUpdate {
+    if (self.pendingProgressUIBlock) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.pendingProgressUIBlock = nil;
+        WKWebView *webView = strongSelf.webView;
+        BrowserTab *tab = strongSelf.tabController.selectedTab;
+        if (!webView || !tab || tab.isNewTabPage) {
+            return;
+        }
+        [strongSelf applyProgressUIUpdate:webView.estimatedProgress animated:YES];
+    });
+    self.pendingProgressUIBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
+- (void)applyProgressUIUpdate:(double)progress animated:(BOOL)animated {
+    [self cancelPendingProgressUIUpdate];
+    self.lastProgressUIUpdateTime = [NSDate date].timeIntervalSince1970;
+    self.lastProgressUIValue = progress;
+
+    WKWebView *webView = self.webView;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage || !webView) {
+        [self.loadingProgressView resetHidden];
+        return;
+    }
     if (webView.isLoading || tab.isLoading || (progress > 0.0 && progress < 1.0)) {
-        [self.loadingProgressView setProgress:progress animated:YES];
+        [self.loadingProgressView setProgress:progress animated:animated];
     } else if (progress >= 1.0) {
         [self.loadingProgressView completeIfVisible];
     } else {
