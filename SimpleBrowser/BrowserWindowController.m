@@ -178,6 +178,14 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) NSTitlebarAccessoryViewController *tabStripAccessory;
 @property (nonatomic, strong) NSView *tabStripAccessoryRoot;
 @property (nonatomic, strong) NSLayoutConstraint *tabStripAccessoryHeightConstraint;
+@property (nonatomic, strong) NSStackView *rootStack;
+@property (nonatomic, strong) NSLayoutConstraint *rootStackTopToContentGuideConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *rootStackTopToContentViewConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *transparentChromeToolbarHeightConstraint;
+@property (nonatomic, assign) CGFloat transparentChromeToolbarFullHeight;
+@property (nonatomic, assign) BOOL transparentChromeStableLayoutActive;
+@property (nonatomic, assign) BOOL transparentChromeStableLayoutPending;
+@property (nonatomic, assign) BOOL transparentModeChromeSetupPending;
 @property (nonatomic, strong) NSStackView *toolbar;
 @property (nonatomic, strong) NSStackView *navButtons;
 @property (nonatomic, assign) BOOL addressBarPeekActive;
@@ -564,7 +572,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return NO;
     }
 
-    [window.contentView layoutSubtreeIfNeeded];
+    if (self.transparentChromeStableLayoutActive) {
+        [self.tabStripAccessoryRoot layoutSubtreeIfNeeded];
+    } else {
+        [window.contentView layoutSubtreeIfNeeded];
+    }
     [self.tabStripView layoutSubtreeIfNeeded];
 
     CGFloat expectedHeight = self.tabStripView.effectiveStripHeight;
@@ -736,6 +748,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)showWindow:(id)sender {
     [super showWindow:sender];
+    [self finishDeferredTransparentModeSetupIfNeeded];
     [self scheduleTrafficLightPositioning];
 }
 
@@ -1005,24 +1018,29 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.window addTitlebarAccessoryViewController:self.tabStripAccessory];
     [self collapseSystemTitlebarDecoration];
 
-    NSStackView *rootStack = [NSStackView stackViewWithViews:@[
+    self.rootStack = [NSStackView stackViewWithViews:@[
         self.toolbar, self.contentRowStack
     ]];
-    rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    rootStack.spacing = 0;
-    rootStack.distribution = NSStackViewDistributionFill;
+    self.rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.rootStack.spacing = 0;
+    self.rootStack.distribution = NSStackViewDistributionFill;
 
     NSView *contentView = self.window.contentView;
-    rootStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [contentView addSubview:rootStack];
+    self.rootStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [contentView addSubview:self.rootStack];
 
     // 对齐 contentLayoutGuide：内容紧贴 accessory 下方，避免重复留白
     NSLayoutGuide *contentGuide = (NSLayoutGuide *)self.window.contentLayoutGuide;
+    self.rootStackTopToContentGuideConstraint =
+        [self.rootStack.topAnchor constraintEqualToAnchor:contentGuide.topAnchor];
+    self.rootStackTopToContentViewConstraint =
+        [self.rootStack.topAnchor constraintEqualToAnchor:contentView.topAnchor];
+    self.rootStackTopToContentViewConstraint.active = NO;
     [NSLayoutConstraint activateConstraints:@[
-        [rootStack.topAnchor constraintEqualToAnchor:contentGuide.topAnchor],
-        [rootStack.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
-        [rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
-        [rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
+        self.rootStackTopToContentGuideConstraint,
+        [self.rootStack.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
+        [self.rootStack.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
+        [self.rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
     ]];
 
     [self.findBarController installInContentContainer:self.contentContainer];
@@ -1594,9 +1612,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:transparentModeEnabled forItemID:BrowserChromeActionTransparentModeID];
 
     if (transparentModeEnabled) {
-        [self enterTransparentModeChrome];
+        if (self.window.isVisible) {
+            [self enterTransparentModeChrome];
+        } else {
+            self.transparentModeChromeSetupPending = YES;
+        }
     } else {
-        [self exitTransparentModeChrome];
+        self.transparentModeChromeSetupPending = NO;
+        self.transparentChromeStableLayoutPending = NO;
+        if (self.transparentModeController.hasSnapshot || self.transparentChromeStableLayoutActive) {
+            [self exitTransparentModeChrome];
+        } else {
+            self.transparentChromeAutoHideController.enabled = NO;
+        }
     }
 
     [[BrowserStatusItemController sharedController] refreshMenuAppearance];
@@ -1692,13 +1720,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self syncTransparentPageStyleForSelection];
     [self.transparentModeController setWindowRightDragMoveEnabled:YES];
 
-    self.transparentChromeAutoHideController.enabled = YES;
-    [self applyChromeVisibilityForCurrentMode];
-
-    [window.contentView layoutSubtreeIfNeeded];
-    [self.tabStripView layoutSubtreeIfNeeded];
-    [self scheduleTrafficLightPositioning];
-    [self collapseSystemTitlebarDecoration];
+    self.transparentChromeStableLayoutPending = YES;
+    if (self.window.isVisible) {
+        [self finishTransparentChromeStableSetupIfNeeded];
+    }
 }
 
 - (void)exitTransparentModeChrome {
@@ -1712,7 +1737,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                              selector:@selector(refreshTransparentPageStyleForSelection)
                                                object:nil];
 
+    self.transparentModeChromeSetupPending = NO;
     self.transparentChromeAutoHideController.enabled = NO;
+    self.transparentChromeStableLayoutPending = NO;
+
+    [self disableTransparentChromeStableLayout];
 
     [self.transparentModeController setWindowRightDragMoveEnabled:NO];
 
@@ -1800,9 +1829,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     self.tabStripView.compactMetricsEnabled = compactModeEnabled;
     [self applyChromeVisibilityForCurrentMode];
-    [self.window.contentView layoutSubtreeIfNeeded];
-    [self.tabStripView layoutSubtreeIfNeeded];
-    [self scheduleTrafficLightPositioning];
+    if (self.window.isVisible) {
+        [self.window.contentView layoutSubtreeIfNeeded];
+        [self.tabStripView layoutSubtreeIfNeeded];
+        [self scheduleTrafficLightPositioning];
+    }
 }
 
 - (void)moveNavButtonsToTabStrip {
@@ -1826,19 +1857,145 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 /// 非透明：条/灯常显，地址栏跟精简。透明：条/灯随指针；地址栏精简永藏，非精简随指针；Peek 强制显栏。
-- (void)applyChromeVisibilityForCurrentMode {
-    BOOL transparent = self.transparentModeEnabled;
-    BOOL chromeRevealed = !transparent || self.transparentChromeAutoHideController.chromeRevealed;
-    BOOL showTabStrip = !transparent || chromeRevealed;
+- (CGFloat)effectiveTransparentChromeToolbarHeight {
+    if (!self.toolbar) {
+        return 0.0;
+    }
+    [self.toolbar layoutSubtreeIfNeeded];
+    NSSize fittingSize = self.toolbar.fittingSize;
+    CGFloat height = fittingSize.height;
+    if (height > 1.0) {
+        return height;
+    }
+    // 地址栏 25 + 上下 inset 4+4
+    return 33.0;
+}
+
+- (void)enableTransparentChromeStableLayout {
+    if (self.transparentChromeStableLayoutActive || !self.rootStack) {
+        return;
+    }
+
+    self.rootStackTopToContentGuideConstraint.active = NO;
+    self.rootStackTopToContentViewConstraint.active = YES;
+
+    if (self.tabStripAccessoryHeightConstraint) {
+        self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
+    }
+
+    if (!self.transparentChromeToolbarHeightConstraint) {
+        if (!self.compactModeEnabled) {
+            self.transparentChromeToolbarFullHeight = [self effectiveTransparentChromeToolbarHeight];
+            self.transparentChromeToolbarHeightConstraint =
+                [self.toolbar.heightAnchor constraintEqualToConstant:self.transparentChromeToolbarFullHeight];
+            self.transparentChromeToolbarHeightConstraint.active = YES;
+        }
+    }
+
+    self.transparentChromeStableLayoutActive = YES;
+}
+
+- (void)disableTransparentChromeStableLayout {
+    if (!self.transparentChromeStableLayoutActive) {
+        return;
+    }
+
+    self.transparentChromeStableLayoutActive = NO;
+
+    if (self.transparentChromeToolbarHeightConstraint) {
+        self.transparentChromeToolbarHeightConstraint.active = NO;
+        self.transparentChromeToolbarHeightConstraint = nil;
+    }
+    self.transparentChromeToolbarFullHeight = 0.0;
+
+    self.rootStackTopToContentViewConstraint.active = NO;
+    self.rootStackTopToContentGuideConstraint.active = YES;
 
     if (self.tabStripAccessoryRoot) {
-        self.tabStripAccessoryRoot.hidden = !showTabStrip;
+        self.tabStripAccessoryRoot.hidden = NO;
+        self.tabStripAccessoryRoot.alphaValue = 1.0;
     }
-    CGFloat stripHeight = showTabStrip ? self.tabStripView.effectiveStripHeight : 0.0;
+    if (self.toolbar) {
+        self.toolbar.hidden = NO;
+        self.toolbar.alphaValue = 1.0;
+    }
     if (self.tabStripAccessoryHeightConstraint) {
-        self.tabStripAccessoryHeightConstraint.constant = stripHeight;
+        self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
     }
-    [self setStandardWindowButtonsHidden:!showTabStrip];
+}
+
+- (void)finishDeferredTransparentModeSetupIfNeeded {
+    if (!self.transparentModeEnabled) {
+        return;
+    }
+    if (self.transparentModeChromeSetupPending) {
+        self.transparentModeChromeSetupPending = NO;
+        [self enterTransparentModeChrome];
+        return;
+    }
+    [self finishTransparentChromeStableSetupIfNeeded];
+}
+
+- (void)finishTransparentChromeStableSetupIfNeeded {
+    if (!self.transparentModeEnabled || !self.transparentChromeStableLayoutPending) {
+        return;
+    }
+    self.transparentChromeStableLayoutPending = NO;
+    [self enableTransparentChromeStableLayout];
+    self.transparentChromeAutoHideController.enabled = YES;
+    [self applyChromeVisibilityForCurrentMode];
+    [self collapseSystemTitlebarDecoration];
+    if (self.transparentChromeAutoHideController.chromeRevealed) {
+        [self.tabStripView layoutSubtreeIfNeeded];
+        [self scheduleTrafficLightPositioning];
+    }
+}
+
+- (void)applyTransparentChromeStableVisibilityTabStrip:(BOOL)showTabStrip
+                                              toolbar:(BOOL)showToolbar {
+    if (self.tabStripAccessoryRoot) {
+        self.tabStripAccessoryRoot.alphaValue = showTabStrip ? 1.0 : 0.0;
+    }
+    if (self.tabStripAccessoryHeightConstraint) {
+        self.tabStripAccessoryHeightConstraint.constant = self.tabStripView.effectiveStripHeight;
+    }
+
+    CGFloat toolbarHeight = 0.0;
+    if (!self.compactModeEnabled) {
+        toolbarHeight = self.transparentChromeToolbarFullHeight;
+        if (toolbarHeight <= 0.0) {
+            toolbarHeight = [self effectiveTransparentChromeToolbarHeight];
+            self.transparentChromeToolbarFullHeight = toolbarHeight;
+        }
+    }
+    if (self.transparentChromeToolbarHeightConstraint) {
+        self.transparentChromeToolbarHeightConstraint.constant = toolbarHeight;
+    }
+    if (self.toolbar) {
+        self.toolbar.alphaValue = showToolbar ? 1.0 : 0.0;
+        self.toolbar.hidden = NO;
+    }
+
+    if (showTabStrip) {
+        [self scheduleTrafficLightPositioning];
+    }
+}
+
+- (void)setTransparentChromeRevealSuppressedForDrag:(BOOL)transparentChromeRevealSuppressedForDrag {
+    if (_transparentChromeRevealSuppressedForDrag == transparentChromeRevealSuppressedForDrag) {
+        return;
+    }
+    _transparentChromeRevealSuppressedForDrag = transparentChromeRevealSuppressedForDrag;
+    if (self.transparentModeEnabled) {
+        [self applyChromeVisibilityForCurrentMode];
+    }
+}
+
+- (void)applyChromeVisibilityForCurrentMode {
+    BOOL transparent = self.transparentModeEnabled;
+    BOOL chromeRevealed = !transparent || (self.transparentChromeAutoHideController.chromeRevealed
+                                           && !self.transparentChromeRevealSuppressedForDrag);
+    BOOL showTabStrip = !transparent || chromeRevealed;
 
     BOOL showToolbar = NO;
     if (self.addressBarPeekActive) {
@@ -1850,13 +2007,45 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     } else {
         showToolbar = chromeRevealed;
     }
+
+    [self setStandardWindowButtonsHidden:!showTabStrip];
+
+    if (transparent && self.transparentChromeStableLayoutActive) {
+        [self applyTransparentChromeStableVisibilityTabStrip:showTabStrip toolbar:showToolbar];
+        [self syncTransparentPointerOutsideToSelectedPage:!chromeRevealed];
+        return;
+    }
+
+    if (self.tabStripAccessoryRoot) {
+        self.tabStripAccessoryRoot.hidden = !showTabStrip;
+    }
+    CGFloat stripHeight = showTabStrip ? self.tabStripView.effectiveStripHeight : 0.0;
+    if (self.tabStripAccessoryHeightConstraint) {
+        self.tabStripAccessoryHeightConstraint.constant = stripHeight;
+    }
     self.toolbar.hidden = !showToolbar;
 
-    [self.window.contentView layoutSubtreeIfNeeded];
-    if (showTabStrip) {
-        [self.tabStripView layoutSubtreeIfNeeded];
-        [self scheduleTrafficLightPositioning];
+    if (self.window.isVisible) {
+        [self.window.contentView layoutSubtreeIfNeeded];
+        if (showTabStrip) {
+            [self.tabStripView layoutSubtreeIfNeeded];
+            [self scheduleTrafficLightPositioning];
+        }
     }
+
+    if (transparent) {
+        [self syncTransparentPointerOutsideToSelectedPage:!chromeRevealed];
+    }
+}
+
+/// 透明模式下把「指针是否在窗外」同步给当前页（微信读书底栏等据此隐藏）。
+- (void)syncTransparentPointerOutsideToSelectedPage:(BOOL)pointerOutside {
+    BrowserTab *selected = self.tabController.selectedTab;
+    WKWebView *webView = selected.isNewTabPage ? nil : selected.webView;
+    if (!webView) {
+        return;
+    }
+    [self.transparentModeController setPointerOutside:pointerOutside onWebView:webView];
 }
 
 - (void)applyToolbarVisibilityForCompactState {
@@ -2903,6 +3092,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                   webViews:@[webView]];
     if (webView == self.webView) {
         [self.transparentModeController applyTransparentPageStyleToWebView:webView];
+        BOOL chromeRevealed = self.transparentChromeAutoHideController.chromeRevealed
+            && !self.transparentChromeRevealSuppressedForDrag;
+        [self.transparentModeController setPointerOutside:!chromeRevealed onWebView:webView];
     }
 }
 
@@ -2913,6 +3105,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     BrowserTab *selected = self.tabController.selectedTab;
     WKWebView *selectedWebView = selected.isNewTabPage ? nil : selected.webView;
+    BOOL chromeRevealed = self.transparentChromeAutoHideController.chromeRevealed
+        && !self.transparentChromeRevealSuppressedForDrag;
     for (BrowserTab *tab in self.tabController.tabs) {
         WKWebView *webView = tab.webView;
         if (!webView) {
@@ -2920,6 +3114,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         }
         if (webView == selectedWebView) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
+            [self.transparentModeController setPointerOutside:!chromeRevealed onWebView:webView];
         } else {
             [self.transparentModeController removeTransparentPageStyleFromWebView:webView];
         }

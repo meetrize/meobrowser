@@ -36,6 +36,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 移除透明模式页面样式。
 - (void)removeTransparentPageStyleFromWebView:(nullable WKWebView *)webView;
 
+/// 同步「指针是否在窗外」到页面（供站点插件隐藏阅读工具条等）。
+- (void)setPointerOutside:(BOOL)pointerOutside onWebView:(nullable WKWebView *)webView;
+
 /// 透明态启停网页区右键拖窗监视器。
 - (void)setWindowRightDragMoveEnabled:(BOOL)enabled;
 

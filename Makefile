@@ -312,7 +312,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 
-.PHONY: all browser clean run run-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools
+.PHONY: all browser clean run run-browser install-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools
 
 all: $(BINARY) $(NIB_OUT)
 
@@ -392,6 +392,13 @@ run: all
 
 run-browser: browser
 	open $(BROWSER_BUNDLE)
+
+# 安装到 ~/Applications（无需 sudo）；覆盖路径：make install-browser INSTALL_DIR=/Applications
+INSTALL_DIR ?= $(HOME)/Applications
+install-browser: browser
+	mkdir -p "$(INSTALL_DIR)"
+	ditto "$(BROWSER_BUNDLE)" "$(INSTALL_DIR)/MeoBrowser.app"
+	@echo "Installed to $(INSTALL_DIR)/MeoBrowser.app"
 
 # 保存 .m/.h 后自动 make browser 并重启 App（见 tools/watch-browser.sh）
 watch-browser:

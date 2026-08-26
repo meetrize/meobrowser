@@ -303,4 +303,19 @@
                     withBootstrap:YES];
 }
 
+- (void)setPointerOutside:(BOOL)pointerOutside onWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    NSString *flag = pointerOutside ? @"true" : @"false";
+    NSString *invocation = [NSString stringWithFormat:
+                            @"(function(){var m=window.__MeoTransparentMode;"
+                            @"if(m&&typeof m.setPointerOutside==='function'){"
+                            @"m.setPointerOutside(%@);return 1;}"
+                            @"var r=document.documentElement;if(!r)return 0;"
+                            @"r.classList.toggle('meo-pointer-outside',%@);return 1;})();",
+                            flag, flag];
+    [webView evaluateJavaScript:invocation completionHandler:nil];
+}
+
 @end

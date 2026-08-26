@@ -65,6 +65,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 透明模式右键拖窗进行中时抑制 WebKit 上下文菜单。
 - (BOOL)shouldSuppressContextMenuForTransparentRightDrag;
 
+/// 透明模式右键拖窗时暂时藏起壳层，避免移窗过程正文闪动。
+@property (nonatomic, assign) BOOL transparentChromeRevealSuppressedForDrag;
+
 /// 供 LoginAssistController 打开助手侧栏。
 - (void)setAssistSidebarVisible:(BOOL)visible
               revealingRecipeID:(nullable NSString *)recipeID

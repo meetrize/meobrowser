@@ -48,6 +48,9 @@ static const CGFloat kTransparentRightDragThreshold = 16.0;
 }
 
 - (void)resetGestureState {
+    if (self.phase == BrowserTransparentRightDragPhaseDragging) {
+        self.windowController.transparentChromeRevealSuppressedForDrag = NO;
+    }
     self.phase = BrowserTransparentRightDragPhaseIdle;
     self.didMoveWindow = NO;
     self.shouldSuppressContextMenu = NO;
@@ -141,6 +144,7 @@ static const CGFloat kTransparentRightDragThreshold = 16.0;
             return event;
         }
         self.phase = BrowserTransparentRightDragPhaseDragging;
+        self.windowController.transparentChromeRevealSuppressedForDrag = YES;
         [self moveWindow:window byScreenDeltaX:dx deltaY:dy];
         self.lastScreenPoint = screen;
         return nil;

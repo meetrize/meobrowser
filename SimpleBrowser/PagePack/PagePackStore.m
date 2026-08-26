@@ -74,6 +74,10 @@ NSNotificationName const PagePackStoreDidChangeNotification = @"PagePackStoreDid
     }
 }
 
+- (void)syncFromDisk {
+    [self loadFromDisk];
+}
+
 - (void)reloadFromDisk {
     [self loadFromDisk];
     [[NSNotificationCenter defaultCenter] postNotificationName:PagePackStoreDidChangeNotification object:self];

@@ -11,8 +11,11 @@ FOUNDATION_EXPORT NSNotificationName const PagePackStoreDidChangeNotification;
 
 + (instancetype)sharedStore;
 
-/// 从磁盘重新加载 index（外部改 Pack / 多进程写入后调用）。
+/// 从磁盘重新加载 index（外部改 Pack / 多进程写入后调用），并广播变更。
 - (void)reloadFromDisk;
+
+/// 仅从磁盘同步到内存，不发通知（侧栏刷新用，避免与 DidChange 观察者形成重入）。
+- (void)syncFromDisk;
 
 - (NSArray<PagePack *> *)allPacks;
 - (nullable PagePack *)packWithID:(NSString *)packID;

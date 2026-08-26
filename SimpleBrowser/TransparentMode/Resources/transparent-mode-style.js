@@ -2,9 +2,17 @@
   /* 每次注入都刷新 apply/remove。
      Canvas 字色/阴影只用 CSS filter（不改像素），退出时可瞬间恢复原貌。 */
   var STYLE_ID = "meo-transparent-mode";
+  var CANVAS_STYLE_ID = "meo-transparent-mode-canvas";
+  var ROOT_CLASS = "meo-transparent-mode";
+  var POINTER_OUTSIDE_CLASS = "meo-pointer-outside";
   var SVG_FILTER_HOST_ID = "meo-tm-svg-filters";
   var CANVAS_RECOLOR_FILTER_ID = "meo-tm-canvas-recolor";
   var MARK_ATTR = "data-meo-tm-color";
+  /* 微信读书底栏 + 翻页钮（迁入前也在栏外）：用 @scope … to() 排除（勿用 revert） */
+  var READER_CONTROLS_SELECTOR = ".readerControls, #readerControls";
+  var SCOPE_LIMIT_SELECTOR =
+    ".readerControls, #readerControls, .renderTarget_pager, " +
+    ".renderTarget_pager_button, .renderTarget_pager_button_right, [data-meo-weread-pager]";
   var SKIP_TAGS = {
     IMG: 1, PICTURE: 1, VIDEO: 1, AUDIO: 1, CANVAS: 1, SVG: 1, IFRAME: 1,
     SCRIPT: 1, STYLE: 1, LINK: 1, META: 1, NOSCRIPT: 1, BR: 1, HR: 1,
@@ -12,9 +20,9 @@
     PATH: 1, CIRCLE: 1, RECT: 1, LINE: 1, POLYGON: 1, POLYLINE: 1, G: 1, USE: 1, DEFS: 1, SYMBOL: 1
   };
 
-  /* 状态挂在 window 上 */
   var state = window.__MeoTMState || (window.__MeoTMState = {
     enabled: false,
+    pointerOutside: false,
     color: "#f2f2f2",
     shadow: "0 0 3px rgba(0,0,0,0.95)",
     shadowColor: "#000000",
@@ -60,7 +68,7 @@
 
   function clamp(n, lo, hi) {
     n = Number(n);
-    if (!(n === n)) { // NaN
+    if (!(n === n)) {
       return lo;
     }
     return Math.max(lo, Math.min(hi, n));
@@ -93,7 +101,6 @@
     return document.head || document.documentElement;
   }
 
-  /** SVG feColorMatrix：只改显示色、保留 alpha，不改 Canvas 像素 */
   function ensureCanvasRecolorSVG(rgb) {
     var host = document.getElementById(SVG_FILTER_HOST_ID);
     if (!host) {
@@ -110,10 +117,18 @@
     var b = (rgb.b / 255).toFixed(6);
     var matrix =
       "0 0 0 0 " + r + " 0 0 0 0 " + g + " 0 0 0 0 " + b + " 0 0 0 1 0";
-    host.innerHTML =
-      '<filter id="' + CANVAS_RECOLOR_FILTER_ID + '" color-interpolation-filters="sRGB">' +
-      '<feColorMatrix type="matrix" values="' + matrix + '"/>' +
-      "</filter>";
+    var filter = host.querySelector("#" + CANVAS_RECOLOR_FILTER_ID);
+    if (!filter) {
+      host.innerHTML =
+        '<filter id="' + CANVAS_RECOLOR_FILTER_ID + '" color-interpolation-filters="sRGB">' +
+        '<feColorMatrix type="matrix" values="' + matrix + '"/>' +
+        "</filter>";
+      return;
+    }
+    var fe = filter.querySelector("feColorMatrix");
+    if (fe) {
+      fe.setAttribute("values", matrix);
+    }
   }
 
   function removeCanvasRecolorSVG() {
@@ -147,25 +162,91 @@
     return parts.join(" ");
   }
 
-  function buildCSS(hex, shadow, canvasFilter) {
+  function isInReaderControls(el) {
+    if (!el || el.nodeType !== 1) {
+      return false;
+    }
+    try {
+      if (el.id === "readerControls") {
+        return true;
+      }
+      if (el.classList && el.classList.contains("readerControls")) {
+        return true;
+      }
+      if (typeof el.closest === "function") {
+        return !!el.closest(READER_CONTROLS_SELECTOR);
+      }
+    } catch (e) {
+    }
+    return false;
+  }
+
+  function isWereadChrome(el) {
+    if (isInReaderControls(el)) {
+      return true;
+    }
+    if (!el || el.nodeType !== 1) {
+      return false;
+    }
+    try {
+      if (el.hasAttribute && el.hasAttribute("data-meo-weread-pager")) {
+        return true;
+      }
+      if (el.classList) {
+        if (el.classList.contains("renderTarget_pager_button") ||
+            el.classList.contains("renderTarget_pager_button_right") ||
+            el.classList.contains("renderTarget_pager")) {
+          return true;
+        }
+      }
+      if (typeof el.closest === "function") {
+        return !!el.closest(
+          ".renderTarget_pager, .renderTarget_pager_button, .renderTarget_pager_button_right, [data-meo-weread-pager]"
+        );
+      }
+    } catch (e) {
+    }
+    return false;
+  }
+
+  function buildCSS() {
+    /* @scope … to(...)：透明规则不作用在底栏/翻页钮及其后代（含图标 mask / 伪元素） */
     return (
-      "html, body, div, section, article, main, header, footer, aside, nav," +
-      "span, p, li, ul, ol, dl, dt, dd, td, th, blockquote, pre, code, figure, figcaption," +
-      "form, fieldset, label, table, thead, tbody, tfoot, tr {" +
-      "  background-color: transparent !important;" +
-      "  background-image: none !important;" +
-      "  box-shadow: none !important;" +
-      "  border-color: transparent !important;" +
+      ":root, html {" +
+      "  --meo-tm-color: " + state.color + ";" +
+      "  --meo-tm-shadow: " + state.shadow + ";" +
       "}" +
-      "html, html body, html body *:not(img):not(picture):not(video):not(canvas):not(svg):not(iframe)," +
-      "html body *::before, html body *::after {" +
-      "  color: " + hex + " !important;" +
-      "  -webkit-text-fill-color: " + hex + " !important;" +
-      "  text-shadow: " + shadow + " !important;" +
-      "  caret-color: " + hex + " !important;" +
-      "}" +
-      "canvas {" +
-      "  filter: " + (canvasFilter || "none") + " !important;" +
+      "@scope (html." + ROOT_CLASS + ") to (" + SCOPE_LIMIT_SELECTOR + ") {" +
+      "  :scope, :scope body, div, section, article, main, header, footer, aside, nav," +
+      "  span, p, li, ul, ol, dl, dt, dd, td, th, blockquote, pre, code, figure, figcaption," +
+      "  form, fieldset, label, table, thead, tbody, tfoot, tr, button, a {" +
+      "    background: transparent !important;" +
+      "    background-color: transparent !important;" +
+      "    background-image: none !important;" +
+      "    box-shadow: none !important;" +
+      "    border-color: transparent !important;" +
+      "  }" +
+      "  :scope *::before, :scope *::after {" +
+      "    background: transparent !important;" +
+      "    background-color: transparent !important;" +
+      "    background-image: none !important;" +
+      "  }" +
+      "  :scope, :scope body," +
+      "  :scope body *:not(img):not(picture):not(video):not(canvas):not(svg):not(iframe)," +
+      "  :scope body *::before, :scope body *::after {" +
+      "    color: var(--meo-tm-color) !important;" +
+      "    -webkit-text-fill-color: var(--meo-tm-color) !important;" +
+      "    text-shadow: var(--meo-tm-shadow) !important;" +
+      "    caret-color: var(--meo-tm-color) !important;" +
+      "  }" +
+      "}"
+    );
+  }
+
+  function buildCanvasFilterCSS(canvasFilter) {
+    return (
+      "@scope (html." + ROOT_CLASS + ") to (" + SCOPE_LIMIT_SELECTOR + ") {" +
+      "  canvas { filter: " + (canvasFilter || "none") + " !important; }" +
       "}"
     );
   }
@@ -174,7 +255,10 @@
     if (!el || el.nodeType !== 1 || !el.tagName) {
       return true;
     }
-    return !!SKIP_TAGS[el.tagName];
+    if (SKIP_TAGS[el.tagName]) {
+      return true;
+    }
+    return isWereadChrome(el);
   }
 
   function paintElement(el) {
@@ -182,10 +266,13 @@
       return;
     }
     try {
-      el.style.setProperty("color", state.color, "important");
-      el.style.setProperty("-webkit-text-fill-color", state.color, "important");
-      el.style.setProperty("text-shadow", state.shadow, "important");
-      el.style.setProperty("caret-color", state.color, "important");
+      el.style.setProperty("background", "transparent", "important");
+      el.style.setProperty("background-color", "transparent", "important");
+      el.style.setProperty("background-image", "none", "important");
+      el.style.setProperty("color", "var(--meo-tm-color)", "important");
+      el.style.setProperty("-webkit-text-fill-color", "var(--meo-tm-color)", "important");
+      el.style.setProperty("text-shadow", "var(--meo-tm-shadow)", "important");
+      el.style.setProperty("caret-color", "var(--meo-tm-color)", "important");
       el.setAttribute(MARK_ATTR, "1");
     } catch (e) {
     }
@@ -196,6 +283,9 @@
       return;
     }
     try {
+      el.style.removeProperty("background");
+      el.style.removeProperty("background-color");
+      el.style.removeProperty("background-image");
       el.style.removeProperty("color");
       el.style.removeProperty("-webkit-text-fill-color");
       el.style.removeProperty("text-shadow");
@@ -230,11 +320,25 @@
     }
   }
 
+  function restoreReaderControlsSubtree() {
+    try {
+      var roots = document.querySelectorAll(READER_CONTROLS_SELECTOR);
+      for (var i = 0; i < roots.length; i++) {
+        var root = roots[i];
+        clearElement(root);
+        walk(root, clearElement);
+      }
+    } catch (e) {
+    }
+  }
+
   function paintAll() {
     if (!document.documentElement) {
       return;
     }
     walk(document.documentElement, paintElement);
+    /* 翻页钮可能先在栏外被染色，再迁入 .readerControls —— 必须清掉残留 inline */
+    restoreReaderControlsSubtree();
   }
 
   function clearAll() {
@@ -300,10 +404,6 @@
     paintScheduled = false;
   }
 
-  /**
-   * 旧版曾 hook fillText 改像素色，导致退出后必须刷新才能恢复。
-   * 现在改为 CSS filter；若页面上仍挂着旧 hook，从干净 iframe 取回原生方法并卸掉。
-   */
   function captureNativeCanvasTextMethods() {
     if (window.__MeoTMCanvasOrig &&
         typeof window.__MeoTMCanvasOrig.fillText === "function") {
@@ -398,14 +498,23 @@
     return { rgb: rgb, shadowRgb: shadowRgb };
   }
 
-  function ensureStyleTag() {
-    var style = document.getElementById(STYLE_ID);
+  function ensureStyleTag(id) {
+    var style = document.getElementById(id);
     if (!style) {
       style = document.createElement("style");
-      style.id = STYLE_ID;
+      style.id = id;
       ensureRoot().appendChild(style);
     }
     return style;
+  }
+
+  function updateStyleVariables() {
+    var root = document.documentElement;
+    if (!root) {
+      return;
+    }
+    root.style.setProperty("--meo-tm-color", state.color);
+    root.style.setProperty("--meo-tm-shadow", state.shadow);
   }
 
   function writeStylesheet() {
@@ -417,11 +526,14 @@
       state.shadowStrength,
       state.shadowRadius
     );
-    var style = ensureStyleTag();
-    style.textContent = buildCSS(state.color, state.shadow, canvasFilter);
+    state._canvasFilter = canvasFilter;
+    var style = ensureStyleTag(STYLE_ID);
+    style.textContent = buildCSS();
     if (style.parentNode) {
       style.parentNode.appendChild(style);
     }
+    ensureStyleTag(CANVAS_STYLE_ID).textContent = buildCanvasFilterCSS(canvasFilter);
+    updateStyleVariables();
   }
 
   function clearRepaintTimers() {
@@ -442,6 +554,21 @@
     window.__MeoTMRepaintTimers = timers;
   }
 
+  function scheduleApplyRepaints() {
+    clearRepaintTimers();
+    var delays = [50, 150, 400, 1000, 2500];
+    for (var i = 0; i < delays.length; i++) {
+      (function (delay) {
+        var id = setTimeout(function () {
+          if (state.enabled) {
+            paintAll();
+          }
+        }, delay);
+        repaintTimers.push(id);
+      })(delays[i]);
+    }
+  }
+
   function clearCanvasInlineFilters() {
     try {
       var canvases = document.querySelectorAll("canvas");
@@ -454,27 +581,50 @@
     }
   }
 
+  function setTransparentRootClass(active) {
+    var root = document.documentElement;
+    if (!root) {
+      return;
+    }
+    if (active) {
+      root.classList.add(ROOT_CLASS);
+    } else {
+      root.classList.remove(ROOT_CLASS);
+    }
+  }
+
+  function setPointerOutsideClass(outside) {
+    var root = document.documentElement;
+    if (!root) {
+      return;
+    }
+    state.pointerOutside = !!outside;
+    if (outside) {
+      root.classList.add(POINTER_OUTSIDE_CLASS);
+    } else {
+      root.classList.remove(POINTER_OUTSIDE_CLASS);
+    }
+  }
+
   window.__MeoTransparentMode = {
-    __v: 10,
-    /** 进入透明模式 / 导航完成后 */
+    __v: 25,
     apply: function (opts) {
       if (!document.documentElement) {
         return;
       }
       rememberNativeCanvasTextIfNeeded();
       uninstallCanvasTextHook();
-      var wasEnabled = !!state.enabled;
       commitStyleState(opts);
       state.enabled = true;
+      setTransparentRootClass(true);
       writeStylesheet();
-      if (!wasEnabled) {
-        paintAll();
-        startObserver();
-      } else if (!window.__MeoTMObserver) {
-        startObserver();
+      paintAll();
+      startObserver();
+      scheduleApplyRepaints();
+      if (opts && typeof opts === "object" && opts.pointerOutside != null) {
+        setPointerOutsideClass(!!opts.pointerOutside);
       }
     },
-    /** 设置变更：只改 stylesheet / canvas CSS filter，实时且可逆 */
     refresh: function (opts) {
       if (!document.documentElement) {
         return;
@@ -485,16 +635,36 @@
       }
       commitStyleState(opts);
       writeStylesheet();
+      paintAll();
     },
-    /** 退出：移除滤镜与样式，像素未改写故立刻恢复原色，无需刷新 */
+    setPointerOutside: function (outside) {
+      setPointerOutsideClass(!!outside);
+    },
+    reprotectReaderControls: function () {
+      if (!state.enabled) {
+        return;
+      }
+      writeStylesheet();
+      paintAll();
+    },
     remove: function () {
       state.enabled = false;
+      setPointerOutsideClass(false);
+      setTransparentRootClass(false);
       clearRepaintTimers();
       stopObserver();
       clearAll();
       var style = document.getElementById(STYLE_ID);
       if (style && style.parentNode) {
         style.parentNode.removeChild(style);
+      }
+      var canvasStyle = document.getElementById(CANVAS_STYLE_ID);
+      if (canvasStyle && canvasStyle.parentNode) {
+        canvasStyle.parentNode.removeChild(canvasStyle);
+      }
+      if (document.documentElement) {
+        document.documentElement.style.removeProperty("--meo-tm-color");
+        document.documentElement.style.removeProperty("--meo-tm-shadow");
       }
       removeCanvasRecolorSVG();
       clearCanvasInlineFilters();
