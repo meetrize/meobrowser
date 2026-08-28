@@ -6,6 +6,7 @@
 #import "BrowserFeedItem.h"
 #import "BrowserFeedReader.h"
 #import "BrowserFeedURLSchemeHandler.h"
+#import "BrowserRiskHostPolicy.h"
 
 @interface BrowserFeedAssistController ()
 @property (nonatomic, copy) NSArray<BrowserFeedItem *> *currentFeeds;
@@ -79,6 +80,9 @@
         return;
     }
     NSURL *pageURL = url ?: webView.URL;
+    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:pageURL title:webView.title]) {
+        return;
+    }
     NSUInteger generation = [[self.probeGenerationByWebView objectForKey:webView] unsignedIntegerValue];
 
     // 文档结束脚本可能早于 didFinish；主动再扫一次避免被清空后漏报。

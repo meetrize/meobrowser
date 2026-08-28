@@ -123,6 +123,36 @@
     return [self URLShouldSuppressLoginAssist:url];
 }
 
++ (BOOL)titleLooksLikeChallenge:(NSString *)title {
+    if (title.length == 0) {
+        return NO;
+    }
+    NSString *t = title.lowercaseString;
+    if ([t containsString:@"just a moment"]) {
+        return YES;
+    }
+    if ([t containsString:@"attention required"]) {
+        return YES;
+    }
+    if ([t containsString:@"请稍候"]) {
+        return YES;
+    }
+    if ([t containsString:@"正在验证"]) {
+        return YES;
+    }
+    if ([t containsString:@"确认您是真人"] || [t containsString:@"确认您是人类"]) {
+        return YES;
+    }
+    return NO;
+}
+
++ (BOOL)shouldSuppressPageAutomationForURL:(NSURL *)url title:(NSString *)title {
+    if ([self URLShouldSuppressPageAutomation:url]) {
+        return YES;
+    }
+    return [self titleLooksLikeChallenge:title];
+}
+
 + (NSString *)javaScriptQuotedSuffixLiteral {
     NSArray<NSString *> *suffixes = [self pageAutomationSuppressionHostSuffixes];
     NSMutableArray<NSString *> *quoted = [NSMutableArray arrayWithCapacity:suffixes.count];

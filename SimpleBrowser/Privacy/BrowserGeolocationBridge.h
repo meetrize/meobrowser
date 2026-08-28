@@ -2,7 +2,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// macOS WKWebView 上原生 geolocation 不可靠；在 document-start 桥接 navigator.geolocation 与 Permissions API。
+/// macOS WKWebView 上原生 geolocation 不可靠；桥接 navigator.geolocation。
+/// DocumentEnd + 主框架 + 延迟安装；Cloudflare / 人机页整段静默（不改 permissions.query）。
 @interface BrowserGeolocationBridge : NSObject
 
 + (instancetype)sharedBridge;

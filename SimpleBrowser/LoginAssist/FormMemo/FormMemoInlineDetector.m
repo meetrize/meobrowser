@@ -369,6 +369,7 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 "      window.addEventListener('resize', repositionFillButtons);\n"
 "      try {\n"
 "        const mo = new MutationObserver(function() {\n"
+"          if (meoShouldSuppress()) { try { mo.disconnect(); } catch (e) {} return; }\n"
 "          if (mutateTimer) clearTimeout(mutateTimer);\n"
 "          mutateTimer = setTimeout(repositionFillButtons, 200);\n"
 "        });\n"

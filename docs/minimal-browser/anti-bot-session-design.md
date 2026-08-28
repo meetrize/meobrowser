@@ -42,16 +42,19 @@
 
 ### 1.5 Cloudflare Turnstile（Safari 能过、MeoBrowser 循环）
 
-典型症状：勾选「确认您是真人」后再次回到 checkbox。根因多为 WKUserScript 在挑战帧改写原生 API，而非缺「自动点选」。
+典型症状：勾选「确认您是真人」后再次回到 checkbox，或 checkbox 一直转圈不出现。根因多为 WKUserScript 在挑战帧（或业务域 Managed Challenge）改写原生 API，而非缺「自动点选」。
 
 | 优先级 | 措施 | 状态 |
 |--------|------|------|
 | P0 | 媒体捕获 UserScript：CF/人机页静默；`fetch`/`XHR`/`createObjectURL` **仅媒体站**（doubao 等） | AB-5 |
 | P1 | `BrowserRiskHostPolicy` 扩展 `__cf_chl` / `cdn-cgi/challenge` / 标题与 DOM 启发式；Captcha/Feed/Find/Login/Memo 统一静默 | AB-5 |
 | P2 | `applicationNameForUserAgent = @""`，避免与 `customUserAgent` 叠 App 名 | AB-5 |
+| P0 | 定位桥：风险帧静默；DocumentEnd；主框架 only；延迟 1.8s 安装；不抢先改 `permissions.query` | AB-6/7 |
+| P0 | CaptchaDetector：Turnstile 上报一次后断开 MO；去掉 attributes 观察 | AB-7 |
+| P1 | PagePack / 透明模式 / Feed：标题启发式 + JS 门禁；Login/FormMemo/Feed 持续静默断开 | AB-7 |
 | — | 自动破解 Turnstile / 伪造 token | **不做** |
 
-对照验收：同网下 Safari 能过的 `linux.do` 等站，MeoBrowser 人手勾选后应进入正文。
+对照验收：同网下 Safari 能过的 `linux.do`、`hero-sms.com` 等站，MeoBrowser 人手勾选后应进入正文。
 
 ### 1.5 与相关模块的关系
 

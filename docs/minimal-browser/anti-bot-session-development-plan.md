@@ -38,6 +38,8 @@
 | Phase AB-3 | 按站清除 + 设置提示 | §3.2 / §4.2 | **完成** | Prefs API + Settings UI |
 | Phase AB-4 | 文档与验收 | §7 | **完成** | acceptance / README / verify |
 | Phase AB-5 | Cloudflare Turnstile 会话对齐 | §1.5 | **完成** | 媒体捕获收窄 + 全脚本人机页静默 |
+| Phase AB-6 | 定位桥 / PagePack 人机页静默 | §1.5 | **完成** | Geolocation DocumentEnd + 风险帧静默；PagePack 抑制 |
+| Phase AB-7 | 业务域延迟 Turnstile 竞态 | §1.5 | **完成** | 延迟定位桥、Captcha MO 停观、标题门禁 |
 
 建议节奏：AB-0 → AB-1 → AB-2 可连续交付（风控主路径）；AB-3 独立；AB-4 收尾。每阶段结束执行 `make browser`。
 
@@ -156,6 +158,43 @@
 
 ---
 
+## Phase AB-6：定位桥 / PagePack 人机页静默
+
+**目标**：消除 AB-5 后仍导致 Turnstile 转圈的定位 API 改写与 PagePack 注入。
+
+### 任务清单
+
+- [x] **6.1** `BrowserGeolocationBridge`：嵌入 `BrowserRiskHostPolicy` 静默；命中则不改写 `geolocation` / `permissions.query`、不留 `__meo*` 标记
+- [x] **6.2** 注入时机改为 `DocumentEnd`，使业务域 Managed Challenge 的标题/DOM 启发式可生效
+- [x] **6.3** `PagePackInjector`：`URLShouldSuppressPageAutomation` 时跳过注入
+- [x] **6.4** 更新设计稿 §1.5；`make browser`
+
+### 完成标准
+
+- 同网 Safari 能过的 CF 站，MeoBrowser 应能出现 checkbox 并人手通过。
+- 非人机页定位桥仍可用。
+
+---
+
+## Phase AB-7：业务域延迟 Turnstile 竞态
+
+**目标**：hero-sms.com 等「干净 URL + 延迟挂载 widget」场景下，避免 DocumentEnd 后仍改写 API / 挂 MutationObserver。
+
+### 任务清单
+
+- [x] **7.1** `titleLooksLikeChallenge:` + `shouldSuppressPageAutomationForURL:title:`
+- [x] **7.2** 定位桥：主框架 only、延迟 1.8s 安装、不抢先改 `permissions.query`
+- [x] **7.3** CaptchaDetector：Turnstile 先上报再 teardown；MO 去掉 attributes
+- [x] **7.4** PagePack JS/CSS 门禁 + hotApply 标题抑制；透明模式 apply 门禁
+- [x] **7.5** Login / FormMemo / Feed：schedule 持续静默并 disconnect
+- [x] **7.6** `make browser`
+
+### 完成标准
+
+- 业务域登录页 Turnstile 应能出 checkbox（同网 Safari 能过时）。
+
+---
+
 ## 手测清单（汇总）
 
 | # | 步骤 | 期望 |
@@ -168,6 +207,7 @@
 | 6 | `login-assist-test.html` | 内联助手与一键登录正常 |
 | 7 | 设置 → 清除当前站点 | 仅当前 host 存储清除 |
 | 8 | 设置 → 清除全部 | 全站数据清；Recipe 仍在 |
+| 9 | `https://hero-sms.com/cn` 登录页 Cloudflare | 出现 checkbox；人手勾选后进入登录（同网 Safari 能过时） |
 
 ---
 

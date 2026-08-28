@@ -344,6 +344,7 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    });\n"
 "  }\n"
 "  function schedule() {\n"
+"    if (meoShouldSuppressLoginAssist()) { try { mo.disconnect(); } catch (e) {} return; }\n"
 "    if (debounceTimer) clearTimeout(debounceTimer);\n"
 "    debounceTimer = setTimeout(scan, 250);\n"
 "  }\n"

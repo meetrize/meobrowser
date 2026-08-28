@@ -2,6 +2,7 @@
 #import "BrowserWindowController.h"
 #import "BrowserTransparentModePreferences.h"
 #import "BrowserTransparentModeWindowDragMonitor.h"
+#import "BrowserRiskHostPolicy.h"
 
 @interface BrowserTransparentModeSnapshot : NSObject
 @property (nonatomic, assign) BOOL opaque;
@@ -265,6 +266,12 @@
 }
 
 - (void)applyTransparentPageStyleToWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:webView.URL title:webView.title]) {
+        return;
+    }
     NSString *optionsJSON = [self pageStyleOptionsJSON];
     NSString *invocation = [NSString stringWithFormat:
                             @"window.__MeoTransparentMode.apply(%@);",
@@ -274,6 +281,9 @@
 
 - (void)refreshTransparentPageStyleOnWebView:(WKWebView *)webView {
     if (!webView) {
+        return;
+    }
+    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:webView.URL title:webView.title]) {
         return;
     }
     NSString *optionsJSON = [self pageStyleOptionsJSON];

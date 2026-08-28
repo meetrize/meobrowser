@@ -3,6 +3,7 @@
 #import "PagePackStore.h"
 #import "PagePackSettings.h"
 #import "PagePackMatcher.h"
+#import "BrowserRiskHostPolicy.h"
 
 @implementation PagePackInjector
 
@@ -48,15 +49,17 @@
     NSString *attr = [[self class] styleAttributeIDForPack:packID fileName:fileName];
     NSString *attrLit = [[self class] jsonLiteralForString:attr];
     NSString *cssLit = [[self class] jsonLiteralForString:css ?: @""];
+    NSString *suppressFn =
+        [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipPagePackCSS"];
     return [NSString stringWithFormat:
-            @"(function(){try{"
+            @"(function(){%@ if(meoShouldSkipPagePackCSS())return; try{"
             @"var id=%@;var css=%@;"
             @"var el=document.querySelector('style[data-meo-pagepack=\"'+id+'\"]');"
             @"if(!el){el=document.createElement('style');el.setAttribute('data-meo-pagepack',id);"
             @"(document.documentElement||document).appendChild(el);}"
             @"el.textContent=css;"
             @"}catch(e){}})();",
-            attrLit, cssLit];
+            suppressFn, attrLit, cssLit];
 }
 
 - (NSString *)cssRemovalSourceForPackID:(NSString *)packID {
@@ -76,9 +79,11 @@
     NSString *body = source ?: @"";
     NSString *label = [NSString stringWithFormat:@"meo-pagepack %@/%@", packID ?: @"?", fileName ?: @"?"];
     NSString *labelLit = [[self class] jsonLiteralForString:label];
+    NSString *suppressFn =
+        [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipPagePack"];
     return [NSString stringWithFormat:
-            @"(function(){try{%@}catch(e){try{console.error(%@,e);}catch(_){}}})();",
-            body, labelLit];
+            @"(function(){%@ if(meoShouldSkipPagePack())return; try{%@}catch(e){try{console.error(%@,e);}catch(_){}}})();",
+            suppressFn, body, labelLit];
 }
 
 - (NSArray<PagePackFile *> *)sortedFiles:(NSArray<PagePackFile *> *)files kind:(PagePackFileKind)kind {
@@ -156,6 +161,10 @@
     if (!url || !([url.scheme isEqualToString:@"http"] || [url.scheme isEqualToString:@"https"])) {
         return;
     }
+    // 人机页 / 风险域不注入用户脚本，避免干扰 Cloudflare Turnstile 等挑战环境。
+    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:url title:webView.title]) {
+        return;
+    }
     @try {
         NSArray<PagePack *> *packs = [[PagePackStore sharedStore] enabledPacksMatchingURL:url];
         for (PagePack *pack in packs) {
@@ -171,6 +180,9 @@
 
 - (void)hotApplyPack:(PagePack *)pack toWebView:(WKWebView *)webView URL:(NSURL *)url {
     if (!pack || !webView || ![PagePackSettings sharedSettings].pagePackEnabled) {
+        return;
+    }
+    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:url ?: webView.URL title:webView.title]) {
         return;
     }
     @try {
