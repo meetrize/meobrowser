@@ -1,9 +1,15 @@
 #import "AssistSidebarSettings.h"
 
 static NSString * const kAssistSidebarWidthKey = @"MeoLoginAssistSidebarWidth";
+static NSString * const kAssistSidebarDetailHeightKey = @"MeoLoginAssistSidebarDetailHeight";
+
 static const CGFloat kDefaultWidth = 360.0;
 static const CGFloat kMinWidth = 320.0;
 static const CGFloat kMaxWidth = 560.0;
+
+static const CGFloat kDefaultDetailHeight = 380.0;
+static const CGFloat kMinDetailHeight = 180.0;
+static const CGFloat kMaxDetailHeight = 520.0;
 
 @implementation AssistSidebarSettings
 
@@ -28,6 +34,20 @@ static const CGFloat kMaxWidth = 560.0;
 - (void)setSidebarWidth:(CGFloat)sidebarWidth {
     CGFloat width = MIN(kMaxWidth, MAX(kMinWidth, sidebarWidth));
     [NSUserDefaults.standardUserDefaults setDouble:width forKey:kAssistSidebarWidthKey];
+}
+
+- (CGFloat)detailHeight {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:kAssistSidebarDetailHeightKey] == nil) {
+        return kDefaultDetailHeight;
+    }
+    CGFloat height = [defaults doubleForKey:kAssistSidebarDetailHeightKey];
+    return MIN(kMaxDetailHeight, MAX(kMinDetailHeight, height));
+}
+
+- (void)setDetailHeight:(CGFloat)detailHeight {
+    CGFloat height = MIN(kMaxDetailHeight, MAX(kMinDetailHeight, detailHeight));
+    [NSUserDefaults.standardUserDefaults setDouble:height forKey:kAssistSidebarDetailHeightKey];
 }
 
 @end

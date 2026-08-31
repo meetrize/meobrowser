@@ -29,6 +29,9 @@
 @property (nonatomic, strong) NSButton *saveButton;
 @property (nonatomic, strong) NSButton *deleteButton;
 @property (nonatomic, assign) BOOL isNewRecipe;
+@property (nonatomic, strong) NSStackView *formStack;
+@property (nonatomic, strong) NSStackView *extraFieldsStack;
+@property (nonatomic, strong) NSMutableArray<LoginRecipeExtraField *> *editingExtraFields;
 @end
 
 @implementation AssistSidebarRecipeEditor
@@ -36,6 +39,7 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _editingExtraFields = [NSMutableArray array];
         [self buildUI];
     }
     return self;
@@ -60,7 +64,11 @@
     label.font = [NSFont systemFontOfSize:11];
     label.textColor = [NSColor secondaryLabelColor];
     label.translatesAutoresizingMaskIntoConstraints = NO;
-    [label.widthAnchor constraintEqualToConstant:64].active = YES;
+    [label.widthAnchor constraintEqualToConstant:44].active = YES;
+    [label setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [label setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
     return label;
 }
 
@@ -74,6 +82,8 @@
                                             action:pickAction];
         pick.bezelStyle = NSBezelStyleRounded;
         pick.controlSize = NSControlSizeMini;
+        [pick setContentHuggingPriority:NSLayoutPriorityRequired
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
         [views addObject:pick];
     }
     NSStackView *row = [NSStackView stackViewWithViews:views];
@@ -83,7 +93,210 @@
     row.translatesAutoresizingMaskIntoConstraints = NO;
     [field setContentHuggingPriority:NSLayoutPriorityDefaultLow
                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
     return row;
+}
+
+/// 标签 | 选择器 | 点选 | 值（RE-2）
+- (NSStackView *)pairedRowWithLabel:(NSString *)label
+                      selectorField:(NSView *)selectorField
+                         valueField:(NSView *)valueField
+                         pickAction:(SEL)pickAction {
+    NSTextField *caption = [self caption:label];
+    NSButton *pick = [NSButton buttonWithTitle:@"点选"
+                                        target:self
+                                        action:pickAction];
+    pick.bezelStyle = NSBezelStyleRounded;
+    pick.controlSize = NSControlSizeMini;
+    [pick setContentHuggingPriority:NSLayoutPriorityRequired
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [pick setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    if ([selectorField isKindOfClass:[NSTextField class]]) {
+        ((NSTextField *)selectorField).placeholderString = @"选择器";
+    }
+    if ([valueField isKindOfClass:[NSSecureTextField class]]) {
+        ((NSSecureTextField *)valueField).placeholderString = @"密码";
+    } else if ([valueField isKindOfClass:[NSTextField class]]) {
+        ((NSTextField *)valueField).placeholderString = @"填入值";
+    }
+
+    // 选择器可压缩；值区略保底宽，避免窄栏下完全挤没。
+    [selectorField setContentHuggingPriority:1
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [selectorField setContentCompressionResistancePriority:250
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField setContentHuggingPriority:1
+                           forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField setContentCompressionResistancePriority:500
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField.widthAnchor constraintGreaterThanOrEqualToConstant:72].active = YES;
+    [selectorField.widthAnchor constraintGreaterThanOrEqualToConstant:64].active = YES;
+
+    NSStackView *row = [NSStackView stackViewWithViews:@[caption, selectorField, pick, valueField]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 4;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    // 宽比约束须在入栈后激活，否则无共同祖先会抛 NSGenericException（启动无窗口）。
+    [NSLayoutConstraint constraintWithItem:selectorField
+                                 attribute:NSLayoutAttributeWidth
+                                 relatedBy:NSLayoutRelationEqual
+                                    toItem:valueField
+                                 attribute:NSLayoutAttributeWidth
+                                multiplier:1.2
+                                  constant:0].active = YES;
+    return row;
+}
+
+/// 自定义字段行：标签 | 选择器 | 点选 | 值 | −（RE-3）
+- (NSStackView *)extraFieldRowForField:(LoginRecipeExtraField *)field {
+    SBTextField *labelField = [self makeField];
+    labelField.placeholderString = @"标签";
+    labelField.stringValue = field.label ?: @"";
+    [labelField.widthAnchor constraintEqualToConstant:52].active = YES;
+    [labelField setContentHuggingPriority:NSLayoutPriorityRequired
+                           forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [labelField setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    SBTextField *selectorField = [self makeField];
+    selectorField.placeholderString = @"选择器";
+    selectorField.stringValue = field.selector ?: @"";
+
+    SBTextField *valueField = [self makeField];
+    valueField.placeholderString = @"填入值";
+    valueField.stringValue = field.value ?: @"";
+
+    NSButton *pick = [NSButton buttonWithTitle:@"点选"
+                                        target:self
+                                        action:@selector(pickExtraField:)];
+    pick.bezelStyle = NSBezelStyleRounded;
+    pick.controlSize = NSControlSizeMini;
+    pick.identifier = field.fieldID;
+    [pick setContentHuggingPriority:NSLayoutPriorityRequired
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSButton *remove = [NSButton buttonWithTitle:@"−"
+                                          target:self
+                                          action:@selector(removeExtraField:)];
+    remove.bezelStyle = NSBezelStyleRounded;
+    remove.controlSize = NSControlSizeMini;
+    remove.identifier = field.fieldID;
+    [remove setContentHuggingPriority:NSLayoutPriorityRequired
+                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    [selectorField setContentHuggingPriority:1
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [selectorField setContentCompressionResistancePriority:250
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField setContentHuggingPriority:1
+                           forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField setContentCompressionResistancePriority:500
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [valueField.widthAnchor constraintGreaterThanOrEqualToConstant:56].active = YES;
+    [selectorField.widthAnchor constraintGreaterThanOrEqualToConstant:48].active = YES;
+
+    NSStackView *row = [NSStackView stackViewWithViews:@[labelField, selectorField, pick, valueField, remove]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 4;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.identifier = field.fieldID;
+    // 同 pairedRow：入栈后再激活宽比，避免无共同祖先异常。
+    [NSLayoutConstraint constraintWithItem:selectorField
+                                 attribute:NSLayoutAttributeWidth
+                                 relatedBy:NSLayoutRelationEqual
+                                    toItem:valueField
+                                 attribute:NSLayoutAttributeWidth
+                                multiplier:1.2
+                                  constant:0].active = YES;
+    return row;
+}
+
+- (nullable LoginRecipeExtraField *)extraFieldWithID:(NSString *)fieldID {
+    if (fieldID.length == 0) {
+        return nil;
+    }
+    for (LoginRecipeExtraField *field in self.editingExtraFields) {
+        if ([field.fieldID isEqualToString:fieldID]) {
+            return field;
+        }
+    }
+    return nil;
+}
+
+- (void)syncExtraFieldsFromUI {
+    for (NSView *view in self.extraFieldsStack.arrangedSubviews) {
+        if (![view isKindOfClass:[NSStackView class]]) {
+            continue;
+        }
+        NSStackView *row = (NSStackView *)view;
+        LoginRecipeExtraField *field = [self extraFieldWithID:row.identifier];
+        if (!field || row.arrangedSubviews.count < 4) {
+            continue;
+        }
+        NSView *labelView = row.arrangedSubviews[0];
+        NSView *selectorView = row.arrangedSubviews[1];
+        NSView *valueView = row.arrangedSubviews[3];
+        if ([labelView isKindOfClass:[NSTextField class]]) {
+            field.label = ((NSTextField *)labelView).stringValue ?: @"";
+        }
+        if ([selectorView isKindOfClass:[NSTextField class]]) {
+            field.selector = ((NSTextField *)selectorView).stringValue ?: @"";
+        }
+        if ([valueView isKindOfClass:[NSTextField class]]) {
+            field.value = ((NSTextField *)valueView).stringValue ?: @"";
+        }
+    }
+}
+
+- (void)rebuildExtraFieldRows {
+    NSArray<NSView *> *old = [self.extraFieldsStack.arrangedSubviews copy];
+    for (NSView *v in old) {
+        [self.extraFieldsStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    for (LoginRecipeExtraField *field in self.editingExtraFields) {
+        NSStackView *row = [self extraFieldRowForField:field];
+        [self.extraFieldsStack addArrangedSubview:row];
+        [row.widthAnchor constraintEqualToAnchor:self.extraFieldsStack.widthAnchor].active = YES;
+    }
+}
+
+- (void)addExtraField:(id)sender {
+    (void)sender;
+    [self syncExtraFieldsFromUI];
+    NSString *label = [NSString stringWithFormat:@"字段%lu",
+                       (unsigned long)(self.editingExtraFields.count + 1)];
+    LoginRecipeExtraField *field = [LoginRecipeExtraField fieldWithLabel:label selector:@"" value:@""];
+    [self.editingExtraFields addObject:field];
+    [self rebuildExtraFieldRows];
+}
+
+- (void)removeExtraField:(id)sender {
+    NSButton *button = [sender isKindOfClass:[NSButton class]] ? (NSButton *)sender : nil;
+    NSString *fieldID = button.identifier;
+    if (fieldID.length == 0) {
+        return;
+    }
+    [self syncExtraFieldsFromUI];
+    LoginRecipeExtraField *field = [self extraFieldWithID:fieldID];
+    if (field) {
+        [self.editingExtraFields removeObject:field];
+    }
+    [self rebuildExtraFieldRows];
+}
+
+- (void)pickExtraField:(id)sender {
+    NSButton *button = [sender isKindOfClass:[NSButton class]] ? (NSButton *)sender : nil;
+    NSString *fieldID = button.identifier;
+    if (fieldID.length == 0) {
+        return;
+    }
+    [self beginPickForTarget:[NSString stringWithFormat:@"extra:%@", fieldID]];
 }
 
 - (void)buildUI {
@@ -167,27 +380,62 @@
     self.statusLabel.textColor = [NSColor tertiaryLabelColor];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSStackView *stack = [NSStackView stackViewWithViews:@[
+    NSTextField *extraHeading = [NSTextField labelWithString:@"自定义字段"];
+    extraHeading.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    extraHeading.textColor = [NSColor secondaryLabelColor];
+    extraHeading.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSButton *addExtra = [NSButton buttonWithTitle:@"＋ 添加字段"
+                                            target:self
+                                            action:@selector(addExtraField:)];
+    addExtra.bezelStyle = NSBezelStyleRounded;
+    addExtra.controlSize = NSControlSizeMini;
+    [addExtra setContentHuggingPriority:NSLayoutPriorityRequired
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *extraHeaderRow = [NSStackView stackViewWithViews:@[extraHeading, addExtra]];
+    extraHeaderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    extraHeaderRow.alignment = NSLayoutAttributeCenterY;
+    extraHeaderRow.spacing = 8;
+    extraHeaderRow.translatesAutoresizingMaskIntoConstraints = NO;
+    [extraHeading setContentHuggingPriority:1
+                             forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.extraFieldsStack = [NSStackView stackViewWithViews:@[]];
+    self.extraFieldsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.extraFieldsStack.alignment = NSLayoutAttributeLeading;
+    self.extraFieldsStack.spacing = 4;
+    self.extraFieldsStack.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.formStack = [NSStackView stackViewWithViews:@[
         heading,
         [self rowWithCaption:@"名称" field:self.titleField pickAction:nil],
         [self rowWithCaption:@"主机" field:self.hostField pickAction:nil],
         [self rowWithCaption:@"路径" field:self.pathPrefixField pickAction:nil],
         modeRow,
-        [self rowWithCaption:@"用户名" field:self.usernameField pickAction:nil],
-        [self rowWithCaption:@"密码" field:self.passwordField pickAction:nil],
-        [self rowWithCaption:@"手机号" field:self.phoneField pickAction:nil],
-        [self rowWithCaption:@"用户选择器" field:self.usernameSelectorField pickAction:@selector(pickUsername:)],
-        [self rowWithCaption:@"密码选择器" field:self.passwordSelectorField pickAction:@selector(pickPassword:)],
-        [self rowWithCaption:@"手机选择器" field:self.phoneSelectorField pickAction:@selector(pickPhone:)],
+        [self pairedRowWithLabel:@"用户名"
+                   selectorField:self.usernameSelectorField
+                      valueField:self.usernameField
+                      pickAction:@selector(pickUsername:)],
+        [self pairedRowWithLabel:@"密码"
+                   selectorField:self.passwordSelectorField
+                      valueField:self.passwordField
+                      pickAction:@selector(pickPassword:)],
+        [self pairedRowWithLabel:@"手机号"
+                   selectorField:self.phoneSelectorField
+                      valueField:self.phoneField
+                      pickAction:@selector(pickPhone:)],
         [self rowWithCaption:@"验证码" field:self.otpSelectorField pickAction:@selector(pickOTP:)],
-        [self rowWithCaption:@"发码按钮" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)],
+        [self rowWithCaption:@"发码" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)],
         [self rowWithCaption:@"提交" field:self.submitSelectorField pickAction:@selector(pickSubmit:)],
         self.submitByEnterCheck,
+        extraHeaderRow,
+        self.extraFieldsStack,
         self.autoLoginCheck,
         self.defaultCheck,
         actionRow,
         self.statusLabel,
     ]];
+    NSStackView *stack = self.formStack;
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 5;
@@ -205,9 +453,10 @@
         [stack.leadingAnchor constraintEqualToAnchor:doc.leadingAnchor],
         [stack.trailingAnchor constraintEqualToAnchor:doc.trailingAnchor],
         [stack.bottomAnchor constraintEqualToAnchor:doc.bottomAnchor],
-        [stack.widthAnchor constraintEqualToConstant:300],
     ]];
     scroll.documentView = doc;
+    // 跟随侧栏内容宽，避免并排行在固定 300pt 下过度挤压。
+    [doc.widthAnchor constraintEqualToAnchor:scroll.contentView.widthAnchor].active = YES;
 
     [root addSubview:scroll];
     [NSLayoutConstraint activateConstraints:@[
@@ -244,6 +493,8 @@
     self.defaultCheck.state = NSControlStateValueOff;
     self.submitSelectorField.enabled = NO;
     self.deleteButton.enabled = NO;
+    [self.editingExtraFields removeAllObjects];
+    [self rebuildExtraFieldRows];
     [self updateSMSFieldsEnabled];
     self.statusLabel.stringValue = @"凭证保存在本地钥匙串。";
 }
@@ -270,6 +521,12 @@
     self.defaultCheck.state = recipe.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
     self.submitSelectorField.enabled = !recipe.submitByEnter;
     self.deleteButton.enabled = YES;
+
+    [self.editingExtraFields removeAllObjects];
+    for (LoginRecipeExtraField *field in recipe.extraFields) {
+        [self.editingExtraFields addObject:[field copy]];
+    }
+    [self rebuildExtraFieldRows];
 
     LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID error:nil];
     self.usernameField.stringValue = credentials.username ?: @"";
@@ -382,6 +639,23 @@
             strongSelf.sendCodeSelectorField.stringValue = cssSelector;
         } else if ([target isEqualToString:@"submit"]) {
             strongSelf.submitSelectorField.stringValue = cssSelector;
+        } else if ([target hasPrefix:@"extra:"]) {
+            NSString *fieldID = [target substringFromIndex:6];
+            [strongSelf syncExtraFieldsFromUI];
+            LoginRecipeExtraField *field = [strongSelf extraFieldWithID:fieldID];
+            if (field) {
+                field.selector = cssSelector;
+            }
+            for (NSView *view in strongSelf.extraFieldsStack.arrangedSubviews) {
+                if (![view.identifier isEqualToString:fieldID] || ![view isKindOfClass:[NSStackView class]]) {
+                    continue;
+                }
+                NSStackView *row = (NSStackView *)view;
+                if (row.arrangedSubviews.count > 1 && [row.arrangedSubviews[1] isKindOfClass:[NSTextField class]]) {
+                    ((NSTextField *)row.arrangedSubviews[1]).stringValue = cssSelector;
+                }
+                break;
+            }
         }
         strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"已拾取：%@", cssSelector];
     }];
@@ -425,6 +699,17 @@
     recipe.otpSelector = self.otpSelectorField.stringValue;
     recipe.sendCodeSelector = self.sendCodeSelectorField.stringValue;
 
+    [self syncExtraFieldsFromUI];
+    NSMutableArray<LoginRecipeExtraField *> *extras = [NSMutableArray arrayWithCapacity:self.editingExtraFields.count];
+    for (LoginRecipeExtraField *field in self.editingExtraFields) {
+        LoginRecipeExtraField *copy = [field copy];
+        if (copy.label.length == 0) {
+            copy.label = @"字段";
+        }
+        [extras addObject:copy];
+    }
+    recipe.extraFields = extras;
+
     if ([recipe requiresOTPWait] && recipe.otpSelector.length == 0) {
         self.statusLabel.stringValue = @"短信/混合模式请配置验证码选择器。";
         return;
@@ -442,19 +727,22 @@
         recipe.passwordSelector = @"";
     }
 
-    NSError *error = nil;
-    if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
-        self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
-        return;
-    }
+    // 先固定表单快照：upsert 会同步发通知 → reloadList → loadRecipe，
+    // 若先 upsert 再读输入框，会被旧钥匙串值冲掉（RE-0）。
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
-    credentials.username = self.usernameField.stringValue;
-    credentials.password = self.passwordField.stringValue;
-    credentials.phone = self.phoneField.stringValue;
+    credentials.username = self.usernameField.stringValue ?: @"";
+    credentials.password = self.passwordField.stringValue ?: @"";
+    credentials.phone = self.phoneField.stringValue ?: @"";
+
+    NSError *error = nil;
     if (![[LoginCredentialStore sharedStore] saveCredentials:credentials
                                                  forRecipeID:recipe.recipeID
                                                        error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"凭证保存失败";
+        return;
+    }
+    if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
+        self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
         return;
     }
     self.isNewRecipe = NO;

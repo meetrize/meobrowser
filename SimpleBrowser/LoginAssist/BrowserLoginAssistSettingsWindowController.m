@@ -1162,18 +1162,19 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     }
 
     NSError *error = nil;
-    if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
-        self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
-        return;
-    }
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
-    credentials.username = self.usernameField.stringValue;
-    credentials.password = self.passwordField.stringValue;
-    credentials.phone = self.phoneField.stringValue;
+    credentials.username = self.usernameField.stringValue ?: @"";
+    credentials.password = self.passwordField.stringValue ?: @"";
+    credentials.phone = self.phoneField.stringValue ?: @"";
+    // 先写钥匙串再 upsert，避免 Store 通知触发的表单重载冲掉输入（与侧栏 RE-0 一致）。
     if (![[LoginCredentialStore sharedStore] saveCredentials:credentials
                                                  forRecipeID:recipe.recipeID
                                                        error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"凭证保存失败";
+        return;
+    }
+    if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
+        self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
         return;
     }
     self.editingRecipeID = recipe.recipeID;

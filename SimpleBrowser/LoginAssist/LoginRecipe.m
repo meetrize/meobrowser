@@ -4,6 +4,75 @@ LoginRecipeMode const LoginRecipeModePassword = @"password";
 LoginRecipeMode const LoginRecipeModeSMSOTP = @"sms_otp";
 LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
 
+@implementation LoginRecipeExtraField
+
++ (instancetype)fieldWithLabel:(NSString *)label selector:(NSString *)selector value:(NSString *)value {
+    LoginRecipeExtraField *field = [[self alloc] init];
+    field.label = label.length > 0 ? label : @"字段";
+    field.selector = selector ?: @"";
+    field.value = value ?: @"";
+    return field;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _fieldID = [[NSUUID UUID] UUIDString];
+        _label = @"";
+        _selector = @"";
+        _value = @"";
+        _enabled = YES;
+    }
+    return self;
+}
+
+- (id)copyWithZone:(NSZone *)zone {
+    (void)zone;
+    LoginRecipeExtraField *copy = [[LoginRecipeExtraField alloc] init];
+    copy.fieldID = self.fieldID;
+    copy.label = self.label;
+    copy.selector = self.selector;
+    copy.value = self.value;
+    copy.enabled = self.enabled;
+    return copy;
+}
+
+- (NSDictionary *)dictionaryRepresentation {
+    return @{
+        @"fieldID": self.fieldID ?: @"",
+        @"label": self.label ?: @"",
+        @"selector": self.selector ?: @"",
+        @"value": self.value ?: @"",
+        @"enabled": @(self.enabled),
+    };
+}
+
++ (instancetype)fieldWithDictionary:(NSDictionary *)dictionary {
+    if (![dictionary isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSString *fieldID = dictionary[@"fieldID"];
+    if (![fieldID isKindOfClass:[NSString class]] || fieldID.length == 0) {
+        fieldID = [[NSUUID UUID] UUIDString];
+    }
+    LoginRecipeExtraField *field = [[self alloc] init];
+    field.fieldID = fieldID;
+    NSString *label = dictionary[@"label"];
+    field.label = [label isKindOfClass:[NSString class]] ? label : @"";
+    NSString *selector = dictionary[@"selector"];
+    field.selector = [selector isKindOfClass:[NSString class]] ? selector : @"";
+    NSString *value = dictionary[@"value"];
+    field.value = [value isKindOfClass:[NSString class]] ? value : @"";
+    if (dictionary[@"enabled"] != nil) {
+        field.enabled = [dictionary[@"enabled"] boolValue];
+    } else {
+        field.enabled = YES;
+    }
+    return field;
+}
+
+@end
+
 @implementation LoginRecipe
 
 + (instancetype)recipeWithHost:(NSString *)host title:(NSString *)title {
@@ -17,6 +86,7 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     recipe.submitByEnter = YES;
     recipe.waitTimeoutMs = 8000;
     recipe.otpMaxWaitMs = 120000;
+    recipe.extraFields = @[];
     recipe.updatedAt = [NSDate date].timeIntervalSince1970;
     return recipe;
 }
@@ -31,6 +101,7 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
         _submitByEnter = YES;
         _waitTimeoutMs = 8000;
         _otpMaxWaitMs = 120000;
+        _extraFields = @[];
         _updatedAt = [NSDate date].timeIntervalSince1970;
     }
     return self;
@@ -57,7 +128,22 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     copy.waitTimeoutMs = self.waitTimeoutMs;
     copy.otpMaxWaitMs = self.otpMaxWaitMs;
     copy.updatedAt = self.updatedAt;
+    NSMutableArray<LoginRecipeExtraField *> *fields = [NSMutableArray arrayWithCapacity:self.extraFields.count];
+    for (LoginRecipeExtraField *field in self.extraFields) {
+        [fields addObject:[field copy]];
+    }
+    copy.extraFields = fields;
     return copy;
+}
+
+- (NSArray<LoginRecipeExtraField *> *)enabledExtraFields {
+    NSMutableArray<LoginRecipeExtraField *> *enabled = [NSMutableArray array];
+    for (LoginRecipeExtraField *field in self.extraFields) {
+        if (field.enabled && field.selector.length > 0) {
+            [enabled addObject:field];
+        }
+    }
+    return enabled;
 }
 
 - (BOOL)requiresOTPWait {
@@ -142,6 +228,13 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     if (self.successJSPredicate.length > 0) {
         dict[@"successJSPredicate"] = self.successJSPredicate;
     }
+    if (self.extraFields.count > 0) {
+        NSMutableArray *encoded = [NSMutableArray arrayWithCapacity:self.extraFields.count];
+        for (LoginRecipeExtraField *field in self.extraFields) {
+            [encoded addObject:[field dictionaryRepresentation]];
+        }
+        dict[@"extraFields"] = encoded;
+    }
     return dict;
 }
 
@@ -195,6 +288,21 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     recipe.submitSelector = [submitSel isKindOfClass:[NSString class]] ? submitSel : nil;
     NSString *predicate = dictionary[@"successJSPredicate"];
     recipe.successJSPredicate = [predicate isKindOfClass:[NSString class]] ? predicate : nil;
+
+    NSArray *rawFields = dictionary[@"extraFields"];
+    NSMutableArray<LoginRecipeExtraField *> *fields = [NSMutableArray array];
+    if ([rawFields isKindOfClass:[NSArray class]]) {
+        for (id item in rawFields) {
+            if (![item isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+            LoginRecipeExtraField *field = [LoginRecipeExtraField fieldWithDictionary:item];
+            if (field) {
+                [fields addObject:field];
+            }
+        }
+    }
+    recipe.extraFields = fields;
     return recipe;
 }
 

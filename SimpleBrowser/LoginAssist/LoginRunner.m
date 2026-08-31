@@ -259,6 +259,7 @@ static NSInteger gLoginRunnerGeneration = 0;
          "const password = passwordArg;\n"
          "const phone = phoneArg;\n"
          "const otp = otpArg;\n"
+         "const extraFields = Array.isArray(extraFieldsArg) ? extraFieldsArg : [];\n"
          "function qs(sel) { try { return document.querySelector(sel); } catch (e) { return null; } }\n"
          "async function waitFor(sel) {\n"
          "  if (!sel) return null;\n"
@@ -280,6 +281,16 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  el.dispatchEvent(new Event('input', { bubbles: true }));\n"
          "  el.dispatchEvent(new Event('change', { bubbles: true }));\n"
          "}\n"
+         "async function fillExtraFieldsSoft() {\n"
+         "  for (const f of extraFields) {\n"
+         "    const sel = f && f.selector ? String(f.selector) : '';\n"
+         "    if (!sel) continue;\n"
+         "    try {\n"
+         "      const el = await waitFor(sel);\n"
+         "      setValue(el, f.value != null ? String(f.value) : '');\n"
+         "    } catch (e) { /* 软失败：继续后续字段 */ }\n"
+         "  }\n"
+         "}\n"
          "function pressEnter(el) {\n"
          "  el.focus();\n"
          "  const opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };\n"
@@ -294,6 +305,7 @@ static NSInteger gLoginRunnerGeneration = 0;
          "    if (passSel) { const passEl = await waitFor(passSel); setValue(passEl, password); }\n"
          "  }\n"
          "  if (phoneSel) { const phoneEl = await waitFor(phoneSel); setValue(phoneEl, phone); }\n"
+         "  await fillExtraFieldsSoft();\n"
          "  if (sendSel) { const sendBtn = await waitFor(sendSel); sendBtn.click(); }\n"
          "  await new Promise(r => setTimeout(r, 80));\n"
          "  return 'pre-ok';\n"
@@ -315,6 +327,7 @@ static NSInteger gLoginRunnerGeneration = 0;
          "let passEl = null;\n"
          "if (userSel) { const userEl = await waitFor(userSel); setValue(userEl, username); }\n"
          "if (passSel) { passEl = await waitFor(passSel); setValue(passEl, password); }\n"
+         "await fillExtraFieldsSoft();\n"
          "await new Promise(r => setTimeout(r, 80));\n"
          "if (doSubmit) {\n"
          "  if (submitByEnter && passEl) { pressEnter(passEl); }\n"
@@ -377,6 +390,14 @@ static NSInteger gLoginRunnerGeneration = 0;
         }
     };
 
+    NSMutableArray<NSDictionary *> *extraPayload = [NSMutableArray array];
+    for (LoginRecipeExtraField *field in [recipe enabledExtraFields]) {
+        [extraPayload addObject:@{
+            @"selector": field.selector ?: @"",
+            @"value": field.value ?: @"",
+        }];
+    }
+
     NSDictionary *args = @{
         @"timeoutMsArg": @(timeoutMs),
         @"userSelArg": userSel,
@@ -393,6 +414,7 @@ static NSInteger gLoginRunnerGeneration = 0;
         @"passwordArg": credentials.password ?: @"",
         @"phoneArg": credentials.phone ?: @"",
         @"otpArg": otp ?: @"",
+        @"extraFieldsArg": extraPayload,
     };
 
     if (@available(macOS 11.0, *)) {
@@ -424,6 +446,7 @@ static NSInteger gLoginRunnerGeneration = 0;
          "  const passwordArg = a.passwordArg;\n"
          "  const phoneArg = a.phoneArg;\n"
          "  const otpArg = a.otpArg;\n"
+         "  const extraFieldsArg = a.extraFieldsArg;\n"
          "  %@\n"
          "})()",
         argsJSON,

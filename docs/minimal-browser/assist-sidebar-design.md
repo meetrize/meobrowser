@@ -1,9 +1,9 @@
 # 登录助手 / 站点备忘 — 管理侧栏设计方案
 
 > 目标：在浏览器右侧侧栏集中展示**当前页匹配**的登录 Recipe 与站点 Memo，并支持在侧栏内完成增删改查与一键执行；减少反复打开「登录助手与互联」设置窗的摩擦。  
-> 状态：**SB-0～SB-3 已实现**（列表 + Memo/Recipe CRUD + 互斥协调 · 2026-07-27）  
+> 状态：**SB-0～SB-3 已实现**（列表 + Memo/Recipe CRUD + 互斥协调 · 2026-07-27）；**登录编辑面板 UX（RE-0～RE-4）已落地**——保存竞态修复、详情高度拖拽记忆、字段并排、自定义字段 + Runner 填入；见 [assist-sidebar-recipe-editor-ux-design.md](assist-sidebar-recipe-editor-ux-design.md) / [assist-sidebar-recipe-editor-ux-development-plan.md](assist-sidebar-recipe-editor-ux-development-plan.md)  
 > 前置：登录助手 V1 + 站点备忘 P1 已落地；通知收件箱侧栏壳已落地（[companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md)）  
-> 关联：[assist-sidebar-development-plan.md](assist-sidebar-development-plan.md) · [auto-login-design.md](auto-login-design.md) · [site-form-memo-design.md](site-form-memo-design.md) · [site-form-memo-development-plan.md](site-form-memo-development-plan.md) · [companion-link-toolbar-mac-design.md](companion-link-toolbar-mac-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md)
+> 关联：[assist-sidebar-development-plan.md](assist-sidebar-development-plan.md) · [assist-sidebar-recipe-editor-ux-design.md](assist-sidebar-recipe-editor-ux-design.md) · [assist-sidebar-recipe-editor-ux-development-plan.md](assist-sidebar-recipe-editor-ux-development-plan.md) · [auto-login-design.md](auto-login-design.md) · [site-form-memo-design.md](site-form-memo-design.md) · [site-form-memo-development-plan.md](site-form-memo-development-plan.md) · [companion-link-toolbar-mac-design.md](companion-link-toolbar-mac-design.md) · [professional-features-roadmap.md](professional-features-roadmap.md)
 
 ---
 

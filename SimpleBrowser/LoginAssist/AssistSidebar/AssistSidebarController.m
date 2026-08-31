@@ -12,6 +12,10 @@
 static const CGFloat kSidebarMinWidth = 320.0;
 static const CGFloat kSidebarMaxWidth = 560.0;
 static const CGFloat kResizeHandleWidth = 8.0;
+static const CGFloat kDetailResizeHandleHeight = 6.0;
+static const CGFloat kDetailMinHeight = 180.0;
+static const CGFloat kDetailMaxHeight = 520.0;
+static const CGFloat kListMinHeight = 120.0;
 static const NSTimeInterval kSearchDebounce = 0.2;
 
 typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
@@ -100,6 +104,110 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 
 @end
 
+/// 列表与详情之间的水平分隔：上下拖改详情高度。
+@interface AssistSidebarDetailResizeView : NSView
+@property (nonatomic, copy, nullable) void (^onDragBegan)(void);
+@property (nonatomic, copy, nullable) void (^onDragToOffset)(CGFloat mouseDeltaYFromStart);
+@property (nonatomic, copy, nullable) void (^onDragEnded)(void);
+@property (nonatomic, assign) CGFloat dragStartScreenY;
+@property (nonatomic, assign) BOOL dragging;
+@property (nonatomic, strong) NSView *hairline;
+@end
+
+@implementation AssistSidebarDetailResizeView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        _hairline = [[NSView alloc] initWithFrame:NSZeroRect];
+        _hairline.translatesAutoresizingMaskIntoConstraints = NO;
+        _hairline.wantsLayer = YES;
+        [self addSubview:_hairline];
+        NSLayoutConstraint *hairlineHeight = [_hairline.heightAnchor constraintEqualToConstant:1];
+        // 父视图收起高度为 0 时，勿用 Required 抢高度（RE-4）。
+        hairlineHeight.priority = NSLayoutPriorityDefaultLow;
+        [NSLayoutConstraint activateConstraints:@[
+            [_hairline.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_hairline.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
+            [_hairline.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-10],
+            hairlineHeight,
+        ]];
+        [self refreshHairlineColor];
+    }
+    return self;
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    [self refreshHairlineColor];
+}
+
+- (void)refreshHairlineColor {
+    if (@available(macOS 10.14, *)) {
+        self.hairline.layer.backgroundColor = [NSColor separatorColor].CGColor;
+    } else {
+        self.hairline.layer.backgroundColor = [NSColor gridColor].CGColor;
+    }
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    return YES;
+}
+
+- (BOOL)mouseDownCanMoveWindow {
+    return NO;
+}
+
+- (void)resetCursorRects {
+    [self addCursorRect:self.bounds cursor:[NSCursor resizeUpDownCursor]];
+}
+
+- (CGFloat)screenYFromEvent:(NSEvent *)event {
+    NSPoint inWindow = event.locationInWindow;
+    if (self.window) {
+        return [self.window convertPointToScreen:inWindow].y;
+    }
+    return inWindow.y;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+    self.dragging = YES;
+    self.dragStartScreenY = [self screenYFromEvent:event];
+    if (self.onDragBegan) {
+        self.onDragBegan();
+    }
+    [[NSCursor resizeUpDownCursor] push];
+
+    while (self.dragging) {
+        NSEvent *next = [window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
+                                            untilDate:[NSDate distantFuture]
+                                               inMode:NSEventTrackingRunLoopMode
+                                              dequeue:YES];
+        if (!next) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseUp) {
+            break;
+        }
+        if (next.type == NSEventTypeLeftMouseDragged && self.onDragToOffset) {
+            self.onDragToOffset([self screenYFromEvent:next] - self.dragStartScreenY);
+        }
+    }
+
+    self.dragging = NO;
+    [NSCursor pop];
+    if (self.onDragEnded) {
+        self.onDragEnded();
+    }
+}
+
+@end
+
 @interface AssistSidebarBackgroundView : NSView
 @property (nonatomic, copy, nullable) void (^onAppearanceChange)(void);
 @end
@@ -132,6 +240,8 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 @property (nonatomic, strong) NSButton *emptyNewMemoButton;
 @property (nonatomic, strong) NSView *detailContainer;
 @property (nonatomic, strong) NSLayoutConstraint *detailHeightConstraint;
+@property (nonatomic, strong) AssistSidebarDetailResizeView *detailResizeHandle;
+@property (nonatomic, strong) NSLayoutConstraint *detailResizeHandleHeightConstraint;
 @property (nonatomic, strong) AssistSidebarMemoEditor *memoEditor;
 @property (nonatomic, strong) AssistSidebarRecipeEditor *recipeEditor;
 @property (nonatomic, strong) NSButton *advancedSettingsButton;
@@ -140,6 +250,8 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 @property (nonatomic, assign, readwrite) BOOL visible;
 @property (nonatomic, assign) CGFloat currentWidth;
 @property (nonatomic, assign) CGFloat dragStartWidth;
+@property (nonatomic, assign) CGFloat dragStartDetailHeight;
+@property (nonatomic, assign) CGFloat dragStartFlexibleSpan;
 @property (nonatomic, strong) NSArray<AssistSidebarRow *> *rows;
 @property (nonatomic, strong, nullable) dispatch_block_t searchDebounceBlock;
 @property (nonatomic, strong, nullable) id localKeyMonitor;
@@ -369,6 +481,23 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     };
     self.resizeHandle = handle;
 
+    AssistSidebarDetailResizeView *detailHandle = [[AssistSidebarDetailResizeView alloc] initWithFrame:NSZeroRect];
+    detailHandle.translatesAutoresizingMaskIntoConstraints = NO;
+    detailHandle.hidden = YES;
+    detailHandle.onDragBegan = ^{
+        weakSelf.dragStartDetailHeight = weakSelf.detailHeightConstraint.constant;
+        weakSelf.dragStartFlexibleSpan = NSHeight(weakSelf.scrollView.frame) + weakSelf.detailHeightConstraint.constant;
+    };
+    detailHandle.onDragToOffset = ^(CGFloat deltaY) {
+        // 分隔条上移（屏幕 Y↑）→ 详情变高
+        [weakSelf applyDetailHeight:weakSelf.dragStartDetailHeight + deltaY];
+    };
+    detailHandle.onDragEnded = ^{
+        [weakSelf persistDetailHeight];
+    };
+    self.detailResizeHandle = detailHandle;
+    self.detailResizeHandleHeightConstraint = [detailHandle.heightAnchor constraintEqualToConstant:0];
+
     NSView *edgeSep = [[NSView alloc] initWithFrame:NSZeroRect];
     edgeSep.translatesAutoresizingMaskIntoConstraints = NO;
     edgeSep.wantsLayer = YES;
@@ -382,6 +511,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     [root addSubview:self.searchField];
     [root addSubview:scroll];
     [root addSubview:empty];
+    [root addSubview:detailHandle];
     [root addSubview:self.detailContainer];
     [root addSubview:footer];
     [root addSubview:edgeSep];
@@ -390,6 +520,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.widthConstraint = [root.widthAnchor constraintEqualToConstant:0];
     self.widthConstraint.active = YES;
     self.detailHeightConstraint.active = YES;
+    self.detailResizeHandleHeightConstraint.active = YES;
 
     [NSLayoutConstraint activateConstraints:@[
         [background.topAnchor constraintEqualToAnchor:root.topAnchor],
@@ -438,7 +569,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
         [scroll.topAnchor constraintEqualToAnchor:self.searchField.bottomAnchor constant:8],
         [scroll.leadingAnchor constraintEqualToAnchor:edgeSep.trailingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
-        [scroll.bottomAnchor constraintEqualToAnchor:self.detailContainer.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:detailHandle.topAnchor],
 
         [empty.topAnchor constraintEqualToAnchor:scroll.topAnchor],
         [empty.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor],
@@ -452,6 +583,10 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
         [self.emptyDetailLabel.trailingAnchor constraintEqualToAnchor:empty.trailingAnchor constant:-24],
         [emptyButtons.topAnchor constraintEqualToAnchor:self.emptyDetailLabel.bottomAnchor constant:12],
         [emptyButtons.centerXAnchor constraintEqualToAnchor:empty.centerXAnchor],
+
+        [detailHandle.leadingAnchor constraintEqualToAnchor:edgeSep.trailingAnchor],
+        [detailHandle.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [detailHandle.bottomAnchor constraintEqualToAnchor:self.detailContainer.topAnchor],
 
         [self.detailContainer.leadingAnchor constraintEqualToAnchor:edgeSep.trailingAnchor],
         [self.detailContainer.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
@@ -538,6 +673,59 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     if ([self.delegate respondsToSelector:@selector(assistSidebar:didChangeWidth:)]) {
         [self.delegate assistSidebar:self didChangeWidth:self.currentWidth];
     }
+}
+
+- (CGFloat)clampedDetailHeight:(CGFloat)proposed usingFlexibleSpan:(CGFloat)flexibleSpan {
+    CGFloat maxByList = flexibleSpan - kListMinHeight;
+    CGFloat minH = kDetailMinHeight;
+    CGFloat maxH = MIN(kDetailMaxHeight, maxByList);
+    if (maxH < minH) {
+        // 侧栏整体过矮：尽量保住列表，允许详情低于常规下限。
+        maxH = MAX(80.0, maxByList);
+        minH = MIN(minH, maxH);
+    }
+    return MIN(maxH, MAX(minH, proposed));
+}
+
+- (void)applyDetailHeight:(CGFloat)height {
+    CGFloat span = self.dragStartFlexibleSpan;
+    if (span < 1) {
+        span = NSHeight(self.scrollView.frame) + MAX(self.detailHeightConstraint.constant, 0);
+    }
+    CGFloat next = [self clampedDetailHeight:height usingFlexibleSpan:span];
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0;
+        context.allowsImplicitAnimation = NO;
+        self.detailHeightConstraint.constant = next;
+        [self.view layoutSubtreeIfNeeded];
+    } completionHandler:nil];
+}
+
+- (void)persistDetailHeight {
+    CGFloat height = self.detailHeightConstraint.constant;
+    if (height < 1) {
+        return;
+    }
+    [AssistSidebarSettings sharedSettings].detailHeight = height;
+}
+
+- (void)expandDetailPanel {
+    CGFloat remembered = [AssistSidebarSettings sharedSettings].detailHeight;
+    CGFloat span = NSHeight(self.scrollView.frame) + MAX(self.detailHeightConstraint.constant, 0);
+    if (span < 1) {
+        // 首次展开时尚无布局：先用记忆值，下一轮 layout 再钳制。
+        span = remembered + kListMinHeight;
+    }
+    CGFloat height = [self clampedDetailHeight:remembered usingFlexibleSpan:MAX(span, remembered + kListMinHeight)];
+    self.detailResizeHandle.hidden = NO;
+    self.detailResizeHandleHeightConstraint.constant = kDetailResizeHandleHeight;
+    self.detailHeightConstraint.constant = height;
+}
+
+- (void)collapseDetailPanel {
+    self.detailResizeHandle.hidden = YES;
+    self.detailResizeHandleHeightConstraint.constant = 0;
+    self.detailHeightConstraint.constant = 0;
 }
 
 - (void)installKeyMonitor {
@@ -705,10 +893,18 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     [self refreshEmptyState];
     [self updateEditButtonEnabled];
 
-    // 新建编辑中：保留表单，不被列表刷新冲掉。
+    // 编辑中保留表单，避免 Store 通知把未保存/刚保存的输入冲掉（RE-0）。
     BOOL editingNewMemo = (!self.memoEditor.view.hidden && self.memoEditor.editingMemoID.length == 0);
     BOOL editingNewRecipe = (!self.recipeEditor.view.hidden && self.recipeEditor.editingRecipeID.length == 0);
-    if (editingNewMemo || editingNewRecipe) {
+    BOOL preservingRecipeEditor =
+        (!self.recipeEditor.view.hidden &&
+         self.recipeEditor.editingRecipeID.length > 0 &&
+         [self.recipeEditor.editingRecipeID isEqualToString:self.selectedRecipeID]);
+    BOOL preservingMemoEditor =
+        (!self.memoEditor.view.hidden &&
+         self.memoEditor.editingMemoID.length > 0 &&
+         [self.memoEditor.editingMemoID isEqualToString:self.selectedMemoID]);
+    if (editingNewMemo || editingNewRecipe || preservingRecipeEditor || preservingMemoEditor) {
         return;
     }
     if (self.selectedMemoID.length > 0) {
@@ -884,7 +1080,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.recipeEditor.view.hidden = YES;
     [self.recipeEditor clear];
     self.memoEditor.view.hidden = NO;
-    self.detailHeightConstraint.constant = 340;
+    [self expandDetailPanel];
     [self.memoEditor loadMemo:memo];
 }
 
@@ -892,7 +1088,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.recipeEditor.view.hidden = YES;
     [self.recipeEditor clear];
     self.memoEditor.view.hidden = NO;
-    self.detailHeightConstraint.constant = 340;
+    [self expandDetailPanel];
     [self.memoEditor beginNewMemoPrefillingFromCurrentURL];
 }
 
@@ -900,7 +1096,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.memoEditor.view.hidden = YES;
     [self.memoEditor clear];
     self.recipeEditor.view.hidden = NO;
-    self.detailHeightConstraint.constant = 380;
+    [self expandDetailPanel];
     [self.recipeEditor loadRecipe:recipe];
 }
 
@@ -908,7 +1104,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.memoEditor.view.hidden = YES;
     [self.memoEditor clear];
     self.recipeEditor.view.hidden = NO;
-    self.detailHeightConstraint.constant = 380;
+    [self expandDetailPanel];
     [self.recipeEditor beginNewRecipePrefillingFromCurrentURL];
 }
 
@@ -917,7 +1113,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     [self.recipeEditor clear];
     self.memoEditor.view.hidden = YES;
     self.recipeEditor.view.hidden = YES;
-    self.detailHeightConstraint.constant = 0;
+    [self collapseDetailPanel];
 }
 
 - (void)hideMemoEditor {
@@ -1187,6 +1383,8 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     (void)editor;
     self.selectedRecipeID = recipe.recipeID;
     self.selectedMemoID = nil;
+    // 凭证已在 editor 内先写入；此处只刷列表并选中。
+    // selectRecipeID → loadRecipe 此时可读到新钥匙串/内存缓存，作真源对齐。
     [self reloadList];
     [self selectRecipeID:recipe.recipeID];
 }

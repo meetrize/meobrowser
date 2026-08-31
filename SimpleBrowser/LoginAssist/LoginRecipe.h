@@ -7,6 +7,19 @@ extern LoginRecipeMode const LoginRecipeModePassword;
 extern LoginRecipeMode const LoginRecipeModeSMSOTP;
 extern LoginRecipeMode const LoginRecipeModeHybrid;
 
+/// 登录 Recipe 的自定义填入字段（选择器 + 值；值存 Recipe JSON，不进钥匙串）。
+@interface LoginRecipeExtraField : NSObject <NSCopying>
+@property (nonatomic, copy) NSString *fieldID;
+@property (nonatomic, copy) NSString *label;
+@property (nonatomic, copy) NSString *selector;
+@property (nonatomic, copy) NSString *value;
+@property (nonatomic, assign) BOOL enabled;
+
++ (instancetype)fieldWithLabel:(NSString *)label selector:(NSString *)selector value:(NSString *)value;
+- (NSDictionary *)dictionaryRepresentation;
++ (nullable instancetype)fieldWithDictionary:(NSDictionary *)dictionary;
+@end
+
 /// 站点登录配方。
 @interface LoginRecipe : NSObject <NSCopying>
 
@@ -30,12 +43,16 @@ extern LoginRecipeMode const LoginRecipeModeHybrid;
 @property (nonatomic, assign) NSInteger waitTimeoutMs;
 /// waitOTP 超时（毫秒），默认 120000。
 @property (nonatomic, assign) NSInteger otpMaxWaitMs;
+/// 自定义字段（默认空数组）。
+@property (nonatomic, copy) NSArray<LoginRecipeExtraField *> *extraFields;
 @property (nonatomic, assign) NSTimeInterval updatedAt;
 
 + (instancetype)recipeWithHost:(NSString *)host title:(NSString *)title;
 
 - (BOOL)matchesURL:(NSURL *)url;
 - (BOOL)requiresOTPWait;
+/// 已启用且带选择器的自定义字段。
+- (NSArray<LoginRecipeExtraField *> *)enabledExtraFields;
 - (NSDictionary *)dictionaryRepresentation;
 + (nullable instancetype)recipeWithDictionary:(NSDictionary *)dictionary;
 
