@@ -1,13 +1,17 @@
 #import "BrowserChromeActionMenuRowView.h"
 
 static const CGFloat kRowHeight = 28.0;
-static const CGFloat kRowWidth = 240.0;
+static const CGFloat kRowWidth = 252.0;
+static const CGFloat kIconSize = 16.0;
 static const CGFloat kPinSize = 22.0;
 static const CGFloat kHPad = 10.0;
+static const CGFloat kIconTitleGap = 8.0;
 static const CGFloat kTitlePinGap = 6.0;
-static const CGFloat kSymbolPointSize = 11.0;
+static const CGFloat kActionSymbolPointSize = 12.0;
+static const CGFloat kPinSymbolPointSize = 11.0;
 
 @interface BrowserChromeActionMenuRowView ()
+@property (nonatomic, strong) NSImageView *iconView;
 @property (nonatomic, strong) NSButton *titleButton;
 @property (nonatomic, strong) NSButton *pinButton;
 @end
@@ -23,8 +27,18 @@ static const CGFloat kSymbolPointSize = 11.0;
     if (self) {
         _itemID = @"";
         _titleText = @"";
+        _symbolName = nil;
+        _onSymbolName = nil;
         _titleEnabled = YES;
         _pinnedToToolbar = YES;
+
+        _iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _iconView.imageScaling = NSImageScaleProportionallyDown;
+        _iconView.translatesAutoresizingMaskIntoConstraints = NO;
+        if (@available(macOS 10.14, *)) {
+            _iconView.contentTintColor = [NSColor secondaryLabelColor];
+        }
+        [self addSubview:_iconView];
 
         _titleButton = [[NSButton alloc] initWithFrame:NSZeroRect];
         _titleButton.bezelStyle = NSBezelStyleInline;
@@ -50,7 +64,12 @@ static const CGFloat kSymbolPointSize = 11.0;
         [self addSubview:_pinButton];
 
         [NSLayoutConstraint activateConstraints:@[
-            [_titleButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:kHPad],
+            [_iconView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:kHPad],
+            [_iconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_iconView.widthAnchor constraintEqualToConstant:kIconSize],
+            [_iconView.heightAnchor constraintEqualToConstant:kIconSize],
+
+            [_titleButton.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:kIconTitleGap],
             [_titleButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_titleButton.trailingAnchor constraintEqualToAnchor:_pinButton.leadingAnchor constant:-kTitlePinGap],
 
@@ -77,6 +96,16 @@ static const CGFloat kSymbolPointSize = 11.0;
     [self reloadAppearance];
 }
 
+- (void)setSymbolName:(NSString *)symbolName {
+    _symbolName = [symbolName copy];
+    [self reloadAppearance];
+}
+
+- (void)setOnSymbolName:(NSString *)onSymbolName {
+    _onSymbolName = [onSymbolName copy];
+    [self reloadAppearance];
+}
+
 - (void)setChecked:(BOOL)checked {
     _checked = checked;
     [self reloadAppearance];
@@ -92,13 +121,13 @@ static const CGFloat kSymbolPointSize = 11.0;
     [self reloadAppearance];
 }
 
-- (nullable NSImage *)symbolNamed:(NSString *)name {
+- (nullable NSImage *)symbolNamed:(NSString *)name pointSize:(CGFloat)pointSize {
     if (name.length == 0) {
         return nil;
     }
     if (@available(macOS 11.0, *)) {
         NSImageSymbolConfiguration *config =
-            [NSImageSymbolConfiguration configurationWithPointSize:kSymbolPointSize
+            [NSImageSymbolConfiguration configurationWithPointSize:pointSize
                                                             weight:NSFontWeightMedium
                                                              scale:NSImageSymbolScaleMedium];
         NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
@@ -114,9 +143,25 @@ static const CGFloat kSymbolPointSize = 11.0;
     self.titleButton.toolTip = self.titleText;
     self.titleButton.accessibilityLabel = self.titleText;
 
+    NSString *actionSymbol = (self.checked && self.onSymbolName.length > 0)
+        ? self.onSymbolName
+        : self.symbolName;
+    NSImage *actionImage = [self symbolNamed:actionSymbol pointSize:kActionSymbolPointSize];
+    self.iconView.image = actionImage;
+    self.iconView.hidden = (actionImage == nil);
+    if (@available(macOS 10.14, *)) {
+        if (self.checked) {
+            self.iconView.contentTintColor = [NSColor controlAccentColor];
+        } else if (self.titleEnabled) {
+            self.iconView.contentTintColor = [NSColor secondaryLabelColor];
+        } else {
+            self.iconView.contentTintColor = [NSColor disabledControlTextColor];
+        }
+    }
+
     BOOL pinned = self.pinnedToToolbar;
     NSString *pinSymbol = pinned ? @"pin.slash" : @"pin";
-    NSImage *pinImage = [self symbolNamed:pinSymbol];
+    NSImage *pinImage = [self symbolNamed:pinSymbol pointSize:kPinSymbolPointSize];
     if (pinImage) {
         self.pinButton.image = pinImage;
         self.pinButton.title = @"";

@@ -116,8 +116,9 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
 - (void)wireLoginButton:(NSButton *)button {
     self.loginButton = button;
-    button.target = self;
-    button.action = @selector(oneClickLogin:);
+    // 条上固定图标与 ⋯ 菜单一致：打开/切换助手侧栏（不做一键登录）。
+    button.target = self.windowController;
+    button.action = @selector(toggleAssistSidebar:);
     // 右键「固定/隐藏」由 ActionGroup 统一处理；登录项经 appendItemsToToolbarContextMenu: 合并。
     for (NSGestureRecognizer *gr in [button.gestureRecognizers copy]) {
         if ([gr isKindOfClass:[NSClickGestureRecognizer class]] &&
@@ -659,28 +660,27 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     BOOL hasRecipe = self.matchedRecipes.count > 0;
     BOOL hasMemo = self.matchedMemos.count > 0;
     BOOL useful = hasRecipe || hasMemo || self.hasDetectedLoginForm;
-    button.enabled = useful && !self.isRunning;
+    // 条上入口改为打开侧栏，始终可点（执行仍走 ⌘⇧L / 侧栏内按钮）。
+    button.enabled = YES;
     if (@available(macOS 10.14, *)) {
-        button.contentTintColor = (useful && !self.isRunning)
+        button.contentTintColor = useful
             ? [NSColor controlAccentColor]
-            : [NSColor tertiaryLabelColor];
+            : [NSColor secondaryLabelColor];
     }
-    if (self.isRunning) {
-        button.toolTip = @"正在执行…";
-    } else if (hasRecipe && hasMemo) {
-        button.toolTip = @"登录助手 / 站点备忘（单击打开菜单；⌘⇧A 助手侧栏）";
+    if (hasRecipe && hasMemo) {
+        button.toolTip = @"打开登录助手侧栏（⌘⇧A；⌘⇧L 一键登录）";
     } else if (hasRecipe) {
         LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
         NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
-        button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L；⌘⇧A 侧栏）", name ?: @"站点"];
+        button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可登录：%@；⌘⇧L）", name ?: @"站点"];
     } else if (hasMemo) {
         FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
         NSString *name = memo.title.length > 0 ? memo.title : memo.host;
-        button.toolTip = [NSString stringWithFormat:@"填入站点备忘：%@（⌘⇧M；⌘⇧A 侧栏）", name ?: @"站点"];
+        button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可填备忘：%@；⌘⇧M）", name ?: @"站点"];
     } else if (self.hasDetectedLoginForm) {
-        button.toolTip = @"检测到登录表单（⌘⇧A 打开助手侧栏）";
+        button.toolTip = @"打开登录助手侧栏（检测到登录表单；⌘⇧A）";
     } else {
-        button.toolTip = @"登录助手（⌘⇧A 打开助手侧栏）";
+        button.toolTip = @"打开登录助手侧栏（⌘⇧A）";
     }
 }
 

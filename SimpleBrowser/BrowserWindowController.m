@@ -1141,6 +1141,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionFindInPageID action:@selector(toggleFindBar:)];
     [self wireChromeButton:BrowserChromeActionHistoryID action:@selector(toggleHistoryPanel:)];
     [self wireChromeButton:BrowserChromeActionDownloadID action:@selector(toggleDownloadsPanel:)];
+    [self wireChromeButton:BrowserChromeActionLoginAssistID action:@selector(toggleAssistSidebar:)];
     [self wireChromeButton:BrowserChromeActionCompanionLinkID action:@selector(showCompanionLinkSettings:)];
     [self wireChromeButton:BrowserChromeActionSendToPhoneID action:@selector(sendCurrentTabToPhone:)];
     [self wireChromeButton:BrowserChromeActionPhonePolicyID action:@selector(showPhonePolicyPanel:)];
@@ -1346,12 +1347,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     if ([itemID isEqualToString:BrowserChromeActionLoginAssistID]) {
-        NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionLoginAssistID];
-        if (button.action && button.target) {
-            [NSApp sendAction:button.action to:button.target from:button];
-        } else {
-            [self.loginAssistController oneClickLogin:nil];
-        }
+        [self toggleAssistSidebar:nil];
         return;
     }
     if ([itemID isEqualToString:BrowserChromeActionCaptchaAssistID]) {
@@ -1426,6 +1422,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             [[BrowserChromeActionMenuRowView alloc] initWithFrame:NSZeroRect];
         row.itemID = itemID;
         row.titleText = [self chromeActionMenuTitleForItemID:itemID];
+        row.symbolName = catalogItem.symbolName;
+        row.onSymbolName = catalogItem.onSymbolName;
         row.checked = catalogItem.toggles ? [self chromeActionCheckedForItemID:itemID] : NO;
         row.pinnedToToolbar = ![BrowserChromeActionLayoutStore isActionIDHidden:itemID];
         row.titleEnabled = [self chromeActionTitleEnabledForItemID:itemID];
