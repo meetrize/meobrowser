@@ -72,7 +72,7 @@
 | 把手位置 | 列表底与详情顶之间的**水平分隔条**（约 5～6 pt 命中区） |
 | 光标 | `resizeUpDownCursor` |
 | 拖动语义 | 上拖 → 详情变高（列表变矮）；下拖 → 详情变矮 |
-| 钳制 | 详情高 **180～520**；列表剩余高度 ≥ **120**（避免列表被挤没） |
+| 钳制 | 详情高 **180～720**；列表剩余高度 ≥ **56**（仍可看见列表，详情可再拖高） |
 | 记忆键 | `MeoLoginAssistSidebarDetailHeight`（`AssistSidebarSettings.detailHeight`） |
 | 默认 | **380**（与现 Recipe 打开高度一致） |
 | 适用范围 | Recipe / Memo 共用同一高度记忆（同一 `detailContainer`） |

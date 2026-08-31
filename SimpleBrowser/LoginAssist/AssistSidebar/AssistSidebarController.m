@@ -14,8 +14,9 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 static const CGFloat kResizeHandleWidth = 8.0;
 static const CGFloat kDetailResizeHandleHeight = 6.0;
 static const CGFloat kDetailMinHeight = 180.0;
-static const CGFloat kDetailMaxHeight = 520.0;
-static const CGFloat kListMinHeight = 120.0;
+static const CGFloat kDetailMaxHeight = 720.0;
+/// 列表区下限：可再矮一些，好把详情拖得更高。
+static const CGFloat kListMinHeight = 56.0;
 static const NSTimeInterval kSearchDebounce = 0.2;
 
 typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {

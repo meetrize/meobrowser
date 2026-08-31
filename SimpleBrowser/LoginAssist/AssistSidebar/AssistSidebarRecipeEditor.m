@@ -6,6 +6,40 @@
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 
+/// 翻转坐标系，便于表单自上而下排布。
+@interface AssistSidebarRecipeEditorDocumentView : NSView
+@end
+
+@implementation AssistSidebarRecipeEditorDocumentView
+- (BOOL)isFlipped {
+    return YES;
+}
+@end
+
+/// 内容矮于视口时贴顶，避免拖高详情后表单沉在底部。
+@interface AssistSidebarRecipeEditorClipView : NSClipView
+@end
+
+@implementation AssistSidebarRecipeEditorClipView
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (NSRect)constrainBoundsRect:(NSRect)proposedBounds {
+    NSRect constrained = [super constrainBoundsRect:proposedBounds];
+    NSView *doc = self.documentView;
+    if (!doc) {
+        return constrained;
+    }
+    CGFloat docHeight = NSHeight(doc.frame);
+    CGFloat clipHeight = NSHeight(self.bounds);
+    if (docHeight < clipHeight) {
+        constrained.origin.y = NSMinY(doc.frame);
+    }
+    return constrained;
+}
+@end
+
 @interface AssistSidebarRecipeEditor ()
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, copy, readwrite, nullable) NSString *editingRecipeID;
@@ -312,6 +346,9 @@
     scroll.hasVerticalScroller = YES;
     scroll.borderType = NSNoBorder;
     scroll.drawsBackground = NO;
+    AssistSidebarRecipeEditorClipView *clip = [[AssistSidebarRecipeEditorClipView alloc] initWithFrame:NSZeroRect];
+    clip.drawsBackground = NO;
+    scroll.contentView = clip;
 
     NSTextField *heading = [NSTextField labelWithString:@"编辑登录配置"];
     heading.font = [NSFont boldSystemFontOfSize:12];
@@ -445,7 +482,7 @@
         [row.widthAnchor constraintEqualToAnchor:stack.widthAnchor].active = YES;
     }
 
-    NSView *doc = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSView *doc = [[AssistSidebarRecipeEditorDocumentView alloc] initWithFrame:NSZeroRect];
     doc.translatesAutoresizingMaskIntoConstraints = NO;
     [doc addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[

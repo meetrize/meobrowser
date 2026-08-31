@@ -12,7 +12,7 @@
 | 保存顺序 | **先** `saveCredentials`，**再** `upsertRecipe`；禁止在凭证写入前用 `loadRecipe` 冲表单 |
 | `reloadList` | 详情编辑器可见且正在编辑对应项时：**只刷列表**，不调用 `loadRecipe` / `loadMemo`（除非显式要求对齐） |
 | 详情高度 | `AssistSidebarSettings.detailHeight`；打开详情用记忆值；关闭用 0；拖拽松手再持久化 |
-| 高度钳制 | 详情 180～520；列表剩余 ≥ 120 |
+| 高度钳制 | 详情 180～720；列表剩余 ≥ 56 |
 | 自定义字段 | `LoginRecipe.extraFields`；值进 Recipe JSON；执行时 `LoginRunner` 填入 |
 | 内建帐密 | 仍 Keychain；UI 与选择器并排 |
 | 输入控件 | 一律 `SBTextField` / `SBSecureTextField` |
@@ -70,9 +70,9 @@
 
 ### 任务清单
 
-- [x] **1.1** `AssistSidebarSettings`：`detailHeight`；键 `MeoLoginAssistSidebarDetailHeight`；默认 380；钳制 180～520  
+- [x] **1.1** `AssistSidebarSettings`：`detailHeight`；键 `MeoLoginAssistSidebarDetailHeight`；默认 380；钳制 180～720  
 - [x] **1.2** `AssistSidebarController`：在 `scroll` 与 `detailContainer` 之间加水平 `AssistSidebarDetailResizeView`（可复用左缘把手的回调模式，改为纵向 delta）  
-- [x] **1.3** 拖动中更新 `detailHeightConstraint`，并保证列表 `scroll` 不被压破（列表可视高度 ≥ 120）  
+- [x] **1.3** 拖动中更新 `detailHeightConstraint`，并保证列表 `scroll` 不被压破（列表可视高度 ≥ 56）  
 - [x] **1.4** `showRecipeEditor*` / `showMemoEditor*`：使用 `settings.detailHeight`，不再写死 380/340  
 - [x] **1.5** `hideDetailEditors`：高度 → 0，**不**写 Settings  
 - [x] **1.6** 松手 `persistDetailHeight`；可选：分隔条细线视觉  

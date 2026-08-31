@@ -9,7 +9,7 @@ static const CGFloat kMaxWidth = 560.0;
 
 static const CGFloat kDefaultDetailHeight = 380.0;
 static const CGFloat kMinDetailHeight = 180.0;
-static const CGFloat kMaxDetailHeight = 520.0;
+static const CGFloat kMaxDetailHeight = 720.0;
 
 @implementation AssistSidebarSettings
 
