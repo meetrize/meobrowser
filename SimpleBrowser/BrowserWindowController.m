@@ -201,6 +201,9 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
 @property (nonatomic, weak) WKWebView *observedProgressWebView;
 @property (nonatomic, weak) WKWebView *observedFullscreenWebView;
+/// Element Fullscreen 期间周期性修补 WKWebView 布局（WebKit 可能异步剥约束导致 0 尺寸黑屏）。
+@property (nonatomic, strong, nullable) NSTimer *fullscreenLayoutRepairTimer;
+@property (nonatomic, assign) NSInteger fullscreenLayoutRepairGeneration;
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
@@ -760,6 +763,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         self.pendingPersistBlock = nil;
     }
     [self stopObservingLoadingProgress];
+    [self stopFullscreenLayoutRepair];
     [self stopObservingFullscreenState];
     [self.addressAutocompleteController uninstall];
     [self.downloadManager removeObserver:self];
@@ -2981,6 +2985,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     webView.translatesAutoresizingMaskIntoConstraints = YES;
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     webView.frame = superview.bounds;
+    [webView setNeedsLayout:YES];
+    [webView setNeedsDisplay:YES];
+    [superview setNeedsLayout:YES];
 }
 
 - (void)attachWebViewForTab:(BrowserTab *)tab {
@@ -3074,6 +3081,22 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     };
     // 挂上时立刻拉一次，避免错过 Initial KVO 之前的 title。
     [tab pullDocumentTitleFromWebView];
+
+    // Element Fullscreen 时 WebKit 已把 WKWebView 挪到自有全屏窗口。
+    // 若此处再 addSubview 回 contentContainer，会拆掉全屏层级 → 全屏区黑屏
+    //（常见于后台标签休眠触发 refreshTabsUI → attach）。退出全屏才看似「恢复」。
+    if ([self webViewIsInElementFullscreen:webView]) {
+        [self pinWebViewLayoutInSuperview:webView];
+        [self observeFullscreenStateForSelectedTab];
+        [self startFullscreenLayoutRepairIfNeededForWebView:webView];
+        return;
+    }
+    if (webView.superview != nil && webView.superview != self.contentContainer) {
+        // 过渡态或其它宿主：勿强行抢回，只保证当前父视图内铺满。
+        [self pinWebViewLayoutInSuperview:webView];
+        [self observeFullscreenStateForSelectedTab];
+        return;
+    }
 
     if (webView.superview != self.contentContainer) {
         [self.contentContainer addSubview:webView];
@@ -3198,16 +3221,25 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     if (selectedTab != nil && !selectedTab.isNewTabPage) {
-        // 先创建 WebView → 挂 navigationDelegate → 再 load。
-        // 若先 load，document-start 写回 #hash 时无 delegate，代理下会把 # 编成 %23 → 404。
-        [selectedTab wakeFromHibernationIfNeeded];
-        [self attachWebViewForTab:selectedTab];
-        [selectedTab loadPendingRestorableURLIfNeeded];
-        if (selectedTab.webView != nil) {
-            selectedTab.webView.hidden = NO;
-        }
-        if (selectedTab.pendingHardRecover) {
-            [self presentHardRecoverErrorForSelectedTabIfNeeded];
+        WKWebView *selectedWebView = selectedTab.webView;
+        if ([self webViewIsInElementFullscreen:selectedWebView]) {
+            // 当前标签正在 HTML5 全屏：勿 wake/attach 重挂，只维持全屏窗口内布局。
+            [self pinWebViewLayoutInSuperview:selectedWebView];
+            [self observeFullscreenStateForSelectedTab];
+            [self startFullscreenLayoutRepairIfNeededForWebView:selectedWebView];
+            selectedWebView.hidden = NO;
+        } else {
+            // 先创建 WebView → 挂 navigationDelegate → 再 load。
+            // 若先 load，document-start 写回 #hash 时无 delegate，代理下会把 # 编成 %23 → 404。
+            [selectedTab wakeFromHibernationIfNeeded];
+            [self attachWebViewForTab:selectedTab];
+            [selectedTab loadPendingRestorableURLIfNeeded];
+            if (selectedTab.webView != nil) {
+                selectedTab.webView.hidden = NO;
+            }
+            if (selectedTab.pendingHardRecover) {
+                [self presentHardRecoverErrorForSelectedTabIfNeeded];
+            }
         }
     } else if (selectedTab != nil) {
         [self detachWebViewIfNeeded:selectedTab.webView];
@@ -3291,9 +3323,91 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.observedProgressWebView = nil;
 }
 
+- (BOOL)webViewIsInElementFullscreen:(WKWebView *)webView {
+    if (webView == nil) {
+        return NO;
+    }
+    if (@available(macOS 13.0, *)) {
+        return webView.fullscreenState != WKFullscreenStateNotInFullscreen;
+    }
+    return NO;
+}
+
+- (void)stopFullscreenLayoutRepair {
+    self.fullscreenLayoutRepairGeneration += 1;
+    [self.fullscreenLayoutRepairTimer invalidate];
+    self.fullscreenLayoutRepairTimer = nil;
+}
+
+- (void)startFullscreenLayoutRepairIfNeededForWebView:(WKWebView *)webView {
+    if (![self webViewIsInElementFullscreen:webView]) {
+        [self stopFullscreenLayoutRepair];
+        return;
+    }
+    if (self.fullscreenLayoutRepairTimer != nil) {
+        return;
+    }
+    self.fullscreenLayoutRepairGeneration += 1;
+    NSInteger generation = self.fullscreenLayoutRepairGeneration;
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+
+    // 进入全屏后短延迟再钉几次，覆盖 WebKit 异步换父视图 / 清约束的竞态。
+    for (NSNumber *delay in @[ @0.0, @0.05, @0.25, @1.0 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+                           typeof(self) strongSelf = weakSelf;
+                           WKWebView *strongWebView = weakWebView;
+                           if (!strongSelf || !strongWebView) {
+                               return;
+                           }
+                           if (strongSelf.fullscreenLayoutRepairGeneration != generation) {
+                               return;
+                           }
+                           if (![strongSelf webViewIsInElementFullscreen:strongWebView]) {
+                               return;
+                           }
+                           [strongSelf pinWebViewLayoutInSuperview:strongWebView];
+                       });
+    }
+
+    // 长时全屏：若 frame 被剥成空矩形则立即修补（抖音等约数分钟后偶发黑屏）。
+    self.fullscreenLayoutRepairTimer =
+        [NSTimer scheduledTimerWithTimeInterval:2.0
+                                        repeats:YES
+                                          block:^(NSTimer *timer) {
+                                              (void)timer;
+                                              typeof(self) strongSelf = weakSelf;
+                                              WKWebView *strongWebView = weakWebView;
+                                              if (!strongSelf || !strongWebView) {
+                                                  [strongSelf stopFullscreenLayoutRepair];
+                                                  return;
+                                              }
+                                              if (strongSelf.fullscreenLayoutRepairGeneration != generation ||
+                                                  ![strongSelf webViewIsInElementFullscreen:strongWebView]) {
+                                                  [strongSelf stopFullscreenLayoutRepair];
+                                                  return;
+                                              }
+                                              NSView *superview = strongWebView.superview;
+                                              if (superview == nil) {
+                                                  return;
+                                              }
+                                              NSSize viewSize = strongWebView.bounds.size;
+                                              NSSize hostSize = superview.bounds.size;
+                                              BOOL emptyView = (viewSize.width < 1.0 || viewSize.height < 1.0);
+                                              BOOL mismatched = (fabs(viewSize.width - hostSize.width) > 1.0 ||
+                                                                 fabs(viewSize.height - hostSize.height) > 1.0);
+                                              if (emptyView || mismatched) {
+                                                  [strongSelf pinWebViewLayoutInSuperview:strongWebView];
+                                              }
+                                          }];
+    self.fullscreenLayoutRepairTimer.tolerance = 0.5;
+}
+
 - (void)stopObservingFullscreenState {
     WKWebView *webView = self.observedFullscreenWebView;
     if (!webView) {
+        [self stopFullscreenLayoutRepair];
         return;
     }
     if (@available(macOS 13.0, *)) {
@@ -3305,6 +3419,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         }
     }
     self.observedFullscreenWebView = nil;
+    [self stopFullscreenLayoutRepair];
 }
 
 - (void)observeFullscreenStateForSelectedTab {
@@ -3332,10 +3447,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         switch (webView.fullscreenState) {
             case WKFullscreenStateEnteringFullscreen:
             case WKFullscreenStateInFullscreen:
+                [self pinWebViewLayoutInSuperview:webView];
+                [self startFullscreenLayoutRepairIfNeededForWebView:webView];
+                break;
             case WKFullscreenStateExitingFullscreen:
                 [self pinWebViewLayoutInSuperview:webView];
                 break;
             case WKFullscreenStateNotInFullscreen:
+                [self stopFullscreenLayoutRepair];
                 if (webView.superview == self.contentContainer) {
                     [self pinWebViewLayoutInSuperview:webView];
                 } else if (webView.superview == nil &&
@@ -3560,6 +3679,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     (void)controller;
     if (self.autoScrollController.enabled) {
         self.autoScrollController.enabled = NO;
+    }
+    // 选中标签未变且正在 Element Fullscreen：只刷标签栏，避免整页 refresh 扰动全屏层。
+    NSUUID *selectedID = self.tabController.selectedTab.tabID;
+    WKWebView *selectedWebView = self.tabController.selectedTab.webView;
+    BOOL selectionUnchanged = selectedID != nil
+        && [selectedID isEqual:self.lastSelectedTabIDForAddressFocus];
+    if (selectionUnchanged && [self webViewIsInElementFullscreen:selectedWebView]) {
+        [self updateTabStripDisplay];
+        [self pinWebViewLayoutInSuperview:selectedWebView];
+        [self startFullscreenLayoutRepairIfNeededForWebView:selectedWebView];
+        [self schedulePersistTabSession];
+        return;
     }
     [self refreshTabsUI];
     [self schedulePersistTabSession];
