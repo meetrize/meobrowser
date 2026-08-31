@@ -11,6 +11,28 @@ static const NSUInteger kMaxLiveWebViewsGlobal = 12;
 static const NSTimeInterval kHibernateIdleSeconds = 600.0; // 10 minutes
 static const NSTimeInterval kHibernateIdleSecondsMediaHeavy = 90.0;
 static const NSTimeInterval kHibernateCheckInterval = 30.0;
+/// 近期交互过的标签在宽限期内不参与预算回收（快速切回时不重载）。
+static const NSTimeInterval kHibernateGraceSeconds = 120.0;
+/// 切标签后延迟执行预算回收，避免连续切换时同步销毁刚失焦的 WebView。
+static const NSTimeInterval kBudgetEnforcementDelaySeconds = 5.0;
+
+static NSTimeInterval BrowserTabLastInteractionTimestamp(BrowserTab *tab) {
+    return MAX(tab.lastActiveTimestamp, tab.lastDeactivatedTimestamp);
+}
+
+static BOOL BrowserTabIsWithinHibernationGrace(BrowserTab *tab, NSTimeInterval now) {
+    return (now - BrowserTabLastInteractionTimestamp(tab)) < kHibernateGraceSeconds;
+}
+
+static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab, BrowserTab *selectedTab, NSTimeInterval now) {
+    if (tab == selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
+        return NO;
+    }
+    if (BrowserTabIsWithinHibernationGrace(tab, now)) {
+        return NO;
+    }
+    return YES;
+}
 
 @interface BrowserRecentlyClosedEntry : NSObject
 @property (nonatomic, copy) NSString *sessionEntry;
@@ -54,6 +76,9 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 - (void)dealloc {
     [self.hibernateTimer invalidate];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(performDeferredBudgetEnforcement)
+                                               object:nil];
     [[[self class] registeredControllers] removeObject:self];
 }
 
@@ -396,13 +421,42 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 #pragma mark - Private
 
 - (void)selectTabInternal:(BrowserTab *)tab notify:(BOOL)notify {
+    BrowserTab *previousTab = self.selectedTab;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (previousTab != nil && previousTab != tab) {
+        previousTab.lastDeactivatedTimestamp = now;
+        // 失焦也视为近期活跃，避免长时间驻留后一切走即因旧时间戳被预算回收。
+        previousTab.lastActiveTimestamp = now;
+    }
     self.selectedTab = tab;
-    tab.lastActiveTimestamp = [NSDate date].timeIntervalSince1970;
+    tab.lastActiveTimestamp = now;
     // 不在此处 wake+load：由 refreshTabsUI 先 attach navigationDelegate 再加载。
     if (notify) {
         [self notifyChange];
     }
-    [self enforceLiveWebViewBudget];
+    [self scheduleDeferredBudgetEnforcement];
+}
+
+- (void)scheduleDeferredBudgetEnforcement {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(performDeferredBudgetEnforcement)
+                                               object:nil];
+    [self performSelector:@selector(performDeferredBudgetEnforcement)
+               withObject:nil
+               afterDelay:kBudgetEnforcementDelaySeconds];
+}
+
+- (void)performDeferredBudgetEnforcement {
+    BOOL changed = NO;
+    if ([self enforceLiveWebViewBudget]) {
+        changed = YES;
+    }
+    if ([[self class] enforceGlobalLiveWebViewBudget]) {
+        changed = YES;
+    }
+    if (changed) {
+        [self notifyChange];
+    }
 }
 
 - (void)removeTabsAtIndexes:(NSIndexSet *)indexes {
@@ -515,15 +569,16 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
             continue;
         }
         NSTimeInterval idleLimit = tab.mediaHeavy ? kHibernateIdleSecondsMediaHeavy : kHibernateIdleSeconds;
-        if (now - tab.lastActiveTimestamp >= idleLimit) {
+        if (now - BrowserTabLastInteractionTimestamp(tab) >= idleLimit) {
             [tab hibernate];
             changed = YES;
         }
     }
 
     if ([self liveWebViewCount] > kMaxLiveWebViews) {
-        [self enforceLiveWebViewBudget];
-        changed = YES;
+        if ([self enforceLiveWebViewBudget]) {
+            changed = YES;
+        }
     }
 
     if ([[self class] globalLiveWebViewCount] > kMaxLiveWebViewsGlobal) {
@@ -590,6 +645,7 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
 
 + (BOOL)enforceGlobalLiveWebViewBudget {
     BOOL changed = NO;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     while ([self globalLiveWebViewCount] > kMaxLiveWebViewsGlobal) {
         BrowserTabController *keyController = [self keyWindowTabController];
         BrowserTab *victim = nil;
@@ -600,17 +656,18 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
         for (BrowserTabController *controller in [self registeredControllers]) {
             BOOL isNonKey = (controller != keyController);
             for (BrowserTab *tab in controller.mutableTabs) {
-                if (tab == controller.selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
+                if (!BrowserTabIsEligibleForBudgetHibernation(tab, controller.selectedTab, now)) {
                     continue;
                 }
                 NSInteger rank = [self hibernationVictimRankForTab:tab isNonKeyWindow:isNonKey];
+                NSTimeInterval interaction = BrowserTabLastInteractionTimestamp(tab);
                 if (victim == nil ||
                     rank < bestRank ||
-                    (rank == bestRank && tab.lastActiveTimestamp < oldest)) {
+                    (rank == bestRank && interaction < oldest)) {
                     victim = tab;
                     victimController = controller;
                     bestRank = rank;
-                    oldest = tab.lastActiveTimestamp;
+                    oldest = interaction;
                 }
             }
         }
@@ -625,18 +682,22 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
     return changed;
 }
 
-- (void)enforceLiveWebViewBudget {
+- (BOOL)enforceLiveWebViewBudget {
     NSUInteger live = [self liveWebViewCount];
     if (live <= kMaxLiveWebViews) {
-        return;
+        return NO;
     }
 
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     NSMutableArray<BrowserTab *> *candidates = [NSMutableArray array];
     for (BrowserTab *tab in self.mutableTabs) {
-        if (tab == self.selectedTab || tab.webView == nil || tab.isNewTabPage || tab.resistsHibernation) {
+        if (!BrowserTabIsEligibleForBudgetHibernation(tab, self.selectedTab, now)) {
             continue;
         }
         [candidates addObject:tab];
+    }
+    if (candidates.count == 0) {
+        return NO;
     }
     [candidates sortUsingComparator:^NSComparisonResult(BrowserTab *a, BrowserTab *b) {
         BOOL aProtected = [BrowserRiskHostPolicy URLIsHibernationProtected:(a.webView.URL ?: a.restorableURL)];
@@ -649,21 +710,26 @@ static const NSTimeInterval kHibernateCheckInterval = 30.0;
             // mediaHeavy 排前（先休眠）。
             return a.mediaHeavy ? NSOrderedAscending : NSOrderedDescending;
         }
-        if (a.lastActiveTimestamp < b.lastActiveTimestamp) {
+        NSTimeInterval aInteraction = BrowserTabLastInteractionTimestamp(a);
+        NSTimeInterval bInteraction = BrowserTabLastInteractionTimestamp(b);
+        if (aInteraction < bInteraction) {
             return NSOrderedAscending;
         }
-        if (a.lastActiveTimestamp > b.lastActiveTimestamp) {
+        if (aInteraction > bInteraction) {
             return NSOrderedDescending;
         }
         return NSOrderedSame;
     }];
 
+    BOOL changed = NO;
     for (BrowserTab *tab in candidates) {
         if ([self liveWebViewCount] <= kMaxLiveWebViews) {
             break;
         }
         [tab hibernate];
+        changed = YES;
     }
+    return changed;
 }
 
 - (void)notifyChange {
