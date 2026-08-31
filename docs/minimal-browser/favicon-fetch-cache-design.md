@@ -15,7 +15,7 @@
 |------|------|------|
 | **ICO-1** | MVP 管道 + 星标触发 | 统一 `BrowserFaviconService`；瀑布渠道；星标加入时后台拉取并回写 `iconURLString` + 磁盘缓存 |
 | **ICO-2** | 编辑对话框 + 消费统一 | 「自动获取」按钮；Launchpad / 补全 / 文件夹四宫格统一走缓存；失败保持首字母占位 |
-| ICO-3 | 延后 | 标签栏 favicon；打开页面时从 `WKWebView` 顺手缓存；用户可清缓存；渠道开关 |
+| ICO-3 | 消费层已完成 | 标签栏 favicon（[tab-strip-lru-favicon-design.md](tab-strip-lru-favicon-design.md)）；`syncFromWebView` Silent 缓存；偏好「清除缓存」/ 渠道开关仍延后 |
 
 **本方案首版交付目标：ICO-1 + ICO-2。**
 
@@ -375,11 +375,12 @@ Makefile：`BROWSER_SOURCES` 增加 `SimpleBrowser/Favicon/*.m`，`-ISimpleBrows
 - [x] 移除私有 `BrowserShortcutIconLoader`  
 - [x] `make browser` 通过；acceptance 追加条目  
 
-### ICO-3（延后）
+### ICO-3（标签栏消费层 — 2026-08-31）
 
-- [ ] 标签条 favicon  
-- [ ] 页面 didFinishNavigation 时顺手缓存  
-- [ ] 负缓存 TTL / 清除缓存 UI  
+- [x] 标签条 favicon（`BrowserTabItemView` + 溢出菜单行）
+- [x] 页面导航完成时 Silent `fetchAndCache`（`syncFromWebView`）
+- [ ] 负缓存 TTL / 清除缓存 UI
+- [ ] 偏好「允许第三方图标服务」
 - [ ] 第三方渠道开关  
 - [ ] Web App Manifest `icons`  
 

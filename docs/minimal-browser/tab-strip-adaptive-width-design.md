@@ -1,6 +1,7 @@
 # 标签栏自适应宽度 — 交互与实现方案
 
 > 目标：多标签时窗口仍可任意缩放；标签栏跟随窗口收缩；放不下时用箭头菜单访问其余标签。  
+> 状态：**基础版已实现**；**LRU + favicon + 32 pt 渐进压缩**见 [tab-strip-lru-favicon-design.md](tab-strip-lru-favicon-design.md)（TS-LRU-0～4，2026-08-31）。  
 > 关联：`multi-tab-design.md` §5.1；实现：`BrowserTabStripView`、`BrowserTabItemView`。
 
 ---
@@ -39,13 +40,15 @@
 | 属性 | 值 | 说明 |
 |------|-----|------|
 | 标签最大宽 | **200 pt** | 少标签时不过分拉长 |
-| 标签最小宽 | **108 pt** | 仍可辨认标题；低于此进入溢出 |
+| 标签最小宽 | **108 pt** | 仍可辨认标题；低于此进入溢出（**演进后**见 LRU 方案：绝对最小 **32 pt** favicon-only） |
 | 关闭按钮常显阈值 | **≥ 120 pt** | 再窄：选中常显，未选中悬停显示 |
 | 标签间距 | 2 pt | 与现实现一致 |
 | 溢出箭头宽 | **22 pt** | `chevron.down`，仅溢出时显示 |
 | 窗口 `minSize` | **400×300** | 与标签数无关 |
 
-宽度计算：
+宽度计算（**基础版**，已被 LRU 方案取代）：
+
+> **现行算法**见 [tab-strip-lru-favicon-design.md §3.3～§3.4](tab-strip-lru-favicon-design.md#33-lru-可见集算法)：LRU 贪心可见集 + 非均匀宽度（选中 +24 pt）+ 绝对最小 **32 pt**。
 
 ```
 若 N×min + (N−1)×spacing ≤ 可用宽（不含箭头）：
@@ -53,7 +56,7 @@
 否则：
   可用宽减去箭头占位
   visibleCount = max(1, floor((tabsWidth + spacing) / (min + spacing)))
-  可见窗口包含 selectedIndex，其余进溢出菜单
+  可见窗口包含 selectedIndex，其余进溢出菜单   ← 已改为 LRU，非 index 窗口
 ```
 
 ---

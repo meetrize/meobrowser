@@ -9,7 +9,9 @@
 | [minimal-browser/design.md](minimal-browser/design.md) | MeoBrowser 最精简浏览器 — 技术方案与架构设计 |
 | [minimal-browser/development-plan.md](minimal-browser/development-plan.md) | MeoBrowser 分阶段开发计划与验收标准 |
 | [minimal-browser/multi-tab-design.md](minimal-browser/multi-tab-design.md) | 多标签页（Chrome 式标题栏）设计方案 L2 |
-| [minimal-browser/tab-strip-adaptive-width-design.md](minimal-browser/tab-strip-adaptive-width-design.md) | 标签栏自适应宽度 — Safari 向伸缩与横向滚动 |
+| [minimal-browser/tab-strip-adaptive-width-design.md](minimal-browser/tab-strip-adaptive-width-design.md) | 标签栏自适应宽度 — 等宽伸缩与溢出菜单（基础版） |
+| [minimal-browser/tab-strip-lru-favicon-design.md](minimal-browser/tab-strip-lru-favicon-design.md) | 标签栏 LRU 溢出 + Favicon + 渐进压缩（32pt favicon-only） |
+| [minimal-browser/tab-strip-lru-favicon-development-plan.md](minimal-browser/tab-strip-lru-favicon-development-plan.md) | 标签栏 LRU + Favicon — 分阶段开发计划（TS-LRU-0～4） |
 | [minimal-browser/tab-strip-chrome-actions-design.md](minimal-browser/tab-strip-chrome-actions-design.md) | 标签栏右侧 Chrome 动作区 — 精简模式 / 窗口置顶（可扩展） |
 | [minimal-browser/tab-strip-chrome-actions-development-plan.md](minimal-browser/tab-strip-chrome-actions-development-plan.md) | 标签栏右侧 Chrome 动作区 — 分阶段开发计划（CA-0～CA-2） |
 | [minimal-browser/transparent-mode-design.md](minimal-browser/transparent-mode-design.md) | 透明模式 — 窗口/页面透明与字色；**壳显隐以 chrome-revision 为准** |

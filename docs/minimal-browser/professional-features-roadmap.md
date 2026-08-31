@@ -100,7 +100,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | **快捷方式文件夹/分组** | P0 | 如「工作 / 个人 / 运维」；方案见 [new-tab-launchpad-folder-design.md](new-tab-launchpad-folder-design.md) |
 | **新标签页背景图** | P1 | 导入降采样 + 进程内共享解码；方案见 [new-tab-launchpad-wallpaper-design.md](new-tab-launchpad-wallpaper-design.md) |
 | **环境标签（Staging / Prod）** | P1 | 同一服务不同 URL 成组，图标角标区分环境 |
-| **Favicon 显示** | P1 | **ICO-0～ICO-2 已实现**：多渠道 + 磁盘缓存；星标 / 编辑「自动获取」；Launchpad + 补全。标签栏延后。见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md) |
+| **Favicon 显示** | P1 | **ICO-0～ICO-2 + 标签栏消费层（TS-LRU）**：Launchpad / 补全 / 星标 + **标签条 favicon**；清除缓存 UI 仍延后。见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md) · [tab-strip-lru-favicon-design.md](tab-strip-lru-favicon-design.md) |
 | **导入/导出快捷方式 JSON** | P1 | 团队共享模板、换机迁移 |
 | **Launchpad 内搜索** | P1 | 快捷方式多时，输入过滤（仍可与地址栏补全共用逻辑） |
 | **默认工作区布局** | P2 | 启动时恢复窗口大小、标签组、选中的 Launchpad 页 |
@@ -203,7 +203,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 
 - [x] Launchpad 文件夹/分组（见 [new-tab-launchpad-folder-design.md](new-tab-launchpad-folder-design.md)）
 - [x] Launchpad 背景图（见 [new-tab-launchpad-wallpaper-design.md](new-tab-launchpad-wallpaper-design.md)）
-- [x] Favicon（Launchpad + 星标 + 补全；见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md)；标签栏仍延后）
+- [x] Favicon（Launchpad + 星标 + 补全 + **标签栏**；见 [favicon-fetch-cache-design.md](favicon-fetch-cache-design.md) · [tab-strip-lru-favicon-design.md](tab-strip-lru-favicon-design.md)）
 - [ ] 快捷方式导入/导出
 - [x] 浏览历史 + 地址栏历史补全（AC-3）
 - [ ] 标签拖拽排序（完成 multi-tab L2d）

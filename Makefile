@@ -36,6 +36,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabItemView.m \
+                   $(BROWSER_SRC_DIR)/Tabs/BrowserTabOverflowMenuRowView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabDragGhostController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabDropPlaceholderView.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserChromeActionItem.m \

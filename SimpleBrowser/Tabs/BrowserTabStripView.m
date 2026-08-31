@@ -1,6 +1,7 @@
 #import "BrowserTabStripView.h"
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
+#import "BrowserTabOverflowMenuRowView.h"
 #import "BrowserTabDragGhostController.h"
 #import "BrowserTabDropPlaceholderView.h"
 #import "BrowserTabStripChromeActionsView.h"
@@ -38,6 +39,14 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
     }
     // Chrome 式：完整标题 + 完整网址（两行）
     return [NSString stringWithFormat:@"%@\n%@", title, urlString];
+}
+
+static NSString *BrowserTabPageURLString(BrowserTab *tab) {
+    if (tab.isNewTabPage) {
+        return @"";
+    }
+    NSURL *url = [tab currentOrRestorableURL];
+    return url.absoluteString ?: @"";
 }
 
 @class BrowserTabStripView;
@@ -185,13 +194,16 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
 @property (nonatomic, strong) NSMutableArray<BrowserTabItemView *> *tabItems;
 @property (nonatomic, strong) NSMapTable<BrowserTabItemView *, NSUUID *> *tabItemIDs;
 @property (nonatomic, strong) NSMapTable<NSUUID *, BrowserTabItemView *> *tabItemsByID;
+@property (nonatomic, copy) NSArray<BrowserTab *> *layoutTabs;
+@property (nonatomic, strong) NSMapTable<NSUUID *, BrowserTab *> *layoutTabsByID;
 @property (nonatomic, strong, nullable) NSUUID *selectedTabID;
 @property (nonatomic, strong) NSMutableArray<NSUUID *> *overflowTabIDs;
 @property (nonatomic, assign) CGFloat lastLaidOutTabWidth;
+@property (nonatomic, assign) CGFloat lastLaidOutInactiveTabWidth;
+@property (nonatomic, assign) CGFloat lastLaidOutSelectedTabWidth;
 @property (nonatomic, assign) CGFloat lastLaidOutAvailableWidth;
 @property (nonatomic, assign) NSUInteger lastLaidOutTabCount;
-@property (nonatomic, assign) NSUInteger lastVisibleStart;
-@property (nonatomic, assign) NSUInteger lastVisibleCount;
+@property (nonatomic, copy, nullable) NSString *lastVisibleSignature;
 @property (nonatomic, assign) BOOL lastOverflowVisible;
 @property (nonatomic, assign) NSUInteger lastPinnedCount;
 @property (nonatomic, weak, nullable) BrowserTabItemView *draggingItem;
@@ -286,12 +298,15 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
         _tabItems = [NSMutableArray array];
         _tabItemIDs = [NSMapTable weakToStrongObjectsMapTable];
         _tabItemsByID = [NSMapTable strongToWeakObjectsMapTable];
+        _layoutTabs = @[];
+        _layoutTabsByID = [NSMapTable strongToStrongObjectsMapTable];
         _overflowTabIDs = [NSMutableArray array];
         _lastLaidOutTabWidth = -1;
+        _lastLaidOutInactiveTabWidth = -1;
+        _lastLaidOutSelectedTabWidth = -1;
         _lastLaidOutAvailableWidth = -1;
         _lastLaidOutTabCount = NSNotFound;
-        _lastVisibleStart = NSNotFound;
-        _lastVisibleCount = NSNotFound;
+        _lastVisibleSignature = nil;
         _lastOverflowVisible = NO;
         _lastPinnedCount = NSNotFound;
         _draggingFromIndex = NSNotFound;
@@ -703,76 +718,194 @@ NSColor *BrowserTabStripFillColor(void) {
     return count;
 }
 
-- (CGFloat)widthNeededForRangeStart:(NSUInteger)start length:(NSUInteger)length {
-    if (length == 0) {
-        return 0;
+- (void)updateLayoutTabs:(NSArray<BrowserTab *> *)tabs {
+    self.layoutTabs = [tabs copy];
+    [self.layoutTabsByID removeAllObjects];
+    for (BrowserTab *tab in tabs) {
+        [self.layoutTabsByID setObject:tab forKey:tab.tabID];
     }
-    // 固定/普通标签均显示标题，最小宽统一，超出后进溢出菜单
-    CGFloat width = length * BrowserTabItemMinWidth;
-    if (length > 1) {
-        width += (length - 1) * kTabSpacing;
-    }
-    (void)start;
-    return width;
 }
 
-/// 在总宽 fullWidth 下最多能完整放下几个标签（可预留 overflow 按钮）
+- (NSUInteger)indexForTabID:(NSUUID *)tabID {
+    BrowserTabItemView *item = [self.tabItemsByID objectForKey:tabID];
+    if (!item) {
+        return NSNotFound;
+    }
+    return [self.tabItems indexOfObject:item];
+}
+
+- (NSTimeInterval)lastActiveTimestampForTabID:(NSUUID *)tabID {
+    BrowserTab *tab = [self.layoutTabsByID objectForKey:tabID];
+    if (!tab) {
+        return 0;
+    }
+    return tab.lastActiveTimestamp;
+}
+
+- (NSMutableSet<NSUUID *> *)mustVisibleTabIDs {
+    NSMutableSet<NSUUID *> *must = [NSMutableSet set];
+    if (self.selectedTabID) {
+        [must addObject:self.selectedTabID];
+    }
+    for (BrowserTabItemView *item in self.tabItems) {
+        if (!item.tabPinned) {
+            continue;
+        }
+        NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+        if (tabID) {
+            [must addObject:tabID];
+        }
+    }
+    return must;
+}
+
+- (CGFloat)minimumLayoutWidthForTabID:(NSUUID *)tabID {
+    if ([tabID isEqual:self.selectedTabID]) {
+        return BrowserTabItemMinimalSelectedWidth;
+    }
+    return BrowserTabItemAbsoluteMinWidth;
+}
+
+- (CGFloat)widthNeededForTabIDs:(NSArray<NSUUID *> *)tabIDs {
+    if (tabIDs.count == 0) {
+        return 0;
+    }
+    CGFloat total = 0;
+    for (NSUUID *tabID in tabIDs) {
+        total += [self minimumLayoutWidthForTabID:tabID];
+    }
+    if (tabIDs.count > 1) {
+        total += (tabIDs.count - 1) * kTabSpacing;
+    }
+    return total;
+}
+
+- (NSArray<NSUUID *> *)candidateTabIDsSortedByLRUDescendingExcluding:(NSSet<NSUUID *> *)excluded {
+    NSMutableArray<NSUUID *> *candidates = [NSMutableArray array];
+    for (BrowserTabItemView *item in self.tabItems) {
+        NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+        if (!tabID || [excluded containsObject:tabID]) {
+            continue;
+        }
+        [candidates addObject:tabID];
+    }
+    [candidates sortUsingComparator:^NSComparisonResult(NSUUID *a, NSUUID *b) {
+        NSTimeInterval ta = [self lastActiveTimestampForTabID:a];
+        NSTimeInterval tb = [self lastActiveTimestampForTabID:b];
+        if (ta > tb) {
+            return NSOrderedAscending;
+        }
+        if (ta < tb) {
+            return NSOrderedDescending;
+        }
+        NSUInteger ia = [self indexForTabID:a];
+        NSUInteger ib = [self indexForTabID:b];
+        if (ia < ib) {
+            return NSOrderedAscending;
+        }
+        if (ia > ib) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+    return candidates;
+}
+
+- (NSSet<NSUUID *> *)visibleTabIDsForBudget:(CGFloat)budget {
+    NSSet<NSUUID *> *must = [self mustVisibleTabIDs];
+    NSMutableArray<NSUUID *> *visible = [NSMutableArray array];
+    for (BrowserTabItemView *item in self.tabItems) {
+        NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+        if (tabID && [must containsObject:tabID]) {
+            [visible addObject:tabID];
+        }
+    }
+
+    if ([self widthNeededForTabIDs:visible] > budget + 0.5) {
+        return [NSSet setWithSet:must];
+    }
+
+    for (NSUUID *tabID in [self candidateTabIDsSortedByLRUDescendingExcluding:must]) {
+        NSMutableArray<NSUUID *> *trial = [visible mutableCopy];
+        [trial addObject:tabID];
+        if ([self widthNeededForTabIDs:trial] <= budget + 0.5) {
+            [visible addObject:tabID];
+        }
+    }
+    return [NSSet setWithArray:visible];
+}
+
+- (NSArray<NSUUID *> *)overflowTabIDsSortedByLRUAscendingForVisible:(NSSet<NSUUID *> *)visibleIDs {
+    NSMutableArray<NSUUID *> *overflow = [NSMutableArray array];
+    for (BrowserTabItemView *item in self.tabItems) {
+        NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+        if (tabID && ![visibleIDs containsObject:tabID]) {
+            [overflow addObject:tabID];
+        }
+    }
+    [overflow sortUsingComparator:^NSComparisonResult(NSUUID *a, NSUUID *b) {
+        NSTimeInterval ta = [self lastActiveTimestampForTabID:a];
+        NSTimeInterval tb = [self lastActiveTimestampForTabID:b];
+        if (ta < tb) {
+            return NSOrderedAscending;
+        }
+        if (ta > tb) {
+            return NSOrderedDescending;
+        }
+        NSUInteger ia = [self indexForTabID:a];
+        NSUInteger ib = [self indexForTabID:b];
+        if (ia < ib) {
+            return NSOrderedAscending;
+        }
+        if (ia > ib) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+    return overflow;
+}
+
+- (NSString *)signatureForVisibleTabIDs:(NSSet<NSUUID *> *)visibleIDs {
+    NSArray<NSUUID *> *sorted = [[visibleIDs allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    return [sorted componentsJoinedByString:@"|"];
+}
+
+- (CGFloat)assignedWidthForTabID:(NSUUID *)tabID inactiveBase:(CGFloat)baseW {
+    if ([tabID isEqual:self.selectedTabID]) {
+        CGFloat width = MIN(BrowserTabItemMaxWidth, baseW + BrowserTabActiveWidthBonus);
+        return MAX(BrowserTabItemMinimalSelectedWidth, width);
+    }
+    CGFloat width = MIN(BrowserTabItemMaxWidth, baseW);
+    return MAX(BrowserTabItemAbsoluteMinWidth, width);
+}
+
+- (CGFloat)layoutWidthForItem:(BrowserTabItemView *)item {
+    NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+    if (!tabID) {
+        return BrowserTabItemMinWidth;
+    }
+    CGFloat baseW = self.lastLaidOutInactiveTabWidth > 0 ? self.lastLaidOutInactiveTabWidth : BrowserTabItemMinWidth;
+    return [self assignedWidthForTabID:tabID inactiveBase:baseW];
+}
+
+/// 在总宽 fullWidth 下 LRU 策略下最多能完整放下几个标签（可预留 overflow 按钮）
 - (NSUInteger)maxVisibleTabCountForWidth:(CGFloat)fullWidth {
     if (fullWidth < 1.0 || self.tabItems.count == 0) {
         return 0;
     }
 
-    NSUInteger total = self.tabItems.count;
-    CGFloat allWidth = [self widthNeededForRangeStart:0 length:total];
-    if (allWidth <= fullWidth + 0.5) {
-        return total;
+    NSSet<NSUUID *> *allVisible = [self visibleTabIDsForBudget:fullWidth];
+    if (allVisible.count == self.tabItems.count) {
+        return self.tabItems.count;
     }
 
     CGFloat tabsWidth = fullWidth - kOverflowButtonWidth - 2.0;
-    if (tabsWidth < BrowserTabPinnedWidth && tabsWidth < BrowserTabItemMinWidth) {
-        return 1;
+    if (tabsWidth < BrowserTabItemAbsoluteMinWidth) {
+        return MAX((NSUInteger)1, [self mustVisibleTabIDs].count);
     }
 
-    for (NSUInteger count = total - 1; count >= 1; count--) {
-        NSUInteger start = 0;
-        NSUInteger len = 0;
-        [self visibleRangeForCount:count start:&start count:&len];
-        CGFloat needed = [self widthNeededForRangeStart:start length:len];
-        if (needed <= tabsWidth + 0.5) {
-            return count;
-        }
-        if (count == 1) {
-            break;
-        }
-    }
-    return 1;
-}
-
-- (void)visibleRangeForCount:(NSUInteger)visibleCount
-                       start:(NSUInteger *)outStart
-                       count:(NSUInteger *)outCount {
-    NSUInteger total = self.tabItems.count;
-    if (visibleCount >= total) {
-        *outStart = 0;
-        *outCount = total;
-        return;
-    }
-
-    NSUInteger selected = [self indexOfSelectedTab];
-    if (selected == NSNotFound) {
-        selected = 0;
-    }
-
-    // 可见窗口始终包含选中标签，尽量靠左
-    NSInteger start = (NSInteger)selected - (NSInteger)visibleCount + 1;
-    if (start < 0) {
-        start = 0;
-    }
-    if ((NSUInteger)start + visibleCount > total) {
-        start = (NSInteger)total - (NSInteger)visibleCount;
-    }
-    *outStart = (NSUInteger)start;
-    *outCount = visibleCount;
+    NSSet<NSUUID *> *visible = [self visibleTabIDsForBudget:tabsWidth];
+    return MAX((NSUInteger)1, visible.count);
 }
 
 - (void)setOverflowVisible:(BOOL)visible {
@@ -805,10 +938,11 @@ NSColor *BrowserTabStripFillColor(void) {
 
 - (void)invalidateTabLayoutCache {
     self.lastLaidOutTabWidth = -1;
+    self.lastLaidOutInactiveTabWidth = -1;
+    self.lastLaidOutSelectedTabWidth = -1;
     self.lastLaidOutAvailableWidth = -1;
     self.lastLaidOutTabCount = NSNotFound;
-    self.lastVisibleStart = NSNotFound;
-    self.lastVisibleCount = NSNotFound;
+    self.lastVisibleSignature = nil;
     self.lastPinnedCount = NSNotFound;
 }
 
@@ -834,42 +968,50 @@ NSColor *BrowserTabStripFillColor(void) {
     [self setOverflowVisible:needsOverflow];
 
     CGFloat available = needsOverflow
-        ? MAX(stripMiddle - kOverflowButtonWidth - 2.0, BrowserTabItemMinWidth)
+        ? MAX(stripMiddle - kOverflowButtonWidth - 2.0, BrowserTabItemAbsoluteMinWidth)
         : stripMiddle;
 
-    NSUInteger visibleStart = 0;
-    NSUInteger visibleLen = 0;
-    [self visibleRangeForCount:visibleCount start:&visibleStart count:&visibleLen];
+    NSSet<NSUUID *> *visibleIDs = [self visibleTabIDsForBudget:available];
+    NSString *visibleSignature = [self signatureForVisibleTabIDs:visibleIDs];
 
     NSUInteger pinnedCount = [self pinnedTabCountInStrip];
-    CGFloat spacingTotal = (visibleLen > 1) ? (visibleLen - 1) * kTabSpacing : 0;
-    CGFloat ideal = visibleLen > 0 ? (available - spacingTotal) / (CGFloat)visibleLen : BrowserTabItemMinWidth;
-    CGFloat tabWidth = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemMinWidth, ideal));
-    CGFloat contentW = (visibleLen > 0) ? (visibleLen * tabWidth + spacingTotal) : 0;
+    CGFloat spacingTotal = (visibleIDs.count > 1) ? (visibleIDs.count - 1) * kTabSpacing : 0;
+    CGFloat baseW = visibleIDs.count > 0
+        ? (available - BrowserTabActiveWidthBonus - spacingTotal) / (CGFloat)visibleIDs.count
+        : BrowserTabItemAbsoluteMinWidth;
+    baseW = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemAbsoluteMinWidth, baseW));
+    CGFloat selectedW = self.selectedTabID
+        ? [self assignedWidthForTabID:self.selectedTabID inactiveBase:baseW]
+        : baseW;
+
     // isFlipped：y=0 在顶。顶 inset（常态/精简均为 5pt），高度 = 条高 − inset，底边贴齐。
     CGFloat stripH = 0;
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:&stripH topInset:&topInset tabHeight:&tabHeight];
 
-    BOOL geometryChanged = fabs(tabWidth - self.lastLaidOutTabWidth) > 0.5
+    BOOL geometryChanged = fabs(baseW - self.lastLaidOutInactiveTabWidth) > 0.5
+        || fabs(selectedW - self.lastLaidOutSelectedTabWidth) > 0.5
         || fabs(available - self.lastLaidOutAvailableWidth) > 0.5
         || total != self.lastLaidOutTabCount
-        || visibleStart != self.lastVisibleStart
-        || visibleLen != self.lastVisibleCount
+        || ![visibleSignature isEqualToString:self.lastVisibleSignature]
         || needsOverflow != self.lastOverflowVisible
         || pinnedCount != self.lastPinnedCount
         || self.draggingItem != nil;
 
     if (geometryChanged) {
         [self.overflowTabIDs removeAllObjects];
+        NSArray<NSUUID *> *overflowOrdered = [self overflowTabIDsSortedByLRUAscendingForVisible:visibleIDs];
+        [self.overflowTabIDs addObjectsFromArray:overflowOrdered];
+
         CGFloat x = 0;
         for (NSUInteger i = 0; i < total; i++) {
             BrowserTabItemView *item = self.tabItems[i];
-            BOOL visible = (i >= visibleStart && i < visibleStart + visibleLen);
+            NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+            BOOL visible = tabID && [visibleIDs containsObject:tabID];
+            CGFloat tabWidth = tabID ? [self assignedWidthForTabID:tabID inactiveBase:baseW] : baseW;
 
             if (item == self.draggingItem) {
-                // 拖拽中的标签保留纵向布局，横向由拖拽逻辑更新
                 item.hidden = NO;
                 NSRect frame = item.frame;
                 frame.origin.y = topInset;
@@ -878,7 +1020,9 @@ NSColor *BrowserTabStripFillColor(void) {
                 item.frame = frame;
                 [item setTabHeight:tabHeight];
                 [item applyAvailableWidth:tabWidth];
-                x += tabWidth + kTabSpacing;
+                if (visible) {
+                    x += tabWidth + kTabSpacing;
+                }
                 continue;
             }
 
@@ -890,25 +1034,29 @@ NSColor *BrowserTabStripFillColor(void) {
                 x += tabWidth + kTabSpacing;
             } else {
                 item.frame = NSZeroRect;
-                NSUUID *tabID = [self.tabItemIDs objectForKey:item];
-                if (tabID) {
-                    [self.overflowTabIDs addObject:tabID];
-                }
             }
         }
 
+        CGFloat contentW = x > 0 ? x - kTabSpacing : 0;
         self.tabsContentView.frame = NSMakeRect(0, 0, MAX(contentW, 1), stripH);
-        self.lastLaidOutTabWidth = tabWidth;
+        self.lastLaidOutInactiveTabWidth = baseW;
+        self.lastLaidOutSelectedTabWidth = selectedW;
+        self.lastLaidOutTabWidth = baseW;
         self.lastLaidOutAvailableWidth = available;
         self.lastLaidOutTabCount = total;
-        self.lastVisibleStart = visibleStart;
-        self.lastVisibleCount = visibleLen;
+        self.lastVisibleSignature = visibleSignature;
         self.lastOverflowVisible = needsOverflow;
         self.lastPinnedCount = pinnedCount;
     }
 
+    CGFloat contentWForChrome = 0;
+    if (self.tabsContentView.frame.size.width > 1.0) {
+        contentWForChrome = self.tabsContentView.frame.size.width;
+    } else if (visibleIDs.count > 0) {
+        contentWForChrome = available;
+    }
     // 每次 layout 都重摆「+」，跟随末标签；不依赖 AL 定宽
-    [self placeChromeButtonsAfterContentWidth:contentW needsOverflow:needsOverflow];
+    [self placeChromeButtonsAfterContentWidth:contentWForChrome needsOverflow:needsOverflow];
 }
 
 - (void)showOverflowMenu:(id)sender {
@@ -924,15 +1072,24 @@ NSColor *BrowserTabStripFillColor(void) {
         BrowserTabItemView *itemView = [self.tabItemsByID objectForKey:tabID];
         NSString *baseTitle = itemView.tabTitle.length > 0 ? itemView.tabTitle : @"新标签页";
         NSString *title = itemView.tabPinned ? [NSString stringWithFormat:@"固定 · %@", baseTitle] : baseTitle;
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
-                                                      action:@selector(selectOverflowTab:)
-                                               keyEquivalent:@""];
-        item.target = self;
+
+        BrowserTabOverflowMenuRowView *row =
+            [[BrowserTabOverflowMenuRowView alloc] initWithFrame:NSZeroRect];
+        row.titleText = title;
+        row.pageURLString = itemView.pageURLString;
+        row.checked = [tabID isEqual:self.selectedTabID];
+
+        __weak typeof(self) weakSelf = self;
+        NSUUID *capturedID = tabID;
+        row.onSelect = ^{
+            [weakSelf selectOverflowTabWithID:capturedID];
+            [menu cancelTracking];
+        };
+
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        item.view = row;
         item.representedObject = tabID;
         item.enabled = YES;
-        if ([tabID isEqual:self.selectedTabID]) {
-            item.state = NSControlStateValueOn;
-        }
         [menu addItem:item];
     }
 
@@ -957,12 +1114,16 @@ NSColor *BrowserTabStripFillColor(void) {
     }
 }
 
-- (void)selectOverflowTab:(NSMenuItem *)sender {
-    NSUUID *tabID = sender.representedObject;
+- (void)selectOverflowTabWithID:(NSUUID *)tabID {
     if (![tabID isKindOfClass:[NSUUID class]]) {
         return;
     }
     [self.delegate tabStripView:self didSelectTabID:tabID];
+}
+
+- (void)selectOverflowTab:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    [self selectOverflowTabWithID:tabID];
 }
 
 #pragma mark - Tab Reorder Drag
@@ -1131,20 +1292,25 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         return low < self.tabItems.count ? low : NSNotFound;
     }
 
-    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     NSUInteger best = low;
     CGFloat bestDistance = CGFLOAT_MAX;
     CGFloat x = 0;
     for (NSUInteger i = 0; i < self.tabItems.count; i++) {
-        if (i >= low && i < high) {
+        BrowserTabItemView *candidate = self.tabItems[i];
+        if (i >= low && i < high && candidate != item && !candidate.hidden) {
+            CGFloat tabWidth = [self layoutWidthForItem:candidate];
             CGFloat slotCenter = x + tabWidth * 0.5;
             CGFloat distance = fabs(slotCenter - centerX);
             if (distance < bestDistance) {
                 bestDistance = distance;
                 best = i;
             }
+            x += tabWidth + kTabSpacing;
+        } else if (candidate != item && !candidate.hidden) {
+            x += [self layoutWidthForItem:candidate] + kTabSpacing;
+        } else if (candidate == item) {
+            x += [self layoutWidthForItem:candidate] + kTabSpacing;
         }
-        x += tabWidth + kTabSpacing;
     }
     return best;
 }
@@ -1153,19 +1319,19 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
-    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     for (BrowserTabItemView *item in self.tabItems) {
         if (item == dragged) {
-            x += tabWidth + kTabSpacing;
+            x += [self layoutWidthForItem:item] + kTabSpacing;
             continue;
         }
         if (!item.hidden) {
+            CGFloat tabWidth = [self layoutWidthForItem:item];
             item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
             [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
+            x += tabWidth + kTabSpacing;
         }
-        x += tabWidth + kTabSpacing;
     }
 }
 
@@ -1173,18 +1339,18 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
-    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     for (BrowserTabItemView *item in self.tabItems) {
         if (item == dragged) {
             continue;
         }
         if (!item.hidden) {
+            CGFloat tabWidth = [self layoutWidthForItem:item];
             item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
             [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
+            x += tabWidth + kTabSpacing;
         }
-        x += tabWidth + kTabSpacing;
     }
 }
 
@@ -1192,32 +1358,34 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
-    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat placeholderWidth = self.lastLaidOutInactiveTabWidth > 0 ? self.lastLaidOutInactiveTabWidth : BrowserTabItemMinWidth;
     CGFloat x = 0;
     NSUInteger slot = 0;
     BOOL placedPlaceholder = NO;
 
     for (BrowserTabItemView *item in self.tabItems) {
         if (slot == index && !placedPlaceholder) {
-            self.foreignPlaceholder.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            self.foreignPlaceholder.frame = NSMakeRect(x, topInset, placeholderWidth, tabHeight);
             self.foreignPlaceholder.hidden = NO;
-            x += tabWidth + kTabSpacing;
+            x += placeholderWidth + kTabSpacing;
             placedPlaceholder = YES;
         }
         if (!item.hidden) {
+            CGFloat tabWidth = [self layoutWidthForItem:item];
             item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
             [item setTabHeight:tabHeight];
             [item applyAvailableWidth:tabWidth];
+            x += tabWidth + kTabSpacing;
         }
-        x += tabWidth + kTabSpacing;
         slot++;
     }
     if (!placedPlaceholder) {
-        self.foreignPlaceholder.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+        self.foreignPlaceholder.frame = NSMakeRect(x, topInset, placeholderWidth, tabHeight);
         self.foreignPlaceholder.hidden = NO;
+        x += placeholderWidth + kTabSpacing;
     }
 
-    CGFloat contentW = MAX(x + (placedPlaceholder ? 0 : (tabWidth + kTabSpacing)), 1);
+    CGFloat contentW = MAX(x - (placedPlaceholder ? 0 : kTabSpacing), 1);
     NSRect contentFrame = self.tabsContentView.frame;
     contentFrame.size.width = MAX(contentW, NSWidth(self.tabsClipView.bounds));
     CGFloat stripH = 0;
@@ -1277,14 +1445,27 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     NSUInteger high = pinned ? actualPinned : self.tabItems.count;
     // Allow inserting at index == high (append within zone).
     // Best slot boundary: between tabs and ends.
-    CGFloat tabWidth = self.lastLaidOutTabWidth > 0 ? self.lastLaidOutTabWidth : BrowserTabItemMinWidth;
+    CGFloat baseW = self.lastLaidOutInactiveTabWidth > 0 ? self.lastLaidOutInactiveTabWidth : BrowserTabItemMinWidth;
     NSUInteger best = low;
     CGFloat bestDistance = CGFLOAT_MAX;
-    NSUInteger slotCount = high - low + 1; // insertion points
+    NSUInteger slotCount = high - low + 1;
     for (NSUInteger s = 0; s < slotCount; s++) {
         NSUInteger insertAt = low + s;
-        CGFloat slotX = insertAt * (tabWidth + kTabSpacing);
-        CGFloat slotCenter = slotX + tabWidth * 0.5;
+        CGFloat slotX = 0;
+        for (NSUInteger i = 0; i < insertAt && i < self.tabItems.count; i++) {
+            BrowserTabItemView *item = self.tabItems[i];
+            if (!item.hidden) {
+                slotX += [self layoutWidthForItem:item] + kTabSpacing;
+            }
+        }
+        CGFloat slotWidth = baseW;
+        if (insertAt < self.tabItems.count) {
+            BrowserTabItemView *item = self.tabItems[insertAt];
+            if (!item.hidden) {
+                slotWidth = [self layoutWidthForItem:item];
+            }
+        }
+        CGFloat slotCenter = slotX + slotWidth * 0.5;
         CGFloat distance = fabs(slotCenter - inContent.x);
         if (distance < bestDistance) {
             bestDistance = distance;
@@ -1488,6 +1669,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     [self.overflowTabIDs removeAllObjects];
     [self invalidateTabLayoutCache];
     self.selectedTabID = selectedTabID;
+    [self updateLayoutTabs:tabs];
 
     for (BrowserTab *tab in tabs) {
         BOOL selected = [tab.tabID isEqual:selectedTabID];
@@ -1495,6 +1677,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         item.translatesAutoresizingMaskIntoConstraints = YES;
         item.autoresizingMask = NSViewNotSizable;
         item.tabTitle = [tab displayTitle];
+        item.pageURLString = BrowserTabPageURLString(tab);
         item.tabPinned = tab.isPinned;
         item.tabSelected = selected;
         item.tabToolTip = BrowserTabToolTipString(tab);
@@ -1737,6 +1920,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         && ![self.selectedTabID isEqual:selectedTabID];
     BOOL pinOrOrderChanged = NO;
     self.selectedTabID = selectedTabID;
+    [self updateLayoutTabs:tabs];
 
     for (NSUInteger i = 0; i < tabs.count; i++) {
         BrowserTab *tab = tabs[i];
@@ -1754,6 +1938,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         NSString *toolTip = BrowserTabToolTipString(tab);
         if (item.tabToolTip != toolTip && ![item.tabToolTip isEqualToString:toolTip]) {
             item.tabToolTip = toolTip;
+        }
+
+        NSString *pageURL = BrowserTabPageURLString(tab);
+        if (item.pageURLString != pageURL && ![item.pageURLString isEqualToString:pageURL]) {
+            item.pageURLString = pageURL;
         }
 
         if (item.tabPinned != tab.isPinned) {

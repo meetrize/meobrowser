@@ -1,19 +1,46 @@
 #import "BrowserTabItemView.h"
+#import "BrowserFaviconService.h"
+#import "BrowserFaviconUtil.h"
+#import "BrowserShortcutIconPalette.h"
 
-const CGFloat BrowserTabItemMinWidth = 108.0;
+const CGFloat BrowserTabItemAbsoluteMinWidth = 32.0;
+const CGFloat BrowserTabItemMinimalSelectedWidth = 48.0;
+const CGFloat BrowserTabItemCompactMinWidth = 56.0;
+const CGFloat BrowserTabItemCompactMaxWidth = 107.0;
+const CGFloat BrowserTabItemComfortMinWidth = 108.0;
+const CGFloat BrowserTabItemMinWidth = 108.0; // 历史别名，同 ComfortMinWidth
 const CGFloat BrowserTabItemMaxWidth = 200.0;
+const CGFloat BrowserTabActiveWidthBonus = 24.0;
+const CGFloat BrowserTabFaviconSize = 16.0;
+const CGFloat BrowserTabFaviconLeadingPad = 6.0;
+const CGFloat BrowserTabFaviconTitleGap = 4.0;
 /// 固定标签仍显示标题，宽度参与等宽分配时的最小宽与普通标签一致。
 const CGFloat BrowserTabPinnedWidth = 108.0;
 
-static const CGFloat kDefaultTabHeight = 31.0;
-static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
+BrowserTabDisplayMode BrowserTabDisplayModeForWidth(CGFloat width, BOOL isSelected) {
+    (void)isSelected; // TS-LRU-1：档位内关闭按钮策略可能区分选中
+    if (width >= BrowserTabItemComfortMinWidth - 0.5) {
+        return BrowserTabDisplayModeComfortable;
+    }
+    if (width >= BrowserTabItemCompactMinWidth - 0.5) {
+        return BrowserTabDisplayModeCompact;
+    }
+    return BrowserTabDisplayModeMinimal;
+}
+
+static const CGFloat kCloseButtonWidth = 16.0;
+static const CGFloat kCloseTrailingPad = 6.0;
+static const CGFloat kCloseTitleGap = 4.0;
+static const CGFloat kTitleTrailingPad = 8.0;
+static const CGFloat kPinAfterFaviconGap = 4.0;
 /// 提高阈值 + 时间门控，避免主线程卡顿时微抖把单击判成拖拽。
 static const CGFloat kReorderDragThreshold = 10.0;
 static const NSTimeInterval kReorderDragMinDuration = 0.15;
 static const CGFloat kPinIconSize = 12.0;
-static const CGFloat kLeadingPadding = 8.0;
-static const CGFloat kTitleAfterPinGap = 4.0;
 static const NSTimeInterval kTabHoverTipDelay = 0.65;
+
+static const CGFloat kDefaultTabHeight = 31.0;
+static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
 
 /// 标题不参与命中，全部由标签本身接收拖拽
 @interface BrowserTabTitleLabel : NSTextField
@@ -33,6 +60,49 @@ static const NSTimeInterval kTabHoverTipDelay = 0.65;
 - (NSView *)hitTest:(NSPoint)point {
     (void)point;
     return nil;
+}
+@end
+
+@interface BrowserTabFaviconIconView : NSImageView
+@end
+
+@implementation BrowserTabFaviconIconView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+@interface BrowserTabFaviconLetterBadgeView : NSView
+@property (nonatomic, strong) NSTextField *letterLabel;
+@end
+
+@implementation BrowserTabFaviconLetterBadgeView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.wantsLayer = YES;
+        self.layer.cornerRadius = 3.0;
+        if (@available(macOS 10.15, *)) {
+            self.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+        _letterLabel = [NSTextField labelWithString:@"?"];
+        _letterLabel.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
+        _letterLabel.alignment = NSTextAlignmentCenter;
+        _letterLabel.textColor = [NSColor whiteColor];
+        _letterLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        [self addSubview:_letterLabel];
+        [NSLayoutConstraint activateConstraints:@[
+            [_letterLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
+            [_letterLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor constant:0.5],
+        ]];
+    }
+    return self;
 }
 @end
 
@@ -235,16 +305,21 @@ NSColor *BrowserTabActiveFillColor(void) {
 @end
 
 @interface BrowserTabItemView ()
+@property (nonatomic, strong) NSImageView *faviconImageView;
+@property (nonatomic, strong) BrowserTabFaviconLetterBadgeView *faviconLetterBadge;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSImageView *pinIconView;
 @property (nonatomic, strong) NSButton *closeButton;
 @property (nonatomic, strong) NSLayoutConstraint *heightConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToClose;
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToEdge;
+@property (nonatomic, strong) NSLayoutConstraint *titleLeadingToFavicon;
 @property (nonatomic, strong) NSLayoutConstraint *titleLeadingToPin;
-@property (nonatomic, strong) NSLayoutConstraint *titleLeadingToEdge;
-@property (nonatomic, strong) NSLayoutConstraint *pinLeadingConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *pinLeadingToFavicon;
+@property (nonatomic, copy, nullable) NSString *boundHost;
+@property (nonatomic, assign) NSUInteger faviconLoadToken;
 @property (nonatomic, assign) CGFloat appliedWidth;
+@property (nonatomic, assign) BrowserTabDisplayMode tabDisplayMode;
 @property (nonatomic, assign) BOOL pointerInside;
 @end
 
@@ -276,7 +351,19 @@ NSColor *BrowserTabActiveFillColor(void) {
         self.wantsLayer = YES;
         self.layer.masksToBounds = YES;
         _appliedWidth = BrowserTabItemMaxWidth;
+        _tabDisplayMode = BrowserTabDisplayModeComfortable;
         _tabTitle = @"";
+
+        _faviconImageView = [[BrowserTabFaviconIconView alloc] initWithFrame:NSZeroRect];
+        _faviconImageView.translatesAutoresizingMaskIntoConstraints = NO;
+        _faviconImageView.imageScaling = NSImageScaleProportionallyDown;
+        _faviconImageView.hidden = YES;
+        [self addSubview:_faviconImageView];
+
+        _faviconLetterBadge = [[BrowserTabFaviconLetterBadgeView alloc] initWithFrame:NSZeroRect];
+        _faviconLetterBadge.translatesAutoresizingMaskIntoConstraints = NO;
+        _faviconLetterBadge.hidden = YES;
+        [self addSubview:_faviconLetterBadge];
 
         _titleLabel = [BrowserTabTitleLabel labelWithString:@"新标签页"];
         _titleLabel.font = [NSFont systemFontOfSize:12];
@@ -320,28 +407,39 @@ NSColor *BrowserTabActiveFillColor(void) {
         [self addSubview:_closeButton];
 
         _titleTrailingToClose = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_closeButton.leadingAnchor
-                                                                                     constant:-4];
+                                                                                     constant:-kCloseTitleGap];
         _titleTrailingToEdge = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor
-                                                                                    constant:-8];
-        _pinLeadingConstraint = [_pinIconView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor
-                                                                           constant:kLeadingPadding];
+                                                                                    constant:-kTitleTrailingPad];
+        _pinLeadingToFavicon = [_pinIconView.leadingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
+                                                                          constant:kPinAfterFaviconGap];
+        _titleLeadingToFavicon = [_titleLabel.leadingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
+                                                                           constant:BrowserTabFaviconTitleGap];
         _titleLeadingToPin = [_titleLabel.leadingAnchor constraintEqualToAnchor:_pinIconView.trailingAnchor
-                                                                       constant:kTitleAfterPinGap];
-        _titleLeadingToEdge = [_titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor
-                                                                        constant:10];
+                                                                       constant:kPinAfterFaviconGap];
 
         [NSLayoutConstraint activateConstraints:@[
-            [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
+            [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kCloseTrailingPad],
             [_closeButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-            [_closeButton.widthAnchor constraintEqualToConstant:16],
-            [_closeButton.heightAnchor constraintEqualToConstant:16],
+            [_closeButton.widthAnchor constraintEqualToConstant:kCloseButtonWidth],
+            [_closeButton.heightAnchor constraintEqualToConstant:kCloseButtonWidth],
 
-            _pinLeadingConstraint,
+            [_faviconImageView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor
+                                                            constant:BrowserTabFaviconLeadingPad],
+            [_faviconImageView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_faviconImageView.widthAnchor constraintEqualToConstant:BrowserTabFaviconSize],
+            [_faviconImageView.heightAnchor constraintEqualToConstant:BrowserTabFaviconSize],
+
+            [_faviconLetterBadge.leadingAnchor constraintEqualToAnchor:_faviconImageView.leadingAnchor],
+            [_faviconLetterBadge.trailingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor],
+            [_faviconLetterBadge.topAnchor constraintEqualToAnchor:_faviconImageView.topAnchor],
+            [_faviconLetterBadge.bottomAnchor constraintEqualToAnchor:_faviconImageView.bottomAnchor],
+
+            _pinLeadingToFavicon,
             [_pinIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_pinIconView.widthAnchor constraintEqualToConstant:kPinIconSize],
             [_pinIconView.heightAnchor constraintEqualToConstant:kPinIconSize],
 
-            _titleLeadingToEdge,
+            _titleLeadingToFavicon,
             [_titleLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             _titleTrailingToClose,
         ]];
@@ -353,14 +451,21 @@ NSColor *BrowserTabActiveFillColor(void) {
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         [self updateChromeAppearance];
-        [self updatePinnedAppearance];
+        [self updateFaviconAppearance];
+        [self updateDisplayModeLayout];
         [self updateCloseButtonVisibility];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(faviconDidUpdate:)
+                                                     name:BrowserFaviconDidUpdateNotification
+                                                   object:nil];
     }
     return self;
 }
 
 - (void)dealloc {
     [[BrowserTabHoverTipWindow shared] cancelForView:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)setTabSelected:(BOOL)tabSelected {
@@ -375,7 +480,7 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
     _tabPinned = tabPinned;
-    [self updatePinnedAppearance];
+    [self updateDisplayModeLayout];
     [self updateCloseButtonVisibility];
     [self invalidateIntrinsicContentSize];
 }
@@ -387,7 +492,66 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
     _tabTitle = [normalized copy];
     self.titleLabel.stringValue = normalized.length > 0 ? normalized : @"新标签页";
+    [self updateFaviconAppearance];
     [self invalidateIntrinsicContentSize];
+}
+
+- (void)setPageURLString:(NSString *)pageURLString {
+    NSString *normalized = pageURLString ?: @"";
+    if ((_pageURLString == nil && normalized.length == 0)
+        || [_pageURLString isEqualToString:normalized]) {
+        return;
+    }
+    _pageURLString = normalized.length > 0 ? [normalized copy] : nil;
+    self.boundHost = BrowserFaviconHostFromURLString(normalized);
+    [self updateFaviconAppearance];
+    [self requestFaviconIfNeeded];
+}
+
+- (void)applyLoadedFaviconImage:(NSImage *)image {
+    if (image) {
+        self.faviconImageView.image = image;
+        self.faviconImageView.hidden = NO;
+        self.faviconLetterBadge.hidden = YES;
+        return;
+    }
+    [self updateFaviconAppearance];
+}
+
+- (void)requestFaviconIfNeeded {
+    NSString *urlString = self.pageURLString ?: @"";
+    if (urlString.length == 0) {
+        return;
+    }
+    self.faviconLoadToken += 1;
+    NSUInteger token = self.faviconLoadToken;
+    __weak typeof(self) weakSelf = self;
+    [[BrowserFaviconService sharedService] imageForPageURLString:urlString
+                                                 preferredIconURL:nil
+                                                      triggerFetch:YES
+                                                        completion:^(NSImage *image) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || token != strongSelf.faviconLoadToken) {
+            return;
+        }
+        if (image) {
+            [strongSelf applyLoadedFaviconImage:image];
+        }
+    }];
+}
+
+- (void)faviconDidUpdate:(NSNotification *)notification {
+    NSString *host = notification.userInfo[BrowserFaviconHostUserInfoKey];
+    if (![host isKindOfClass:[NSString class]]) {
+        host = nil;
+    }
+    if (host.length == 0 || self.boundHost.length == 0 || ![host isEqualToString:self.boundHost]) {
+        return;
+    }
+    NSImage *image = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+    if (image) {
+        [self applyLoadedFaviconImage:image];
+    }
 }
 
 - (void)setTabToolTip:(NSString *)tabToolTip {
@@ -402,27 +566,59 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)applyAvailableWidth:(CGFloat)width {
-    if (fabs(self.appliedWidth - width) < 0.5) {
+    BrowserTabDisplayMode mode = BrowserTabDisplayModeForWidth(width, self.tabSelected);
+    if (fabs(self.appliedWidth - width) < 0.5 && self.tabDisplayMode == mode) {
         return;
     }
     self.appliedWidth = width;
+    self.tabDisplayMode = mode;
+    [self updateDisplayModeLayout];
     [self updateCloseButtonVisibility];
 }
 
-- (void)updatePinnedAppearance {
-    BOOL showPin = self.tabPinned && (self.pinIconView.image != nil);
+- (BOOL)showsPinIcon {
+    return self.tabPinned && self.pinIconView.image != nil;
+}
+
+- (void)updateDisplayModeLayout {
+    BOOL showTitle = self.tabDisplayMode != BrowserTabDisplayModeMinimal;
+    BOOL showPin = [self showsPinIcon] && showTitle;
+
+    self.titleLabel.hidden = !showTitle;
     self.pinIconView.hidden = !showPin;
-    self.titleLabel.hidden = NO;
-    self.titleLabel.stringValue = self.tabTitle.length > 0 ? self.tabTitle : @"新标签页";
+    self.pinLeadingToFavicon.active = showPin;
 
     self.titleLeadingToPin.active = showPin;
-    self.titleLeadingToEdge.active = !showPin;
+    self.titleLeadingToFavicon.active = showTitle && !showPin;
+}
 
-    if (self.tabPinned) {
-        self.closeButton.hidden = YES;
-        self.titleTrailingToClose.active = NO;
-        self.titleTrailingToEdge.active = YES;
+- (void)updateFaviconAppearance {
+    NSString *urlString = self.pageURLString ?: @"";
+    if (urlString.length == 0) {
+        self.faviconImageView.image = BrowserFaviconMakeDefaultGlobeImage();
+        self.faviconImageView.hidden = NO;
+        self.faviconLetterBadge.hidden = YES;
+        return;
     }
+
+    NSString *host = self.boundHost ?: BrowserFaviconHostFromURLString(urlString);
+    if (host.length > 0) {
+        NSImage *cached = [[BrowserFaviconService sharedService] cachedImageForHost:host];
+        if (cached) {
+            [self applyLoadedFaviconImage:cached];
+            return;
+        }
+    }
+
+    self.faviconImageView.image = nil;
+    self.faviconImageView.hidden = YES;
+
+    NSString *letter = [BrowserShortcutIconPalette defaultLetterForTitle:self.tabTitle
+                                                               urlString:urlString];
+    NSInteger colorIndex = [BrowserShortcutIconPalette defaultIndexForURLString:urlString];
+    self.faviconLetterBadge.layer.backgroundColor = [BrowserShortcutIconPalette colorAtIndex:colorIndex].CGColor;
+    self.faviconLetterBadge.letterLabel.stringValue = letter.length > 0 ? letter : @"?";
+    self.faviconLetterBadge.hidden = NO;
 }
 
 - (void)updateCloseButtonVisibility {
@@ -433,11 +629,23 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
 
-    BOOL alwaysShow = self.tabSelected || self.appliedWidth >= kCloseAlwaysVisibleMinWidth;
+    BOOL alwaysShow = NO;
+    switch (self.tabDisplayMode) {
+        case BrowserTabDisplayModeComfortable:
+            alwaysShow = self.tabSelected || self.appliedWidth >= kCloseAlwaysVisibleMinWidth;
+            break;
+        case BrowserTabDisplayModeCompact:
+            alwaysShow = self.tabSelected;
+            break;
+        case BrowserTabDisplayModeMinimal:
+            alwaysShow = NO;
+            break;
+    }
+
     BOOL visible = alwaysShow || self.pointerInside;
     self.closeButton.hidden = !visible;
-    self.titleTrailingToClose.active = visible;
-    self.titleTrailingToEdge.active = !visible;
+    self.titleTrailingToClose.active = visible && self.tabDisplayMode != BrowserTabDisplayModeMinimal;
+    self.titleTrailingToEdge.active = !visible || self.tabDisplayMode == BrowserTabDisplayModeMinimal;
 }
 
 - (void)updateChromeAppearance {

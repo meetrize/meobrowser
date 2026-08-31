@@ -198,7 +198,80 @@ SimpleBrowser/Favicon/
 
 ### 结论
 
-**ICO-0～ICO-2 实现完成**；标签栏 favicon 与清除缓存 UI 仍属设计延后项。手测项（断网复用、连点 ★）建议在 `make run-browser` 时补勾。
+**ICO-0～ICO-2 实现完成**；**标签栏 favicon 消费层**见下方「标签栏 LRU + Favicon」及 [tab-strip-lru-favicon-design.md](tab-strip-lru-favicon-design.md)。清除缓存 UI 仍属 ICO-3 延后项。手测项（断网复用、连点 ★）建议在 `make run-browser` 时补勾。
+
+---
+
+## 标签栏 LRU 溢出 + Favicon + 渐进压缩验收（TS-LRU-0～TS-LRU-4 · 2026-08-31）
+
+> 对照 [tab-strip-lru-favicon-design.md §9](tab-strip-lru-favicon-design.md#9-验收标准)  
+> 开发计划：[tab-strip-lru-favicon-development-plan.md](tab-strip-lru-favicon-development-plan.md)  
+> Cursor 计划：[.cursor/plans/tab-strip-lru-favicon.plan.md](../../.cursor/plans/tab-strip-lru-favicon.plan.md)
+
+### 自动化检查
+
+| 检查项 | 命令 / 说明 | 结果 |
+|--------|-------------|------|
+| 全量编译 | `make browser` | 通过 |
+| Tab 模块入链 | Makefile 含 `BrowserTabItemView` / `BrowserTabOverflowMenuRowView` / `BrowserTabStripView` | 通过 |
+| Favicon 依赖 | Tab 项链接 `BrowserFaviconService` + `BrowserShortcutIconPalette` | 通过 |
+
+### 功能验收 — LRU 溢出
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| LRU 可见集 | 20 标签宽窗：条上为最近使用 N 个，非最右侧连续段 | 通过（逻辑） | `visibleTabIDsForBudget:` + `lastActiveTimestamp` |
+| 菜单唤醒 | ▾ 选中冷门标签 → 回条上，另一冷门进菜单 | 通过（逻辑） | 选中更新 timestamp + layout 重算 |
+| 新标签不被藏 | 新开并选中标签留在条上（宽度足够时） | 通过（逻辑） | 创建/选中写入 `lastActiveTimestamp` |
+| Pinned 永不出条 | 固定标签不进 ▾ | 通过（逻辑） | `mustVisibleTabIDs` |
+| 菜单 LRU 序 | 溢出列表按最久未用升序 | 通过（逻辑） | `overflowTabIDsSortedByLRUAscendingForVisible:` |
+
+### 功能验收 — 渐进压缩
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 三档压缩 | 1200 pt → 400 pt：Comfortable → Compact → Minimal | 待手测 | `BrowserTabDisplayModeForWidth` + `applyAvailableWidth:` |
+| Minimal favicon-only | 非选中 32 pt 仅 favicon | 通过（逻辑） | `BrowserTabItemAbsoluteMinWidth` |
+| 选中略宽 | Minimal 下选中 48 pt | 通过（逻辑） | `BrowserTabActiveWidthBonus` + `assignedWidthForTabID:` |
+| 无溢出无 ▾ | 宽度足够时箭头不占位 | 通过（逻辑） | `setOverflowVisible:NO` |
+
+### 功能验收 — Favicon
+
+| 测试项 | 操作 | 状态 | 代码支撑 |
+|--------|------|------|----------|
+| 条上 favicon | 已访问站点显示图标（如 github.com） | 待手测 | `BrowserTabItemView` + `BrowserFaviconService` |
+| 异步占位 | 未缓存先首字母，到位后替换 | 通过（逻辑） | `requestFaviconIfNeeded` + `BrowserFaviconDidUpdateNotification` |
+| 导航 Silent 缓存 | 页面加载完成写入磁盘 | 通过（逻辑） | `syncFromWebView:` `fetchAndCache` |
+| 溢出菜单 icon | ▾ 每行 ✓ + favicon + 标题 | 通过（逻辑） | `BrowserTabOverflowMenuRowView` |
+| 同源缓存 | 与 Launchpad / 概览共用 host 缓存 | 通过（逻辑） | `BrowserFaviconCache` |
+
+### 回归
+
+| 测试项 | 状态 | 说明 |
+|--------|------|------|
+| 拖拽排序 / ghost detach | 待手测 | 拖拽 layout 用 `layoutWidthForItem:` |
+| 跨窗拖放 XD | 待手测 | 未改 XD 路径 |
+| 精简模式 32 pt 条高 | 待手测 | favicon 16 pt 垂直居中 |
+| Chrome 动作区扣宽 | 通过（逻辑） | `chromeActionsReservedWidth` 未改 |
+| `window.minSize` 400×300 | 通过（逻辑） | 未抬高 minSize |
+
+### 涉及文件
+
+```text
+SimpleBrowser/Tabs/
+├── BrowserTabItemView.h/.m          # 三档 UI + favicon
+├── BrowserTabStripView.m            # LRU layout + 溢出菜单
+├── BrowserTabOverflowMenuRowView.*  # ▾ 菜单行
+└── BrowserWindowController.m        # syncFromWebView Silent fetch
+
+docs/minimal-browser/
+├── tab-strip-lru-favicon-design.md
+└── tab-strip-lru-favicon-development-plan.md
+```
+
+### 结论
+
+**TS-LRU-0～TS-LRU-4 实现完成**（`make browser` 通过）。窄窗三档压缩、多标签 LRU、条上/菜单 favicon 等项建议在 `make run-browser` 时按 §9 补勾手测。
 
 ---
 

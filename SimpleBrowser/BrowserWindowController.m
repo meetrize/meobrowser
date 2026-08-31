@@ -6143,6 +6143,17 @@ didFailNavigation:(WKNavigation *)navigation
 
     [self recordHistoryForWebView:webView tab:tab];
 
+    if (!tab.isNewTabPage) {
+        NSURL *pageURL = [tab currentOrRestorableURL];
+        NSString *pageURLString = pageURL.absoluteString;
+        if (pageURLString.length > 0) {
+            [[BrowserFaviconService sharedService] fetchAndCacheForPageURLString:pageURLString
+                                                                 preferredIconURL:nil
+                                                                           reason:BrowserFaviconFetchReasonSilent
+                                                                       completion:nil];
+        }
+    }
+
     NSInteger generation = tab.titleUpdateGeneration;
     __weak typeof(self) weakSelf = self;
     // 立刻拉取 document.title；SPA 可能晚到，再延迟补几次。
