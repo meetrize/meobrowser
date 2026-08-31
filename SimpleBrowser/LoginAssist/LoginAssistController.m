@@ -23,6 +23,7 @@
 #import "SBTextField.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <AppKit/AppKit.h>
+#import <Security/Security.h>
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
@@ -1188,68 +1189,97 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         return;
     }
 
-    NSError *loadError = nil;
-    LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID
-                                                                                              error:&loadError];
-    if (!credentials) {
-        [self showError:@"无法读取凭证" message:loadError.localizedDescription ?: @"钥匙串读取失败" recipeID:recipe.recipeID];
-        return;
-    }
-    BOOL needsOTP = [recipe requiresOTPWait];
-    BOOL hasUserPass = (credentials.username.length > 0) || (credentials.password.length > 0);
-    if (!needsOTP && !hasUserPass) {
-        [self showError:@"缺少账号密码" message:@"请在助手侧栏中填写用户名与密码。" recipeID:recipe.recipeID];
-        return;
-    }
-    if (needsOTP && recipe.otpSelector.length == 0) {
-        [self showError:@"缺少验证码配置" message:@"请在助手侧栏中配置验证码选择器。" recipeID:recipe.recipeID];
-        return;
-    }
-
+    // 异步读钥匙串：安装后/重启后首次访问会弹出系统授权框，勿与「繁忙」警告叠弹。
     self.isRunning = YES;
     [self refreshButtonAppearance];
-    if (needsOTP && !fillOnly) {
-        NSString *channelHint = [CompanionChannel sharedChannel].state == CompanionChannelStateConnected
-            ? @"等待手机推送验证码…"
-            : @"等待验证码…（手机未连接时可粘贴）";
-        [BrowserTransientToast showMessage:channelHint
-                                  inWindow:self.windowController.window
-                                  duration:2.5];
-        [self startClipboardPolling];
-    }
-
+    NSString *recipeID = recipe.recipeID;
     __weak typeof(self) weakSelf = self;
-    [LoginRunner runRecipe:recipe
-                 inWebView:webView
-               credentials:credentials
-                  fillOnly:fillOnly
-                completion:^(BOOL success, NSError *error) {
+    [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipeID
+                                                        completion:^(LoginCredentials *credentials, NSError *loadError) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
         }
-        [strongSelf stopClipboardPolling];
-        strongSelf.isRunning = NO;
-        [strongSelf refreshButtonAppearance];
-        if (!success) {
-            NSString *message = error.localizedDescription ?: @"未知错误";
-            if ([CompanionChannel sharedChannel].state != CompanionChannelStateConnected &&
-                [recipe requiresOTPWait]) {
-                message = [message stringByAppendingString:@"\n提示：可在助手侧栏或高级设置中查看配对状态，或粘贴验证码后重试。"];
+        if (!credentials) {
+            strongSelf.isRunning = NO;
+            [strongSelf refreshButtonAppearance];
+            // 用户取消授权或主线程同步路径的「繁忙」均不弹警告。
+            if (loadError.code == errSecUserCanceled ||
+                ([loadError.domain isEqualToString:LoginCredentialStoreErrorDomain] &&
+                 loadError.code == LoginCredentialStoreErrorBusy)) {
+                return;
             }
-            [strongSelf showError:@"登录助手执行失败"
-                          message:message
-                         recipeID:recipe.recipeID];
+            [strongSelf showError:@"无法读取凭证"
+                          message:loadError.localizedDescription ?: @"钥匙串读取失败"
+                         recipeID:recipeID];
             return;
         }
-        if (notifyOTP && fillOnly) {
-            NSString *toast = strongSelf.detectedHasOTP
-                ? @"帐密已填入，请完成验证后手动登录"
-                : @"帐密已填入";
-            [BrowserTransientToast showMessage:toast
-                                      inWindow:strongSelf.windowController.window
-                                      duration:2.0];
+
+        LoginRecipe *current = [[LoginRecipeStore sharedStore] recipeWithID:recipeID] ?: recipe;
+        BOOL needsOTP = [current requiresOTPWait];
+        BOOL hasUserPass = (credentials.username.length > 0) || (credentials.password.length > 0);
+        if (!needsOTP && !hasUserPass) {
+            strongSelf.isRunning = NO;
+            [strongSelf refreshButtonAppearance];
+            [strongSelf showError:@"缺少账号密码" message:@"请在助手侧栏中填写用户名与密码。" recipeID:recipeID];
+            return;
         }
+        if (needsOTP && current.otpSelector.length == 0) {
+            strongSelf.isRunning = NO;
+            [strongSelf refreshButtonAppearance];
+            [strongSelf showError:@"缺少验证码配置" message:@"请在助手侧栏中配置验证码选择器。" recipeID:recipeID];
+            return;
+        }
+
+        WKWebView *activeWebView = strongSelf.windowController.webView;
+        if (!activeWebView) {
+            strongSelf.isRunning = NO;
+            [strongSelf refreshButtonAppearance];
+            [strongSelf showError:@"无法登录" message:@"当前没有可操作的网页。" recipeID:recipeID];
+            return;
+        }
+        if (needsOTP && !fillOnly) {
+            NSString *channelHint = [CompanionChannel sharedChannel].state == CompanionChannelStateConnected
+                ? @"等待手机推送验证码…"
+                : @"等待验证码…（手机未连接时可粘贴）";
+            [BrowserTransientToast showMessage:channelHint
+                                      inWindow:strongSelf.windowController.window
+                                      duration:2.5];
+            [strongSelf startClipboardPolling];
+        }
+
+        [LoginRunner runRecipe:current
+                     inWebView:activeWebView
+                   credentials:credentials
+                      fillOnly:fillOnly
+                    completion:^(BOOL success, NSError *error) {
+            __strong typeof(weakSelf) runnerSelf = weakSelf;
+            if (!runnerSelf) {
+                return;
+            }
+            [runnerSelf stopClipboardPolling];
+            runnerSelf.isRunning = NO;
+            [runnerSelf refreshButtonAppearance];
+            if (!success) {
+                NSString *message = error.localizedDescription ?: @"未知错误";
+                if ([CompanionChannel sharedChannel].state != CompanionChannelStateConnected &&
+                    [current requiresOTPWait]) {
+                    message = [message stringByAppendingString:@"\n提示：可在助手侧栏或高级设置中查看配对状态，或粘贴验证码后重试。"];
+                }
+                [runnerSelf showError:@"登录助手执行失败"
+                              message:message
+                             recipeID:recipeID];
+                return;
+            }
+            if (notifyOTP && fillOnly) {
+                NSString *toast = runnerSelf.detectedHasOTP
+                    ? @"帐密已填入，请完成验证后手动登录"
+                    : @"帐密已填入";
+                [BrowserTransientToast showMessage:toast
+                                          inWindow:runnerSelf.windowController.window
+                                          duration:2.0];
+            }
+        }];
     }];
 }
 
