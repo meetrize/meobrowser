@@ -20,6 +20,7 @@
 #import "FormMemoInlineDetector.h"
 #import "FormMemoPreferences.h"
 #import "FormMemoPageSaveCoordinator.h"
+#import "LoginFieldSaveCoordinator.h"
 #import "SBTextField.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 #import <AppKit/AppKit.h>
@@ -47,6 +48,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @property (nonatomic, copy, nullable) NSString *detectedPasswordSelector;
 @property (nonatomic, copy, nullable) NSString *detectedSubmitSelector;
 @property (nonatomic, copy, nullable) NSString *detectedFormId;
+@property (nonatomic, copy, nullable) NSArray *detectedSlots;
 @property (nonatomic, copy, nullable) NSString *lastAutoRecipeID;
 @property (nonatomic, assign) NSTimeInterval lastAutoTimestamp;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingAutoBlock;
@@ -55,9 +57,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @property (nonatomic, strong) SystemPasswordBridge *passwordBridge;
 @property (nonatomic, strong) SaveRecipePromptCoordinator *savePromptCoordinator;
 @property (nonatomic, strong) FormMemoPageSaveCoordinator *memoSaveCoordinator;
+@property (nonatomic, strong) LoginFieldSaveCoordinator *fieldSaveCoordinator;
 @property (nonatomic, strong, nullable) NSDictionary *lastIconContext;
 @property (nonatomic, strong, nullable) NSTimer *clipboardPollTimer;
 @property (nonatomic, copy, nullable) NSString *lastSeenPasteboardChangeCount;
+@property (nonatomic, copy, nullable) NSString *lastFillRequestKey;
+@property (nonatomic, assign) NSTimeInterval lastFillRequestTime;
 @end
 
 @implementation LoginAssistController
@@ -77,6 +82,8 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         _passwordBridge = [[SystemPasswordBridge alloc] init];
         _savePromptCoordinator = [[SaveRecipePromptCoordinator alloc] initWithWindowController:windowController];
         _memoSaveCoordinator = [[FormMemoPageSaveCoordinator alloc] initWithWindowController:windowController];
+        _fieldSaveCoordinator = [[LoginFieldSaveCoordinator alloc] initWithWindowController:windowController];
+        _detectedSlots = @[];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(recipesDidChange:)
                                                      name:LoginRecipeStoreDidChangeNotification
@@ -92,6 +99,10 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(formMemoPreferencesDidChange:)
                                                      name:FormMemoPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(loginAssistPreferencesDidChange:)
+                                                     name:LoginAssistPreferencesDidChangeNotification
                                                    object:nil];
     }
     return self;
@@ -112,6 +123,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 - (void)formMemoPreferencesDidChange:(NSNotification *)notification {
     (void)notification;
     // 开关变更对新建标签 / 新导航后的页面生效（与登录内联一致）。
+}
+
+- (void)loginAssistPreferencesDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self pushFieldAssistTargetsToActiveWebView];
 }
 
 - (void)wireLoginButton:(NSButton *)button {
@@ -602,18 +618,73 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         self.matchedRecipes = @[];
         self.matchedMemos = @[];
         self.hasDetectedLoginForm = NO;
+        self.detectedSlots = @[];
     } else if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
         self.matchedRecipes = @[];
         self.matchedMemos = @[];
         self.hasDetectedLoginForm = NO;
         self.detectedHasOTP = NO;
         self.detectedFormId = nil;
+        self.detectedSlots = @[];
     } else {
         self.matchedRecipes = [[LoginRecipeStore sharedStore] recipesMatchingURL:url];
         self.matchedMemos = [[FormMemoStore sharedStore] memosMatchingURL:url];
     }
     [self refreshButtonAppearance];
     [self pushMemoFillTargetsToActiveWebView];
+    [self pushFieldAssistTargetsToActiveWebView];
+}
+
+- (void)pushFieldAssistTargetsToActiveWebView {
+    WKWebView *webView = self.windowController.webView;
+    if (!webView) {
+        return;
+    }
+    if (![LoginAssistPreferences inlineAssistEnabled] ||
+        ![[LoginAssistPreferences loginFieldInlineMode] isEqualToString:LoginFieldInlineModePerField]) {
+        NSString *clearJS = [LoginFormDetector javaScriptSettingFieldAssistTargets:@[]];
+        [webView evaluateJavaScript:clearJS completionHandler:nil];
+        return;
+    }
+    NSURL *url = webView.URL;
+    if (!url || [BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
+        NSString *clearJS = [LoginFormDetector javaScriptSettingFieldAssistTargets:@[]];
+        [webView evaluateJavaScript:clearJS completionHandler:nil];
+        return;
+    }
+
+    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url];
+    if (!recipe && self.matchedRecipes.count > 0) {
+        recipe = self.matchedRecipes.firstObject;
+    }
+
+    void (^apply)(LoginCredentials *) = ^(LoginCredentials *creds) {
+        NSArray *targets = [LoginFormDetector fieldAssistTargetDictionariesForRecipe:recipe
+                                                                        credentials:creds
+                                                                     detectedSlots:self.detectedSlots
+                                                           extraFieldInlineEnabled:[LoginAssistPreferences loginExtraFieldInlineEnabled]];
+        NSString *js = [LoginFormDetector javaScriptSettingFieldAssistTargets:targets];
+        [webView evaluateJavaScript:js completionHandler:nil];
+    };
+
+    if (!recipe) {
+        apply(nil);
+        return;
+    }
+    [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID
+                                                        completion:^(LoginCredentials *credentials, NSError *error) {
+        (void)error;
+        apply(credentials);
+    }];
+}
+
+- (void)scheduleFieldAssistTargetRetries {
+    __weak typeof(self) weakSelf = self;
+    for (NSNumber *delay in @[ @0.3, @0.8, @1.6, @3.0 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf pushFieldAssistTargetsToActiveWebView];
+        });
+    }
 }
 
 - (void)pushMemoFillTargetsToActiveWebView {
@@ -690,6 +761,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self.savePromptCoordinator noteNavigationFinishedInWebView:webView URL:url];
     // SPA / 晚渲染：多次重试推送填入图标
     [self scheduleMemoFillTargetRetries];
+    [self scheduleFieldAssistTargetRetries];
 }
 
 - (void)scheduleAutoLoginIfNeededForURL:(NSURL *)url {
@@ -955,6 +1027,13 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     save.representedObject = ctx;
     [menu addItem:save];
 
+    NSMenuItem *saveForm = [[NSMenuItem alloc] initWithTitle:@"将本表已填项保存为配置…"
+                                                      action:@selector(saveCurrentFormFieldsAsRecipe:)
+                                               keyEquivalent:@""];
+    saveForm.target = self;
+    saveForm.representedObject = ctx;
+    [menu addItem:saveForm];
+
     NSMenuItem *manage = [[NSMenuItem alloc] initWithTitle:@"管理登录配置…"
                                                     action:@selector(openRecipeSidebar:)
                                              keyEquivalent:@""];
@@ -1042,6 +1121,261 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     NSURL *url = webView.URL;
     NSString *host = url.isFileURL ? @"file" : (url.host.lowercaseString ?: @"");
     [self.savePromptCoordinator promptSaveFromWebView:webView preferredHost:host existingFormInfo:nil];
+}
+
+- (void)saveCurrentFormFieldsAsRecipe:(NSMenuItem *)item {
+    NSDictionary *ctx = [item.representedObject isKindOfClass:[NSDictionary class]] ? item.representedObject : (self.lastIconContext ?: @{});
+    WKWebView *webView = self.windowController.webView;
+    if (!webView) {
+        return;
+    }
+    NSString *formId = self.detectedFormId ?: @"";
+    if ([ctx[@"formId"] isKindOfClass:[NSString class]] && [(NSString *)ctx[@"formId"] length] > 0) {
+        formId = ctx[@"formId"];
+    }
+    NSMutableDictionary *body = [@{
+        @"formId": formId ?: @"",
+        @"href": webView.URL.absoluteString ?: @"",
+        @"usernameSelector": self.detectedUsernameSelector ?: @"",
+        @"passwordSelector": self.detectedPasswordSelector ?: @"",
+        @"submitSelector": self.detectedSubmitSelector ?: @"",
+    } mutableCopy];
+    NSError *jsonError = nil;
+    NSData *fidData = [NSJSONSerialization dataWithJSONObject:formId ?: @"" options:0 error:&jsonError];
+    NSString *fidJSON = fidData ? [[NSString alloc] initWithData:fidData encoding:NSUTF8StringEncoding] : @"\"\"";
+    NSString *js = [NSString stringWithFormat:
+                    @"(function(){ try { return window.__meoLoginAssistCollectFormFields(%@); } catch(e) { return []; } })();",
+                    fidJSON];
+    __weak typeof(self) weakSelf = self;
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        (void)error;
+        NSArray *fields = [result isKindOfClass:[NSArray class]] ? (NSArray *)result : @[];
+        if (fields.count == 0) {
+            [BrowserTransientToast showMessage:@"本表没有可保存的已填字段"
+                                      inWindow:strongSelf.windowController.window
+                                      duration:2.0];
+            return;
+        }
+        body[@"fields"] = fields;
+        NSWindow *window = strongSelf.windowController.window;
+        if (!window) {
+            return;
+        }
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"保存本表到登录助手？";
+        alert.informativeText = [NSString stringWithFormat:@"将保存本表已填写的 %lu 个字段（帐密进钥匙串）。", (unsigned long)fields.count];
+        [alert addButtonWithTitle:@"保存"];
+        [alert addButtonWithTitle:@"取消"];
+        [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
+            if (returnCode != NSAlertFirstButtonReturn) {
+                return;
+            }
+            [strongSelf.fieldSaveCoordinator handleSaveFormMessage:body
+                                                       fromWebView:webView
+                                                        completion:^(BOOL saved) {
+                if (saved) {
+                    [strongSelf pushFieldAssistTargetsToActiveWebView];
+                }
+            }];
+        }];
+    }];
+}
+
+- (NSString *)credentialValue:(NSString *)slot fromCredentials:(LoginCredentials *)credentials {
+    if ([slot isEqualToString:@"username"]) {
+        return credentials.username ?: @"";
+    }
+    if ([slot isEqualToString:@"password"]) {
+        return credentials.password ?: @"";
+    }
+    if ([slot isEqualToString:@"phone"]) {
+        return credentials.phone ?: @"";
+    }
+    return @"";
+}
+
+- (NSString *)recipeSelector:(NSString *)slot forRecipe:(LoginRecipe *)recipe {
+    if ([slot isEqualToString:@"username"]) {
+        return recipe.usernameSelector ?: @"";
+    }
+    if ([slot isEqualToString:@"password"]) {
+        return recipe.passwordSelector ?: @"";
+    }
+    if ([slot isEqualToString:@"phone"]) {
+        return recipe.phoneSelector ?: @"";
+    }
+    return @"";
+}
+
+- (void)performFillSelector:(NSString *)primarySelector
+              fallbackSelector:(NSString *)fallbackSelector
+                         value:(NSString *)value
+                       inWebView:(WKWebView *)webView {
+    if (value.length == 0 || primarySelector.length == 0) {
+        [BrowserTransientToast showMessage:@"该字段没有已保存的值"
+                                  inWindow:self.windowController.window
+                                  duration:2.0];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [LoginRunner fillSelector:primarySelector value:value inWebView:webView completion:^(BOOL success, NSError *fillError) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (success) {
+            return;
+        }
+        if (fallbackSelector.length > 0 && ![fallbackSelector isEqualToString:primarySelector]) {
+            [LoginRunner fillSelector:fallbackSelector value:value inWebView:webView completion:^(BOOL ok2, NSError *err2) {
+                if (!ok2) {
+                    [BrowserTransientToast showMessage:err2.localizedDescription ?: (fillError.localizedDescription ?: @"填入失败")
+                                              inWindow:strongSelf.windowController.window
+                                              duration:2.5];
+                }
+            }];
+            return;
+        }
+        [BrowserTransientToast showMessage:fillError.localizedDescription ?: @"填入失败"
+                                  inWindow:strongSelf.windowController.window
+                                  duration:2.5];
+    }];
+}
+
+- (void)fillCredentialSlot:(NSString *)slot
+                  selector:(NSString *)selector
+                    recipe:(LoginRecipe *)recipe
+                   webView:(WKWebView *)webView
+                retryBusy:(BOOL)retryBusy {
+    NSString *requestKey = [NSString stringWithFormat:@"%@|%@|%@", recipe.recipeID ?: @"", slot ?: @"", selector ?: @""];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if ([requestKey isEqualToString:self.lastFillRequestKey] && (now - self.lastFillRequestTime) < 0.35) {
+        return;
+    }
+    self.lastFillRequestKey = requestKey;
+    self.lastFillRequestTime = now;
+
+    NSString *fallbackSelector = [self recipeSelector:slot forRecipe:recipe];
+    __weak typeof(self) weakSelf = self;
+
+    LoginCredentials *cached = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID error:nil];
+    if (cached) {
+        NSString *value = [self credentialValue:slot fromCredentials:cached];
+        [self performFillSelector:selector fallbackSelector:fallbackSelector value:value inWebView:webView];
+        return;
+    }
+
+    [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID
+                                                        completion:^(LoginCredentials *credentials, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (!credentials) {
+            if (error.code == LoginCredentialStoreErrorBusy && retryBusy) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [strongSelf fillCredentialSlot:slot selector:selector recipe:recipe webView:webView retryBusy:NO];
+                });
+                return;
+            }
+            NSString *msg = @"无法读取已保存的帐密";
+            if (error.code == LoginCredentialStoreErrorBusy) {
+                msg = @"钥匙串忙，请稍后再试";
+            } else if (error.localizedDescription.length > 0) {
+                msg = error.localizedDescription;
+            }
+            [BrowserTransientToast showMessage:msg
+                                      inWindow:strongSelf.windowController.window
+                                      duration:2.5];
+            return;
+        }
+        NSString *value = [strongSelf credentialValue:slot fromCredentials:credentials];
+        [strongSelf performFillSelector:selector fallbackSelector:fallbackSelector value:value inWebView:webView];
+    }];
+}
+
+- (void)handleFillFieldMessage:(NSDictionary *)body fromWebView:(WKWebView *)webView {
+    NSString *slot = body[@"slot"];
+    NSString *selector = body[@"selector"];
+    if (![slot isKindOfClass:[NSString class]] || ![selector isKindOfClass:[NSString class]] || selector.length == 0) {
+        return;
+    }
+    NSURL *url = webView.URL;
+    LoginRecipe *recipe = url ? [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url] : nil;
+    if (!recipe && self.matchedRecipes.count > 0) {
+        recipe = self.matchedRecipes.firstObject;
+    }
+    if (!recipe) {
+        [BrowserTransientToast showMessage:@"当前页没有登录配置"
+                                  inWindow:self.windowController.window
+                                  duration:2.0];
+        return;
+    }
+
+    if ([slot isEqualToString:@"otp"]) {
+        __weak typeof(self) weakSelf = self;
+        [[OTPInbox sharedInbox] waitForCodeWithTimeout:0.8 completion:^(NSString *code, NSError *error) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            (void)error;
+            if (code.length == 0) {
+                [BrowserTransientToast showMessage:@"暂无验证码，请先通过 Companion 或粘贴获取"
+                                          inWindow:strongSelf.windowController.window
+                                          duration:2.5];
+                return;
+            }
+            [LoginRunner fillOTPCode:code
+                           intoRecipe:recipe
+                            inWebView:webView
+                         shouldSubmit:NO
+                           completion:^(BOOL success, NSError *fillError) {
+                if (success) {
+                    [[OTPInbox sharedInbox] markCodeConsumed:code];
+                    [BrowserTransientToast showMessage:@"已填入验证码"
+                                              inWindow:strongSelf.windowController.window
+                                              duration:1.8];
+                } else {
+                    [BrowserTransientToast showMessage:fillError.localizedDescription ?: @"填入失败"
+                                              inWindow:strongSelf.windowController.window
+                                              duration:2.5];
+                }
+            }];
+        }];
+        return;
+    }
+
+    if ([slot isEqualToString:@"extra"]) {
+        NSString *value = @"";
+        for (LoginRecipeExtraField *ef in recipe.extraFields) {
+            if ([ef.selector isEqualToString:selector]) {
+                value = ef.value ?: @"";
+                break;
+            }
+        }
+        if (value.length == 0) {
+            [BrowserTransientToast showMessage:@"该字段没有已保存的值"
+                                      inWindow:self.windowController.window
+                                      duration:2.0];
+            return;
+        }
+        __weak typeof(self) weakSelf = self;
+        [LoginRunner fillSelector:selector value:value inWebView:webView completion:^(BOOL success, NSError *error) {
+            if (!success) {
+                [BrowserTransientToast showMessage:error.localizedDescription ?: @"填入失败"
+                                          inWindow:weakSelf.windowController.window
+                                          duration:2.5];
+            }
+        }];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    NSString *useSelector = selector;
+    [self fillCredentialSlot:slot selector:useSelector recipe:recipe webView:webView retryBusy:YES];
+    (void)weakSelf;
 }
 
 - (void)openSettings:(id)sender {
@@ -1471,13 +1805,28 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         self.detectedUsernameSelector = body[@"usernameSelector"];
         self.detectedPasswordSelector = body[@"passwordSelector"];
         self.detectedSubmitSelector = body[@"submitSelector"];
+        if ([body[@"slots"] isKindOfClass:[NSArray class]]) {
+            self.detectedSlots = body[@"slots"];
+        } else {
+            NSMutableArray *fallback = [NSMutableArray array];
+            if (self.detectedUsernameSelector.length > 0) {
+                [fallback addObject:@{@"slot": @"username", @"selector": self.detectedUsernameSelector}];
+            }
+            if (self.detectedPasswordSelector.length > 0) {
+                [fallback addObject:@{@"slot": @"password", @"selector": self.detectedPasswordSelector}];
+            }
+            self.detectedSlots = fallback;
+        }
         [self refreshButtonAppearance];
+        [self pushFieldAssistTargetsToActiveWebView];
     } else if ([type isEqualToString:@"formCleared"]) {
         self.hasDetectedLoginForm = NO;
         self.detectedHasOTP = NO;
         self.detectedFormId = nil;
+        self.detectedSlots = @[];
         [self refreshButtonAppearance];
-    } else if ([type isEqualToString:@"iconClicked"]) {
+        [self pushFieldAssistTargetsToActiveWebView];
+    } else if ([type isEqualToString:@"iconClicked"] || [type isEqualToString:@"iconMenu"]) {
         self.lastIconContext = body;
         self.hasDetectedLoginForm = YES;
         self.detectedHasOTP = [body[@"hasOTP"] boolValue];
@@ -1485,6 +1834,32 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         self.detectedPasswordSelector = body[@"passwordSelector"];
         self.detectedSubmitSelector = body[@"submitSelector"];
         [self presentAssistMenuFromView:nil context:body];
+    } else if ([type isEqualToString:@"saveField"]) {
+        __weak typeof(self) weakSelf = self;
+        [self.fieldSaveCoordinator handleSaveFieldMessage:body
+                                              fromWebView:message.webView
+                                               completion:^(BOOL saved) {
+            if (saved) {
+                [weakSelf pushFieldAssistTargetsToActiveWebView];
+                [weakSelf updateForURL:message.webView.URL];
+            }
+        }];
+    } else if ([type isEqualToString:@"saveFieldEmpty"]) {
+        [BrowserTransientToast showMessage:@"请先填写再保存"
+                                  inWindow:self.windowController.window
+                                  duration:2.0];
+    } else if ([type isEqualToString:@"fillField"]) {
+        [self handleFillFieldMessage:body fromWebView:message.webView];
+    } else if ([type isEqualToString:@"saveForm"]) {
+        __weak typeof(self) weakSelf = self;
+        [self.fieldSaveCoordinator handleSaveFormMessage:body
+                                             fromWebView:message.webView
+                                              completion:^(BOOL saved) {
+            if (saved) {
+                [weakSelf pushFieldAssistTargetsToActiveWebView];
+                [weakSelf updateForURL:message.webView.URL];
+            }
+        }];
     } else if ([type isEqualToString:@"credentialsDraft"]) {
         [self.savePromptCoordinator noteCredentialsDraftOnPage];
     } else if ([type isEqualToString:@"formSubmitted"]) {

@@ -188,6 +188,76 @@ static NSInteger gLoginRunnerGeneration = 0;
                       completion:completion];
 }
 
++ (void)fillSelector:(NSString *)selector
+               value:(NSString *)value
+           inWebView:(WKWebView *)webView
+          completion:(LoginRunnerCompletion)completion {
+    if (!webView || selector.length == 0) {
+        if (completion) {
+            completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                               code:10
+                                           userInfo:@{NSLocalizedDescriptionKey: @"缺少页面或选择器"}]);
+        }
+        return;
+    }
+    // 顶层必须是字典/数组；裸 NSString 会抛 NSInvalidArgumentException 导致进程崩溃。
+    NSDictionary *payload = @{
+        @"selector": selector ?: @"",
+        @"value": value ?: @"",
+    };
+    NSError *jsonError = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&jsonError];
+    NSString *json = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
+    if (json.length == 0) {
+        if (completion) {
+            completion(NO, jsonError ?: [NSError errorWithDomain:@"LoginRunner"
+                                                            code:12
+                                                        userInfo:@{NSLocalizedDescriptionKey: @"无法编码填入参数"}]);
+        }
+        return;
+    }
+    // 拼接而非 stringWithFormat，避免帐密中的 % 被当成格式符。
+    NSString *script = [@[
+        @"(function(){",
+        @"  var p = ", json, @";",
+        @"  var sel = p.selector || '';",
+        @"  var value = (p.value != null) ? String(p.value) : '';",
+        @"  if (window.__meoLoginAssistFillSelector) {",
+        @"    return window.__meoLoginAssistFillSelector(sel, value);",
+        @"  }",
+        @"  try {",
+        @"    var el = document.querySelector(sel);",
+        @"    if (!el) return 'missing';",
+        @"    el.focus();",
+        @"    var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;",
+        @"    var d = Object.getOwnPropertyDescriptor(proto, 'value');",
+        @"    if (d && d.set) d.set.call(el, value); else el.value = value;",
+        @"    el.dispatchEvent(new Event('input', { bubbles: true }));",
+        @"    el.dispatchEvent(new Event('change', { bubbles: true }));",
+        @"    return 'ok';",
+        @"  } catch (e) { return 'error'; }",
+        @"})();"
+    ] componentsJoinedByString:@""];
+    [webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        if (error) {
+            if (completion) {
+                completion(NO, error);
+            }
+            return;
+        }
+        BOOL ok = [result isKindOfClass:[NSString class]] && [result isEqualToString:@"ok"];
+        if (completion) {
+            if (ok) {
+                completion(YES, nil);
+            } else {
+                completion(NO, [NSError errorWithDomain:@"LoginRunner"
+                                                   code:11
+                                               userInfo:@{NSLocalizedDescriptionKey: @"未找到字段，请在侧栏修正选择器"}]);
+            }
+        }
+    }];
+}
+
 + (void)fillOTPCode:(NSString *)code
           intoRecipe:(LoginRecipe *)recipe
            inWebView:(WKWebView *)webView

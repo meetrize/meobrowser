@@ -40,6 +40,12 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
          shouldSubmit:(BOOL)shouldSubmit
            completion:(nullable LoginRunnerCompletion)completion;
 
+/// 仅填入单个选择器对应字段（不提交）。
++ (void)fillSelector:(NSString *)selector
+               value:(NSString *)value
+           inWebView:(WKWebView *)webView
+          completion:(nullable LoginRunnerCompletion)completion;
+
 /// 仅填入验证码栏（不重跑帐密/发码），用于 Companion 推码到达且页面已有 recipe。
 + (void)fillOTPCode:(NSString *)code
           intoRecipe:(LoginRecipe *)recipe

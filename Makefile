@@ -177,6 +177,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/BrowserLoginAssistSettingsWindowController.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginFormDetector.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginAssistPreferences.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/LoginFieldSaveCoordinator.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/SystemPasswordBridge.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/SaveRecipePromptCoordinator.m \
                    $(BROWSER_SRC_DIR)/CaptchaAssist/CaptchaDetection.m \

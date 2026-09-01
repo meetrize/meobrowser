@@ -483,6 +483,38 @@ companion/.../newtab/
 
 ---
 
+## 登录表单逐字段内联 V1.6 验收（IF-D0～IF-D6）
+
+> 对照 [login-form-field-inline-design.md](login-form-field-inline-design.md) · [login-form-field-inline-development-plan.md](login-form-field-inline-development-plan.md)
+
+### 自动化检查
+
+| 检查项 | 结果 |
+|--------|------|
+| `make browser` | 待勾选 |
+| 新模块入链 | `LoginFieldSaveCoordinator`；`LoginFormDetector` 支持 perField |
+
+### 功能验收
+
+| 测试项 | 状态 |
+|--------|------|
+| 无 Recipe 时用户名/密码旁为「＋」 | 待手测 |
+| 「保存此字段」后该框变填入；点填入只写该框 | 待手测 |
+| 「保存本表已填项」批量写入 | 待手测 |
+| OTP 框无「＋」；有 otpSelector 时可填入 | 待手测 |
+| 密码旁「⋯」打开完整菜单 | 待手测 |
+| 关闭逐字段 → legacy 单钥匙 | 待手测 |
+| 风险域无注入；登录字段无备忘「＋」 | 待手测 |
+
+### 手测
+
+1. `make run-browser` → 打开 `Resources/login-assist-test.html`  
+2. 用户名、密码右侧应出现「＋」；填写后点「＋」→ 保存此字段 / 保存本表  
+3. 保存后图标变为填入；点填入应写入对应值  
+4. 高级设置关闭「逐字段」后新标签应回退单钥匙  
+
+---
+
 ## 反风控与会话稳定验收（AB-0～AB-4 · 2026-07-16）
 
 > 对照 [anti-bot-session-design.md](anti-bot-session-design.md) · [anti-bot-session-development-plan.md](anti-bot-session-development-plan.md)  

@@ -2,6 +2,8 @@
 #import "LoginAssistScriptMessageProxy.h"
 #import "LoginAssistPreferences.h"
 #import "BrowserRiskHostPolicy.h"
+#import "LoginRecipe.h"
+#import "LoginCredentialStore.h"
 
 NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 
@@ -24,10 +26,16 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
     proxy.target = handler;
     [ucc addScriptMessageHandler:proxy name:LoginFormInlineHandlerName];
 
-    // 新标签使用当前 Pref；已打开页需重启窗口或导航刷新脚本时机有限。
     BOOL enabled = [LoginAssistPreferences inlineAssistEnabled];
-    NSString *source = [NSString stringWithFormat:@"window.__meoLoginInlineEnabled=%@;\n%@",
+    NSString *mode = [LoginAssistPreferences loginFieldInlineMode] ?: LoginFieldInlineModePerField;
+    BOOL extra = [LoginAssistPreferences loginExtraFieldInlineEnabled];
+    NSString *source = [NSString stringWithFormat:
+                        @"window.__meoLoginInlineEnabled=%@;\n"
+                        @"window.__meoLoginFieldInlineMode='%@';\n"
+                        @"window.__meoLoginExtraFieldInlineEnabled=%@;\n%@",
                         enabled ? @"true" : @"false",
+                        mode,
+                        extra ? @"true" : @"false",
                         [self userScriptSource]];
     WKUserScript *script = [[WKUserScript alloc] initWithSource:source
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
@@ -35,9 +43,121 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
     [ucc addUserScript:script];
 }
 
++ (NSString *)javaScriptSettingFieldAssistTargets:(NSArray<NSDictionary *> *)targets {
+    NSArray *safe = targets ?: @[];
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:safe options:0 error:&error];
+    if (!data || error) {
+        return @"try{if(window.__meoLoginAssistSetFieldTargets)window.__meoLoginAssistSetFieldTargets([]);}catch(e){}";
+    }
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
+    return [NSString stringWithFormat:
+            @"try{if(window.__meoLoginAssistSetFieldTargets)window.__meoLoginAssistSetFieldTargets(%@);}catch(e){}",
+            json];
+}
+
++ (NSArray<NSDictionary *> *)fieldAssistTargetDictionariesForRecipe:(LoginRecipe *)recipe
+                                                       credentials:(LoginCredentials *)credentials
+                                                    detectedSlots:(NSArray *)detectedSlots
+                                          extraFieldInlineEnabled:(BOOL)extraEnabled {
+    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+    if (![detectedSlots isKindOfClass:[NSArray class]]) {
+        return out;
+    }
+
+    NSString *credUser = credentials.username ?: @"";
+    NSString *credPass = credentials.password ?: @"";
+    NSString *credPhone = credentials.phone ?: @"";
+
+    for (id item in detectedSlots) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSDictionary *slotInfo = (NSDictionary *)item;
+        NSString *slot = slotInfo[@"slot"];
+        NSString *detectedSel = slotInfo[@"selector"];
+        if (![slot isKindOfClass:[NSString class]] || slot.length == 0) {
+            continue;
+        }
+        if (![detectedSel isKindOfClass:[NSString class]]) {
+            detectedSel = @"";
+        }
+        if ([slot isEqualToString:@"extra"] && !extraEnabled) {
+            continue;
+        }
+
+        NSString *selector = detectedSel;
+        BOOL hasPreset = NO;
+        BOOL allowSave = YES;
+        NSString *label = slot;
+
+        if ([slot isEqualToString:@"username"]) {
+            label = @"用户名";
+            if (recipe.usernameSelector.length > 0) {
+                selector = recipe.usernameSelector;
+            }
+            hasPreset = (credUser.length > 0);
+        } else if ([slot isEqualToString:@"password"]) {
+            label = @"密码";
+            if (recipe.passwordSelector.length > 0) {
+                selector = recipe.passwordSelector;
+            }
+            hasPreset = (credPass.length > 0);
+        } else if ([slot isEqualToString:@"phone"]) {
+            label = @"手机号";
+            if (recipe.phoneSelector.length > 0) {
+                selector = recipe.phoneSelector;
+            }
+            hasPreset = (credPhone.length > 0);
+        } else if ([slot isEqualToString:@"otp"]) {
+            label = @"验证码";
+            allowSave = NO;
+            if (recipe.otpSelector.length > 0) {
+                selector = recipe.otpSelector;
+                hasPreset = YES;
+            } else {
+                continue; // 无 otp 预设则不显示图标
+            }
+        } else if ([slot isEqualToString:@"extra"]) {
+            NSString *detLabel = slotInfo[@"label"];
+            if ([detLabel isKindOfClass:[NSString class]] && detLabel.length > 0) {
+                label = detLabel;
+            } else {
+                label = @"字段";
+            }
+            hasPreset = NO;
+            if (recipe) {
+                for (LoginRecipeExtraField *ef in recipe.extraFields) {
+                    if (ef.selector.length > 0 && [ef.selector isEqualToString:detectedSel] && ef.value.length > 0) {
+                        hasPreset = YES;
+                        selector = ef.selector;
+                        if (ef.label.length > 0) {
+                            label = ef.label;
+                        }
+                        break;
+                    }
+                }
+            }
+        } else {
+            continue;
+        }
+
+        if (selector.length == 0) {
+            continue;
+        }
+
+        [out addObject:@{
+            @"slot": slot,
+            @"selector": selector,
+            @"hasPreset": @(hasPreset),
+            @"allowSave": @(allowSave),
+            @"label": label ?: @"",
+        }];
+    }
+    return out;
+}
+
 + (NSString *)userScriptSource {
-    // IF-P：无密码早退 + 按需 scroll + 空闲暂停 MutationObserver（见 login-form-detector-perf-design.md）
-    // AB-2 / AB-5：风险域 / Cloudflare 人机页不注入
     NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressLoginAssist"];
     NSString *prefix = [NSString stringWithFormat:
         @"(function() {\n"
@@ -56,15 +176,26 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
     return @
 "  const HANDLER = 'loginFormInline';\n"
 "  const BTN_ATTR = 'data-meo-login-assist';\n"
+"  const FIELD_BTN = 'meo-login-field-btn';\n"
+"  const MENU_BTN = 'meo-login-menu-btn';\n"
 "  const EMPTY_STREAK = 8;\n"
 "  const PULSE_MS = 8000;\n"
+"  const FIELD_SIZE = 28;\n"
+"  const MENU_SIZE = 22;\n"
+"  const FIELD_GAP = 6;\n"
 "  let debounceTimer = null;\n"
+"  let layoutTimer = null;\n"
 "  let activeFormId = null;\n"
 "  let emptyStreak = 0;\n"
 "  let paused = false;\n"
 "  let scrollBound = false;\n"
+"  let layoutBound = false;\n"
 "  let pulseTimer = null;\n"
+"  let fieldTargets = [];\n"
+"  let lastContexts = [];\n"
 "  const drafts = {};\n"
+"  function isPerField() { return (window.__meoLoginFieldInlineMode || 'perField') !== 'legacySingleKey'; }\n"
+"  function extraEnabled() { return window.__meoLoginExtraFieldInlineEnabled === true; }\n"
 "\n"
 "  function post(payload) {\n"
 "    try { window.webkit.messageHandlers[HANDLER].postMessage(payload); } catch (e) {}\n"
@@ -89,6 +220,15 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    return [el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.autocomplete]\n"
 "      .filter(Boolean).join(' ').toLowerCase();\n"
 "  }\n"
+"  function fieldLabel(el) {\n"
+"    try {\n"
+"      if (el.id) {\n"
+"        const lab = document.querySelector('label[for=\"' + CSS.escape(el.id) + '\"]');\n"
+"        if (lab && lab.textContent) return lab.textContent.trim().replace(/\\s+/g, ' ').slice(0, 40);\n"
+"      }\n"
+"    } catch (e) {}\n"
+"    return (el.placeholder || el.name || el.id || '字段').toString().slice(0, 40);\n"
+"  }\n"
 "  function isAccountField(el) {\n"
 "    if (!el || el.tagName !== 'INPUT' || !visible(el)) return false;\n"
 "    const t = (el.type || 'text').toLowerCase();\n"
@@ -98,6 +238,14 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    const ac = (el.autocomplete || '').toLowerCase();\n"
 "    if (/(username|email|tel|nickname|name)/.test(ac)) return true;\n"
 "    return /(user|login|account|email|mail|手机|帐号|账号|邮箱|phone)/i.test(textBlob(el));\n"
+"  }\n"
+"  function isPhoneField(el) {\n"
+"    if (!el || el.tagName !== 'INPUT' || !visible(el)) return false;\n"
+"    const t = (el.type || 'text').toLowerCase();\n"
+"    if (t === 'tel') return true;\n"
+"    const ac = (el.autocomplete || '').toLowerCase();\n"
+"    if (ac.indexOf('tel') >= 0) return true;\n"
+"    return /(手机|phone|mobile|tel)/i.test(textBlob(el)) && !/(user|login|account|email|mail|帐号|账号|邮箱)/i.test(textBlob(el));\n"
 "  }\n"
 "  function isPasswordField(el) {\n"
 "    if (!el || el.tagName !== 'INPUT' || !visible(el)) return false;\n"
@@ -153,6 +301,33 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    const hit = buttons.find(b => /(log\\s*in|sign\\s*in|登录|登陸|提交|signin)/i.test((b.textContent || b.value || '') + ' ' + textBlob(b)));\n"
 "    return hit || null;\n"
 "  }\n"
+"  function buildSlots(ctx) {\n"
+"    const slots = [];\n"
+"    if (ctx.user) {\n"
+"      const phoneLike = isPhoneField(ctx.user) && !/(user|login|account|email|mail|帐号|账号|邮箱)/i.test(textBlob(ctx.user));\n"
+"      slots.push({ slot: phoneLike ? 'phone' : 'username', el: ctx.user, selector: cssPath(ctx.user), label: fieldLabel(ctx.user),\n"
+"        hasValueInDOM: !!(ctx.user.value && String(ctx.user.value).trim()) });\n"
+"    }\n"
+"    if (ctx.phone && ctx.phone !== ctx.user) {\n"
+"      slots.push({ slot: 'phone', el: ctx.phone, selector: cssPath(ctx.phone), label: fieldLabel(ctx.phone),\n"
+"        hasValueInDOM: !!(ctx.phone.value && String(ctx.phone.value).trim()) });\n"
+"    }\n"
+"    if (ctx.pass) {\n"
+"      slots.push({ slot: 'password', el: ctx.pass, selector: cssPath(ctx.pass), label: fieldLabel(ctx.pass),\n"
+"        hasValueInDOM: !!(ctx.pass.value && String(ctx.pass.value).trim()) });\n"
+"    }\n"
+"    if (ctx.otpEl) {\n"
+"      slots.push({ slot: 'otp', el: ctx.otpEl, selector: cssPath(ctx.otpEl), label: fieldLabel(ctx.otpEl),\n"
+"        hasValueInDOM: !!(ctx.otpEl.value && String(ctx.otpEl.value).trim()) });\n"
+"    }\n"
+"    if (extraEnabled() && ctx.extras) {\n"
+"      ctx.extras.forEach(function(ex) {\n"
+"        slots.push({ slot: 'extra', el: ex, selector: cssPath(ex), label: fieldLabel(ex),\n"
+"          hasValueInDOM: !!(ex.value && String(ex.value).trim()) });\n"
+"      });\n"
+"    }\n"
+"    return slots;\n"
+"  }\n"
 "  function contexts() {\n"
 "    const results = [];\n"
 "    const forms = Array.from(document.querySelectorAll('form'));\n"
@@ -162,23 +337,33 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "      const inputs = Array.from(root.querySelectorAll('input'));\n"
 "      const pass = inputs.find(isPasswordField);\n"
 "      if (!pass) return;\n"
-"      const user = inputs.find(el => isAccountField(el));\n"
-"      if (!user) return;\n"
-"      const otp = inputs.some(isOTPField);\n"
+"      const accounts = inputs.filter(isAccountField);\n"
+"      if (!accounts.length) return;\n"
+"      let phone = inputs.find(el => isPhoneField(el));\n"
+"      let user = accounts.find(el => el !== phone) || accounts[0];\n"
+"      if (phone === user) phone = inputs.find(el => isPhoneField(el) && el !== user) || null;\n"
+"      const otpEl = inputs.find(isOTPField) || null;\n"
+"      const used = new Set([user, pass, phone, otpEl].filter(Boolean));\n"
+"      const extras = inputs.filter(el => {\n"
+"        if (used.has(el) || !visible(el) || isPasswordField(el) || isOTPField(el)) return false;\n"
+"        const t = (el.type || 'text').toLowerCase();\n"
+"        return t === 'text' || t === 'email' || t === 'tel' || t === 'number' || t === 'url' || t === '';\n"
+"      });\n"
 "      const submit = findSubmit(root, pass);\n"
 "      const formId = root.id ? ('id:' + root.id) : ('auto:' + idx + ':' + cssPath(pass));\n"
-"      results.push({ root, user, pass, submit, otp, formId });\n"
+"      results.push({ root, user, pass, phone, otpEl, extras, submit, otp: !!otpEl, formId });\n"
 "    });\n"
 "    if (!results.length && document.body) {\n"
 "      const inputs = Array.from(document.querySelectorAll('input'));\n"
 "      const pass = inputs.find(isPasswordField);\n"
-"      const user = inputs.find(isAccountField);\n"
+"      const accounts = inputs.filter(isAccountField);\n"
+"      const user = accounts[0];\n"
 "      if (pass && user && !isRegisterish(document.body)) {\n"
+"        const phone = inputs.find(el => isPhoneField(el) && el !== user) || null;\n"
+"        const otpEl = inputs.find(isOTPField) || null;\n"
 "        results.push({\n"
-"          root: document.body,\n"
-"          user, pass,\n"
-"          submit: findSubmit(document.body, pass),\n"
-"          otp: inputs.some(isOTPField),\n"
+"          root: document.body, user, pass, phone, otpEl, extras: [],\n"
+"          submit: findSubmit(document.body, pass), otp: !!otpEl,\n"
 "          formId: 'body:' + cssPath(pass)\n"
 "        });\n"
 "      }\n"
@@ -190,16 +375,158 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    const style = document.createElement('style');\n"
 "    style.id = 'meo-login-assist-style';\n"
 "    style.textContent = '' +\n"
-"      'input[' + BTN_ATTR + '-host=\"1\"]{ padding-right: 28px !important; }' +\n"
-"      'button.meo-login-assist-btn{' +\n"
-"      'position:absolute;z-index:2147483646;width:20px;height:20px;border:0;padding:0;' +\n"
-"      'border-radius:4px;cursor:pointer;background:rgba(128,128,128,0.18);' +\n"
-"      'color:inherit;font-size:12px;line-height:20px;text-align:center;' +\n"
+"      'input[' + BTN_ATTR + '-host=\"1\"]{ padding-right: 40px !important; box-sizing: border-box !important; }' +\n"
+"      'input[' + BTN_ATTR + '-host=\"2\"]{ padding-right: 64px !important; box-sizing: border-box !important; }' +\n"
+"      'button.meo-login-assist-btn,button.' + FIELD_BTN + ',button.' + MENU_BTN + '{' +\n"
+"      'position:fixed;z-index:2147483647;border:0;cursor:pointer;' +\n"
+"      'display:flex;align-items:center;justify-content:center;' +\n"
+"      'box-shadow:0 0 0 1px rgba(0,0,0,0.08);' +\n"
+"      'pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none;' +\n"
 "      '}' +\n"
-"      'button.meo-login-assist-btn:hover{background:rgba(10,132,255,0.25);}';\n"
+"      'button.' + FIELD_BTN + '{' +\n"
+"      'width:' + FIELD_SIZE + 'px;height:' + FIELD_SIZE + 'px;padding:0;border-radius:6px;position:relative;' +\n"
+"      '}' +\n"
+"      'button.' + FIELD_BTN + '::before{' +\n"
+"      'content:\"\";position:absolute;inset:-8px;border-radius:10px;' +\n"
+"      '}' +\n"
+"      'button.meo-login-assist-btn{background:rgba(128,128,128,0.18);font-size:12px;width:22px;height:22px;}' +\n"
+"      'button.meo-login-assist-btn:hover{background:rgba(10,132,255,0.25);}' +\n"
+"      'button.' + FIELD_BTN + '[data-meo-kind=\"plus\"]{background:rgba(128,128,128,0.22);color:inherit;font-size:16px;font-weight:600;}' +\n"
+"      'button.' + FIELD_BTN + '[data-meo-kind=\"plus\"]:hover{background:rgba(10,132,255,0.32);}' +\n"
+"      'button.' + FIELD_BTN + '[data-meo-kind=\"fill\"]{background:rgba(10,132,255,0.92);color:#fff;}' +\n"
+"      'button.' + FIELD_BTN + '[data-meo-kind=\"fill\"]:hover{background:rgba(0,112,230,1);}' +\n"
+"      'button.' + FIELD_BTN + '[data-meo-kind=\"fill\"]:active{background:rgba(0,96,200,1);transform:scale(0.96);}' +\n"
+"      'button.' + MENU_BTN + '{background:rgba(128,128,128,0.18);font-size:11px;width:' + MENU_SIZE + 'px;height:' + MENU_SIZE + 'px;border-radius:5px;padding:0;}' +\n"
+"      'button.' + MENU_BTN + ':hover{background:rgba(10,132,255,0.25);}';\n"
 "    document.documentElement.appendChild(style);\n"
 "  }\n"
-"  function placeButton(ctx) {\n"
+"  function fillSvg() {\n"
+"    return '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"13\" height=\"13\" viewBox=\"0 0 16 16\" fill=\"none\" aria-hidden=\"true\">' +\n"
+"      '<path d=\"M3 2.5h7.5L13 5v8.5H3V2.5z\" stroke=\"#fff\" stroke-width=\"1.4\" fill=\"none\"/>' +\n"
+"      '<path d=\"M10 2.5V5h2.5\" stroke=\"#fff\" stroke-width=\"1.4\" fill=\"none\"/>' +\n"
+"      '<path d=\"M8 7v4.5M8 11.5L6.2 9.7M8 11.5l1.8-1.8\" stroke=\"#fff\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>' +\n"
+"      '</svg>';\n"
+"  }\n"
+"  function queryBySelector(sel) {\n"
+"    if (!sel) return null;\n"
+"    try { return document.querySelector(sel); } catch (e) { return null; }\n"
+"  }\n"
+"  function targetForSlot(slot, selector) {\n"
+"    for (let i = 0; i < fieldTargets.length; i++) {\n"
+"      const t = fieldTargets[i];\n"
+"      if (!t) continue;\n"
+"      if (t.slot === slot && (!selector || !t.selector || t.selector === selector)) return t;\n"
+"      if (selector && t.selector === selector) return t;\n"
+"    }\n"
+"    return null;\n"
+"  }\n"
+"  function clearLegacyButtons(keepIds) {\n"
+"    document.querySelectorAll('button.meo-login-assist-btn').forEach(btn => {\n"
+"      const id = btn.getAttribute(BTN_ATTR);\n"
+"      if (keepIds && keepIds.has(id)) return;\n"
+"      btn.remove();\n"
+"    });\n"
+"  }\n"
+"  function clearFieldButtons() {\n"
+"    document.querySelectorAll('button.' + FIELD_BTN + ',button.' + MENU_BTN).forEach(b => b.remove());\n"
+"    document.querySelectorAll('input[' + BTN_ATTR + '-host]').forEach(el => {\n"
+"      el.removeAttribute(BTN_ATTR + '-host');\n"
+"    });\n"
+"  }\n"
+"  function removeOrphanFieldButtons(activeKeys) {\n"
+"    document.querySelectorAll('button.' + FIELD_BTN).forEach(function(btn) {\n"
+"      const k = btn.getAttribute('data-meo-key');\n"
+"      if (!k || !activeKeys.has(k)) btn.remove();\n"
+"    });\n"
+"    document.querySelectorAll('button.' + MENU_BTN).forEach(function(btn) {\n"
+"      const k = btn.getAttribute('data-meo-menu-key');\n"
+"      if (!k || !activeKeys.has(k)) btn.remove();\n"
+"    });\n"
+"  }\n"
+"  function fieldBtnKey(formCtx, slotInfo, idx) {\n"
+"    return String(formCtx.formId) + ':' + slotInfo.slot + ':' + idx;\n"
+"  }\n"
+"  function updateButtonGeometry(btn, el, hasMenu) {\n"
+"    const r = el.getBoundingClientRect();\n"
+"    const visibleNow = r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;\n"
+"    if (!visibleNow) {\n"
+"      btn.style.display = 'none';\n"
+"      return;\n"
+"    }\n"
+"    const menuW = MENU_SIZE;\n"
+"    const gap = FIELD_GAP;\n"
+"    const inset = 6;\n"
+"    let left = r.left + Math.max(inset, r.width - FIELD_SIZE - inset);\n"
+"    if (hasMenu) {\n"
+"      left = r.left + Math.max(inset, r.width - menuW - gap - FIELD_SIZE - inset);\n"
+"    }\n"
+"    btn.style.position = 'fixed';\n"
+"    btn.style.top = Math.round(r.top + (r.height - FIELD_SIZE) / 2) + 'px';\n"
+"    btn.style.left = Math.round(left) + 'px';\n"
+"    btn.style.display = 'flex';\n"
+"    btn.style.pointerEvents = 'auto';\n"
+"  }\n"
+"  function updateMenuGeometry(menu, el) {\n"
+"    const r = el.getBoundingClientRect();\n"
+"    const visibleNow = r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;\n"
+"    if (!visibleNow) {\n"
+"      menu.style.display = 'none';\n"
+"      return;\n"
+"    }\n"
+"    const inset = 6;\n"
+"    menu.style.position = 'fixed';\n"
+"    menu.style.top = Math.round(r.top + (r.height - MENU_SIZE) / 2) + 'px';\n"
+"    menu.style.left = Math.round(r.left + Math.max(inset, r.width - MENU_SIZE - inset)) + 'px';\n"
+"    menu.style.display = 'flex';\n"
+"    menu.style.pointerEvents = 'auto';\n"
+"  }\n"
+"  function activateFieldButton(btn) {\n"
+"    if (!btn || btn.getAttribute('data-meo-busy') === '1') return;\n"
+"    btn.setAttribute('data-meo-busy', '1');\n"
+"    setTimeout(function() { try { btn.removeAttribute('data-meo-busy'); } catch (e) {} }, 500);\n"
+"    const kind = btn.getAttribute('data-meo-kind');\n"
+"    const slot = btn.getAttribute('data-meo-slot') || '';\n"
+"    const sel = btn.getAttribute('data-meo-selector') || '';\n"
+"    const formId = btn.getAttribute('data-meo-form-id') || '';\n"
+"    const label = btn.getAttribute('data-meo-label') || '';\n"
+"    const el = queryBySelector(sel);\n"
+"    if (kind === 'fill') {\n"
+"      post({ type: 'fillField', slot: slot, selector: sel, formId: formId, href: location.href || '' });\n"
+"      return;\n"
+"    }\n"
+"    const v = el ? (el.value || '').toString() : '';\n"
+"    if (!v.trim()) {\n"
+"      post({ type: 'saveFieldEmpty', slot: slot, formId: formId });\n"
+"      return;\n"
+"    }\n"
+"    const ctx = lastContexts.find(function(c) { return c.formId === formId; }) || lastContexts[0];\n"
+"    post({\n"
+"      type: 'saveField', slot: slot, selector: sel, label: label, value: v,\n"
+"      formId: formId, href: location.href || '',\n"
+"      usernameSelector: ctx && ctx.user ? cssPath(ctx.user) : '',\n"
+"      passwordSelector: ctx && ctx.pass ? cssPath(ctx.pass) : '',\n"
+"      phoneSelector: ctx && ctx.phone ? cssPath(ctx.phone) : '',\n"
+"      submitSelector: ctx && ctx.submit ? cssPath(ctx.submit) : ''\n"
+"    });\n"
+"  }\n"
+"  function bindFieldButtonEvents(btn) {\n"
+"    if (btn.getAttribute('data-meo-bound') === '1') return;\n"
+"    btn.setAttribute('data-meo-bound', '1');\n"
+"    btn.addEventListener('pointerdown', function(e) {\n"
+"      e.preventDefault();\n"
+"      e.stopPropagation();\n"
+"    }, true);\n"
+"    btn.addEventListener('pointerup', function(e) {\n"
+"      e.preventDefault();\n"
+"      e.stopPropagation();\n"
+"      activateFieldButton(btn);\n"
+"    }, true);\n"
+"    btn.addEventListener('click', function(e) {\n"
+"      e.preventDefault();\n"
+"      e.stopPropagation();\n"
+"    }, true);\n"
+"  }\n"
+"  function placeLegacyButton(ctx) {\n"
 "    ensureStyle();\n"
 "    const pass = ctx.pass;\n"
 "    pass.setAttribute(BTN_ATTR + '-host', '1');\n"
@@ -216,33 +543,135 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "        e.preventDefault(); e.stopPropagation();\n"
 "        const r = btn.getBoundingClientRect();\n"
 "        post({\n"
-"          type: 'iconClicked',\n"
-"          formId: ctx.formId,\n"
-"          hasOTP: !!ctx.otp,\n"
-"          usernameSelector: cssPath(ctx.user),\n"
-"          passwordSelector: cssPath(ctx.pass),\n"
+"          type: 'iconClicked', formId: ctx.formId, hasOTP: !!ctx.otp,\n"
+"          usernameSelector: cssPath(ctx.user), passwordSelector: cssPath(ctx.pass),\n"
 "          submitSelector: ctx.submit ? cssPath(ctx.submit) : '',\n"
 "          left: r.left, top: r.top, width: r.width, height: r.height,\n"
-"          hasUsername: !!(ctx.user && ctx.user.value),\n"
-"          hasPassword: !!(ctx.pass && ctx.pass.value)\n"
+"          hasUsername: !!(ctx.user && ctx.user.value), hasPassword: !!(ctx.pass && ctx.pass.value)\n"
 "        });\n"
 "      }, true);\n"
 "      document.documentElement.appendChild(btn);\n"
 "    }\n"
 "    const r = pass.getBoundingClientRect();\n"
-"    const top = r.top + window.scrollY + (r.height - 20) / 2;\n"
-"    const left = r.left + window.scrollX + r.width - 24;\n"
-"    btn.style.top = Math.round(top) + 'px';\n"
-"    btn.style.left = Math.round(left) + 'px';\n"
-"    btn.style.display = visible(pass) ? 'block' : 'none';\n"
+"    btn.style.top = Math.round(r.top + (r.height - 22) / 2) + 'px';\n"
+"    btn.style.left = Math.round(r.left + Math.max(8, r.width - 26)) + 'px';\n"
+"    btn.style.display = visible(pass) ? 'flex' : 'none';\n"
 "  }\n"
-"  function clearButtons(keepIds) {\n"
-"    document.querySelectorAll('button.meo-login-assist-btn').forEach(btn => {\n"
-"      const id = btn.getAttribute(BTN_ATTR);\n"
-"      if (keepIds && keepIds.has(id)) return;\n"
-"      btn.remove();\n"
+"  function placeFieldButton(el, slotInfo, idx, formCtx) {\n"
+"    if (!el || !visible(el)) return null;\n"
+"    ensureStyle();\n"
+"    const tgt = targetForSlot(slotInfo.slot, slotInfo.selector);\n"
+"    const hasPreset = !!(tgt && tgt.hasPreset);\n"
+"    const allowSave = tgt ? (tgt.allowSave !== false) : (slotInfo.slot !== 'otp');\n"
+"    if (slotInfo.slot === 'otp' && !hasPreset) return null;\n"
+"    if (!hasPreset && !allowSave) return null;\n"
+"    const kind = hasPreset ? 'fill' : 'plus';\n"
+"    if (kind === 'plus' && !allowSave) return null;\n"
+"    const hasMenu = (slotInfo.slot === 'password');\n"
+"    el.setAttribute(BTN_ATTR + '-host', hasMenu ? '2' : '1');\n"
+"    const key = fieldBtnKey(formCtx, slotInfo, idx);\n"
+"    const sel = (tgt && tgt.selector) || slotInfo.selector;\n"
+"    let btn = document.querySelector('button.' + FIELD_BTN + '[data-meo-key=\"' + key.replace(/\\\\/g,'\\\\\\\\').replace(/\"/g,'\\\\\"') + '\"]');\n"
+"    if (!btn) {\n"
+"      btn = document.createElement('button');\n"
+"      btn.type = 'button';\n"
+"      btn.className = FIELD_BTN;\n"
+"      btn.setAttribute('data-meo-key', key);\n"
+"      document.documentElement.appendChild(btn);\n"
+"      bindFieldButtonEvents(btn);\n"
+"    }\n"
+"    btn.setAttribute('data-meo-kind', kind);\n"
+"    btn.setAttribute('data-meo-slot', slotInfo.slot);\n"
+"    btn.setAttribute('data-meo-selector', sel);\n"
+"    btn.setAttribute('data-meo-form-id', formCtx.formId);\n"
+"    btn.setAttribute('data-meo-label', (tgt && tgt.label) || slotInfo.label || '');\n"
+"    if (kind === 'plus') {\n"
+"      btn.textContent = '+';\n"
+"      btn.setAttribute('aria-label', '保存到登录助手');\n"
+"      btn.title = '保存到登录助手' + ((tgt && tgt.label) ? ('：' + tgt.label) : '');\n"
+"    } else {\n"
+"      btn.innerHTML = fillSvg();\n"
+"      btn.setAttribute('aria-label', '填入登录助手：' + ((tgt && tgt.label) || slotInfo.slot));\n"
+"      btn.title = '填入登录配置' + ((tgt && tgt.label) ? ('：' + tgt.label) : '');\n"
+"    }\n"
+"    updateButtonGeometry(btn, el, hasMenu);\n"
+"    if (hasMenu) {\n"
+"      const menuKey = key + ':menu';\n"
+"      let menu = document.querySelector('button.' + MENU_BTN + '[data-meo-menu-key=\"' + menuKey.replace(/\\\\/g,'\\\\\\\\').replace(/\"/g,'\\\\\"') + '\"]');\n"
+"      if (!menu) {\n"
+"        menu = document.createElement('button');\n"
+"        menu.type = 'button';\n"
+"        menu.className = MENU_BTN;\n"
+"        menu.setAttribute('data-meo-menu-key', menuKey);\n"
+"        menu.setAttribute('aria-label', '登录助手菜单');\n"
+"        menu.title = '登录助手菜单';\n"
+"        menu.textContent = '\\u22EF';\n"
+"        menu.addEventListener('pointerdown', function(e) { e.preventDefault(); e.stopPropagation(); }, true);\n"
+"        menu.addEventListener('pointerup', function(e) {\n"
+"          e.preventDefault(); e.stopPropagation();\n"
+"          const mr = menu.getBoundingClientRect();\n"
+"          post({\n"
+"            type: 'iconMenu', formId: formCtx.formId, hasOTP: !!formCtx.otp,\n"
+"            usernameSelector: cssPath(formCtx.user), passwordSelector: cssPath(formCtx.pass),\n"
+"            submitSelector: formCtx.submit ? cssPath(formCtx.submit) : '',\n"
+"            left: mr.left, top: mr.top, width: mr.width, height: mr.height,\n"
+"            hasUsername: !!(formCtx.user && formCtx.user.value),\n"
+"            hasPassword: !!(formCtx.pass && formCtx.pass.value)\n"
+"          });\n"
+"        }, true);\n"
+"        document.documentElement.appendChild(menu);\n"
+"      }\n"
+"      updateMenuGeometry(menu, el);\n"
+"    }\n"
+"    return key;\n"
+"  }\n"
+"  function syncFieldButtons(removeOrphans) {\n"
+"    if (!isPerField()) return;\n"
+"    const activeKeys = new Set();\n"
+"    lastContexts.forEach(function(ctx) {\n"
+"      const slots = buildSlots(ctx);\n"
+"      slots.forEach(function(s, idx) {\n"
+"        const k = placeFieldButton(s.el, s, idx, ctx);\n"
+"        if (k) {\n"
+"          activeKeys.add(k);\n"
+"          if (s.slot === 'password') activeKeys.add(k + ':menu');\n"
+"        }\n"
+"      });\n"
+"    });\n"
+"    if (removeOrphans) removeOrphanFieldButtons(activeKeys);\n"
+"  }\n"
+"  function scheduleLayoutSync() {\n"
+"    if (layoutTimer) clearTimeout(layoutTimer);\n"
+"    layoutTimer = setTimeout(function() { syncFieldButtons(false); }, 16);\n"
+"  }\n"
+"  function bindLayoutSync(on) {\n"
+"    if (on && !layoutBound) {\n"
+"      window.addEventListener('scroll', scheduleLayoutSync, true);\n"
+"      window.addEventListener('resize', scheduleLayoutSync);\n"
+"      layoutBound = true;\n"
+"    } else if (!on && layoutBound) {\n"
+"      window.removeEventListener('scroll', scheduleLayoutSync, true);\n"
+"      window.removeEventListener('resize', scheduleLayoutSync);\n"
+"      layoutBound = false;\n"
+"    }\n"
+"  }\n"
+"  function collectFilledFields(ctx) {\n"
+"    return buildSlots(ctx).filter(function(s) {\n"
+"      if (s.slot === 'otp') return false;\n"
+"      return !!(s.el && s.el.value && String(s.el.value).trim());\n"
+"    }).map(function(s) {\n"
+"      return { slot: s.slot, selector: s.selector, label: s.label, value: String(s.el.value) };\n"
 "    });\n"
 "  }\n"
+"  window.__meoLoginAssistCollectFormFields = function(formId) {\n"
+"    const ctx = lastContexts.find(function(c) { return c.formId === formId; }) || lastContexts[0];\n"
+"    if (!ctx) return [];\n"
+"    return collectFilledFields(ctx);\n"
+"  };\n"
+"  window.__meoLoginAssistSetFieldTargets = function(targets) {\n"
+"    fieldTargets = Array.isArray(targets) ? targets : [];\n"
+"    if (isPerField()) syncFieldButtons(true);\n"
+"  };\n"
 "  function bindDraft(ctx) {\n"
 "    if (drafts[ctx.formId]) return;\n"
 "    drafts[ctx.formId] = { dirty: false };\n"
@@ -260,8 +689,8 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "        post({ type: 'credentialsDraft', formId: ctx.formId, hasUsername: true, hasPassword: true });\n"
 "      }\n"
 "    };\n"
-"    ctx.user.addEventListener('input', mark);\n"
-"    ctx.pass.addEventListener('input', mark);\n"
+"    if (ctx.user) ctx.user.addEventListener('input', mark);\n"
+"    if (ctx.pass) ctx.pass.addEventListener('input', mark);\n"
 "    const root = ctx.root;\n"
 "    if (root && root.tagName === 'FORM') {\n"
 "      root.addEventListener('submit', function() {\n"
@@ -304,20 +733,32 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "  }\n"
 "  function scan() {\n"
 "    if (!hasPasswordCandidate()) {\n"
-"      clearButtons();\n"
+"      clearLegacyButtons();\n"
+"      clearFieldButtons();\n"
+"      lastContexts = [];\n"
 "      if (activeFormId) {\n"
 "        activeFormId = null;\n"
 "        post({ type: 'formCleared' });\n"
 "      }\n"
 "      bindScroll(false);\n"
+"      bindLayoutSync(false);\n"
 "      emptyStreak++;\n"
 "      if (!paused && emptyStreak >= EMPTY_STREAK) setPaused(true);\n"
 "      return;\n"
 "    }\n"
 "    emptyStreak = 0;\n"
 "    const list = contexts();\n"
+"    lastContexts = list;\n"
 "    const ids = new Set(list.map(c => c.formId));\n"
-"    clearButtons(ids);\n"
+"    if (isPerField()) {\n"
+"      clearLegacyButtons();\n"
+"      syncFieldButtons(true);\n"
+"      bindLayoutSync(true);\n"
+"    } else {\n"
+"      clearFieldButtons();\n"
+"      clearLegacyButtons(ids);\n"
+"      list.forEach(ctx => placeLegacyButton(ctx));\n"
+"    }\n"
 "    if (!list.length) {\n"
 "      if (activeFormId) {\n"
 "        activeFormId = null;\n"
@@ -326,21 +767,23 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "      bindScroll(false);\n"
 "      return;\n"
 "    }\n"
-"    list.forEach(ctx => {\n"
-"      placeButton(ctx);\n"
-"      bindDraft(ctx);\n"
-"    });\n"
+"    list.forEach(ctx => bindDraft(ctx));\n"
 "    bindScroll(true);\n"
 "    const primary = list[0];\n"
 "    activeFormId = primary.formId;\n"
+"    const slots = buildSlots(primary).map(function(s) {\n"
+"      return { slot: s.slot, selector: s.selector, label: s.label, hasValueInDOM: s.hasValueInDOM };\n"
+"    });\n"
 "    post({\n"
 "      type: 'formDetected',\n"
 "      formId: primary.formId,\n"
 "      hasOTP: !!primary.otp,\n"
 "      usernameSelector: cssPath(primary.user),\n"
 "      passwordSelector: cssPath(primary.pass),\n"
+"      phoneSelector: primary.phone ? cssPath(primary.phone) : '',\n"
 "      submitSelector: primary.submit ? cssPath(primary.submit) : '',\n"
-"      formCount: list.length\n"
+"      formCount: list.length,\n"
+"      slots: slots\n"
 "    });\n"
 "  }\n"
 "  function schedule() {\n"
@@ -367,16 +810,25 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    }\n"
 "    return 'ok';\n"
 "  };\n"
+"  window.__meoLoginAssistFillSelector = function(sel, value) {\n"
+"    function qs(s) { try { return document.querySelector(s); } catch (e) { return null; } }\n"
+"    const el = qs(sel);\n"
+"    if (!el) return 'missing';\n"
+"    el.focus();\n"
+"    const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;\n"
+"    const setter = Object.getOwnPropertyDescriptor(proto, 'value');\n"
+"    if (setter && setter.set) setter.set.call(el, value || ''); else el.value = value || '';\n"
+"    el.dispatchEvent(new Event('input', { bubbles: true }));\n"
+"    el.dispatchEvent(new Event('change', { bubbles: true }));\n"
+"    return 'ok';\n"
+"  };\n"
 "  window.__meoLoginAssistReadDraft = function(formId) {\n"
 "    const d = drafts[formId];\n"
 "    if (!d || !d.dirty) return null;\n"
 "    return {\n"
-"      username: d.username || '',\n"
-"      password: d.password || '',\n"
-"      usernameSelector: d.usernameSelector || '',\n"
-"      passwordSelector: d.passwordSelector || '',\n"
-"      submitSelector: d.submitSelector || '',\n"
-"      submitByEnter: !!d.submitByEnter\n"
+"      username: d.username || '', password: d.password || '',\n"
+"      usernameSelector: d.usernameSelector || '', passwordSelector: d.passwordSelector || '',\n"
+"      submitSelector: d.submitSelector || '', submitByEnter: !!d.submitByEnter\n"
 "    };\n"
 "  };\n"
 "  window.__meoLoginAssistConsumeDraftForSave = function() {\n"
@@ -385,13 +837,9 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "        const d = drafts[id];\n"
 "        drafts[id].dirty = false;\n"
 "        return {\n"
-"          formId: id,\n"
-"          username: d.username || '',\n"
-"          password: d.password || '',\n"
-"          usernameSelector: d.usernameSelector || '',\n"
-"          passwordSelector: d.passwordSelector || '',\n"
-"          submitSelector: d.submitSelector || '',\n"
-"          submitByEnter: !!d.submitByEnter\n"
+"          formId: id, username: d.username || '', password: d.password || '',\n"
+"          usernameSelector: d.usernameSelector || '', passwordSelector: d.passwordSelector || '',\n"
+"          submitSelector: d.submitSelector || '', submitByEnter: !!d.submitByEnter\n"
 "        };\n"
 "      }\n"
 "    }\n"
@@ -403,8 +851,7 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "  document.addEventListener('focusin', function(e) {\n"
 "    const t = e.target;\n"
 "    if (!t) return;\n"
-"    const tag = t.tagName;\n"
-"    if (tag === 'INPUT' || tag === 'TEXTAREA') rearm();\n"
+"    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') rearm();\n"
 "  }, true);\n"
 "  schedule();\n"
 "})();";

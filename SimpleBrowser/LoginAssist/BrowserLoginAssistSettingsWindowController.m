@@ -54,6 +54,8 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
 @property (nonatomic, strong) NSButton *defaultCheck;
 @property (nonatomic, strong) NSButton *inlineAssistCheck;
 @property (nonatomic, strong) NSButton *promptSaveCheck;
+@property (nonatomic, strong) NSButton *perFieldInlineCheck;
+@property (nonatomic, strong) NSButton *extraFieldInlineCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSView *companionStatusCard;
 @property (nonatomic, strong) NSView *companionStatusIconBg;
@@ -311,8 +313,17 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.promptSaveCheck = [NSButton checkboxWithTitle:@"登录成功后询问是否保存为配置"
                                                 target:self
                                                 action:@selector(prefsChanged:)];
+    self.perFieldInlineCheck = [NSButton checkboxWithTitle:@"逐字段显示「＋ / 填入」（关闭则回退为单钥匙菜单）"
+                                                    target:self
+                                                    action:@selector(prefsChanged:)];
+    self.extraFieldInlineCheck = [NSButton checkboxWithTitle:@"登录表额外文本框也显示图标（默认关）"
+                                                      target:self
+                                                      action:@selector(prefsChanged:)];
     self.inlineAssistCheck.state = [LoginAssistPreferences inlineAssistEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
     self.promptSaveCheck.state = [LoginAssistPreferences promptSaveOnSuccess] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.perFieldInlineCheck.state = [[LoginAssistPreferences loginFieldInlineMode] isEqualToString:LoginFieldInlineModePerField]
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.extraFieldInlineCheck.state = [LoginAssistPreferences loginExtraFieldInlineEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
 
     NSButton *saveButton = [NSButton buttonWithTitle:@"保存"
                                               target:self
@@ -669,6 +680,8 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
                                          self.defaultCheck,
                                          saveButton,
                                          self.inlineAssistCheck,
+                                         self.perFieldInlineCheck,
+                                         self.extraFieldInlineCheck,
                                          self.promptSaveCheck,
                                          self.statusLabel,
                                      ]];
@@ -1043,6 +1056,10 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     (void)sender;
     [LoginAssistPreferences setInlineAssistEnabled:(self.inlineAssistCheck.state == NSControlStateValueOn)];
     [LoginAssistPreferences setPromptSaveOnSuccess:(self.promptSaveCheck.state == NSControlStateValueOn)];
+    [LoginAssistPreferences setLoginFieldInlineMode:(self.perFieldInlineCheck.state == NSControlStateValueOn)
+     ? LoginFieldInlineModePerField
+     : LoginFieldInlineModeLegacySingleKey];
+    [LoginAssistPreferences setLoginExtraFieldInlineEnabled:(self.extraFieldInlineCheck.state == NSControlStateValueOn)];
     self.statusLabel.stringValue = @"偏好已保存。内联图标开关对新建标签 / 新导航后的页面生效。";
 }
 

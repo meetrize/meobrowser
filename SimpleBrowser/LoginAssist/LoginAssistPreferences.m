@@ -2,9 +2,14 @@
 
 NSNotificationName const LoginAssistPreferencesDidChangeNotification = @"LoginAssistPreferencesDidChangeNotification";
 
+LoginFieldInlineMode const LoginFieldInlineModePerField = @"perField";
+LoginFieldInlineMode const LoginFieldInlineModeLegacySingleKey = @"legacySingleKey";
+
 static NSString * const kInlineAssistEnabledKey = @"LoginAssistInlineAssistEnabled";
 static NSString * const kPromptSaveOnSuccessKey = @"LoginAssistPromptSaveOnSuccess";
 static NSString * const kSuppressHostsKey = @"LoginAssistSavePromptSuppressHosts";
+static NSString * const kLoginFieldInlineModeKey = @"LoginAssistLoginFieldInlineMode";
+static NSString * const kLoginExtraFieldInlineEnabledKey = @"LoginAssistLoginExtraFieldInlineEnabled";
 
 @implementation LoginAssistPreferences
 
@@ -35,6 +40,31 @@ static NSString * const kSuppressHostsKey = @"LoginAssistSavePromptSuppressHosts
 
 + (void)setPromptSaveOnSuccess:(BOOL)enabled {
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kPromptSaveOnSuccessKey];
+    [self notifyChanged];
+}
+
++ (LoginFieldInlineMode)loginFieldInlineMode {
+    NSString *raw = [NSUserDefaults.standardUserDefaults stringForKey:kLoginFieldInlineModeKey];
+    if ([raw isEqualToString:LoginFieldInlineModeLegacySingleKey]) {
+        return LoginFieldInlineModeLegacySingleKey;
+    }
+    return LoginFieldInlineModePerField;
+}
+
++ (void)setLoginFieldInlineMode:(LoginFieldInlineMode)mode {
+    NSString *value = [mode isEqualToString:LoginFieldInlineModeLegacySingleKey]
+        ? LoginFieldInlineModeLegacySingleKey
+        : LoginFieldInlineModePerField;
+    [NSUserDefaults.standardUserDefaults setObject:value forKey:kLoginFieldInlineModeKey];
+    [self notifyChanged];
+}
+
++ (BOOL)loginExtraFieldInlineEnabled {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kLoginExtraFieldInlineEnabledKey];
+}
+
++ (void)setLoginExtraFieldInlineEnabled:(BOOL)enabled {
+    [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kLoginExtraFieldInlineEnabledKey];
     [self notifyChanged];
 }
 

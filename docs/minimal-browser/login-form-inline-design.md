@@ -1,7 +1,7 @@
 # 登录表单内联助手 — 设计方案（V1.5）
 
 > 目标：在检测到登录表单时，于帐号/邮箱/密码框内侧提供统一入口，打通 **系统「密码」自动填充**、**登录助手 Recipe**、以及 **登录成功后保存 Recipe** 三条路径。  
-> 状态：**V1.5 已实现**（IF-0～IF-3 · 2026-07-15）  
+> 状态：**V1.5 已实现**（IF-0～IF-3 · 2026-07-15）；**V1.6 逐字段「＋ / 填入」见** [login-form-field-inline-design.md](login-form-field-inline-design.md)  
 > 前置：登录助手 V1 已落地（[auto-login-design.md](auto-login-design.md) · [auto-login-development-plan.md](auto-login-development-plan.md)）  
 > 开发计划：[login-form-inline-development-plan.md](login-form-inline-development-plan.md) · Cursor：`.cursor/plans/login-form-inline.plan.md`  
 > 性能优化：**IF-P 已落地** — [login-form-detector-perf-design.md](login-form-detector-perf-design.md)（早退 / 按需 scroll / 空闲暂停）  
@@ -89,7 +89,7 @@ MeoBrowser 已声明受限 entitlement `com.apple.developer.web-browser`（见 `
 | 样式 | 使用与工具栏一致的钥匙语义；浅/深色用 `color-scheme` / CSS 变量；不抢站点品牌色 |
 | 无障碍 | `aria-label="登录助手"`；键盘可聚焦打开菜单 |
 
-若用户强烈要求「每框都有」，可做成设置项「图标密度：精简 / 每个相关字段」，默认精简。
+**V1.6 定稿**：默认「每个相关字段」互斥「＋ / 填入」（见 [login-form-field-inline-design.md](login-form-field-inline-design.md)）；偏好 `loginFieldInlineMode=legacySingleKey` 可回退本节单钥匙行为。
 
 ### 3.3 点击菜单（Popover / NSMenu）
 
