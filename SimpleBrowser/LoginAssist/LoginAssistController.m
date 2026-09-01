@@ -28,6 +28,8 @@
 
 static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
+/// 等待登录表单出现的最长时间；超时则静默放弃自动登录（不向用户报错）。
+static const NSTimeInterval kAutoLoginFormWaitMax = 12.0;
 /// 冷启动内跳过自动登录读钥匙串，避免与 Companion / 云同步叠弹密码框。
 static const NSTimeInterval kAutoLoginColdStartSuppress = 12.0;
 static NSTimeInterval sLoginAssistProcessStartAt = 0;
@@ -52,6 +54,8 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @property (nonatomic, copy, nullable) NSString *lastAutoRecipeID;
 @property (nonatomic, assign) NSTimeInterval lastAutoTimestamp;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingAutoBlock;
+@property (nonatomic, copy, nullable) NSString *pendingAutoLoginRecipeID;
+@property (nonatomic, strong, nullable) dispatch_block_t pendingAutoLoginExpireBlock;
 @property (nonatomic, strong, nullable) id autoLoginEscapeMonitor;
 @property (nonatomic, strong, nullable) BrowserLoginAssistSettingsWindowController *settingsController;
 @property (nonatomic, strong) SystemPasswordBridge *passwordBridge;
@@ -764,15 +768,67 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self scheduleFieldAssistTargetRetries];
 }
 
+- (void)clearPendingAutoLoginRequest {
+    self.pendingAutoLoginRecipeID = nil;
+    if (self.pendingAutoLoginExpireBlock) {
+        dispatch_block_cancel(self.pendingAutoLoginExpireBlock);
+        self.pendingAutoLoginExpireBlock = nil;
+    }
+}
+
+- (void)cancelPendingAutoLoginSchedule {
+    if (self.pendingAutoBlock) {
+        dispatch_block_cancel(self.pendingAutoBlock);
+        self.pendingAutoBlock = nil;
+    }
+    [self clearPendingAutoLoginRequest];
+    if (self.autoLoginEscapeMonitor) {
+        [NSEvent removeMonitor:self.autoLoginEscapeMonitor];
+        self.autoLoginEscapeMonitor = nil;
+    }
+}
+
+- (void)tryExecutePendingAutoLoginIfReady {
+    if (!self.pendingAutoLoginRecipeID || self.isRunning) {
+        return;
+    }
+    if (!self.hasDetectedLoginForm) {
+        return;
+    }
+
+    NSString *recipeID = self.pendingAutoLoginRecipeID;
+    LoginRecipe *recipe = [[LoginRecipeStore sharedStore] recipeWithID:recipeID];
+    NSURL *currentURL = self.windowController.webView.URL;
+    if (!recipe || !recipe.autoLogin || ![recipe matchesURL:currentURL]) {
+        [self clearPendingAutoLoginRequest];
+        return;
+    }
+
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if ([recipeID isEqualToString:self.lastAutoRecipeID] &&
+        (now - self.lastAutoTimestamp) < kAutoLoginCooldown) {
+        [self clearPendingAutoLoginRequest];
+        return;
+    }
+
+    [self clearPendingAutoLoginRequest];
+    if (self.autoLoginEscapeMonitor) {
+        [NSEvent removeMonitor:self.autoLoginEscapeMonitor];
+        self.autoLoginEscapeMonitor = nil;
+    }
+    self.lastAutoRecipeID = recipeID;
+    self.lastAutoTimestamp = now;
+    [self runRecipe:recipe fillOnly:NO notifyOTP:NO];
+}
+
 - (void)scheduleAutoLoginIfNeededForURL:(NSURL *)url {
-    [self cancelPendingAutoLogin];
+    [self cancelPendingAutoLoginSchedule];
     if (self.isRunning || !url) {
         return;
     }
     if ([BrowserRiskHostPolicy URLShouldSuppressLoginAssist:url]) {
         return;
     }
-    // 冷启动会话恢复会立刻 finish 导航；此时读凭证极易叠出第二把钥匙串密码框。
     if (sLoginAssistProcessStartAt > 0 &&
         ([NSDate date].timeIntervalSince1970 - sLoginAssistProcessStartAt) < kAutoLoginColdStartSuppress) {
         return;
@@ -781,56 +837,45 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     if (!recipe || !recipe.autoLogin) {
         return;
     }
-    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    if ([recipe.recipeID isEqualToString:self.lastAutoRecipeID] &&
-        (now - self.lastAutoTimestamp) < kAutoLoginCooldown) {
-        return;
-    }
+
+    self.pendingAutoLoginRecipeID = recipe.recipeID;
 
     __weak typeof(self) weakSelf = self;
-    NSString *recipeID = recipe.recipeID;
-    dispatch_block_t block = dispatch_block_create(0, ^{
+    dispatch_block_t expire = dispatch_block_create(0, ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
         }
-        strongSelf.pendingAutoBlock = nil;
+        [strongSelf clearPendingAutoLoginRequest];
         if (strongSelf.autoLoginEscapeMonitor) {
             [NSEvent removeMonitor:strongSelf.autoLoginEscapeMonitor];
             strongSelf.autoLoginEscapeMonitor = nil;
         }
-        LoginRecipe *current = [[LoginRecipeStore sharedStore] recipeWithID:recipeID];
-        NSURL *currentURL = strongSelf.windowController.webView.URL;
-        if (!current || !current.autoLogin || ![current matchesURL:currentURL]) {
-            return;
-        }
-        strongSelf.lastAutoRecipeID = recipeID;
-        strongSelf.lastAutoTimestamp = [NSDate date].timeIntervalSince1970;
-        [strongSelf runRecipe:current fillOnly:NO notifyOTP:NO];
     });
-    self.pendingAutoBlock = block;
+    self.pendingAutoLoginExpireBlock = expire;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAutoLoginFormWaitMax * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   expire);
+
     self.autoLoginEscapeMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                                         handler:^NSEvent *(NSEvent *event) {
         if (event.keyCode == 53) {
-            [weakSelf cancelPendingAutoLogin];
+            [weakSelf cancelPendingAutoLoginSchedule];
             return nil;
         }
         return event;
     }];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kAutoLoginDelay * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(),
-                   block);
+
+    for (NSNumber *delay in @[ @(kAutoLoginDelay), @1.5, @3.0, @5.0, @8.0 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf tryExecutePendingAutoLoginIfReady];
+        });
+    }
 }
 
 - (void)cancelPendingAutoLogin {
-    if (self.pendingAutoBlock) {
-        dispatch_block_cancel(self.pendingAutoBlock);
-        self.pendingAutoBlock = nil;
-    }
-    if (self.autoLoginEscapeMonitor) {
-        [NSEvent removeMonitor:self.autoLoginEscapeMonitor];
-        self.autoLoginEscapeMonitor = nil;
-    }
+    [self cancelPendingAutoLoginSchedule];
     if (self.isRunning) {
         [LoginRunner cancelAll];
         [FormMemoRunner cancelAll];
@@ -1819,6 +1864,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         }
         [self refreshButtonAppearance];
         [self pushFieldAssistTargetsToActiveWebView];
+        [self tryExecutePendingAutoLoginIfReady];
     } else if ([type isEqualToString:@"formCleared"]) {
         self.hasDetectedLoginForm = NO;
         self.detectedHasOTP = NO;
