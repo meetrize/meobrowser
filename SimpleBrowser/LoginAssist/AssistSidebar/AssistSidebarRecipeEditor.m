@@ -66,6 +66,12 @@
 @property (nonatomic, strong) NSStackView *formStack;
 @property (nonatomic, strong) NSStackView *extraFieldsStack;
 @property (nonatomic, strong) NSMutableArray<LoginRecipeExtraField *> *editingExtraFields;
+@property (nonatomic, strong) NSView *usernameRow;
+@property (nonatomic, strong) NSView *passwordRow;
+@property (nonatomic, strong) NSView *phoneRow;
+@property (nonatomic, strong) NSView *otpRow;
+@property (nonatomic, strong) NSView *sendCodeRow;
+@property (nonatomic, strong) NSView *submitSelectorRow;
 @end
 
 @implementation AssistSidebarRecipeEditor
@@ -443,30 +449,38 @@
     self.extraFieldsStack.spacing = 4;
     self.extraFieldsStack.translatesAutoresizingMaskIntoConstraints = NO;
 
+    self.usernameRow = [self pairedRowWithLabel:@"用户名"
+                                 selectorField:self.usernameSelectorField
+                                    valueField:self.usernameField
+                                    pickAction:@selector(pickUsername:)];
+    self.passwordRow = [self pairedRowWithLabel:@"密码"
+                                 selectorField:self.passwordSelectorField
+                                    valueField:self.passwordField
+                                    pickAction:@selector(pickPassword:)];
+    self.phoneRow = [self pairedRowWithLabel:@"手机号"
+                               selectorField:self.phoneSelectorField
+                                  valueField:self.phoneField
+                                  pickAction:@selector(pickPhone:)];
+    self.otpRow = [self rowWithCaption:@"验证码" field:self.otpSelectorField pickAction:@selector(pickOTP:)];
+    self.sendCodeRow = [self rowWithCaption:@"发码" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)];
+    self.submitSelectorRow = [self rowWithCaption:@"提交" field:self.submitSelectorField pickAction:@selector(pickSubmit:)];
+
+    // 顺序：基础信息 → 帐密 →（短信字段）→ 自定义字段 → 提交方式 → 选项
     self.formStack = [NSStackView stackViewWithViews:@[
         heading,
         [self rowWithCaption:@"名称" field:self.titleField pickAction:nil],
         [self rowWithCaption:@"主机" field:self.hostField pickAction:nil],
         [self rowWithCaption:@"路径" field:self.pathPrefixField pickAction:nil],
         modeRow,
-        [self pairedRowWithLabel:@"用户名"
-                   selectorField:self.usernameSelectorField
-                      valueField:self.usernameField
-                      pickAction:@selector(pickUsername:)],
-        [self pairedRowWithLabel:@"密码"
-                   selectorField:self.passwordSelectorField
-                      valueField:self.passwordField
-                      pickAction:@selector(pickPassword:)],
-        [self pairedRowWithLabel:@"手机号"
-                   selectorField:self.phoneSelectorField
-                      valueField:self.phoneField
-                      pickAction:@selector(pickPhone:)],
-        [self rowWithCaption:@"验证码" field:self.otpSelectorField pickAction:@selector(pickOTP:)],
-        [self rowWithCaption:@"发码" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)],
-        [self rowWithCaption:@"提交" field:self.submitSelectorField pickAction:@selector(pickSubmit:)],
-        self.submitByEnterCheck,
+        self.usernameRow,
+        self.passwordRow,
+        self.phoneRow,
+        self.otpRow,
+        self.sendCodeRow,
         extraHeaderRow,
         self.extraFieldsStack,
+        self.submitSelectorRow,
+        self.submitByEnterCheck,
         self.autoLoginCheck,
         self.defaultCheck,
         actionRow,
@@ -475,8 +489,10 @@
     NSStackView *stack = self.formStack;
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 5;
-    stack.edgeInsets = NSEdgeInsetsMake(8, 10, 8, 10);
+    stack.spacing = 6;
+    // 左右内边距改由相对 doc 的约束实现；勿用 edgeInsets+width=stack，会被行宽约束冲掉。
+    static const CGFloat kFormHorizontalInset = 20.0;
+    stack.edgeInsets = NSEdgeInsetsMake(10, 0, 12, 0);
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     for (NSView *row in stack.arrangedSubviews) {
         [row.widthAnchor constraintEqualToAnchor:stack.widthAnchor].active = YES;
@@ -487,8 +503,8 @@
     [doc addSubview:stack];
     [NSLayoutConstraint activateConstraints:@[
         [stack.topAnchor constraintEqualToAnchor:doc.topAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:doc.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:doc.trailingAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:doc.leadingAnchor constant:kFormHorizontalInset],
+        [stack.trailingAnchor constraintEqualToAnchor:doc.trailingAnchor constant:-kFormHorizontalInset],
         [stack.bottomAnchor constraintEqualToAnchor:doc.bottomAnchor],
     ]];
     scroll.documentView = doc;
@@ -503,7 +519,7 @@
         [scroll.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
     ]];
     self.view = root;
-    [self updateSMSFieldsEnabled];
+    [self updateModeDependentRows];
     self.submitSelectorField.enabled = NO;
 }
 
@@ -532,7 +548,7 @@
     self.deleteButton.enabled = NO;
     [self.editingExtraFields removeAllObjects];
     [self rebuildExtraFieldRows];
-    [self updateSMSFieldsEnabled];
+    [self updateModeDependentRows];
     self.statusLabel.stringValue = @"凭证保存在本地钥匙串。";
 }
 
@@ -556,8 +572,8 @@
     self.submitByEnterCheck.state = recipe.submitByEnter ? NSControlStateValueOn : NSControlStateValueOff;
     self.autoLoginCheck.state = recipe.autoLogin ? NSControlStateValueOn : NSControlStateValueOff;
     self.defaultCheck.state = recipe.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
-    self.submitSelectorField.enabled = !recipe.submitByEnter;
     self.deleteButton.enabled = YES;
+    [self updateModeDependentRows];
 
     [self.editingExtraFields removeAllObjects];
     for (LoginRecipeExtraField *field in recipe.extraFields) {
@@ -612,12 +628,12 @@
     } else {
         [self.modePopup selectItemAtIndex:0];
     }
-    [self updateSMSFieldsEnabled];
+    [self updateModeDependentRows];
 }
 
 - (void)modeChanged:(id)sender {
     (void)sender;
-    [self updateSMSFieldsEnabled];
+    [self updateModeDependentRows];
     if ([[self selectedMode] isEqualToString:LoginRecipeModeSMSOTP]) {
         self.usernameSelectorField.stringValue = @"";
         self.passwordSelectorField.stringValue = @"";
@@ -627,17 +643,36 @@
     }
 }
 
-- (void)updateSMSFieldsEnabled {
-    BOOL sms = ![[self selectedMode] isEqualToString:LoginRecipeModePassword];
-    self.phoneField.enabled = sms;
-    self.phoneSelectorField.enabled = sms;
-    self.otpSelectorField.enabled = sms;
-    self.sendCodeSelectorField.enabled = sms;
+- (void)updateModeDependentRows {
+    LoginRecipeMode mode = [self selectedMode];
+    BOOL passwordMode = [mode isEqualToString:LoginRecipeModePassword];
+    BOOL smsMode = [mode isEqualToString:LoginRecipeModeSMSOTP];
+    BOOL hybridMode = [mode isEqualToString:LoginRecipeModeHybrid];
+    BOOL showUserPass = passwordMode || hybridMode;
+    BOOL showSMS = smsMode || hybridMode;
+    BOOL showSubmitSelector = (self.submitByEnterCheck.state != NSControlStateValueOn);
+
+    self.usernameRow.hidden = !showUserPass;
+    self.passwordRow.hidden = !showUserPass;
+    self.phoneRow.hidden = !showSMS;
+    self.otpRow.hidden = !showSMS;
+    self.sendCodeRow.hidden = !showSMS;
+    self.submitSelectorRow.hidden = !showSubmitSelector;
+    self.submitSelectorField.enabled = showSubmitSelector;
+
+    self.phoneField.enabled = showSMS;
+    self.phoneSelectorField.enabled = showSMS;
+    self.otpSelectorField.enabled = showSMS;
+    self.sendCodeSelectorField.enabled = showSMS;
+    self.usernameField.enabled = showUserPass;
+    self.passwordField.enabled = showUserPass;
+    self.usernameSelectorField.enabled = showUserPass;
+    self.passwordSelectorField.enabled = showUserPass;
 }
 
 - (void)submitModeChanged:(id)sender {
     (void)sender;
-    self.submitSelectorField.enabled = (self.submitByEnterCheck.state != NSControlStateValueOn);
+    [self updateModeDependentRows];
 }
 
 #pragma mark - Pick
