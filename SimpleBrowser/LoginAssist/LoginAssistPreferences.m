@@ -10,6 +10,7 @@ static NSString * const kPromptSaveOnSuccessKey = @"LoginAssistPromptSaveOnSucce
 static NSString * const kSuppressHostsKey = @"LoginAssistSavePromptSuppressHosts";
 static NSString * const kLoginFieldInlineModeKey = @"LoginAssistLoginFieldInlineMode";
 static NSString * const kLoginExtraFieldInlineEnabledKey = @"LoginAssistLoginExtraFieldInlineEnabled";
+static NSString * const kLoginFocusInlineEnabledKey = @"LoginAssistLoginFocusInlineEnabled";
 
 @implementation LoginAssistPreferences
 
@@ -65,6 +66,19 @@ static NSString * const kLoginExtraFieldInlineEnabledKey = @"LoginAssistLoginExt
 
 + (void)setLoginExtraFieldInlineEnabled:(BOOL)enabled {
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kLoginExtraFieldInlineEnabledKey];
+    [self notifyChanged];
+}
+
++ (BOOL)loginFocusInlineEnabled {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:kLoginFocusInlineEnabledKey] == nil) {
+        return YES;
+    }
+    return [defaults boolForKey:kLoginFocusInlineEnabledKey];
+}
+
++ (void)setLoginFocusInlineEnabled:(BOOL)enabled {
+    [NSUserDefaults.standardUserDefaults setBool:enabled forKey:kLoginFocusInlineEnabledKey];
     [self notifyChanged];
 }
 

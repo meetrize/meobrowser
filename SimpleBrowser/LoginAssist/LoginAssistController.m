@@ -1870,13 +1870,18 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         self.detectedSlots = @[];
         [self refreshButtonAppearance];
         [self pushFieldAssistTargetsToActiveWebView];
-    } else if ([type isEqualToString:@"iconClicked"] || [type isEqualToString:@"iconMenu"]) {
+    } else if ([type isEqualToString:@"iconClicked"] || [type isEqualToString:@"iconMenu"] || [type isEqualToString:@"crossFrameAssist"]) {
         self.lastIconContext = body;
         self.hasDetectedLoginForm = YES;
         self.detectedHasOTP = [body[@"hasOTP"] boolValue];
         self.detectedUsernameSelector = body[@"usernameSelector"];
         self.detectedPasswordSelector = body[@"passwordSelector"];
         self.detectedSubmitSelector = body[@"submitSelector"];
+        if ([type isEqualToString:@"crossFrameAssist"]) {
+            [BrowserTransientToast showMessage:@"登录框在跨域框架内，已打开登录助手（请用侧栏/一键登录）"
+                                      inWindow:self.windowController.window
+                                      duration:2.6];
+        }
         [self presentAssistMenuFromView:nil context:body];
     } else if ([type isEqualToString:@"saveField"]) {
         __weak typeof(self) weakSelf = self;

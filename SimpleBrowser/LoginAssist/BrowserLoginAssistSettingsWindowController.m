@@ -56,6 +56,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
 @property (nonatomic, strong) NSButton *promptSaveCheck;
 @property (nonatomic, strong) NSButton *perFieldInlineCheck;
 @property (nonatomic, strong) NSButton *extraFieldInlineCheck;
+@property (nonatomic, strong) NSButton *focusInlineCheck;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSView *companionStatusCard;
 @property (nonatomic, strong) NSView *companionStatusIconBg;
@@ -319,11 +320,15 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.extraFieldInlineCheck = [NSButton checkboxWithTitle:@"登录表额外文本框也显示图标（默认关）"
                                                       target:self
                                                       action:@selector(prefsChanged:)];
+    self.focusInlineCheck = [NSButton checkboxWithTitle:@"聚焦输入框时显示助手图标（手机/卡号/短信登录等，新标签生效）"
+                                                 target:self
+                                                 action:@selector(prefsChanged:)];
     self.inlineAssistCheck.state = [LoginAssistPreferences inlineAssistEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
     self.promptSaveCheck.state = [LoginAssistPreferences promptSaveOnSuccess] ? NSControlStateValueOn : NSControlStateValueOff;
     self.perFieldInlineCheck.state = [[LoginAssistPreferences loginFieldInlineMode] isEqualToString:LoginFieldInlineModePerField]
         ? NSControlStateValueOn : NSControlStateValueOff;
     self.extraFieldInlineCheck.state = [LoginAssistPreferences loginExtraFieldInlineEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.focusInlineCheck.state = [LoginAssistPreferences loginFocusInlineEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
 
     NSButton *saveButton = [NSButton buttonWithTitle:@"保存"
                                               target:self
@@ -682,6 +687,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
                                          self.inlineAssistCheck,
                                          self.perFieldInlineCheck,
                                          self.extraFieldInlineCheck,
+                                         self.focusInlineCheck,
                                          self.promptSaveCheck,
                                          self.statusLabel,
                                      ]];
@@ -1060,6 +1066,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
      ? LoginFieldInlineModePerField
      : LoginFieldInlineModeLegacySingleKey];
     [LoginAssistPreferences setLoginExtraFieldInlineEnabled:(self.extraFieldInlineCheck.state == NSControlStateValueOn)];
+    [LoginAssistPreferences setLoginFocusInlineEnabled:(self.focusInlineCheck.state == NSControlStateValueOn)];
     self.statusLabel.stringValue = @"偏好已保存。内联图标开关对新建标签 / 新导航后的页面生效。";
 }
 

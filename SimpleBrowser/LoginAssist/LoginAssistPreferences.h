@@ -26,6 +26,10 @@ FOUNDATION_EXPORT LoginFieldInlineMode const LoginFieldInlineModeLegacySingleKey
 + (BOOL)loginExtraFieldInlineEnabled;
 + (void)setLoginExtraFieldInlineEnabled:(BOOL)enabled;
 
+/// 聚焦任意可编辑输入框时，在右侧显示登录助手图标（即使不在传统账密表单内）。默认 YES。
++ (BOOL)loginFocusInlineEnabled;
++ (void)setLoginFocusInlineEnabled:(BOOL)enabled;
+
 + (BOOL)shouldSuppressSavePromptForHost:(NSString *)host;
 + (void)setSuppressSavePrompt:(BOOL)suppress forHost:(NSString *)host;
 
