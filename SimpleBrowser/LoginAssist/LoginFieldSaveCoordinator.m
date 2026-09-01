@@ -236,7 +236,7 @@
     alert.alertStyle = NSAlertStyleInformational;
     alert.messageText = @"保存到登录助手？";
     alert.informativeText = [NSString stringWithFormat:
-                             @"将「%@」保存到本站登录配置（帐密存本地钥匙串）。\n也可一次保存本表已填写的全部合格字段。",
+                             @"将「%@」保存到本站登录配置（帐密存应用内部）。\n也可一次保存本表已填写的全部合格字段。",
                              label];
     [alert addButtonWithTitle:@"保存此字段"];
     [alert addButtonWithTitle:@"保存本表已填项"];

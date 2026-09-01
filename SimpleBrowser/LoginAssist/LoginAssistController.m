@@ -30,7 +30,7 @@ static const NSTimeInterval kAutoLoginDelay = 0.55;
 static const NSTimeInterval kAutoLoginCooldown = 12.0;
 /// 等待登录表单出现的最长时间；超时则静默放弃自动登录（不向用户报错）。
 static const NSTimeInterval kAutoLoginFormWaitMax = 12.0;
-/// 冷启动内跳过自动登录读钥匙串，避免与 Companion / 云同步叠弹密码框。
+/// 冷启动内跳过自动登录读凭证，避免与 Companion / 云同步叠弹对话框。
 static const NSTimeInterval kAutoLoginColdStartSuppress = 12.0;
 static NSTimeInterval sLoginAssistProcessStartAt = 0;
 /// kVK_ANSI_V — 模拟 ⌘V 粘贴（多格验证码框等场景比 insertText / JS 赋值更可靠）
@@ -1209,7 +1209,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         }
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = @"保存本表到登录助手？";
-        alert.informativeText = [NSString stringWithFormat:@"将保存本表已填写的 %lu 个字段（帐密进钥匙串）。", (unsigned long)fields.count];
+        alert.informativeText = [NSString stringWithFormat:@"将保存本表已填写的 %lu 个字段（帐密存应用内部）。", (unsigned long)fields.count];
         [alert addButtonWithTitle:@"保存"];
         [alert addButtonWithTitle:@"取消"];
         [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
@@ -1326,7 +1326,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
             }
             NSString *msg = @"无法读取已保存的帐密";
             if (error.code == LoginCredentialStoreErrorBusy) {
-                msg = @"钥匙串忙，请稍后再试";
+                msg = @"凭证读取繁忙，请稍后再试";
             } else if (error.localizedDescription.length > 0) {
                 msg = error.localizedDescription;
             }
@@ -1568,7 +1568,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         return;
     }
 
-    // 异步读钥匙串：安装后/重启后首次访问会弹出系统授权框，勿与「繁忙」警告叠弹。
+    // 异步读本地凭证；「繁忙」不与警告叠弹（历史兼容）。
     self.isRunning = YES;
     [self refreshButtonAppearance];
     NSString *recipeID = recipe.recipeID;
@@ -1582,14 +1582,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         if (!credentials) {
             strongSelf.isRunning = NO;
             [strongSelf refreshButtonAppearance];
-            // 用户取消授权或主线程同步路径的「繁忙」均不弹警告。
-            if (loadError.code == errSecUserCanceled ||
-                ([loadError.domain isEqualToString:LoginCredentialStoreErrorDomain] &&
-                 loadError.code == LoginCredentialStoreErrorBusy)) {
+            if ([loadError.domain isEqualToString:LoginCredentialStoreErrorDomain] &&
+                loadError.code == LoginCredentialStoreErrorBusy) {
                 return;
             }
             [strongSelf showError:@"无法读取凭证"
-                          message:loadError.localizedDescription ?: @"钥匙串读取失败"
+                          message:loadError.localizedDescription ?: @"凭证读取失败"
                          recipeID:recipeID];
             return;
         }

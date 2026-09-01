@@ -1385,7 +1385,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.selectedRecipeID = recipe.recipeID;
     self.selectedMemoID = nil;
     // 凭证已在 editor 内先写入；此处只刷列表并选中。
-    // selectRecipeID → loadRecipe 此时可读到新钥匙串/内存缓存，作真源对齐。
+    // selectRecipeID → loadRecipe 此时可读到新凭证/内存缓存，作真源对齐。
     [self reloadList];
     [self selectRecipeID:recipe.recipeID];
 }
@@ -1513,7 +1513,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     [alert addButtonWithTitle:@"取消"];
     if (rowItem.kind == AssistSidebarRowKindRecipe) {
         alert.messageText = @"删除此登录配置？";
-        alert.informativeText = @"将同时删除钥匙串中的账号密码。";
+        alert.informativeText = @"将同时删除本地保存的账号密码。";
         NSString *recipeID = rowItem.recipe.recipeID;
         [alert beginSheetModalForWindow:self.view.window completionHandler:^(NSModalResponse code) {
             if (code == NSAlertFirstButtonReturn) {

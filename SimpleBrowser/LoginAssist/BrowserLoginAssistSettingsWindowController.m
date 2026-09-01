@@ -331,7 +331,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     saveButton.bezelStyle = NSBezelStyleRounded;
     saveButton.keyEquivalent = @"\r";
 
-    self.statusLabel = [NSTextField wrappingLabelWithString:@"凭证保存在本地钥匙串；清除「网站数据」不会删除登录配置。"];
+    self.statusLabel = [NSTextField wrappingLabelWithString:@"凭证保存在应用内部存储；清除「网站数据」不会删除登录配置。"];
     self.statusLabel.font = [NSFont systemFontOfSize:11];
     self.statusLabel.textColor = [NSColor secondaryLabelColor];
     self.statusLabel.preferredMaxLayoutWidth = 460;
@@ -882,7 +882,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.autoLoginCheck.state = NSControlStateValueOff;
     self.defaultCheck.state = NSControlStateValueOff;
     self.submitSelectorField.enabled = NO;
-    self.statusLabel.stringValue = @"凭证保存在本地钥匙串；清除「网站数据」不会删除登录配置。";
+    self.statusLabel.stringValue = @"凭证保存在应用内部存储；清除「网站数据」不会删除登录配置。";
     [self updateSMSFieldsEnabled];
 }
 
@@ -1117,7 +1117,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     }
     NSAlert *confirm = [[NSAlert alloc] init];
     confirm.messageText = @"删除此登录配置？";
-    confirm.informativeText = @"将同时删除钥匙串中的账号密码。";
+    confirm.informativeText = @"将同时删除本地保存的账号密码。";
     confirm.alertStyle = NSAlertStyleWarning;
     [confirm addButtonWithTitle:@"删除"];
     [confirm addButtonWithTitle:@"取消"];
@@ -1183,7 +1183,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     credentials.username = self.usernameField.stringValue ?: @"";
     credentials.password = self.passwordField.stringValue ?: @"";
     credentials.phone = self.phoneField.stringValue ?: @"";
-    // 先写钥匙串再 upsert，避免 Store 通知触发的表单重载冲掉输入（与侧栏 RE-0 一致）。
+    // 先写凭证再 upsert，避免 Store 通知触发的表单重载冲掉输入（与侧栏 RE-0 一致）。
     if (![[LoginCredentialStore sharedStore] saveCredentials:credentials
                                                  forRecipeID:recipe.recipeID
                                                        error:&error]) {

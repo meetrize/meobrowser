@@ -7,7 +7,7 @@ extern LoginRecipeMode const LoginRecipeModePassword;
 extern LoginRecipeMode const LoginRecipeModeSMSOTP;
 extern LoginRecipeMode const LoginRecipeModeHybrid;
 
-/// 登录 Recipe 的自定义填入字段（选择器 + 值；值存 Recipe JSON，不进钥匙串）。
+/// 登录 Recipe 的自定义填入字段（选择器 + 值；值存 Recipe JSON，不进凭证文件）。
 @interface LoginRecipeExtraField : NSObject <NSCopying>
 @property (nonatomic, copy) NSString *fieldID;
 @property (nonatomic, copy) NSString *label;

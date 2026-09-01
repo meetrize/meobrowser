@@ -8,7 +8,7 @@
     if (![target respondsToSelector:@selector(userContentController:didReceiveScriptMessage:)]) {
         return;
     }
-    // WK 可能在后台线程回调；UI / 钥匙串必须在主线程。
+    // WK 可能在后台线程回调；UI / 凭证读写必须在主线程。
     if ([NSThread isMainThread]) {
         [target userContentController:userContentController didReceiveScriptMessage:message];
         return;

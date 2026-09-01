@@ -418,7 +418,7 @@
     actionRow.spacing = 8;
     actionRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.statusLabel = [NSTextField wrappingLabelWithString:@"凭证保存在本地钥匙串。"];
+    self.statusLabel = [NSTextField wrappingLabelWithString:@"凭证保存在应用内部存储。"];
     self.statusLabel.font = [NSFont systemFontOfSize:10];
     self.statusLabel.textColor = [NSColor tertiaryLabelColor];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -549,7 +549,7 @@
     [self.editingExtraFields removeAllObjects];
     [self rebuildExtraFieldRows];
     [self updateModeDependentRows];
-    self.statusLabel.stringValue = @"凭证保存在本地钥匙串。";
+    self.statusLabel.stringValue = @"凭证保存在应用内部存储。";
 }
 
 - (void)loadRecipe:(LoginRecipe *)recipe {
@@ -800,7 +800,7 @@
     }
 
     // 先固定表单快照：upsert 会同步发通知 → reloadList → loadRecipe，
-    // 若先 upsert 再读输入框，会被旧钥匙串值冲掉（RE-0）。
+    // 若先 upsert 再读输入框，会被旧凭证值冲掉（RE-0）。
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
     credentials.username = self.usernameField.stringValue ?: @"";
     credentials.password = self.passwordField.stringValue ?: @"";
@@ -838,7 +838,7 @@
     NSString *recipeID = self.editingRecipeID;
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"删除此登录配置？";
-    alert.informativeText = @"将同时删除钥匙串中的账号密码。";
+    alert.informativeText = @"将同时删除本地保存的账号密码。";
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"删除"];
     [alert addButtonWithTitle:@"取消"];
