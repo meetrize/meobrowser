@@ -232,20 +232,90 @@
     }
 
     self.promptVisible = YES;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.alertStyle = NSAlertStyleInformational;
-    alert.messageText = @"保存到登录助手？";
-    alert.informativeText = [NSString stringWithFormat:
-                             @"将「%@」保存到本站登录配置（帐密存应用内部）。\n也可一次保存本表已填写的全部合格字段。",
-                             label];
-    [alert addButtonWithTitle:@"保存此字段"];
-    [alert addButtonWithTitle:@"保存本表已填项"];
-    [alert addButtonWithTitle:@"取消"];
-
     __weak typeof(self) weakSelf = self;
-    [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
+    NSString *formId = [body[@"formId"] isKindOfClass:[NSString class]] ? body[@"formId"] : @"";
+    NSString *collectJS = [NSString stringWithFormat:
+                           @"(function(){ try {"
+                           @"  if (window.__meoLoginAssistCollectFormFields) {"
+                           @"    var a = window.__meoLoginAssistCollectFormFields(%@);"
+                           @"    if (a && a.length) return a;"
+                           @"  }"
+                           @"  if (window.top && window.top !== window && window.top.__meoLoginAssistCollectFormFields) {"
+                           @"    return window.top.__meoLoginAssistCollectFormFields(%@);"
+                           @"  }"
+                           @"  try {"
+                           @"    for (var i = 0; i < window.frames.length; i++) {"
+                           @"      var f = window.frames[i];"
+                           @"      if (f && f.__meoLoginAssistCollectFormFields) {"
+                           @"        var b = f.__meoLoginAssistCollectFormFields(%@);"
+                           @"        if (b && b.length) return b;"
+                           @"      }"
+                           @"    }"
+                           @"  } catch (e2) {}"
+                           @"  return [];"
+                           @"} catch(e) { return []; } })();",
+                           [self jsonStringLiteral:formId],
+                           [self jsonStringLiteral:formId],
+                           [self jsonStringLiteral:formId]];
+
+    // 先收集本表字段，再用应用级模态确认（sheet 在 WK 点击后中间按钮经常点不动）。
+    void (^presentConfirm)(NSArray *) = ^(NSArray *precollectedFields) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            if (completion) {
+                completion(NO);
+            }
+            return;
+        }
+        NSWindow *hostWindow = strongSelf.windowController.window ?: window;
+        if (hostWindow) {
+            [hostWindow makeKeyAndOrderFront:nil];
+        }
+
+        NSMutableArray *fields = [NSMutableArray array];
+        if ([precollectedFields isKindOfClass:[NSArray class]]) {
+            for (id item in precollectedFields) {
+                if ([item isKindOfClass:[NSDictionary class]]) {
+                    [fields addObject:item];
+                }
+            }
+        }
+        // 确保包含当前触发保存的字段
+        BOOL hasCurrent = NO;
+        for (NSDictionary *f in fields) {
+            if ([f[@"selector"] isKindOfClass:[NSString class]] &&
+                [f[@"selector"] isEqualToString:selector]) {
+                hasCurrent = YES;
+                break;
+            }
+        }
+        if (!hasCurrent) {
+            [fields insertObject:@{
+                @"slot": slot ?: @"",
+                @"selector": selector ?: @"",
+                @"label": label ?: @"",
+                @"value": value ?: @"",
+            } atIndex:0];
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleInformational;
+        alert.messageText = @"保存到登录助手？";
+        alert.informativeText = [NSString stringWithFormat:
+                                 @"将「%@」保存到本站登录配置（帐密存应用内部）。\n也可一次保存本表已填写的全部合格字段（当前可保存 %lu 项）。",
+                                 label,
+                                 (unsigned long)fields.count];
+        NSButton *saveFieldBtn = [alert addButtonWithTitle:@"保存此字段"];
+        NSButton *saveFormBtn = [alert addButtonWithTitle:@"保存本表已填项"];
+        [alert addButtonWithTitle:@"取消"];
+        saveFieldBtn.keyEquivalent = @"\r";
+        saveFormBtn.keyEquivalent = @"s";
+        saveFormBtn.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+
+        // 应用级模态：避免 beginSheet 在 WKWebView 触发后第二按钮无命中。
+        NSModalResponse returnCode = [alert runModal];
         strongSelf.promptVisible = NO;
+
         if (returnCode == NSAlertFirstButtonReturn) {
             BOOL ok = [strongSelf commitSingleSlot:slot
                                              value:value
@@ -260,17 +330,45 @@
             return;
         }
         if (returnCode == NSAlertSecondButtonReturn) {
-            [strongSelf saveWholeFormFromWebView:webView
-                                           body:body
-                                            url:url
-                                           host:host
-                                     completion:completion];
+            NSDictionary *payload = @{
+                @"formId": formId ?: @"",
+                @"fields": fields,
+                @"skipConfirm": @YES,
+                @"usernameSelector": body[@"usernameSelector"] ?: @"",
+                @"passwordSelector": body[@"passwordSelector"] ?: @"",
+                @"phoneSelector": body[@"phoneSelector"] ?: @"",
+                @"submitSelector": body[@"submitSelector"] ?: @"",
+                @"href": body[@"href"] ?: (url.absoluteString ?: @""),
+            };
+            [strongSelf handleSaveFormMessage:payload fromWebView:webView completion:completion];
             return;
         }
         if (completion) {
             completion(NO);
         }
-    }];
+    };
+
+    // 等鼠标抬起进入下一圈 runloop，再收集 + 弹窗。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            if (completion) {
+                completion(NO);
+            }
+            return;
+        }
+        if (!webView) {
+            presentConfirm(@[]);
+            return;
+        }
+        [webView evaluateJavaScript:collectJS completionHandler:^(id result, NSError *error) {
+            (void)error;
+            NSArray *fields = [result isKindOfClass:[NSArray class]] ? (NSArray *)result : @[];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                presentConfirm(fields);
+            });
+        }];
+    });
 }
 
 - (BOOL)commitSingleSlot:(NSString *)slot
@@ -352,14 +450,19 @@
 }
 
 - (NSString *)jsonStringLiteral:(NSString *)string {
-    if (!string) {
+    // NSJSONSerialization 顶层只能是数组/字典；裸 NSString 会抛异常导致崩溃。
+    NSString *safe = string ?: @"";
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[safe] options:0 error:&error];
+    if (!data || data.length < 2) {
         return @"\"\"";
     }
-    NSData *data = [NSJSONSerialization dataWithJSONObject:string options:0 error:nil];
-    if (!data) {
+    NSString *arrayJSON = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (arrayJSON.length < 2) {
         return @"\"\"";
     }
-    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"\"\"";
+    // ["..."] → "..."
+    return [arrayJSON substringWithRange:NSMakeRange(1, arrayJSON.length - 2)];
 }
 
 - (void)handleSaveFormMessage:(NSDictionary *)body

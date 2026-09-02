@@ -1186,8 +1186,12 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         @"submitSelector": self.detectedSubmitSelector ?: @"",
     } mutableCopy];
     NSError *jsonError = nil;
-    NSData *fidData = [NSJSONSerialization dataWithJSONObject:formId ?: @"" options:0 error:&jsonError];
-    NSString *fidJSON = fidData ? [[NSString alloc] initWithData:fidData encoding:NSUTF8StringEncoding] : @"\"\"";
+    NSData *fidData = [NSJSONSerialization dataWithJSONObject:@[formId ?: @""] options:0 error:&jsonError];
+    NSString *fidArrayJSON = fidData ? [[NSString alloc] initWithData:fidData encoding:NSUTF8StringEncoding] : nil;
+    NSString *fidJSON = @"\"\"";
+    if (fidArrayJSON.length >= 2) {
+        fidJSON = [fidArrayJSON substringWithRange:NSMakeRange(1, fidArrayJSON.length - 2)];
+    }
     NSString *js = [NSString stringWithFormat:
                     @"(function(){ try { return window.__meoLoginAssistCollectFormFields(%@); } catch(e) { return []; } })();",
                     fidJSON];

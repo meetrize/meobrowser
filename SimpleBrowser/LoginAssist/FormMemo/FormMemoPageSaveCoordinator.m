@@ -127,29 +127,48 @@
         return;
     }
     self.promptVisible = YES;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.alertStyle = NSAlertStyleInformational;
-    alert.messageText = @"保存到站点备忘？";
-    if (isFirstDevice) {
-        alert.informativeText = [NSString stringWithFormat:
-                                 @"将「%@」保存为明文本地备忘（不会上传）。\n密码请使用登录助手，勿写入站点备忘。",
-                                 label];
-    } else {
-        alert.informativeText = [NSString stringWithFormat:
-                                 @"「%@」的内容较长或可能含敏感信息，确认以明文保存到本地站点备忘？",
-                                 label];
-    }
-    [alert addButtonWithTitle:@"保存"];
-    [alert addButtonWithTitle:@"取消"];
     __weak typeof(self) weakSelf = self;
-    [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse returnCode) {
+    dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        strongSelf.promptVisible = NO;
-        if (returnCode != NSAlertFirstButtonReturn) {
+        if (!strongSelf) {
             return;
         }
-        [strongSelf commitSelector:selector label:label value:value host:host url:url];
-    }];
+        NSWindow *hostWindow = strongSelf.windowController.window ?: window;
+        if (!hostWindow) {
+            strongSelf.promptVisible = NO;
+            return;
+        }
+        [hostWindow makeKeyAndOrderFront:nil];
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleInformational;
+        alert.messageText = @"保存到站点备忘？";
+        if (isFirstDevice) {
+            alert.informativeText = [NSString stringWithFormat:
+                                     @"将「%@」保存为明文本地备忘（不会上传）。\n密码请使用登录助手，勿写入站点备忘。",
+                                     label];
+        } else {
+            alert.informativeText = [NSString stringWithFormat:
+                                     @"「%@」的内容较长或可能含敏感信息，确认以明文保存到本地站点备忘？",
+                                     label];
+        }
+        [alert addButtonWithTitle:@"保存"];
+        [alert addButtonWithTitle:@"取消"];
+        void (^handle)(NSModalResponse) = ^(NSModalResponse returnCode) {
+            __strong typeof(weakSelf) inner = weakSelf;
+            if (inner) {
+                inner.promptVisible = NO;
+            }
+            if (returnCode != NSAlertFirstButtonReturn || !inner) {
+                return;
+            }
+            [inner commitSelector:selector label:label value:value host:host url:url];
+        };
+        if (hostWindow.attachedSheet) {
+            handle([alert runModal]);
+            return;
+        }
+        [alert beginSheetModalForWindow:hostWindow completionHandler:handle];
+    });
 }
 
 - (void)commitSelector:(NSString *)selector
