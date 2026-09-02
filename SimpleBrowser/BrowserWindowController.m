@@ -747,6 +747,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 - (void)windowDidLoad {
     [super windowDidLoad];
     [self scheduleTrafficLightPositioning];
+    // 预建 Launchpad 网格，避免用户 ⌘T 后立刻点快捷方式时撞上 reloadData。
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf.launchpadView preloadShortcutsIfNeeded];
+    });
 }
 
 - (void)showWindow:(id)sender {
@@ -3290,7 +3295,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         }
         BOOL showLP = stillSelected.isNewTabPage;
         if (showLP && !strongSelf.transparentModeEnabled) {
-            [strongSelf.launchpadView reloadShortcuts];
+            [strongSelf.launchpadView refreshShortcutsWhenShown];
         }
         if (strongSelf.tabOverviewController.isVisible) {
             [strongSelf.tabOverviewController reloadFromTabController];
@@ -3952,16 +3957,63 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 #pragma mark - BrowserLaunchpadViewDelegate
 
-- (void)launchpadView:(BrowserLaunchpadView *)view openURL:(NSURL *)url {
+- (void)launchpadView:(BrowserLaunchpadView *)view prepareToOpenURL:(NSURL *)url {
     (void)view;
+    (void)url;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab.isNewTabPage) {
+        [tab prewarmWebViewIfNeeded];
+    }
+}
+
+- (void)navigateSelectedNewTabPageToURL:(NSURL *)url {
+    if (url == nil) {
+        return;
+    }
     if ([self openURLInExternalApplicationIfNeeded:url]) {
         return;
     }
+
     BrowserTab *tab = self.tabController.selectedTab;
-    if (tab) {
+    if (tab == nil) {
+        return;
+    }
+    if (!tab.isNewTabPage) {
         [tab loadURL:url];
         [self refreshTabsUI];
+        return;
     }
+
+    self.launchpadView.hidden = YES;
+    NSString *urlString = url.absoluteString;
+    if (urlString.length > 0) {
+        self.addressField.stringValue = urlString;
+    }
+    [self endAddressBarEditingIfNeeded];
+
+    [tab loadURL:url];
+    [self attachWebViewForTab:tab];
+    [tab loadPendingRestorableURLIfNeeded];
+    if (tab.webView != nil) {
+        tab.webView.hidden = NO;
+    }
+
+    [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
+    [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
+    [self.contentContainer addSubview:self.navigationErrorView positioned:NSWindowAbove relativeTo:nil];
+    if (self.findBarController.isVisible) {
+        [self.contentContainer addSubview:self.findBarController.findBarView positioned:NSWindowAbove relativeTo:nil];
+    }
+    [self.findBarController syncWithSelectedTab];
+    [self observeLoadingProgressForSelectedTab];
+    [self updateTabStripDisplay];
+    [self updateNavigationState];
+    [self schedulePersistTabSession];
+}
+
+- (void)launchpadView:(BrowserLaunchpadView *)view openURL:(NSURL *)url {
+    (void)view;
+    [self navigateSelectedNewTabPageToURL:url];
 }
 
 - (void)launchpadView:(BrowserLaunchpadView *)view openURLInNewTab:(NSURL *)url {
@@ -5470,10 +5522,11 @@ doCommandBySelector:(SEL)commandSelector {
 }
 
 /// 切换到新标签页（含新建）时聚焦地址栏。
-/// 延后到下一轮 runloop，避免标签栏点击链路结束后仍占住第一响应者。
+/// 延后执行，避免与 Launchpad 快捷方式点击争抢第一响应者/主线程。
 - (void)focusAddressBarForNewTabPage {
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
             return;

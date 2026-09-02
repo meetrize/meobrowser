@@ -118,6 +118,13 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     return self.webView;
 }
 
+- (void)prewarmWebViewIfNeeded {
+    if (self.webView != nil) {
+        return;
+    }
+    [self ensureWebView];
+}
+
 - (void)startObservingWebViewTitle {
     if (self.observingWebViewTitle || self.webView == nil) {
         return;

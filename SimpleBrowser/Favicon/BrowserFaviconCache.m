@@ -20,6 +20,7 @@ static const NSUInteger kMaxDiskEntries = 500;
 @property (nonatomic, strong) NSCache<NSString *, NSDictionary *> *memoryMetaCache;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *indexMap;
 @property (nonatomic, strong) dispatch_queue_t ioQueue;
+@property (nonatomic, assign) BOOL indexLoaded;
 @end
 
 @implementation BrowserFaviconCache
@@ -46,9 +47,46 @@ static const NSUInteger kMaxDiskEntries = 500;
         _memoryMetaCache.countLimit = kMemoryCacheLimit;
         _ioQueue = dispatch_queue_create("com.meobrowser.favicon.cache", DISPATCH_QUEUE_SERIAL);
         _indexMap = [NSMutableDictionary dictionary];
-        [self loadIndexUnlocked];
     }
     return self;
+}
+
++ (void)warmUpInBackground {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        BrowserFaviconCache *cache = [BrowserFaviconCache sharedCache];
+        dispatch_sync(cache.ioQueue, ^{
+            [cache ensureIndexLoadedUnlocked];
+        });
+    });
+}
+
+- (void)ensureIndexLoadedUnlocked {
+    if (self.indexLoaded) {
+        return;
+    }
+    [self loadIndexUnlocked];
+    self.indexLoaded = YES;
+}
+
+- (void)prefetchImageForHost:(NSString *)host {
+    NSString *key = [self normalizedHost:host];
+    if (key == nil || [self.memoryCache objectForKey:key] != nil) {
+        return;
+    }
+    dispatch_async(self.ioQueue, ^{
+        if ([self.memoryCache objectForKey:key] != nil) {
+            return;
+        }
+        [self ensureIndexLoadedUnlocked];
+        NSImage *diskImage = [self loadDiskImageUnlockedForHost:key];
+        NSDictionary *entry = self.indexMap[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            [self.memoryMetaCache setObject:entry forKey:key];
+        }
+        if (diskImage != nil) {
+            [self.memoryCache setObject:diskImage forKey:key];
+        }
+    });
 }
 
 #pragma mark - Paths
@@ -195,6 +233,7 @@ static const NSUInteger kMaxDiskEntries = 500;
     }
 
     dispatch_async(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         NSImage *diskImage = [self loadDiskImageUnlockedForHost:key];
         NSDictionary *entry = self.indexMap[key];
         if ([entry isKindOfClass:[NSDictionary class]]) {
@@ -224,6 +263,7 @@ static const NSUInteger kMaxDiskEntries = 500;
     }
     __block NSImage *diskImage = nil;
     dispatch_sync(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         diskImage = [self loadDiskImageUnlockedForHost:key];
         NSDictionary *entry = self.indexMap[key];
         if ([entry isKindOfClass:[NSDictionary class]]) {
@@ -266,6 +306,7 @@ static const NSUInteger kMaxDiskEntries = 500;
     }
     __block NSString *sourceURL = nil;
     dispatch_sync(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         NSDictionary *entry = self.indexMap[key];
         if ([entry isKindOfClass:[NSDictionary class]]) {
             [self.memoryMetaCache setObject:entry forKey:key];
@@ -293,6 +334,7 @@ static const NSUInteger kMaxDiskEntries = 500;
     }
     __block NSString *channel = nil;
     dispatch_sync(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         NSDictionary *entry = self.indexMap[key];
         if ([entry isKindOfClass:[NSDictionary class]]) {
             [self.memoryMetaCache setObject:entry forKey:key];
@@ -326,6 +368,7 @@ static const NSUInteger kMaxDiskEntries = 500;
     NSString *fileName = [self blobFileNameForHost:key];
     __block BOOL ok = NO;
     dispatch_sync(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         NSError *error = nil;
         if (![[self class] ensureDirectoriesExist:&error]) {
             return;
@@ -384,12 +427,14 @@ static const NSUInteger kMaxDiskEntries = 500;
         [self.memoryCache removeObjectForKey:key];
         [self.memoryMetaCache removeObjectForKey:key];
         dispatch_async(self.ioQueue, ^{
+            [self ensureIndexLoadedUnlocked];
             [self removeHostUnlocked:key];
             [self persistIndexUnlocked];
         });
         return;
     }
     dispatch_sync(self.ioQueue, ^{
+        [self ensureIndexLoadedUnlocked];
         [self removeHostUnlocked:key];
         [self persistIndexUnlocked];
     });

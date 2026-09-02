@@ -1646,6 +1646,92 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     }];
 }
 
+- (BrowserTabItemView *)makeTabItemForTab:(BrowserTab *)tab selected:(BOOL)selected {
+    BrowserTabItemView *item = [[BrowserTabItemView alloc] initWithFrame:NSZeroRect];
+    item.translatesAutoresizingMaskIntoConstraints = YES;
+    item.autoresizingMask = NSViewNotSizable;
+    item.tabTitle = [tab displayTitle];
+    item.pageURLString = BrowserTabPageURLString(tab);
+    item.tabPinned = tab.isPinned;
+    item.tabSelected = selected;
+    item.tabToolTip = BrowserTabToolTipString(tab);
+
+    __weak typeof(self) weakSelf = self;
+    __weak BrowserTabItemView *weakItem = item;
+    NSUUID *tabID = tab.tabID;
+    item.onSelect = ^{
+        [weakSelf.delegate tabStripView:weakSelf didSelectTabID:tabID];
+    };
+    item.onClose = ^{
+        [weakSelf.delegate tabStripView:weakSelf didCloseTabID:tabID];
+    };
+    item.onCloseTabsToTheRight = ^{
+        id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
+        if ([delegate respondsToSelector:@selector(tabStripView:didCloseTabsToTheRightOfTabID:)]) {
+            [delegate tabStripView:weakSelf didCloseTabsToTheRightOfTabID:tabID];
+        }
+    };
+    item.contextMenuProvider = ^{
+        return [weakSelf contextMenuForTabID:tabID];
+    };
+    item.onReorderDragBegan = ^(NSPoint locationInWindow) {
+        BrowserTabItemView *strongItem = weakItem;
+        if (strongItem) {
+            [weakSelf beginReorderDragForItem:strongItem locationInWindow:locationInWindow];
+        }
+    };
+    item.onReorderDragMoved = ^(NSPoint locationInWindow) {
+        BrowserTabItemView *strongItem = weakItem;
+        if (strongItem) {
+            [weakSelf moveReorderDragForItem:strongItem locationInWindow:locationInWindow];
+        }
+    };
+    item.onReorderDragEnded = ^(NSPoint locationInWindow) {
+        BrowserTabItemView *strongItem = weakItem;
+        if (strongItem) {
+            [weakSelf endReorderDragForItem:strongItem locationInWindow:locationInWindow];
+        }
+    };
+
+    [self.tabItemIDs setObject:tab.tabID forKey:item];
+    [self.tabItemsByID setObject:item forKey:tab.tabID];
+    return item;
+}
+
+/// 新建标签页常见路径：末尾追加一个 tab，避免 O(n) 重建整条标签栏。
+- (BOOL)tryAppendSingleTabFromTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID {
+    if (self.draggingItem || tabs.count != self.tabItems.count + 1) {
+        return NO;
+    }
+    for (NSUInteger i = 0; i < self.tabItems.count; i++) {
+        NSUUID *existingID = [self.tabItemIDs objectForKey:self.tabItems[i]];
+        if (![existingID isEqual:tabs[i].tabID]) {
+            return NO;
+        }
+    }
+
+    BrowserTab *newTab = tabs.lastObject;
+    BOOL selected = [newTab.tabID isEqual:selectedTabID];
+    BrowserTabItemView *item = [self makeTabItemForTab:newTab selected:selected];
+    [self.tabItems addObject:item];
+    [self.tabsContentView addSubview:item];
+
+    self.selectedTabID = selectedTabID;
+    [self updateLayoutTabs:tabs];
+
+    for (BrowserTabItemView *tabItem in self.tabItems) {
+        NSUUID *tabID = [self.tabItemIDs objectForKey:tabItem];
+        BOOL isSelected = tabID != nil && [tabID isEqual:selectedTabID];
+        if (tabItem.tabSelected != isSelected) {
+            tabItem.tabSelected = isSelected;
+        }
+    }
+
+    [self invalidateTabLayoutCache];
+    [self setNeedsLayout:YES];
+    return YES;
+}
+
 - (void)reloadWithTabs:(NSArray<BrowserTab *> *)tabs selectedTabID:(nullable NSUUID *)selectedTabID {
     if (self.draggingItem) {
         self.draggingItem.hidden = NO;
@@ -1673,54 +1759,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
     for (BrowserTab *tab in tabs) {
         BOOL selected = [tab.tabID isEqual:selectedTabID];
-        BrowserTabItemView *item = [[BrowserTabItemView alloc] initWithFrame:NSZeroRect];
-        item.translatesAutoresizingMaskIntoConstraints = YES;
-        item.autoresizingMask = NSViewNotSizable;
-        item.tabTitle = [tab displayTitle];
-        item.pageURLString = BrowserTabPageURLString(tab);
-        item.tabPinned = tab.isPinned;
-        item.tabSelected = selected;
-        item.tabToolTip = BrowserTabToolTipString(tab);
-
-        __weak typeof(self) weakSelf = self;
-        __weak BrowserTabItemView *weakItem = item;
-        NSUUID *tabID = tab.tabID;
-        item.onSelect = ^{
-            [weakSelf.delegate tabStripView:weakSelf didSelectTabID:tabID];
-        };
-        item.onClose = ^{
-            [weakSelf.delegate tabStripView:weakSelf didCloseTabID:tabID];
-        };
-        item.onCloseTabsToTheRight = ^{
-            id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
-            if ([delegate respondsToSelector:@selector(tabStripView:didCloseTabsToTheRightOfTabID:)]) {
-                [delegate tabStripView:weakSelf didCloseTabsToTheRightOfTabID:tabID];
-            }
-        };
-        item.contextMenuProvider = ^{
-            return [weakSelf contextMenuForTabID:tabID];
-        };
-        item.onReorderDragBegan = ^(NSPoint locationInWindow) {
-            BrowserTabItemView *strongItem = weakItem;
-            if (strongItem) {
-                [weakSelf beginReorderDragForItem:strongItem locationInWindow:locationInWindow];
-            }
-        };
-        item.onReorderDragMoved = ^(NSPoint locationInWindow) {
-            BrowserTabItemView *strongItem = weakItem;
-            if (strongItem) {
-                [weakSelf moveReorderDragForItem:strongItem locationInWindow:locationInWindow];
-            }
-        };
-        item.onReorderDragEnded = ^(NSPoint locationInWindow) {
-            BrowserTabItemView *strongItem = weakItem;
-            if (strongItem) {
-                [weakSelf endReorderDragForItem:strongItem locationInWindow:locationInWindow];
-            }
-        };
-
-        [self.tabItemIDs setObject:tab.tabID forKey:item];
-        [self.tabItemsByID setObject:item forKey:tab.tabID];
+        BrowserTabItemView *item = [self makeTabItemForTab:tab selected:selected];
         [self.tabItems addObject:item];
         [self.tabsContentView addSubview:item];
     }
@@ -1912,6 +1951,9 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     }
 
     if (self.tabItems.count != tabs.count) {
+        if ([self tryAppendSingleTabFromTabs:tabs selectedTabID:selectedTabID]) {
+            return;
+        }
         [self reloadWithTabs:tabs selectedTabID:selectedTabID];
         return;
     }

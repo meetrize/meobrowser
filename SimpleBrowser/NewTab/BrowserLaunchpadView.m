@@ -22,6 +22,7 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 
 @interface BrowserLaunchpadView (HostHelpers)
 @property (nonatomic, readonly, getter=isDraggingShortcut) BOOL draggingShortcut;
+- (void)prepareToOpenShortcut:(BrowserShortcutItem *)shortcut;
 - (BOOL)launchpadBeginDraggingShortcut:(BrowserShortcutItem *)shortcut
                               fromView:(NSView *)view
                                  event:(NSEvent *)event;
@@ -322,6 +323,7 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 @property (nonatomic, assign) NSInteger dropPlaceholderIndex; // DropBefore 插入下标；NSNotFound 表示隐藏
 @property (nonatomic, assign) BOOL dropDidCommit;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingIconRefreshBlock;
+@property (nonatomic, copy, nullable) NSString *lastShortcutsFingerprint;
 @end
 
 @implementation BrowserLaunchpadView
@@ -713,10 +715,49 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     }
 }
 
+- (BOOL)isShortcutsGridLoaded {
+    if (self.lastShortcutsFingerprint.length == 0) {
+        return NO;
+    }
+    NSInteger expected = [self totalItemCount];
+    return expected > 0 && [self.collectionView numberOfItemsInSection:0] == expected;
+}
+
+- (void)preloadShortcutsIfNeeded {
+    if ([self isShortcutsGridLoaded]) {
+        return;
+    }
+    [self reloadShortcuts];
+}
+
+- (void)refreshShortcutsWhenShown {
+    if ([self isShortcutsGridLoaded]) {
+        [self scheduleRefreshPendingShortcutIconsWithDelay:kLaunchpadIconRefreshAfterVisibleDelay];
+        return;
+    }
+    [self reloadShortcuts];
+}
+
+- (NSString *)shortcutsFingerprintForItems:(NSArray<BrowserShortcutItem *> *)items {
+    NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithCapacity:items.count];
+    for (BrowserShortcutItem *item in items) {
+        [parts addObject:item.itemID ?: @""];
+    }
+    return [parts componentsJoinedByString:@"|"];
+}
+
 - (void)reloadShortcuts {
-    [self.mutableShortcuts setArray:[BrowserShortcutStore loadShortcuts]];
+    NSArray<BrowserShortcutItem *> *loaded = [BrowserShortcutStore loadShortcuts];
+    NSString *fingerprint = [self shortcutsFingerprintForItems:loaded];
+    BOOL shortcutsUnchanged = self.lastShortcutsFingerprint != nil
+        && [fingerprint isEqualToString:self.lastShortcutsFingerprint];
+    self.lastShortcutsFingerprint = fingerprint;
+
+    [self.mutableShortcuts setArray:loaded];
     [self refreshDisplayShortcuts];
-    [self reloadCollectionView];
+    if (!shortcutsUnchanged) {
+        [self reloadCollectionView];
+    }
     if (self.folderOverlay.folder) {
         BrowserShortcutItem *folder = [BrowserShortcutStore shortcutWithID:self.folderOverlay.folder.itemID
                                                                inShortcuts:self.mutableShortcuts];
@@ -815,6 +856,20 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 
 - (BOOL)isDraggingShortcut {
     return self.draggingItemID.length > 0;
+}
+
+- (void)prepareToOpenShortcut:(BrowserShortcutItem *)shortcut {
+    if (shortcut.isFolder || shortcut.urlString.length == 0) {
+        return;
+    }
+    NSURL *url = [NSURL URLWithString:shortcut.urlString];
+    if (url == nil) {
+        return;
+    }
+    id<BrowserLaunchpadViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(launchpadView:prepareToOpenURL:)]) {
+        [delegate launchpadView:self prepareToOpenURL:url];
+    }
 }
 
 /// 单元格槽位内、与真实图标同尺寸的圆角正方形（不含标题区）。

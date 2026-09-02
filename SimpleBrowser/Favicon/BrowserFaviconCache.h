@@ -34,6 +34,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 测试 / 维护：清空内存热缓存（不删磁盘）。
 - (void)clearMemoryCache;
 
+/// 启动后在后台加载索引并预热 Launchpad 常用 host 的磁盘图标，避免首次打开新标签页堵主线程。
++ (void)warmUpInBackground;
+
+/// 异步读盘填入内存（不回调）；用于批量预热。
+- (void)prefetchImageForHost:(NSString *)host;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -16,6 +16,7 @@
 - (BOOL)launchpadBeginDraggingShortcut:(BrowserShortcutItem *)shortcut
                               fromView:(NSView *)view
                                  event:(NSEvent *)event;
+- (void)prepareToOpenShortcut:(BrowserShortcutItem *)shortcut;
 @end
 
 static const CGFloat kIconShadowBlur = 6.0;
@@ -343,9 +344,10 @@ static void BrowserShortcutWritebackIconIfNeeded(BrowserShortcutItem *shortcut) 
 
     NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
+    // 首屏只读缓存；网络瀑布由 Launchpad 延迟 refresh 触发，避免打开新标签页瞬间占满 fetch 槽位。
     [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
                                                  preferredIconURL:preferred
-                                                      triggerFetch:YES
+                                                      triggerFetch:NO
                                                         completion:^(NSImage *image) {
         BrowserShortcutFolderTileView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.loadToken != token || !image) {
@@ -829,9 +831,10 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     }
     NSString *preferred = shortcut.iconURLString.length > 0 ? shortcut.iconURLString : nil;
     __weak typeof(self) weakSelf = self;
+    // 首屏只读缓存；网络瀑布由 Launchpad 延迟 refresh 触发，避免打开新标签页瞬间占满 fetch 槽位。
     [[BrowserFaviconService sharedService] imageForPageURLString:shortcut.urlString
                                                  preferredIconURL:preferred
-                                                      triggerFetch:YES
+                                                      triggerFetch:NO
                                                         completion:^(NSImage *image) {
         BrowserShortcutCellContentView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf.iconLoadToken != token || !image) {
@@ -1056,6 +1059,12 @@ static CGFloat BrowserShortcutIconImageInset(CGFloat iconSize) {
     if (self.addCell) {
         [super mouseDown:event];
         return;
+    }
+    if (self.shortcut && !self.shortcut.isFolder) {
+        BrowserLaunchpadView *launchpad = [self enclosingLaunchpadView];
+        if (launchpad) {
+            [launchpad prepareToOpenShortcut:self.shortcut];
+        }
     }
     self.mouseDownLocation = event.locationInWindow;
     self.mouseDownEvent = event;

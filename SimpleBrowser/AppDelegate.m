@@ -16,6 +16,10 @@
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserUserAgent.h"
 #import "BrowserStatusItemController.h"
+#import "BrowserFaviconCache.h"
+#import "BrowserShortcutStore.h"
+#import "BrowserShortcutItem.h"
+#import "BrowserFaviconUtil.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -59,6 +63,7 @@
     [BrowserMenus installBrowserChromeMenus];
     [BrowserUserAgent warmUpInBackground];
     [ServerSyncKeychain warmMemoryCacheInBackground];
+    [self warmUpLaunchpadFaviconsInBackground];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(developerPreferencesDidChange:)
                                                  name:BrowserDeveloperPreferencesDidChangeNotification
@@ -83,6 +88,22 @@
     }
     [self flushPendingExternalURLs];
     [[BrowserStatusItemController sharedController] install];
+}
+
+- (void)warmUpLaunchpadFaviconsInBackground {
+    [BrowserFaviconCache warmUpInBackground];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        BrowserFaviconCache *cache = [BrowserFaviconCache sharedCache];
+        for (BrowserShortcutItem *item in [BrowserShortcutStore loadShortcuts]) {
+            if (item.isFolder) {
+                continue;
+            }
+            NSString *host = BrowserFaviconHostFromURLString(item.urlString);
+            if (host.length > 0) {
+                [cache prefetchImageForHost:host];
+            }
+        }
+    });
 }
 
 - (BrowserWindowController *)createBrowserWindowWithSession:(NSDictionary *)session {

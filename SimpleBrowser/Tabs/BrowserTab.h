@@ -72,6 +72,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 - (void)forceDiscardWebViewForHardRecover;
 /// 若已休眠则仅重建 WebView，不发起导航（须先挂上 navigationDelegate，再调 loadPendingRestorableURLIfNeeded）。
 - (void)wakeFromHibernationIfNeeded;
+/// 新标签页首次点快捷方式前预热 WebView 壳（不导航、不挂 delegate）。
+- (void)prewarmWebViewIfNeeded;
 /// 在 navigationDelegate 已设置后加载 restorableURL（会话恢复 / 唤醒用）。
 - (void)loadPendingRestorableURLIfNeeded;
 /// 当前页面 URL，或休眠占位 URL。
