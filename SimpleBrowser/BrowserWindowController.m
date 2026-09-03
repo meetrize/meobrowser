@@ -18,6 +18,8 @@
 #import "BrowserTransparentChromeAutoHideController.h"
 #import "BrowserAfkModeController.h"
 #import "BrowserPresentationFullscreenController.h"
+#import "BrowserPresentationFullscreenExitOverlay.h"
+#import "BrowserPresentationFullscreenExitOverlay.h"
 #import "BrowserAutoScrollController.h"
 #import "BrowserAutoScrollPreferences.h"
 #import "BrowserWindowLayoutPresetStore.h"
@@ -173,6 +175,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTransparentChromeAutoHideController *transparentChromeAutoHideController;
 @property (nonatomic, strong) BrowserAfkModeController *afkModeController;
 @property (nonatomic, strong) BrowserPresentationFullscreenController *presentationFullscreenController;
+@property (nonatomic, strong) BrowserPresentationFullscreenExitOverlay *presentationFullscreenExitOverlay;
 @property (nonatomic, assign) BOOL presentationChromeForcedHidden;
 @property (nonatomic, strong) BrowserAutoScrollController *autoScrollController;
 @property (nonatomic, assign) BOOL smallLayoutTransparentSnapshotValid;
@@ -445,6 +448,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _afkModeController.windowController = self;
         _presentationFullscreenController = [[BrowserPresentationFullscreenController alloc] init];
         _presentationFullscreenController.windowController = self;
+        _presentationFullscreenExitOverlay = [[BrowserPresentationFullscreenExitOverlay alloc] init];
+        _presentationFullscreenExitOverlay.windowController = self;
         _autoScrollController = [[BrowserAutoScrollController alloc] init];
         _autoScrollController.windowController = self;
         __weak typeof(self) weakSelfForScroll = self;
@@ -1868,12 +1873,35 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.trailingSidebarSlot hideAllAnimated:NO];
 }
 
+- (void)presentationFullscreenDetachTabStripAccessory {
+    NSWindow *window = self.window;
+    if (!window || !self.tabStripAccessory) {
+        return;
+    }
+    NSUInteger idx = [window.titlebarAccessoryViewControllers indexOfObjectIdenticalTo:self.tabStripAccessory];
+    if (idx != NSNotFound) {
+        [window removeTitlebarAccessoryViewControllerAtIndex:idx];
+    }
+}
+
+- (void)presentationFullscreenAttachTabStripAccessoryIfNeeded {
+    NSWindow *window = self.window;
+    if (!window || !self.tabStripAccessory) {
+        return;
+    }
+    if (![window.titlebarAccessoryViewControllers containsObject:self.tabStripAccessory]) {
+        [window addTitlebarAccessoryViewController:self.tabStripAccessory];
+    }
+}
+
 - (void)presentationFullscreenApplyChromeHidden:(BOOL)hidden {
     self.presentationChromeForcedHidden = hidden;
     if (hidden) {
         if (self.isTabOverviewVisible) {
             [self hideTabOverview];
         }
+        // 卸掉 titlebar accessory，避免系统顶边滑出空标签条。
+        [self presentationFullscreenDetachTabStripAccessory];
         if (self.tabStripAccessoryRoot) {
             self.tabStripAccessoryRoot.hidden = YES;
         }
@@ -1887,7 +1915,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         self.certificateWarningView.hidden = YES;
         self.navigationErrorView.hidden = YES;
         self.findBarController.findBarView.hidden = YES;
+        self.presentationFullscreenExitOverlay.active = YES;
     } else {
+        self.presentationFullscreenExitOverlay.active = NO;
+        [self presentationFullscreenAttachTabStripAccessoryIfNeeded];
         self.loadingProgressView.hidden = NO;
         self.findBarController.findBarView.hidden = !self.findBarController.isVisible;
         [self syncCertificateWarningVisibilityForSelectedTab];

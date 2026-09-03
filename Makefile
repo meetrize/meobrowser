@@ -45,6 +45,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserTabStripChromeActionsView.m \
                    $(BROWSER_SRC_DIR)/AfkMode/BrowserAfkModeController.m \
                    $(BROWSER_SRC_DIR)/PresentationFullscreen/BrowserPresentationFullscreenController.m \
+                   $(BROWSER_SRC_DIR)/PresentationFullscreen/BrowserPresentationFullscreenExitOverlay.m \
                    $(BROWSER_SRC_DIR)/AutoScroll/BrowserAutoScrollPreferences.m \
                    $(BROWSER_SRC_DIR)/AutoScroll/BrowserAutoScrollController.m \
                    $(BROWSER_SRC_DIR)/WindowLayout/BrowserWindowLayoutPresetStore.m \
