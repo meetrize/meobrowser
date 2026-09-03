@@ -389,6 +389,8 @@ static NSString *MeoScrollToFragmentJS(void) {
     NSMenuItem *openMediaItem = nil;
     NSMenuItem *openLinkInNewWindowItem = nil;
     NSMenuItem *searchWebItem = nil;
+    NSMenuItem *copySelectionItem = nil;
+    BOOL hasLinkMenu = NO;
 
     NSString *engineName = [BrowsingPreferences displayNameForSearchEngineID:[BrowsingPreferences defaultSearchEngineID]];
     NSString *searchTitle = [NSString stringWithFormat:@"使用「%@」搜索", engineName];
@@ -412,6 +414,13 @@ static NSString *MeoScrollToFragmentJS(void) {
             openMediaItem = item;
         } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenLinkInNewWindow"]) {
             openLinkInNewWindowItem = item;
+            hasLinkMenu = YES;
+        } else if ([identifier isEqualToString:@"WKMenuItemIdentifierOpenLink"] ||
+                   [identifier isEqualToString:@"WKMenuItemIdentifierCopyLink"] ||
+                   [identifier isEqualToString:@"WKMenuItemIdentifierDownloadLinkedFile"]) {
+            hasLinkMenu = YES;
+        } else if ([identifier isEqualToString:@"WKMenuItemIdentifierCopy"]) {
+            copySelectionItem = item;
         }
     }
 
@@ -429,6 +438,14 @@ static NSString *MeoScrollToFragmentJS(void) {
             openInWindow.representedObject = openLinkInNewWindowItem;
             [menu insertItem:openInWindow atIndex:index + 1];
         }
+    }
+
+    // 链接菜单通常不含选区项；有选区时合并「搜索 / 拷贝」。
+    if (hasLinkMenu) {
+        [self meo_augmentLinkMenuWithSelectionItems:menu
+                                        searchTitle:searchTitle
+                                  existingSearchItem:searchWebItem
+                                    existingCopyItem:copySelectionItem];
     }
 
     // 选中文本含 http(s):// 时，提供「在新标签中打开」（已有链接菜单时不必重复）。
@@ -509,6 +526,96 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
 
     return NO;
+}
+
+/// 链接菜单 + 非空选区：在菜单顶部补齐选区「搜索 / 拷贝」（与链接项并存）。
+- (void)meo_augmentLinkMenuWithSelectionItems:(NSMenu *)menu
+                                  searchTitle:(NSString *)searchTitle
+                            existingSearchItem:(nullable NSMenuItem *)existingSearchItem
+                              existingCopyItem:(nullable NSMenuItem *)existingCopyItem {
+    if (!menu) {
+        return;
+    }
+
+    NSMutableArray<NSMenuItem *> *insertedItems = [NSMutableArray array];
+    NSInteger insertIndex = 0;
+
+    if (!existingSearchItem) {
+        NSMenuItem *searchItem = [[NSMenuItem alloc] initWithTitle:searchTitle ?: @"搜索"
+                                                            action:@selector(meo_searchSelectionWithDefaultEngine:)
+                                                     keyEquivalent:@""];
+        searchItem.target = self;
+        searchItem.hidden = YES;
+        [menu insertItem:searchItem atIndex:insertIndex++];
+        [insertedItems addObject:searchItem];
+    }
+
+    if (!existingCopyItem) {
+        NSMenuItem *copyItem = [[NSMenuItem alloc] initWithTitle:@"拷贝"
+                                                          action:@selector(meo_copySelection:)
+                                                   keyEquivalent:@""];
+        copyItem.target = self;
+        copyItem.hidden = YES;
+        [menu insertItem:copyItem atIndex:insertIndex++];
+        [insertedItems addObject:copyItem];
+    }
+
+    if (insertedItems.count == 0) {
+        return;
+    }
+
+    NSMenuItem *separator = [NSMenuItem separatorItem];
+    separator.hidden = YES;
+    [menu insertItem:separator atIndex:insertIndex];
+    [insertedItems addObject:separator];
+
+    __weak typeof(self) weakSelf = self;
+    __weak NSMenu *weakMenu = menu;
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        NSMenu *strongMenu = weakMenu;
+        if (!strongSelf || !strongMenu) {
+            return;
+        }
+
+        BOOL hasSelection = NO;
+        if (!error && [result isKindOfClass:[NSString class]]) {
+            NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
+                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            hasSelection = trimmed.length > 0;
+        }
+
+        for (NSMenuItem *item in insertedItems) {
+            if (![strongMenu.itemArray containsObject:item]) {
+                continue;
+            }
+            if (hasSelection) {
+                item.hidden = NO;
+            } else {
+                [strongMenu removeItem:item];
+            }
+        }
+    }];
+}
+
+- (void)meo_copySelection:(id)sender {
+#pragma unused(sender)
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        NSString *text = (NSString *)result;
+        if (text.length == 0) {
+            return;
+        }
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+        [pasteboard setString:text forType:NSPasteboardTypeString];
+    }];
 }
 
 - (void)meo_insertOpenSelectionURLItemInMenu:(NSMenu *)menu nearItem:(NSMenuItem *)nearItem {

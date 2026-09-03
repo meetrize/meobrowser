@@ -4,7 +4,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /// WKWebView 子类：拦截系统右键菜单中无效的「Search with…」与「Download Image」等项；
-/// 选中文本含 http(s):// 时补充「在新标签中打开」。
+/// 选中文本含 http(s):// 时补充「在新标签中打开」；
+/// 选中超链文字时合并文本项（搜索 / 拷贝）与链接项。
 @interface BrowserWebView : WKWebView
 
 /// 在应用内打开 URL（通常为新标签）。未设置时回退为当前 WebView 加载。
