@@ -15,8 +15,11 @@ typedef NS_ENUM(NSInteger, BrowserTabDragGhostStyle) {
 @property (nonatomic, assign, readonly) BrowserTabDragGhostStyle style;
 @property (nonatomic, assign, readonly) NSSize ghostSize;
 
-/// 从源标签截图并显示；grabPointInSource 为按下点相对源视图 bounds 的坐标。
-- (void)beginWithSourceView:(NSView *)sourceView grabPointInSource:(NSPoint)grabPointInSource;
+/// 从源标签显示影子；先空壳跟手，截图延后到下一 runloop（afterCapture 在截图尝试后回调，可能已取消）。
+/// grabPointInSource 为按下点相对源视图 bounds 的坐标。
+- (void)beginWithSourceView:(NSView *)sourceView
+          grabPointInSource:(NSPoint)grabPointInSource
+               afterCapture:(void (^ _Nullable)(void))afterCapture;
 
 /// 指针屏幕坐标（AppKit 原点左下）。
 - (void)moveToScreenPoint:(NSPoint)screenPoint;

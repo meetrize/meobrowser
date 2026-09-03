@@ -36,6 +36,10 @@ static const CGFloat kPinAfterFaviconGap = 4.0;
 /// 提高阈值 + 时间门控，避免主线程卡顿时微抖把单击判成拖拽。
 static const CGFloat kReorderDragThreshold = 10.0;
 static const NSTimeInterval kReorderDragMinDuration = 0.15;
+/// 单帧位移过大视为卡顿后的「瞬移」队列事件，重定起点而非开拖。
+static const CGFloat kReorderDragTeleportReject = 48.0;
+/// 需连续多帧超阈值才 commit，吸收主线程恢复后的突发 dragged。
+static const NSInteger kReorderDragConfirmSamples = 2;
 static const CGFloat kPinIconSize = 12.0;
 static const NSTimeInterval kTabHoverTipDelay = 0.65;
 
@@ -787,18 +791,20 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
 
-    if (self.onSelect) {
-        self.onSelect();
-    }
-
+    // 选中与拖拽解耦：先进入 tracking 排空延迟事件，再在 mouseUp / drag-commit 时选中。
+    // 旧路径在 mouseDown 同步 onSelect→refreshTabsUI，主线程一卡就把单击判成拖拽。
     NSWindow *window = self.window;
     if (!window) {
+        if (self.onSelect) {
+            self.onSelect();
+        }
         return;
     }
 
     NSPoint start = event.locationInWindow;
     NSTimeInterval mouseDownTime = event.timestamp;
     BOOL dragging = NO;
+    NSInteger confirmSamples = 0;
     NSEventMask mask = NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp;
 
     while (YES) {
@@ -816,10 +822,26 @@ NSColor *BrowserTabActiveFillColor(void) {
             CGFloat distance = hypot(deltaX, deltaY);
             if (!dragging) {
                 NSTimeInterval held = next.timestamp - mouseDownTime;
+                if (distance >= kReorderDragTeleportReject) {
+                    // 卡顿恢复后队列里的瞬移：重定原点，不累计确认帧。
+                    start = next.locationInWindow;
+                    mouseDownTime = next.timestamp;
+                    confirmSamples = 0;
+                    continue;
+                }
                 if (distance < kReorderDragThreshold || held < kReorderDragMinDuration) {
+                    confirmSamples = 0;
+                    continue;
+                }
+                confirmSamples += 1;
+                if (confirmSamples < kReorderDragConfirmSamples) {
                     continue;
                 }
                 dragging = YES;
+                // 真正开拖后再选中，避免选中阻塞干扰手势判别。
+                if (self.onSelect) {
+                    self.onSelect();
+                }
                 if (self.onReorderDragBegan) {
                     self.onReorderDragBegan(next.locationInWindow);
                 }
@@ -830,8 +852,13 @@ NSColor *BrowserTabActiveFillColor(void) {
             continue;
         }
 
-        if (dragging && self.onReorderDragEnded) {
-            self.onReorderDragEnded(next.locationInWindow);
+        // mouseUp
+        if (dragging) {
+            if (self.onReorderDragEnded) {
+                self.onReorderDragEnded(next.locationInWindow);
+            }
+        } else if (self.onSelect) {
+            self.onSelect();
         }
         break;
     }

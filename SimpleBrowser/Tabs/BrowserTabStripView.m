@@ -1168,12 +1168,21 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
     NSPoint grabInItem = [item convertPoint:locationInWindow fromView:nil];
     self.dragGhost = [[BrowserTabDragGhostController alloc] init];
-    [self.dragGhost beginWithSourceView:item grabPointInSource:grabInItem];
+    __weak typeof(self) weakSelf = self;
+    __weak BrowserTabItemView *weakItem = item;
+    [self.dragGhost beginWithSourceView:item
+                      grabPointInSource:grabInItem
+                           afterCapture:^{
+        typeof(self) strongSelf = weakSelf;
+        BrowserTabItemView *strongItem = weakItem;
+        if (!strongSelf || !strongItem || strongSelf.draggingItem != strongItem || strongSelf.dragEnding) {
+            return;
+        }
+        strongItem.hidden = YES;
+        [strongSelf layoutTabsExcludingDraggedItem:strongItem];
+    }];
     NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
     [self.dragGhost moveToScreenPoint:screenPoint];
-
-    item.hidden = YES;
-    [self layoutTabsExcludingDraggedItem:item];
 }
 
 - (nullable BrowserWindowController *)hostBrowserWindowController {

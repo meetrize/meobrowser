@@ -1,4 +1,5 @@
 #import "BrowserTabDragGhostController.h"
+#import "BrowserTabItemView.h"
 #import <QuartzCore/QuartzCore.h>
 
 static const CGFloat kGhostInStripAlpha = 0.88;
@@ -14,6 +15,7 @@ static const CGFloat kGhostDetachScale = 1.03;
 @property (nonatomic, assign) NSSize sourceSize;
 @property (nonatomic, assign, readwrite) BrowserTabDragGhostStyle style;
 @property (nonatomic, assign) BOOL animatingOut;
+@property (nonatomic, assign) NSUInteger captureGeneration;
 @end
 
 @implementation BrowserTabDragGhostController
@@ -26,10 +28,15 @@ static const CGFloat kGhostDetachScale = 1.03;
     return self.sourceSize;
 }
 
-- (void)beginWithSourceView:(NSView *)sourceView grabPointInSource:(NSPoint)grabPointInSource {
+- (void)beginWithSourceView:(NSView *)sourceView
+          grabPointInSource:(NSPoint)grabPointInSource
+               afterCapture:(void (^ _Nullable)(void))afterCapture {
     [self endAndRemoveImmediately];
 
     if (!sourceView || NSWidth(sourceView.bounds) < 1 || NSHeight(sourceView.bounds) < 1) {
+        if (afterCapture) {
+            afterCapture();
+        }
         return;
     }
 
@@ -37,15 +44,6 @@ static const CGFloat kGhostDetachScale = 1.03;
     self.sourceSize = sourceView.bounds.size;
     self.style = BrowserTabDragGhostStyleInStrip;
     self.animatingOut = NO;
-
-    NSBitmapImageRep *rep =
-        [sourceView bitmapImageRepForCachingDisplayInRect:sourceView.bounds];
-    if (!rep) {
-        return;
-    }
-    [sourceView cacheDisplayInRect:sourceView.bounds toBitmapImageRep:rep];
-    NSImage *image = [[NSImage alloc] initWithSize:sourceView.bounds.size];
-    [image addRepresentation:rep];
 
     NSPanel *panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, self.sourceSize.width, self.sourceSize.height)
                                                  styleMask:NSWindowStyleMaskBorderless
@@ -67,14 +65,15 @@ static const CGFloat kGhostDetachScale = 1.03;
     content.wantsLayer = YES;
     content.layer.backgroundColor = [NSColor clearColor].CGColor;
 
+    // 先挂廉价占位跟手；截图放到下一拍，避免 commit 边沿同步 cacheDisplay。
     NSImageView *imageView = [[NSImageView alloc] initWithFrame:content.bounds];
-    imageView.image = image;
     imageView.imageScaling = NSImageScaleAxesIndependently;
     imageView.wantsLayer = YES;
     imageView.alphaValue = kGhostInStripAlpha;
     imageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     imageView.layer.cornerRadius = 6.0;
-    imageView.layer.masksToBounds = NO;
+    imageView.layer.masksToBounds = YES;
+    imageView.layer.backgroundColor = BrowserTabActiveFillColor().CGColor;
     imageView.layer.shadowColor = [NSColor blackColor].CGColor;
     imageView.layer.shadowOpacity = 0.25;
     imageView.layer.shadowRadius = 8.0;
@@ -107,6 +106,46 @@ static const CGFloat kGhostDetachScale = 1.03;
     self.panel = panel;
     self.imageView = imageView;
     self.badgeLabel = badge;
+
+    NSUInteger generation = ++self.captureGeneration;
+    __weak typeof(self) weakSelf = self;
+    __weak NSView *weakSource = sourceView;
+    void (^finish)(void) = ^{
+        if (afterCapture) {
+            afterCapture();
+        }
+    };
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        NSView *strongSource = weakSource;
+        if (!strongSelf) {
+            finish();
+            return;
+        }
+        if (strongSelf.captureGeneration != generation || strongSelf.panel == nil) {
+            // 已取消：不要再隐藏源标签。
+            return;
+        }
+        if (strongSource && NSWidth(strongSource.bounds) >= 1 && NSHeight(strongSource.bounds) >= 1
+            && !strongSource.hidden) {
+            NSBitmapImageRep *rep =
+                [strongSource bitmapImageRepForCachingDisplayInRect:strongSource.bounds];
+            if (rep) {
+                [strongSource cacheDisplayInRect:strongSource.bounds toBitmapImageRep:rep];
+                if (strongSelf.captureGeneration == generation && strongSelf.imageView != nil) {
+                    NSImage *image = [[NSImage alloc] initWithSize:strongSource.bounds.size];
+                    [image addRepresentation:rep];
+                    strongSelf.imageView.image = image;
+                    strongSelf.imageView.layer.backgroundColor = [NSColor clearColor].CGColor;
+                    strongSelf.imageView.layer.masksToBounds = NO;
+                }
+            }
+        }
+        if (strongSelf.captureGeneration != generation) {
+            return;
+        }
+        finish();
+    });
 }
 
 - (void)moveToScreenPoint:(NSPoint)screenPoint {
@@ -269,6 +308,7 @@ static const CGFloat kGhostDetachScale = 1.03;
 }
 
 - (void)endAndRemoveImmediately {
+    self.captureGeneration += 1;
     self.animatingOut = NO;
     if (self.panel) {
         [self.panel orderOut:nil];
