@@ -140,6 +140,11 @@
                                                        keyEquivalent:@""];
             transparentMode.target = nil;
 
+            NSMenuItem *presentationFullscreen = [viewMenu addItemWithTitle:@"进入全屏"
+                                                                     action:@selector(togglePresentationFullscreen:)
+                                                              keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSF11FunctionKey]];
+            presentationFullscreen.target = nil;
+
             [viewMenu addItem:[NSMenuItem separatorItem]];
 
             NSMenuItem *zoomIn = [viewMenu addItemWithTitle:@"放大"

@@ -44,6 +44,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserChromeActionMenuRowView.m \
                    $(BROWSER_SRC_DIR)/ChromeActions/BrowserTabStripChromeActionsView.m \
                    $(BROWSER_SRC_DIR)/AfkMode/BrowserAfkModeController.m \
+                   $(BROWSER_SRC_DIR)/PresentationFullscreen/BrowserPresentationFullscreenController.m \
                    $(BROWSER_SRC_DIR)/AutoScroll/BrowserAutoScrollPreferences.m \
                    $(BROWSER_SRC_DIR)/AutoScroll/BrowserAutoScrollController.m \
                    $(BROWSER_SRC_DIR)/WindowLayout/BrowserWindowLayoutPresetStore.m \
@@ -221,7 +222,7 @@ BROWSER_INJECT_CFLAGS := -DMEO_ENABLE_INJECTION=1
 BROWSER_INJECT_LDFLAGS := -Xlinker -interposable
 endif
 
-BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation $(BROWSER_INJECT_LDFLAGS)
 

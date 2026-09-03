@@ -17,6 +17,7 @@
 #import "BrowserTransparentModePreferences.h"
 #import "BrowserTransparentChromeAutoHideController.h"
 #import "BrowserAfkModeController.h"
+#import "BrowserPresentationFullscreenController.h"
 #import "BrowserAutoScrollController.h"
 #import "BrowserAutoScrollPreferences.h"
 #import "BrowserWindowLayoutPresetStore.h"
@@ -171,6 +172,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTransparentModeController *transparentModeController;
 @property (nonatomic, strong) BrowserTransparentChromeAutoHideController *transparentChromeAutoHideController;
 @property (nonatomic, strong) BrowserAfkModeController *afkModeController;
+@property (nonatomic, strong) BrowserPresentationFullscreenController *presentationFullscreenController;
+@property (nonatomic, assign) BOOL presentationChromeForcedHidden;
 @property (nonatomic, strong) BrowserAutoScrollController *autoScrollController;
 @property (nonatomic, assign) BOOL smallLayoutTransparentSnapshotValid;
 @property (nonatomic, assign) BOOL smallLayoutTransparentSnapshot;
@@ -438,6 +441,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         };
         _afkModeController = [[BrowserAfkModeController alloc] init];
         _afkModeController.windowController = self;
+        _presentationFullscreenController = [[BrowserPresentationFullscreenController alloc] init];
+        _presentationFullscreenController.windowController = self;
         _autoScrollController = [[BrowserAutoScrollController alloc] init];
         _autoScrollController.windowController = self;
         __weak typeof(self) weakSelfForScroll = self;
@@ -686,9 +691,17 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (notification.object != self.window) {
         return;
     }
+    [self.presentationFullscreenController windowDidExitNativeFullscreen];
     [self applyAlwaysOnTopWindowLevel];
     [self syncChromeActionButtonStates];
     [self scheduleTrafficLightPositioning];
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    if (notification.object != self.window) {
+        return;
+    }
+    [self.presentationFullscreenController windowDidEnterNativeFullscreen];
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification *)notification {
@@ -1692,6 +1705,116 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+#pragma mark - Presentation Fullscreen (Host)
+
+- (BOOL)isPresentationFullscreenActive {
+    return self.presentationFullscreenController.isActive;
+}
+
+- (void)togglePresentationFullscreen:(id)sender {
+    (void)sender;
+    [self.presentationFullscreenController toggle];
+}
+
+- (BOOL)canEnterPresentationFullscreen {
+    if (self.window.attachedSheet) {
+        return NO;
+    }
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage || tab.pendingHardRecover) {
+        return NO;
+    }
+    WKWebView *webView = tab.webView;
+    if (!webView) {
+        return NO;
+    }
+    if ([self webViewIsInElementFullscreen:webView]) {
+        return NO;
+    }
+    return YES;
+}
+
+- (void)presentationFullscreenPrepareToEnter {
+    if (self.transparentModeEnabled) {
+        [self setTransparentModeEnabled:NO];
+    }
+    if (self.afkModeEnabled) {
+        [self setAfkModeEnabled:NO];
+    }
+    [self dismissTransientUIForTransparentMode];
+    [self.trailingSidebarSlot hideAllAnimated:NO];
+}
+
+- (void)presentationFullscreenApplyChromeHidden:(BOOL)hidden {
+    self.presentationChromeForcedHidden = hidden;
+    if (hidden) {
+        if (self.isTabOverviewVisible) {
+            [self hideTabOverview];
+        }
+        if (self.tabStripAccessoryRoot) {
+            self.tabStripAccessoryRoot.hidden = YES;
+        }
+        if (self.tabStripAccessoryHeightConstraint) {
+            self.tabStripAccessoryHeightConstraint.constant = 0.0;
+        }
+        [self setStandardWindowButtonsHidden:YES];
+        self.toolbar.hidden = YES;
+        self.launchpadView.hidden = YES;
+        self.loadingProgressView.hidden = YES;
+        self.certificateWarningView.hidden = YES;
+        self.navigationErrorView.hidden = YES;
+        self.findBarController.findBarView.hidden = YES;
+    } else {
+        self.loadingProgressView.hidden = NO;
+        self.findBarController.findBarView.hidden = !self.findBarController.isVisible;
+        [self syncCertificateWarningVisibilityForSelectedTab];
+        [self syncNavigationErrorVisibilityForSelectedTab];
+    }
+
+    if (self.window.isVisible) {
+        [self.window.contentView layoutSubtreeIfNeeded];
+    }
+}
+
+- (void)presentationFullscreenLayoutSelectedWebView {
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return;
+    }
+    WKWebView *webView = tab.webView;
+    if (!webView) {
+        return;
+    }
+    if ([self webViewIsInElementFullscreen:webView]) {
+        [self pinWebViewLayoutInSuperview:webView];
+        return;
+    }
+    if (webView.superview != nil && webView.superview != self.contentContainer) {
+        [self pinWebViewLayoutInSuperview:webView];
+        [self.contentContainer layoutSubtreeIfNeeded];
+        return;
+    }
+    if (webView.superview != self.contentContainer) {
+        [self.contentContainer addSubview:webView];
+    }
+    webView.hidden = NO;
+    [self pinWebViewLayoutInSuperview:webView];
+    [self.contentContainer layoutSubtreeIfNeeded];
+    [self.window.contentView layoutSubtreeIfNeeded];
+}
+
+- (void)presentationFullscreenRestoreChromeAfterExit {
+    [self presentationFullscreenApplyChromeHidden:NO];
+    [self applyChromeVisibilityForCurrentMode];
+    [self scheduleTrafficLightPositioning];
+    [self syncChromeActionButtonStates];
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (tab && !tab.isNewTabPage && tab.webView) {
+        [self pinWebViewLayoutInSuperview:tab.webView];
+        [self.contentContainer layoutSubtreeIfNeeded];
+    }
+}
+
 - (void)enterTransparentModeChrome {
     NSWindow *window = self.window;
     if (!window) {
@@ -1999,6 +2122,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)applyChromeVisibilityForCurrentMode {
+    if (self.presentationChromeForcedHidden) {
+        [self presentationFullscreenApplyChromeHidden:YES];
+        return;
+    }
     BOOL transparent = self.transparentModeEnabled;
     BOOL chromeRevealed = !transparent || (self.transparentChromeAutoHideController.chromeRevealed
                                            && !self.transparentChromeRevealSuppressedForDrag);
@@ -4537,12 +4664,24 @@ didRequestTransferTabID:(NSUUID *)tabID
     if (event.isARepeat) {
         return event;
     }
-    // Esc：停止当前标签加载（即使尚未进入 provisional）。
+    // Esc：网页全屏优先退出；否则停止当前标签加载。
     if (event.keyCode == 53) {
+        if (self.isPresentationFullscreenActive) {
+            [self.presentationFullscreenController exit];
+            return nil;
+        }
         BrowserTab *tab = self.tabController.selectedTab;
         WKWebView *webView = self.webView;
         if (webView && tab && !tab.isNewTabPage && (webView.isLoading || tab.isLoading)) {
             [self stopLoadingInWebView:webView];
+            return nil;
+        }
+        return event;
+    }
+    // F11：切换网页全屏（Chrome 式）。
+    if (event.keyCode == 103) {
+        if (self.isPresentationFullscreenActive || [self.presentationFullscreenController canEnter]) {
+            [self.presentationFullscreenController toggle];
             return nil;
         }
         return event;
@@ -4610,6 +4749,14 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         }
         menuItem.state = self.transparentModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
         return YES;
+    }
+    if (action == @selector(togglePresentationFullscreen:)) {
+        if (self.isPresentationFullscreenActive) {
+            menuItem.title = @"退出全屏";
+            return YES;
+        }
+        menuItem.title = @"进入全屏";
+        return [self canEnterPresentationFullscreen];
     }
     if (action == @selector(toggleAfkMode:)) {
         if (self.window.styleMask & NSWindowStyleMaskFullScreen) {

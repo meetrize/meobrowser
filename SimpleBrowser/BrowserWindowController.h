@@ -55,11 +55,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)toggleAlwaysOnTop:(nullable id)sender;
 - (void)toggleTransparentMode:(nullable id)sender;
 - (void)toggleAfkMode:(nullable id)sender;
+- (void)togglePresentationFullscreen:(nullable id)sender;
 - (void)focusAddressBar:(nullable id)sender;
 @property (nonatomic, assign, getter=isCompactModeEnabled) BOOL compactModeEnabled;
 @property (nonatomic, assign, getter=isAlwaysOnTopEnabled) BOOL alwaysOnTopEnabled;
 @property (nonatomic, assign, getter=isTransparentModeEnabled) BOOL transparentModeEnabled;
 @property (nonatomic, assign, getter=isAfkModeEnabled) BOOL afkModeEnabled;
+@property (nonatomic, assign, getter=isPresentationFullscreenActive, readonly) BOOL presentationFullscreenActive;
 @property (nonatomic, assign) BrowserWindowLayoutMode windowLayoutMode;
 
 /// 透明模式右键拖窗进行中时抑制 WebKit 上下文菜单。
