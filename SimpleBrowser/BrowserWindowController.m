@@ -233,6 +233,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserTabOverviewController *tabOverviewController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
+/// 全屏顶栏可见时持续校正红绿灯（窗口模式不用）。
+@property (nonatomic, strong, nullable) NSTimer *trafficLightRepairTimer;
 @property (nonatomic, strong) BrowserCertificateWarningView *certificateWarningView;
 @property (nonatomic, strong) BrowserNavigationErrorView *navigationErrorView;
 @property (nonatomic, strong) NSMapTable<WKWebView *, BrowserPendingSSLAuth *> *pendingSSLAuthByWebView;
@@ -551,7 +553,20 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 /// 相对标签栏垂直中心的额外下移量（pt），正值表示向标题栏底部方向移动。
 static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
-/// 压扁系统标题栏装饰区高度，避免 accessory 标签条上方再露出一截标题栏。
+- (BOOL)isNativeFullscreenActive {
+    return (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+}
+
+/// 全屏收起态必须为 0，否则 accessory 常驻、标签栏无法自动隐藏。
+- (void)ensureTabStripAccessoryAllowsFullscreenAutoHide {
+    if (!self.tabStripAccessory) {
+        return;
+    }
+    if (self.tabStripAccessory.fullScreenMinHeight != 0.0) {
+        self.tabStripAccessory.fullScreenMinHeight = 0.0;
+    }
+}
+
 - (void)collapseSystemTitlebarDecoration {
     NSWindow *window = self.window;
     NSView *themeFrame = window.contentView.superview;
@@ -569,10 +584,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 }
 
+/// 恢复原先可工作的写 frame 逻辑（切标签依赖此路径）；不做「已对齐跳过」。
 - (BOOL)positionTrafficLightButtons {
     NSWindow *window = self.window;
     if (!window || !window.isVisible) {
         return NO;
+    }
+    if (self.presentationChromeForcedHidden) {
+        return YES;
     }
 
     NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
@@ -594,6 +613,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
 
     NSView *container = closeButton.superview;
+    // 全屏顶栏容器常 clips，放开以免上半裁切。
+    container.clipsToBounds = NO;
+    if (container.superview) {
+        container.superview.clipsToBounds = NO;
+    }
+
     NSPoint tabCenterInContainer = [self.tabStripView convertPoint:NSMakePoint(NSMidX(self.tabStripView.bounds),
                                                                               NSMidY(self.tabStripView.bounds))
                                                             toView:container];
@@ -619,9 +644,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         frame.origin.y = targetCenterY - NSHeight(frame) / 2.0;
         button.frame = frame;
     }
+
+    if ([NSProcessInfo.processInfo.environment[@"MEO_DEBUG_TRAFFIC_LIGHT"] isEqualToString:@"1"]) {
+        NSPoint stripMid =
+            [self.tabStripView convertPoint:NSMakePoint(NSMidX(self.tabStripView.bounds),
+                                                        NSMidY(self.tabStripView.bounds))
+                                     toView:nil];
+        NSPoint buttonMid =
+            [closeButton convertPoint:NSMakePoint(NSMidX(closeButton.bounds),
+                                                  NSMidY(closeButton.bounds))
+                               toView:nil];
+        NSLog(@"[TrafficLight] stripMidY=%.2f btnMidY=%.2f delta=%.2f targetY=%.2f fs=%d",
+              stripMid.y, buttonMid.y, stripMid.y - buttonMid.y, targetCenterY,
+              [self isNativeFullscreenActive]);
+    }
     return YES;
 }
 
+/// 切标签生效的路径：布局后再写两次，不要在这里 collapse（避免打乱 titlebar）。
 - (void)repositionTrafficLightButtonsAfterLayout {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self positionTrafficLightButtons];
@@ -640,14 +680,76 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self repositionTrafficLightButtonsAfterLayout];
 }
 
+- (void)stopTrafficLightRepairTimer {
+    [self.trafficLightRepairTimer invalidate];
+    self.trafficLightRepairTimer = nil;
+}
+
+/// 全屏且标签条可见时，对抗 AppKit 覆盖 frame；窗口模式不启用。
+- (void)startTrafficLightRepairTimerIfNeeded {
+    if (![self isNativeFullscreenActive] || self.presentationChromeForcedHidden) {
+        [self stopTrafficLightRepairTimer];
+        return;
+    }
+    if (self.trafficLightRepairTimer != nil) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    self.trafficLightRepairTimer =
+        [NSTimer timerWithTimeInterval:1.0 / 30.0
+                               repeats:YES
+                                 block:^(NSTimer *timer) {
+                                     typeof(self) strongSelf = weakSelf;
+                                     if (!strongSelf) {
+                                         [timer invalidate];
+                                         return;
+                                     }
+                                     if (![strongSelf isNativeFullscreenActive]
+                                         || strongSelf.presentationChromeForcedHidden) {
+                                         [strongSelf stopTrafficLightRepairTimer];
+                                         return;
+                                     }
+                                     // 标签条仍在层级内才修；收起时 frame 可能仍有效但按钮不可见。
+                                     NSButton *closeButton =
+                                         [strongSelf.window standardWindowButton:NSWindowCloseButton];
+                                     if (!closeButton || closeButton.hidden || !closeButton.superview) {
+                                         return;
+                                     }
+                                     if (!strongSelf.tabStripView.window) {
+                                         return;
+                                     }
+                                     [strongSelf positionTrafficLightButtons];
+                                 }];
+    [[NSRunLoop mainRunLoop] addTimer:self.trafficLightRepairTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)tabStripAccessoryFrameDidChange:(NSNotification *)notification {
+    (void)notification;
+    if (![self isNativeFullscreenActive]) {
+        return;
+    }
+    [self startTrafficLightRepairTimerIfNeeded];
+    [self positionTrafficLightButtons];
+    [self repositionTrafficLightButtonsAfterLayout];
+}
+
 - (void)scheduleTrafficLightPositioning {
-    // 用 generation 取消 resize/move 风暴中堆积的重试与延迟定位。
     NSInteger generation = ++self.trafficLightScheduleGeneration;
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
     [self collapseSystemTitlebarDecoration];
     [self tryPositionTrafficLightsStartingAtAttempt:0 generation:generation];
 
+    if ([self isNativeFullscreenActive]) {
+        [self startTrafficLightRepairTimerIfNeeded];
+    } else {
+        [self stopTrafficLightRepairTimer];
+    }
+
     __weak typeof(self) weakSelf = self;
-    for (NSNumber *delayMs in @[@50, @200]) {
+    NSArray<NSNumber *> *delaysMs = [self isNativeFullscreenActive]
+        ? @[ @50, @200, @400, @700 ]
+        : @[ @50, @200 ];
+    for (NSNumber *delayMs in delaysMs) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayMs.doubleValue * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
@@ -656,6 +758,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             }
             [strongSelf collapseSystemTitlebarDecoration];
             [strongSelf positionTrafficLightButtons];
+            [strongSelf repositionTrafficLightButtonsAfterLayout];
         });
     }
 }
@@ -691,9 +794,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (notification.object != self.window) {
         return;
     }
+    [self stopTrafficLightRepairTimer];
     [self.presentationFullscreenController windowDidExitNativeFullscreen];
     [self applyAlwaysOnTopWindowLevel];
     [self syncChromeActionButtonStates];
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
     [self scheduleTrafficLightPositioning];
 }
 
@@ -702,6 +807,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return;
     }
     [self.presentationFullscreenController windowDidEnterNativeFullscreen];
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
+    [self startTrafficLightRepairTimerIfNeeded];
+    [self scheduleTrafficLightPositioning];
 }
 
 - (void)windowWillEnterFullScreen:(NSNotification *)notification {
@@ -751,6 +859,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         dispatch_block_cancel(self.pendingPersistBlock);
         self.pendingPersistBlock = nil;
     }
+    self.trafficLightScheduleGeneration += 1;
+    [self stopTrafficLightRepairTimer];
     id delegate = NSApp.delegate;
     if ([delegate respondsToSelector:@selector(browserWindowControllerWillClose:)]) {
         [(AppDelegate *)delegate browserWindowControllerWillClose:self];
@@ -1038,7 +1148,20 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     // 必须在 add 之前设置
     self.tabStripAccessory.layoutAttribute = NSLayoutAttributeBottom;
     [self.window addTitlebarAccessoryViewController:self.tabStripAccessory];
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
     [self collapseSystemTitlebarDecoration];
+
+    // 全屏顶栏滑入改的是 accessory/标签条 frame，未必总有 window DidResize；对齐切标签触发定位。
+    accessoryRoot.postsFrameChangedNotifications = YES;
+    self.tabStripView.postsFrameChangedNotifications = YES;
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(tabStripAccessoryFrameDidChange:)
+                                                 name:NSViewFrameDidChangeNotification
+                                               object:accessoryRoot];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(tabStripAccessoryFrameDidChange:)
+                                                 name:NSViewFrameDidChangeNotification
+                                               object:self.tabStripView];
 
     self.rootStack = [NSStackView stackViewWithViews:@[
         self.toolbar, self.contentRowStack
@@ -1770,6 +1893,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self syncCertificateWarningVisibilityForSelectedTab];
         [self syncNavigationErrorVisibilityForSelectedTab];
     }
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
 
     if (self.window.isVisible) {
         [self.window.contentView layoutSubtreeIfNeeded];
@@ -2157,6 +2281,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (self.tabStripAccessoryHeightConstraint) {
         self.tabStripAccessoryHeightConstraint.constant = stripHeight;
     }
+    [self ensureTabStripAccessoryAllowsFullscreenAutoHide];
     self.toolbar.hidden = !showToolbar;
 
     if (self.window.isVisible) {
