@@ -207,40 +207,8 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self applyIncomingOTPCode:code copiedToClipboard:copied];
 }
 
-/// Companion/粘贴等到码且当前没有 waiter 时：优先按 Recipe 填栏，否则插入光标位置。
+/// Companion/粘贴等到码且当前没有 waiter 时：插入光标位置。
 - (void)applyIncomingOTPCode:(NSString *)code copiedToClipboard:(BOOL)copied {
-    WKWebView *webView = self.windowController.webView;
-    NSURL *url = webView.URL;
-    LoginRecipe *recipe = url ? [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url] : nil;
-    BOOL hasOTPRecipe = (recipe.otpSelector.length > 0);
-
-    if (hasOTPRecipe && webView) {
-        __weak typeof(self) weakSelf = self;
-        [LoginRunner fillOTPCode:code
-                       intoRecipe:recipe
-                        inWebView:webView
-                     shouldSubmit:NO
-                       completion:^(BOOL success, NSError *error) {
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf) {
-                return;
-            }
-            if (success) {
-                [[OTPInbox sharedInbox] markCodeConsumed:code];
-                NSString *status = copied
-                    ? @"已按 Recipe 填入（并已复制到剪贴板）"
-                    : @"已按 Recipe 填入";
-                [strongSelf showOTPFollowUpToastWithCode:code status:status];
-            } else {
-                // Recipe 填入失败则退化为光标插入
-                [strongSelf insertOTPAtCaret:code
-                           copiedToClipboard:copied
-                              failureReason:error.localizedDescription];
-            }
-        }];
-        return;
-    }
-
     [self insertOTPAtCaret:code copiedToClipboard:copied failureReason:nil];
 }
 
@@ -895,8 +863,8 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         return;
     }
     if (recipe) {
-        // Recipe 自带 waitOTP 时走完整流程；仅启发式 OTP（无 Recipe 短信步）才 fillOnly。
-        BOOL fillOnly = self.detectedHasOTP && ![recipe requiresOTPWait];
+        // 页上有启发式 OTP 时仅填帐密，需用户手动完成验证。
+        BOOL fillOnly = self.detectedHasOTP;
         [self runRecipe:recipe fillOnly:fillOnly notifyOTP:fillOnly];
         return;
     }
@@ -985,8 +953,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     } else {
         for (LoginRecipe *recipe in recipes) {
             NSString *base = recipe.title.length > 0 ? recipe.title : recipe.host;
-            BOOL recipeHandlesOTP = [recipe requiresOTPWait];
-            if (hasOTP && !recipeHandlesOTP) {
+            if (hasOTP) {
                 NSString *title = [NSString stringWithFormat:@"填入帐密 · %@（请手动完成验证）", base];
                 NSMenuItem *fill = [[NSMenuItem alloc] initWithTitle:title
                                                               action:@selector(runRecipeFillOnlyFromMenu:)
@@ -995,9 +962,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
                 fill.representedObject = recipe.recipeID;
                 [menu addItem:fill];
             } else {
-                NSString *loginTitle = recipeHandlesOTP
-                    ? [NSString stringWithFormat:@"一键登录（含验证码）· %@", base]
-                    : [NSString stringWithFormat:@"一键登录 · %@", base];
+                NSString *loginTitle = [NSString stringWithFormat:@"一键登录 · %@", base];
                 NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:loginTitle
                                                                action:@selector(runRecipeFromMenu:)
                                                         keyEquivalent:@""];
@@ -1251,9 +1216,6 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     if ([slot isEqualToString:@"password"]) {
         return recipe.passwordSelector ?: @"";
     }
-    if ([slot isEqualToString:@"phone"]) {
-        return recipe.phoneSelector ?: @"";
-    }
     return @"";
 }
 
@@ -1376,10 +1338,9 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
                                           duration:2.5];
                 return;
             }
-            [LoginRunner fillOTPCode:code
-                           intoRecipe:recipe
+            [LoginRunner fillSelector:selector
+                                value:code
                             inWebView:webView
-                         shouldSubmit:NO
                            completion:^(BOOL success, NSError *fillError) {
                 if (success) {
                     [[OTPInbox sharedInbox] markCodeConsumed:code];
@@ -1597,18 +1558,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         }
 
         LoginRecipe *current = [[LoginRecipeStore sharedStore] recipeWithID:recipeID] ?: recipe;
-        BOOL needsOTP = [current requiresOTPWait];
         BOOL hasUserPass = (credentials.username.length > 0) || (credentials.password.length > 0);
-        if (!needsOTP && !hasUserPass) {
+        if (!hasUserPass) {
             strongSelf.isRunning = NO;
             [strongSelf refreshButtonAppearance];
             [strongSelf showError:@"缺少账号密码" message:@"请在助手侧栏中填写用户名与密码。" recipeID:recipeID];
-            return;
-        }
-        if (needsOTP && current.otpSelector.length == 0) {
-            strongSelf.isRunning = NO;
-            [strongSelf refreshButtonAppearance];
-            [strongSelf showError:@"缺少验证码配置" message:@"请在助手侧栏中配置验证码选择器。" recipeID:recipeID];
             return;
         }
 
@@ -1618,15 +1572,6 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
             [strongSelf refreshButtonAppearance];
             [strongSelf showError:@"无法登录" message:@"当前没有可操作的网页。" recipeID:recipeID];
             return;
-        }
-        if (needsOTP && !fillOnly) {
-            NSString *channelHint = [CompanionChannel sharedChannel].state == CompanionChannelStateConnected
-                ? @"等待手机推送验证码…"
-                : @"等待验证码…（手机未连接时可粘贴）";
-            [BrowserTransientToast showMessage:channelHint
-                                      inWindow:strongSelf.windowController.window
-                                      duration:2.5];
-            [strongSelf startClipboardPolling];
         }
 
         [LoginRunner runRecipe:current
@@ -1643,10 +1588,6 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
             [runnerSelf refreshButtonAppearance];
             if (!success) {
                 NSString *message = error.localizedDescription ?: @"未知错误";
-                if ([CompanionChannel sharedChannel].state != CompanionChannelStateConnected &&
-                    [current requiresOTPWait]) {
-                    message = [message stringByAppendingString:@"\n提示：可在助手侧栏或高级设置中查看配对状态，或粘贴验证码后重试。"];
-                }
                 [runnerSelf showError:@"登录助手执行失败"
                               message:message
                              recipeID:recipeID];

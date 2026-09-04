@@ -180,7 +180,6 @@
             if (!existing) {
                 recipe.isDefault = YES;
             }
-            recipe.mode = LoginRecipeModePassword;
 
             [[LoginRecipeStore sharedStore] upsertRecipe:recipe error:nil];
             [[LoginCredentialStore sharedStore] saveUsername:username

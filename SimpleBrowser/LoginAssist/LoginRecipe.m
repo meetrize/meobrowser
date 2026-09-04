@@ -1,10 +1,6 @@
 #import "LoginRecipe.h"
 #import "MeoSiteMatch.h"
 
-LoginRecipeMode const LoginRecipeModePassword = @"password";
-LoginRecipeMode const LoginRecipeModeSMSOTP = @"sms_otp";
-LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
-
 @implementation LoginRecipeExtraField
 
 + (instancetype)fieldWithLabel:(NSString *)label selector:(NSString *)selector value:(NSString *)value {
@@ -81,12 +77,10 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     recipe.recipeID = [[NSUUID UUID] UUIDString];
     recipe.title = title.length > 0 ? title : host;
     recipe.host = host.lowercaseString ?: @"";
-    recipe.mode = LoginRecipeModePassword;
     recipe.autoLogin = NO;
     recipe.isDefault = NO;
     recipe.submitByEnter = YES;
     recipe.waitTimeoutMs = 8000;
-    recipe.otpMaxWaitMs = 120000;
     recipe.extraFields = @[];
     recipe.updatedAt = [NSDate date].timeIntervalSince1970;
     return recipe;
@@ -98,10 +92,8 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
         _recipeID = [[NSUUID UUID] UUIDString];
         _title = @"";
         _host = @"";
-        _mode = LoginRecipeModePassword;
         _submitByEnter = YES;
         _waitTimeoutMs = 8000;
-        _otpMaxWaitMs = 120000;
         _extraFields = @[];
         _updatedAt = [NSDate date].timeIntervalSince1970;
     }
@@ -117,19 +109,14 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     copy.port = self.port;
     copy.pathPrefix = self.pathPrefix;
     copy.pathMatchMode = self.pathMatchMode;
-    copy.mode = self.mode;
     copy.autoLogin = self.autoLogin;
     copy.isDefault = self.isDefault;
     copy.usernameSelector = self.usernameSelector;
     copy.passwordSelector = self.passwordSelector;
-    copy.phoneSelector = self.phoneSelector;
-    copy.otpSelector = self.otpSelector;
-    copy.sendCodeSelector = self.sendCodeSelector;
     copy.submitSelector = self.submitSelector;
     copy.submitByEnter = self.submitByEnter;
     copy.successJSPredicate = self.successJSPredicate;
     copy.waitTimeoutMs = self.waitTimeoutMs;
-    copy.otpMaxWaitMs = self.otpMaxWaitMs;
     copy.updatedAt = self.updatedAt;
     NSMutableArray<LoginRecipeExtraField *> *fields = [NSMutableArray arrayWithCapacity:self.extraFields.count];
     for (LoginRecipeExtraField *field in self.extraFields) {
@@ -147,14 +134,6 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
         }
     }
     return enabled;
-}
-
-- (BOOL)requiresOTPWait {
-    if (self.otpSelector.length == 0) {
-        return NO;
-    }
-    return [self.mode isEqualToString:LoginRecipeModeSMSOTP] ||
-           [self.mode isEqualToString:LoginRecipeModeHybrid];
 }
 
 - (BOOL)matchesURL:(NSURL *)url {
@@ -177,12 +156,12 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
         @"id": self.recipeID ?: @"",
         @"title": self.title ?: @"",
         @"host": self.host ?: @"",
-        @"mode": self.mode ?: LoginRecipeModePassword,
+        // 兼容旧客户端：始终写 password。
+        @"mode": @"password",
         @"autoLogin": @(self.autoLogin),
         @"isDefault": @(self.isDefault),
         @"submitByEnter": @(self.submitByEnter),
         @"waitTimeoutMs": @(self.waitTimeoutMs > 0 ? self.waitTimeoutMs : 8000),
-        @"otpMaxWaitMs": @(self.otpMaxWaitMs > 0 ? self.otpMaxWaitMs : 120000),
         @"updatedAt": @(self.updatedAt),
     } mutableCopy];
     if (self.port != nil) {
@@ -205,15 +184,6 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     }
     if (self.passwordSelector.length > 0) {
         dict[@"passwordSelector"] = self.passwordSelector;
-    }
-    if (self.phoneSelector.length > 0) {
-        dict[@"phoneSelector"] = self.phoneSelector;
-    }
-    if (self.otpSelector.length > 0) {
-        dict[@"otpSelector"] = self.otpSelector;
-    }
-    if (self.sendCodeSelector.length > 0) {
-        dict[@"sendCodeSelector"] = self.sendCodeSelector;
     }
     if (self.submitSelector.length > 0) {
         dict[@"submitSelector"] = self.submitSelector;
@@ -249,8 +219,6 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     recipe.host = host.lowercaseString;
     NSString *title = dictionary[@"title"];
     recipe.title = [title isKindOfClass:[NSString class]] && title.length > 0 ? title : host;
-    NSString *mode = dictionary[@"mode"];
-    recipe.mode = [mode isKindOfClass:[NSString class]] && mode.length > 0 ? mode : LoginRecipeModePassword;
     recipe.autoLogin = [dictionary[@"autoLogin"] boolValue];
     recipe.isDefault = [dictionary[@"isDefault"] boolValue];
     if (dictionary[@"submitByEnter"] != nil) {
@@ -258,8 +226,6 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     }
     NSInteger timeout = [dictionary[@"waitTimeoutMs"] integerValue];
     recipe.waitTimeoutMs = timeout > 0 ? timeout : 8000;
-    NSInteger otpWait = [dictionary[@"otpMaxWaitMs"] integerValue];
-    recipe.otpMaxWaitMs = otpWait > 0 ? otpWait : 120000;
     recipe.updatedAt = [dictionary[@"updatedAt"] doubleValue];
     if (recipe.updatedAt <= 0) {
         recipe.updatedAt = [NSDate date].timeIntervalSince1970;
@@ -279,12 +245,6 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     recipe.usernameSelector = [userSel isKindOfClass:[NSString class]] ? userSel : nil;
     NSString *passSel = dictionary[@"passwordSelector"];
     recipe.passwordSelector = [passSel isKindOfClass:[NSString class]] ? passSel : nil;
-    NSString *phoneSel = dictionary[@"phoneSelector"];
-    recipe.phoneSelector = [phoneSel isKindOfClass:[NSString class]] ? phoneSel : nil;
-    NSString *otpSel = dictionary[@"otpSelector"];
-    recipe.otpSelector = [otpSel isKindOfClass:[NSString class]] ? otpSel : nil;
-    NSString *sendSel = dictionary[@"sendCodeSelector"];
-    recipe.sendCodeSelector = [sendSel isKindOfClass:[NSString class]] ? sendSel : nil;
     NSString *submitSel = dictionary[@"submitSelector"];
     recipe.submitSelector = [submitSel isKindOfClass:[NSString class]] ? submitSel : nil;
     NSString *predicate = dictionary[@"successJSPredicate"];

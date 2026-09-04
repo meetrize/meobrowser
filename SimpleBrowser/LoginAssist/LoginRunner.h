@@ -10,7 +10,7 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
 
 @interface LoginRunner : NSObject
 
-/// 执行 recipe。若 requiresOTPWait，会在填完前置字段后阻塞至 OTPInbox。
+/// 执行密码登录 recipe。
 + (void)runRecipe:(LoginRecipe *)recipe
         inWebView:(WKWebView *)webView
       credentials:(LoginCredentials *)credentials
@@ -44,13 +44,6 @@ typedef void (^LoginRunnerCompletion)(BOOL success, NSError * _Nullable error);
 + (void)fillSelector:(NSString *)selector
                value:(NSString *)value
            inWebView:(WKWebView *)webView
-          completion:(nullable LoginRunnerCompletion)completion;
-
-/// 仅填入验证码栏（不重跑帐密/发码），用于 Companion 推码到达且页面已有 recipe。
-+ (void)fillOTPCode:(NSString *)code
-          intoRecipe:(LoginRecipe *)recipe
-           inWebView:(WKWebView *)webView
-        shouldSubmit:(BOOL)shouldSubmit
           completion:(nullable LoginRunnerCompletion)completion;
 
 + (void)cancelAll;

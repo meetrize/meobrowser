@@ -109,18 +109,13 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
             hasPreset = (credPass.length > 0);
         } else if ([slot isEqualToString:@"phone"]) {
             label = @"手机号";
-            if (recipe.phoneSelector.length > 0) {
-                selector = recipe.phoneSelector;
-            }
             hasPreset = (credPhone.length > 0);
         } else if ([slot isEqualToString:@"otp"]) {
             label = @"验证码";
             allowSave = NO;
-            if (recipe.otpSelector.length > 0) {
-                selector = recipe.otpSelector;
-                hasPreset = YES;
-            } else {
-                continue; // 无 otp 预设则不显示图标
+            hasPreset = (selector.length > 0);
+            if (selector.length == 0) {
+                continue;
             }
         } else if ([slot isEqualToString:@"extra"]) {
             NSString *detLabel = slotInfo[@"label"];

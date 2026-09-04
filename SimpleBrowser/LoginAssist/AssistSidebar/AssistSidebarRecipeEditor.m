@@ -46,15 +46,10 @@
 @property (nonatomic, copy, readwrite, nullable) NSString *editingRecipeID;
 @property (nonatomic, strong) SBTextField *sitePatternField;
 @property (nonatomic, strong) NSTextField *pathHintLabel;
-@property (nonatomic, strong) NSPopUpButton *modePopup;
 @property (nonatomic, strong) SBTextField *usernameField;
 @property (nonatomic, strong) SBSecureTextField *passwordField;
-@property (nonatomic, strong) SBTextField *phoneField;
 @property (nonatomic, strong) SBTextField *usernameSelectorField;
 @property (nonatomic, strong) SBTextField *passwordSelectorField;
-@property (nonatomic, strong) SBTextField *phoneSelectorField;
-@property (nonatomic, strong) SBTextField *otpSelectorField;
-@property (nonatomic, strong) SBTextField *sendCodeSelectorField;
 @property (nonatomic, strong) SBTextField *submitSelectorField;
 @property (nonatomic, strong) NSButton *submitByEnterCheck;
 @property (nonatomic, strong) NSButton *autoLoginCheck;
@@ -68,9 +63,6 @@
 @property (nonatomic, strong) NSMutableArray<LoginRecipeExtraField *> *editingExtraFields;
 @property (nonatomic, strong) NSView *usernameRow;
 @property (nonatomic, strong) NSView *passwordRow;
-@property (nonatomic, strong) NSView *phoneRow;
-@property (nonatomic, strong) NSView *otpRow;
-@property (nonatomic, strong) NSView *sendCodeRow;
 @property (nonatomic, strong) NSView *submitSelectorRow;
 @end
 
@@ -367,24 +359,11 @@
     self.pathHintLabel.font = [NSFont systemFontOfSize:10];
     self.pathHintLabel.textColor = [NSColor tertiaryLabelColor];
     self.pathHintLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    self.modePopup.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.modePopup removeAllItems];
-    [self.modePopup addItemWithTitle:@"密码"];
-    [self.modePopup addItemWithTitle:@"短信验证码"];
-    [self.modePopup addItemWithTitle:@"账密 + 短信"];
-    self.modePopup.target = self;
-    self.modePopup.action = @selector(modeChanged:);
-    self.modePopup.controlSize = NSControlSizeSmall;
 
     self.usernameField = [self makeField];
     self.passwordField = [self makeSecureField];
-    self.phoneField = [self makeField];
     self.usernameSelectorField = [self makeField];
     self.passwordSelectorField = [self makeField];
-    self.phoneSelectorField = [self makeField];
-    self.otpSelectorField = [self makeField];
-    self.sendCodeSelectorField = [self makeField];
     self.submitSelectorField = [self makeField];
 
     self.submitByEnterCheck = [NSButton checkboxWithTitle:@"回车提交（否则点提交选择器）"
@@ -399,13 +378,6 @@
                                              target:nil
                                              action:nil];
     self.defaultCheck.font = [NSFont systemFontOfSize:11];
-
-    NSTextField *modeCaption = [self caption:@"方式"];
-    NSStackView *modeRow = [NSStackView stackViewWithViews:@[modeCaption, self.modePopup]];
-    modeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    modeRow.alignment = NSLayoutAttributeCenterY;
-    modeRow.spacing = 6;
-    modeRow.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.saveButton = [NSButton buttonWithTitle:@"保存"
                                          target:self
@@ -461,25 +433,15 @@
                                  selectorField:self.passwordSelectorField
                                     valueField:self.passwordField
                                     pickAction:@selector(pickPassword:)];
-    self.phoneRow = [self pairedRowWithLabel:@"手机号"
-                               selectorField:self.phoneSelectorField
-                                  valueField:self.phoneField
-                                  pickAction:@selector(pickPhone:)];
-    self.otpRow = [self rowWithCaption:@"验证码" field:self.otpSelectorField pickAction:@selector(pickOTP:)];
-    self.sendCodeRow = [self rowWithCaption:@"发码" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)];
     self.submitSelectorRow = [self rowWithCaption:@"提交" field:self.submitSelectorField pickAction:@selector(pickSubmit:)];
 
-    // 顺序：匹配路径 → 帐密 →（短信字段）→ 自定义字段 → 提交方式 → 选项
+    // 顺序：匹配路径 → 帐密 → 自定义字段 → 提交方式 → 选项
     self.formStack = [NSStackView stackViewWithViews:@[
         heading,
         [self rowWithCaption:@"匹配" field:self.sitePatternField pickAction:nil],
         self.pathHintLabel,
-        modeRow,
         self.usernameRow,
         self.passwordRow,
-        self.phoneRow,
-        self.otpRow,
-        self.sendCodeRow,
         extraHeaderRow,
         self.extraFieldsStack,
         self.submitSelectorRow,
@@ -522,7 +484,7 @@
         [scroll.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
     ]];
     self.view = root;
-    [self updateModeDependentRows];
+    [self updateSubmitSelectorEnabled];
     self.submitSelectorField.enabled = NO;
 }
 
@@ -537,15 +499,10 @@
     self.editingRecipeID = nil;
     self.isNewRecipe = NO;
     self.sitePatternField.stringValue = @"";
-    [self.modePopup selectItemAtIndex:0];
     self.usernameField.stringValue = @"";
     self.passwordField.stringValue = @"";
-    self.phoneField.stringValue = @"";
     self.usernameSelectorField.stringValue = @"input[type=\"text\"], input[type=\"email\"], input[name=\"username\"]";
     self.passwordSelectorField.stringValue = @"input[type=\"password\"]";
-    self.phoneSelectorField.stringValue = @"input[type=\"tel\"], input[name*=\"phone\"]";
-    self.otpSelectorField.stringValue = @"input[autocomplete=\"one-time-code\"]";
-    self.sendCodeSelectorField.stringValue = @"";
     self.submitSelectorField.stringValue = @"button[type=\"submit\"], input[type=\"submit\"]";
     self.submitByEnterCheck.state = NSControlStateValueOn;
     self.autoLoginCheck.state = NSControlStateValueOff;
@@ -554,7 +511,7 @@
     self.deleteButton.enabled = NO;
     [self.editingExtraFields removeAllObjects];
     [self rebuildExtraFieldRows];
-    [self updateModeDependentRows];
+    [self updateSubmitSelectorEnabled];
     self.statusLabel.stringValue = @"凭证保存在应用内部存储。";
 }
 
@@ -566,18 +523,14 @@
     self.isNewRecipe = NO;
     self.editingRecipeID = recipe.recipeID;
     [self setSitePatternHost:recipe.host port:recipe.port path:recipe.pathPrefix];
-    [self selectMode:recipe.mode ?: LoginRecipeModePassword];
     self.usernameSelectorField.stringValue = recipe.usernameSelector ?: @"";
     self.passwordSelectorField.stringValue = recipe.passwordSelector ?: @"";
-    self.phoneSelectorField.stringValue = recipe.phoneSelector ?: @"";
-    self.otpSelectorField.stringValue = recipe.otpSelector ?: @"";
-    self.sendCodeSelectorField.stringValue = recipe.sendCodeSelector ?: @"";
     self.submitSelectorField.stringValue = recipe.submitSelector ?: @"";
     self.submitByEnterCheck.state = recipe.submitByEnter ? NSControlStateValueOn : NSControlStateValueOff;
     self.autoLoginCheck.state = recipe.autoLogin ? NSControlStateValueOn : NSControlStateValueOff;
     self.defaultCheck.state = recipe.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
     self.deleteButton.enabled = YES;
-    [self updateModeDependentRows];
+    [self updateSubmitSelectorEnabled];
 
     [self.editingExtraFields removeAllObjects];
     for (LoginRecipeExtraField *field in recipe.extraFields) {
@@ -588,7 +541,6 @@
     LoginCredentials *credentials = [[LoginCredentialStore sharedStore] loadCredentialsForRecipeID:recipe.recipeID error:nil];
     self.usernameField.stringValue = credentials.username ?: @"";
     self.passwordField.stringValue = credentials.password ?: @"";
-    self.phoneField.stringValue = credentials.phone ?: @"";
     self.statusLabel.stringValue = [NSString stringWithFormat:@"编辑「%@」", self.sitePatternField.stringValue];
 }
 
@@ -607,69 +559,17 @@
     self.statusLabel.stringValue = @"已填入当前页完整匹配路径，可改主机/端口/通配后保存。";
 }
 
-#pragma mark - Mode
+#pragma mark - Submit mode
 
-- (LoginRecipeMode)selectedMode {
-    switch (self.modePopup.indexOfSelectedItem) {
-        case 1: return LoginRecipeModeSMSOTP;
-        case 2: return LoginRecipeModeHybrid;
-        default: return LoginRecipeModePassword;
-    }
-}
-
-- (void)selectMode:(LoginRecipeMode)mode {
-    if ([mode isEqualToString:LoginRecipeModeSMSOTP]) {
-        [self.modePopup selectItemAtIndex:1];
-    } else if ([mode isEqualToString:LoginRecipeModeHybrid]) {
-        [self.modePopup selectItemAtIndex:2];
-    } else {
-        [self.modePopup selectItemAtIndex:0];
-    }
-    [self updateModeDependentRows];
-}
-
-- (void)modeChanged:(id)sender {
-    (void)sender;
-    [self updateModeDependentRows];
-    if ([[self selectedMode] isEqualToString:LoginRecipeModeSMSOTP]) {
-        self.usernameSelectorField.stringValue = @"";
-        self.passwordSelectorField.stringValue = @"";
-        self.usernameField.stringValue = @"";
-        self.passwordField.stringValue = @"";
-        self.statusLabel.stringValue = @"短信模式：请配置手机号与验证码选择器。";
-    }
-}
-
-- (void)updateModeDependentRows {
-    LoginRecipeMode mode = [self selectedMode];
-    BOOL passwordMode = [mode isEqualToString:LoginRecipeModePassword];
-    BOOL smsMode = [mode isEqualToString:LoginRecipeModeSMSOTP];
-    BOOL hybridMode = [mode isEqualToString:LoginRecipeModeHybrid];
-    BOOL showUserPass = passwordMode || hybridMode;
-    BOOL showSMS = smsMode || hybridMode;
+- (void)updateSubmitSelectorEnabled {
     BOOL showSubmitSelector = (self.submitByEnterCheck.state != NSControlStateValueOn);
-
-    self.usernameRow.hidden = !showUserPass;
-    self.passwordRow.hidden = !showUserPass;
-    self.phoneRow.hidden = !showSMS;
-    self.otpRow.hidden = !showSMS;
-    self.sendCodeRow.hidden = !showSMS;
     self.submitSelectorRow.hidden = !showSubmitSelector;
     self.submitSelectorField.enabled = showSubmitSelector;
-
-    self.phoneField.enabled = showSMS;
-    self.phoneSelectorField.enabled = showSMS;
-    self.otpSelectorField.enabled = showSMS;
-    self.sendCodeSelectorField.enabled = showSMS;
-    self.usernameField.enabled = showUserPass;
-    self.passwordField.enabled = showUserPass;
-    self.usernameSelectorField.enabled = showUserPass;
-    self.passwordSelectorField.enabled = showUserPass;
 }
 
 - (void)submitModeChanged:(id)sender {
     (void)sender;
-    [self updateModeDependentRows];
+    [self updateSubmitSelectorEnabled];
 }
 
 #pragma mark - Pick
@@ -700,12 +600,6 @@
             strongSelf.usernameSelectorField.stringValue = cssSelector;
         } else if ([target isEqualToString:@"password"]) {
             strongSelf.passwordSelectorField.stringValue = cssSelector;
-        } else if ([target isEqualToString:@"phone"]) {
-            strongSelf.phoneSelectorField.stringValue = cssSelector;
-        } else if ([target isEqualToString:@"otp"]) {
-            strongSelf.otpSelectorField.stringValue = cssSelector;
-        } else if ([target isEqualToString:@"send"]) {
-            strongSelf.sendCodeSelectorField.stringValue = cssSelector;
         } else if ([target isEqualToString:@"submit"]) {
             strongSelf.submitSelectorField.stringValue = cssSelector;
         } else if ([target hasPrefix:@"extra:"]) {
@@ -732,9 +626,6 @@
 
 - (void)pickUsername:(id)sender { (void)sender; [self beginPickForTarget:@"username"]; }
 - (void)pickPassword:(id)sender { (void)sender; [self beginPickForTarget:@"password"]; }
-- (void)pickPhone:(id)sender { (void)sender; [self beginPickForTarget:@"phone"]; }
-- (void)pickOTP:(id)sender { (void)sender; [self beginPickForTarget:@"otp"]; }
-- (void)pickSend:(id)sender { (void)sender; [self beginPickForTarget:@"send"]; }
 - (void)pickSubmit:(id)sender { (void)sender; [self beginPickForTarget:@"submit"]; }
 
 #pragma mark - Save / Delete
@@ -768,10 +659,6 @@
     recipe.submitByEnter = (self.submitByEnterCheck.state == NSControlStateValueOn);
     recipe.autoLogin = (self.autoLoginCheck.state == NSControlStateValueOn);
     recipe.isDefault = (self.defaultCheck.state == NSControlStateValueOn);
-    recipe.mode = [self selectedMode];
-    recipe.phoneSelector = self.phoneSelectorField.stringValue;
-    recipe.otpSelector = self.otpSelectorField.stringValue;
-    recipe.sendCodeSelector = self.sendCodeSelectorField.stringValue;
 
     [self syncExtraFieldsFromUI];
     NSMutableArray<LoginRecipeExtraField *> *extras = [NSMutableArray arrayWithCapacity:self.editingExtraFields.count];
@@ -784,29 +671,12 @@
     }
     recipe.extraFields = extras;
 
-    if ([recipe requiresOTPWait] && recipe.otpSelector.length == 0) {
-        self.statusLabel.stringValue = @"短信/混合模式请配置验证码选择器。";
-        return;
-    }
-    if ([recipe.mode isEqualToString:LoginRecipeModeSMSOTP]) {
-        if (recipe.phoneSelector.length == 0) {
-            self.statusLabel.stringValue = @"短信登录请配置手机号选择器。";
-            return;
-        }
-        if (self.phoneField.stringValue.length == 0) {
-            self.statusLabel.stringValue = @"请填写手机号。";
-            return;
-        }
-        recipe.usernameSelector = @"";
-        recipe.passwordSelector = @"";
-    }
-
     // 先固定表单快照：upsert 会同步发通知 → reloadList → loadRecipe，
     // 若先 upsert 再读输入框，会被旧凭证值冲掉（RE-0）。
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
     credentials.username = self.usernameField.stringValue ?: @"";
     credentials.password = self.passwordField.stringValue ?: @"";
-    credentials.phone = self.phoneField.stringValue ?: @"";
+    credentials.phone = @"";
 
     NSError *error = nil;
     if (![[LoginCredentialStore sharedStore] saveCredentials:credentials

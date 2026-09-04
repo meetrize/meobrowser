@@ -68,7 +68,6 @@
         recipe.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:path];
         recipe.isDefault = YES;
         recipe.autoLogin = NO;
-        recipe.mode = LoginRecipeModePassword;
         recipe.submitByEnter = YES;
     } else if (recipe) {
         recipe = [recipe copy];
@@ -110,7 +109,7 @@
         return YES;
     }
     if ([slot isEqualToString:@"phone"]) {
-        recipe.phoneSelector = selector;
+        // 手机号仅存凭证；Recipe 模型不再有 phoneSelector。
         credentials.phone = value;
         return YES;
     }
@@ -393,9 +392,6 @@
     if ([body[@"passwordSelector"] isKindOfClass:[NSString class]] && recipe.passwordSelector.length == 0) {
         recipe.passwordSelector = body[@"passwordSelector"];
     }
-    if ([body[@"phoneSelector"] isKindOfClass:[NSString class]] && recipe.phoneSelector.length == 0) {
-        recipe.phoneSelector = body[@"phoneSelector"];
-    }
 
     LoginCredentials *creds = [self loadOrEmptyCredentialsForRecipeID:recipe.recipeID];
     if (![self applySlot:slot value:value selector:selector label:label toRecipe:recipe credentials:creds]) {
@@ -519,9 +515,6 @@
     }
     if ([body[@"passwordSelector"] isKindOfClass:[NSString class]] && [(NSString *)body[@"passwordSelector"] length] > 0) {
         recipe.passwordSelector = body[@"passwordSelector"];
-    }
-    if ([body[@"phoneSelector"] isKindOfClass:[NSString class]] && [(NSString *)body[@"phoneSelector"] length] > 0) {
-        recipe.phoneSelector = body[@"phoneSelector"];
     }
 
     LoginCredentials *creds = [self loadOrEmptyCredentialsForRecipeID:recipe.recipeID];
