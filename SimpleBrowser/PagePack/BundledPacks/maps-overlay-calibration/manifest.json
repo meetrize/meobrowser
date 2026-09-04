@@ -1,8 +1,8 @@
 {
   "id": "maps-overlay-calibration",
   "name": "地图叠加校准",
-  "version": "1.2.4",
-  "description": "MOC-5：东/北偏移写入 Leaflet 相机（视口铺满，无裁切空白）。请关闭 Maps Labels。",
+  "version": "1.2.5",
+  "description": "MOC-5：东/北 ± 微调（0.5–50m 步进）+ 相机偏移。请关闭 Maps Labels。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://maps-overlay-calibration",
   "enabled": true,
@@ -40,5 +40,5 @@
     }
   ],
   "createdAt": 1756960000,
-  "updatedAt": 1756962200
+  "updatedAt": 1756963000
 }

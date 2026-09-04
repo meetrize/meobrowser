@@ -1,5 +1,5 @@
 /**
- * MeoBrowser — 地图叠加校准 v1.2.4 (MOC-5)
+ * MeoBrowser — 地图叠加校准 v1.2.5 (MOC-5)
  * 自建 Leaflet 透明路网/标注层，与 Google Maps 相机同步；东/北米偏移写入 Leaflet 中心（非 CSS 平移），视口始终铺满瓦片。
  * URL 中 Xm = 视口垂直地面跨度（米），换算 zoom 必须乘上地图画布 CSS 高度。
  * 请在 Google Maps「图层」中关闭 Labels，避免双份标注。
@@ -74,7 +74,7 @@
       selfOverlay: true,
       tileStyle: 'googleRoads',
       layers: { roads: true, labels: true, pois: true, experimental: false },
-      stepMeters: 10,
+      stepMeters: 1,
       maxAbsMeters: DEFAULT_MAX,
       hud: { collapsed: true, corner: 'bottom-right', offsetX: 0, offsetY: 0 },
       regions: []
@@ -123,7 +123,34 @@
     var max = state.config.maxAbsMeters || DEFAULT_MAX;
     if (v > max) return max;
     if (v < -max) return -max;
-    return v;
+    // 保留 0.1m 精度，避免浮点毛刺
+    return Math.round(v * 10) / 10;
+  }
+
+  function currentStepMeters() {
+    var s = state.config.stepMeters;
+    if (typeof s !== 'number' || !(s > 0)) return 1;
+    return s;
+  }
+
+  function snapToStep(v) {
+    var step = currentStepMeters();
+    return clampMeters(Math.round(v / step) * step);
+  }
+
+  function setAxisMeters(axis, value) {
+    var v = clampMeters(value);
+    if (axis === 'east') state.eastMeters = v;
+    else state.northMeters = v;
+    persistCurrentRegion();
+    syncSliders();
+    applyOverlayPixelOffset();
+    updateStatusUI();
+  }
+
+  function nudgeAxis(axis, dir) {
+    var cur = axis === 'east' ? state.eastMeters : state.northMeters;
+    setAxisMeters(axis, cur + dir * currentStepMeters());
   }
 
   function cellIdFor(lat, lng) {
@@ -484,8 +511,21 @@
       '    <label><input type="checkbox" data-opt="selfOverlay" checked>自建叠加层</label>' +
       '  </div>' +
       '  <div class="meo-ma-styles" data-role="styles"></div>' +
-      '  <div class="meo-ma-row"><label>东</label><input type="range" data-axis="east" min="-2000" max="2000" step="1" value="0"><span class="meo-ma-val" data-val="east">0 m</span></div>' +
-      '  <div class="meo-ma-row"><label>北</label><input type="range" data-axis="north" min="-2000" max="2000" step="1" value="0"><span class="meo-ma-val" data-val="north">0 m</span></div>' +
+      '  <div class="meo-ma-row">' +
+      '    <label>东</label>' +
+      '    <button type="button" class="meo-ma-nudge" data-nudge="east" data-dir="-1" title="减少一档">−</button>' +
+      '    <input type="range" data-axis="east" min="-2000" max="2000" step="0.5" value="0">' +
+      '    <button type="button" class="meo-ma-nudge" data-nudge="east" data-dir="1" title="增加一档">+</button>' +
+      '    <span class="meo-ma-val" data-val="east">0 m</span>' +
+      '  </div>' +
+      '  <div class="meo-ma-row">' +
+      '    <label>北</label>' +
+      '    <button type="button" class="meo-ma-nudge" data-nudge="north" data-dir="-1" title="减少一档">−</button>' +
+      '    <input type="range" data-axis="north" min="-2000" max="2000" step="0.5" value="0">' +
+      '    <button type="button" class="meo-ma-nudge" data-nudge="north" data-dir="1" title="增加一档">+</button>' +
+      '    <span class="meo-ma-val" data-val="north">0 m</span>' +
+      '  </div>' +
+      '  <div class="meo-ma-steps-label meo-ma-muted">微调步进</div>' +
       '  <div class="meo-ma-steps" data-role="steps"></div>' +
       '  <div class="meo-ma-actions">' +
       '    <button type="button" class="meo-ma-btn" data-act="pause">暂停偏移</button>' +
@@ -505,7 +545,7 @@
       'background:rgba(28,28,30,0.92);color:#f5f5f7;font:600 13px/34px -apple-system,sans-serif;' +
       'cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.35);pointer-events:auto;';
     panel.style.cssText = 'position:fixed;right:16px;bottom:88px;z-index:2147483647;' +
-      'width:330px;max-width:calc(100vw - 24px);padding:10px 12px 12px;border-radius:12px;' +
+      'width:360px;max-width:calc(100vw - 24px);padding:10px 12px 12px;border-radius:12px;' +
       'background:rgba(245,245,247,0.96);box-shadow:0 8px 28px rgba(0,0,0,0.28);' +
       'border:1px solid rgba(0,0,0,0.08);pointer-events:auto;color:#1d1d1f;' +
       'font:12px/1.35 -apple-system,sans-serif;';
@@ -524,29 +564,34 @@
     });
 
     var stepsHost = root.querySelector('[data-role="steps"]');
-    [1, 10, 50, 100].forEach(function (s) {
+    [0.5, 1, 5, 10, 50].forEach(function (s) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'meo-ma-btn';
-      b.textContent = s + ' m';
+      b.textContent = s < 1 ? '0.5 m' : (s + ' m');
       b.setAttribute('data-step', String(s));
       b.addEventListener('click', function () {
         state.config.stepMeters = s;
         saveConfig();
         updateStepButtons();
+        syncSliders();
       });
       stepsHost.appendChild(b);
+    });
+
+    root.querySelectorAll('[data-nudge]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var axis = btn.getAttribute('data-nudge');
+        var dir = parseInt(btn.getAttribute('data-dir'), 10) || 0;
+        if (!axis || !dir) return;
+        nudgeAxis(axis, dir);
+      });
     });
 
     root.querySelectorAll('input[data-axis]').forEach(function (input) {
       input.addEventListener('input', function () {
         var axis = input.getAttribute('data-axis');
-        var v = clampMeters(parseFloat(input.value) || 0);
-        if (axis === 'east') state.eastMeters = v;
-        else state.northMeters = v;
-        persistCurrentRegion();
-        applyOverlayPixelOffset();
-        updateStatusUI();
+        setAxisMeters(axis, parseFloat(input.value) || 0);
       });
     });
 
@@ -654,9 +699,13 @@
     var root = document.getElementById(ROOT_ID);
     if (!root) return;
     var max = state.config.maxAbsMeters || DEFAULT_MAX;
+    var step = currentStepMeters();
+    // range 最小刻度取 0.5，避免步进 5/10 时拖不动细调；细调用 ±
+    var rangeStep = step <= 0.5 ? 0.5 : (step < 1 ? step : 0.5);
     root.querySelectorAll('input[data-axis]').forEach(function (input) {
       input.min = String(-max);
       input.max = String(max);
+      input.step = String(rangeStep);
       input.value = String(input.getAttribute('data-axis') === 'east' ? state.eastMeters : state.northMeters);
     });
     var ve = root.querySelector('[data-val="east"]');
@@ -666,16 +715,20 @@
   }
 
   function formatMeters(v) {
-    var n = Math.round(v);
-    return (n >= 0 ? '+' : '') + n + ' m';
+    var n = Math.round((v || 0) * 10) / 10;
+    var abs = Math.abs(n);
+    var body = (Math.abs(abs - Math.round(abs)) < 0.05) ? String(Math.round(n)) : n.toFixed(1);
+    if (n > 0) body = '+' + body;
+    return body + ' m';
   }
 
   function updateStepButtons() {
     var root = document.getElementById(ROOT_ID);
     if (!root) return;
-    var step = state.config.stepMeters || 10;
+    var step = currentStepMeters();
     root.querySelectorAll('[data-step]').forEach(function (b) {
-      b.classList.toggle('active', b.getAttribute('data-step') === String(step));
+      var s = parseFloat(b.getAttribute('data-step'));
+      b.classList.toggle('active', Math.abs(s - step) < 0.001);
     });
   }
 
@@ -736,7 +789,7 @@
     var view = readMapView();
     var cam = overlayCameraCenter(view);
     return {
-      version: '1.2.4',
+      version: '1.2.5',
       mode: 'moc5-camera-offset',
       href: location.href,
       view: view,
@@ -849,7 +902,7 @@
       } else {
         state.lastDiag = {
           mode: 'no-leaflet',
-          note: 'Leaflet 未挂到 window.L（若仍失败请重启并确认 Pack 1.2.4）'
+          note: 'Leaflet 未挂到 window.L（若仍失败请重启并确认 Pack 1.2.5）'
         };
         updateStatusUI();
         try { console.warn('[MeoMapAlign] Leaflet missing', typeof define, typeof module); } catch (e) {}
@@ -861,7 +914,7 @@
     window.addEventListener('popstate', onMaybeNavigate);
     window.addEventListener('resize', onViewportResize);
     startPolling();
-    try { console.info('[MeoMapAlign] HUD ready (MOC-5 1.2.4 camera-offset)'); } catch (e3) {}
+    try { console.info('[MeoMapAlign] HUD ready (MOC-5 1.2.5 nudge)'); } catch (e3) {}
   }
 
   window.MeoMapAlign = window.__MeoMapAlign = {
