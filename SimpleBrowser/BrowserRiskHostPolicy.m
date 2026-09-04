@@ -153,6 +153,15 @@
     return [self titleLooksLikeChallenge:title];
 }
 
++ (BOOL)shouldSuppressPagePackForURL:(NSURL *)url title:(NSString *)title {
+    // 不走 google.com 等整站风险域名单：PagePack 是用户显式启用的站点脚本。
+    // 仍屏蔽 /sorry、CF Turnstile、挑战标题，避免干扰人机验证。
+    if ([self pathOrHostLooksLikeChallenge:url]) {
+        return YES;
+    }
+    return [self titleLooksLikeChallenge:title];
+}
+
 + (NSString *)javaScriptQuotedSuffixLiteral {
     NSArray<NSString *> *suffixes = [self pageAutomationSuppressionHostSuffixes];
     NSMutableArray<NSString *> *quoted = [NSMutableArray arrayWithCapacity:suffixes.count];
@@ -204,6 +213,41 @@
             @"  return false;\n"
             @"}\n",
             name, suffixLiteral];
+}
+
++ (NSString *)javaScriptShouldSuppressPagePackFunctionNamed:(NSString *)functionName {
+    NSString *name = functionName.length > 0 ? functionName : @"meoShouldSkipPagePack";
+    // 与 shouldSuppressPagePackForURL: 对齐：无风险域后缀循环。
+    return [NSString stringWithFormat:
+            @"function %@() {\n"
+            @"  try {\n"
+            @"    var host = (location.hostname || '').toLowerCase();\n"
+            @"    var path = (location.pathname || '').toLowerCase();\n"
+            @"    var href = (location.href || '').toLowerCase();\n"
+            @"    var search = (location.search || '').toLowerCase();\n"
+            @"    if (path.indexOf('/sorry/') >= 0) return true;\n"
+            @"    if (path.indexOf('/recaptcha') >= 0) return true;\n"
+            @"    if (host.indexOf('challenges.cloudflare') >= 0) return true;\n"
+            @"    if (href.indexOf('challenges.cloudflare.com') >= 0) return true;\n"
+            @"    if (path.indexOf('/cdn-cgi/challenge') >= 0) return true;\n"
+            @"    if (path.indexOf('/cdn-cgi/l/chk_jschl') >= 0) return true;\n"
+            @"    if (href.indexOf('__cf_chl') >= 0 || search.indexOf('__cf_chl') >= 0) return true;\n"
+            @"    if (href.indexOf('cf-challenge') >= 0 || href.indexOf('cf_challenge') >= 0) return true;\n"
+            @"    if (host.indexOf('turnstile') >= 0) return true;\n"
+            @"    try {\n"
+            @"      var t = (document.title || '').toLowerCase();\n"
+            @"      if (t.indexOf('just a moment') >= 0 || t.indexOf('attention required') >= 0) return true;\n"
+            @"      if (t.indexOf('请稍候') >= 0 || t.indexOf('正在验证') >= 0) return true;\n"
+            @"      if (document.querySelector && document.querySelector(\n"
+            @"          '#challenge-form, #cf-challenge-running, #cf-please-wait, .cf-turnstile, #cf-turnstile, '\n"
+            @"          + 'iframe[src*=\"challenges.cloudflare\"], iframe[src*=\"turnstile\"]')) {\n"
+            @"        return true;\n"
+            @"      }\n"
+            @"    } catch (domErr) {}\n"
+            @"  } catch (e) {}\n"
+            @"  return false;\n"
+            @"}\n",
+            name];
 }
 
 @end

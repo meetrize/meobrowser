@@ -3,7 +3,7 @@
 > 目标：在 MeoBrowser 内提供 **Stylish（User CSS）+ Tampermonkey（User JS）合一** 的「页面插件」能力：按 URL 匹配注入样式与脚本，支持远程安装与本地完全开放式编辑，保存后即时生效。  
 > 状态：**已确认（按推荐定稿）** · 2026-08-21  
 > 开发计划：[page-pack-development-plan.md](page-pack-development-plan.md) · Cursor：[.cursor/plans/page-pack.plan.md](../../.cursor/plans/page-pack.plan.md)  
-> 关联：[professional-features-roadmap.md](professional-features-roadmap.md)（§3.9「每站点 User CSS/JS」）· [assist-sidebar-design.md](assist-sidebar-design.md) · [companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md) · [web-inspector-design.md](web-inspector-design.md)
+> 关联：[professional-features-roadmap.md](professional-features-roadmap.md)（§3.9「每站点 User CSS/JS」）· [assist-sidebar-design.md](assist-sidebar-design.md) · [companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md) · [web-inspector-design.md](web-inspector-design.md) · [maps-overlay-calibration-design.md](maps-overlay-calibration-design.md)（种子 Pack 用例）
 
 ---
 

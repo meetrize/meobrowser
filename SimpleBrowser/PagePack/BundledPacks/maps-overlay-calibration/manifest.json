@@ -1,0 +1,44 @@
+{
+  "id": "maps-overlay-calibration",
+  "name": "地图叠加校准",
+  "version": "1.2.3",
+  "description": "MOC-5：Xm→zoom 按地图画布高度换算，与 Google 比例对齐。请关闭 Maps Labels。",
+  "author": "MeoBrowser",
+  "sourceURL": "bundle://maps-overlay-calibration",
+  "enabled": true,
+  "matches": [
+    "*://www.google.com/maps*",
+    "*://*.google.com/maps*",
+    "*://maps.google.com/*",
+    "*://www.google.com/maps/*"
+  ],
+  "excludes": [],
+  "files": [
+    {
+      "name": "leaflet.css",
+      "kind": "css",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "overlay-calibration.css",
+      "kind": "css",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "leaflet.js",
+      "kind": "js",
+      "runAt": "document-end",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "overlay-calibration.js",
+      "kind": "js",
+      "runAt": "document-idle",
+      "mainFrameOnly": true
+    }
+  ],
+  "createdAt": 1756960000,
+  "updatedAt": 1756961600
+}

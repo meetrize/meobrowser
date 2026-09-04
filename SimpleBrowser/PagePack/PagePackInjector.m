@@ -50,7 +50,7 @@
     NSString *attrLit = [[self class] jsonLiteralForString:attr];
     NSString *cssLit = [[self class] jsonLiteralForString:css ?: @""];
     NSString *suppressFn =
-        [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipPagePackCSS"];
+        [BrowserRiskHostPolicy javaScriptShouldSuppressPagePackFunctionNamed:@"meoShouldSkipPagePackCSS"];
     return [NSString stringWithFormat:
             @"(function(){%@ if(meoShouldSkipPagePackCSS())return; try{"
             @"var id=%@;var css=%@;"
@@ -80,10 +80,16 @@
     NSString *label = [NSString stringWithFormat:@"meo-pagepack %@/%@", packID ?: @"?", fileName ?: @"?"];
     NSString *labelLit = [[self class] jsonLiteralForString:label];
     NSString *suppressFn =
-        [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipPagePack"];
-    return [NSString stringWithFormat:
-            @"(function(){%@ if(meoShouldSkipPagePack())return; try{%@}catch(e){try{console.error(%@,e);}catch(_){}}})();",
-            suppressFn, body, labelLit];
+        [BrowserRiskHostPolicy javaScriptShouldSuppressPagePackFunctionNamed:@"meoShouldSkipPagePack"];
+    // 勿对 body 使用 stringWithFormat 的可变参数拼接以外的二次格式化：
+    // 大脚本（如 leaflet.js）内含大量 '%'，必须用 append，避免误解析格式符。
+    NSMutableString *out = [NSMutableString string];
+    [out appendString:@"(function(){"];
+    [out appendString:suppressFn ?: @""];
+    [out appendString:@" if(meoShouldSkipPagePack())return; try{"];
+    [out appendString:body];
+    [out appendFormat:@"}catch(e){try{console.error(%@,e);}catch(_){}}})();", labelLit];
+    return out;
 }
 
 - (NSArray<PagePackFile *> *)sortedFiles:(NSArray<PagePackFile *> *)files kind:(PagePackFileKind)kind {
@@ -161,8 +167,8 @@
     if (!url || !([url.scheme isEqualToString:@"http"] || [url.scheme isEqualToString:@"https"])) {
         return;
     }
-    // 人机页 / 风险域不注入用户脚本，避免干扰 Cloudflare Turnstile 等挑战环境。
-    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:url title:webView.title]) {
+    // 人机挑战页不注入；google.com 等整站风险域不再屏蔽 PagePack（见 shouldSuppressPagePackForURL:）。
+    if ([BrowserRiskHostPolicy shouldSuppressPagePackForURL:url title:webView.title]) {
         return;
     }
     @try {
@@ -182,7 +188,7 @@
     if (!pack || !webView || ![PagePackSettings sharedSettings].pagePackEnabled) {
         return;
     }
-    if ([BrowserRiskHostPolicy shouldSuppressPageAutomationForURL:url ?: webView.URL title:webView.title]) {
+    if ([BrowserRiskHostPolicy shouldSuppressPagePackForURL:url ?: webView.URL title:webView.title]) {
         return;
     }
     @try {

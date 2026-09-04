@@ -20,6 +20,7 @@
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
 #import "BrowserFaviconUtil.h"
+#import "PagePackSeedInstaller.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -72,6 +73,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    [PagePackSeedInstaller installBundledSeedsIfNeeded];
     [BrowserUserAgent scheduleMainQueueSampleIfNeeded];
     [[CompanionChannel sharedChannel] start];
     // startIfNeeded 内部会判登录；此处勿再先读一次钥匙串 token。

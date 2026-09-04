@@ -71,6 +71,10 @@
 | [minimal-browser/login-form-inline-design.md](minimal-browser/login-form-inline-design.md) | 登录表单内联助手 — 检测、系统密码、Recipe 与保存提示（V1.5） |
 | [minimal-browser/login-form-inline-development-plan.md](minimal-browser/login-form-inline-development-plan.md) | 登录表单内联助手 — 分阶段开发计划（IF-0～IF-3） |
 | [minimal-browser/insecure-https-design.md](minimal-browser/insecure-https-design.md) | 不安全 HTTPS（证书无效）继续访问 — 警告页与地址栏风险提示方案 |
+| [minimal-browser/page-pack-design.md](minimal-browser/page-pack-design.md) | 页面插件（Page Pack）— Stylish + User JS 合一方案 |
+| [minimal-browser/page-pack-development-plan.md](minimal-browser/page-pack-development-plan.md) | 页面插件 — 分阶段开发计划（PP-0～PP-MVP） |
+| [minimal-browser/maps-overlay-calibration-design.md](minimal-browser/maps-overlay-calibration-design.md) | 地图叠加校准 — Google Maps 路网/POI 相对卫星图手动对齐 |
+| [minimal-browser/maps-overlay-calibration-development-plan.md](minimal-browser/maps-overlay-calibration-development-plan.md) | 地图叠加校准 — 分阶段开发计划（MOC-0～MOC-4） |
 | [sbkit/text-input.md](sbkit/text-input.md) | SBKit 文本输入与编辑快捷键架构 |
 
 ## 构建命令
