@@ -3506,6 +3506,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self detachWebViewIfNeeded:wv];
     }
 
+    BOOL deferredColdWake = NO;
     if (selectedTab != nil && !selectedTab.isNewTabPage) {
         WKWebView *selectedWebView = selectedTab.webView;
         if ([self webViewIsInElementFullscreen:selectedWebView]) {
@@ -3514,9 +3515,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             [self observeFullscreenStateForSelectedTab];
             [self startFullscreenLayoutRepairIfNeededForWebView:selectedWebView];
             selectedWebView.hidden = NO;
+        } else if (selectedWebView == nil || selectedTab.pendingRestorableLoad) {
+            // 冷唤醒 / 预热后待 load：先更新 chrome，创建·挂载·加载放到下一拍。
+            deferredColdWake = YES;
         } else {
-            // 先创建 WebView → 挂 navigationDelegate → 再 load。
-            // 若先 load，document-start 写回 #hash 时无 delegate，代理下会把 # 编成 %23 → 404。
+            // 热路径：WebView 仍在，同步挂回即可。
             [selectedTab wakeFromHibernationIfNeeded];
             [self attachWebViewForTab:selectedTab];
             [selectedTab loadPendingRestorableURLIfNeeded];
@@ -3562,8 +3565,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self focusAddressBarForNewTabPage];
     }
 
-    // 非关键 chrome：下一 runloop，避免占满 mouseDown→切页关键路径。
+    // 非关键 chrome + 冷唤醒：下一 runloop，避免占满选中关键路径。
     __weak typeof(self) weakSelf = self;
+    BOOL shouldDeferredColdWake = deferredColdWake;
     dispatch_async(dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -3575,6 +3579,27 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         BrowserTab *stillSelected = strongSelf.tabController.selectedTab;
         if (selectedIDAtStart != nil && ![stillSelected.tabID isEqual:selectedIDAtStart]) {
             return;
+        }
+        if (shouldDeferredColdWake && stillSelected != nil && !stillSelected.isNewTabPage) {
+            WKWebView *wv = stillSelected.webView;
+            if ([strongSelf webViewIsInElementFullscreen:wv]) {
+                [strongSelf pinWebViewLayoutInSuperview:wv];
+                [strongSelf observeFullscreenStateForSelectedTab];
+                [strongSelf startFullscreenLayoutRepairIfNeededForWebView:wv];
+                wv.hidden = NO;
+            } else {
+                [stillSelected wakeFromHibernationIfNeeded];
+                [strongSelf attachWebViewForTab:stillSelected];
+                [stillSelected loadPendingRestorableURLIfNeeded];
+                if (stillSelected.webView != nil) {
+                    stillSelected.webView.hidden = NO;
+                }
+                if (stillSelected.pendingHardRecover) {
+                    [strongSelf presentHardRecoverErrorForSelectedTabIfNeeded];
+                }
+                [strongSelf observeLoadingProgressForSelectedTab];
+                [strongSelf updateNavigationState];
+            }
         }
         BOOL showLP = stillSelected.isNewTabPage;
         if (showLP && !strongSelf.transparentModeEnabled) {
@@ -3995,6 +4020,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (tab) {
         [self.tabController selectTab:tab];
     }
+}
+
+- (void)tabStripView:(id)stripView prepareToSelectTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab == nil || tab.isNewTabPage || tab == self.tabController.selectedTab) {
+        return;
+    }
+    // 与手势 tracking 重叠创建空 WebView，mouseUp 选中时冷启动更轻。
+    [tab wakeFromHibernationIfNeeded];
 }
 
 - (void)tabStripView:(id)stripView didCloseTabID:(NSUUID *)tabID {

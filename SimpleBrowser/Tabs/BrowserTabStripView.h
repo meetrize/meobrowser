@@ -19,6 +19,8 @@ NSColor *BrowserTabStripFillColor(void);
 - (void)tabStripViewDidRequestNewTab:(id)stripView;
 
 @optional
+/// 标签按下但尚未提交选中：可预热休眠 WebView（勿同步 refreshTabsUI）。
+- (void)tabStripView:(id)stripView prepareToSelectTabID:(NSUUID *)tabID;
 - (void)tabStripViewDidDoubleClickTitleBar:(BrowserTabStripView *)stripView;
 - (void)tabStripView:(id)stripView didCloseOtherTabsExceptTabID:(NSUUID *)tabID;
 - (void)tabStripView:(id)stripView didCloseTabsToTheRightOfTabID:(NSUUID *)tabID;

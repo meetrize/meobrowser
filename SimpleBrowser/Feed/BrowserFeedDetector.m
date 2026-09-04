@@ -1,6 +1,7 @@
 #import "BrowserFeedDetector.h"
 #import "BrowserFeedItem.h"
 #import "BrowserFeedReader.h"
+#import "BrowserSystemURLSession.h"
 #import "LoginAssistScriptMessageProxy.h"
 #import "BrowserRiskHostPolicy.h"
 
@@ -313,8 +314,8 @@ NSString * const BrowserFeedAssistHandlerName = @"meoFeedAssist";
         return nil;
     }
 
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    config.timeoutIntervalForRequest = 4.0;
+    NSURLSessionConfiguration *config =
+        [BrowserSystemURLSession ephemeralConfigurationWithRequestTimeout:4.0 resourceTimeout:4.0];
     config.HTTPAdditionalHeaders = @{
         @"Accept": @"application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, */*;q=0.8",
         @"User-Agent": @"MeoBrowser FeedProbe/1.0"

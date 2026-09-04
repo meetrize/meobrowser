@@ -1671,6 +1671,12 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     item.onSelect = ^{
         [weakSelf.delegate tabStripView:weakSelf didSelectTabID:tabID];
     };
+    item.onSelectGestureBegan = ^{
+        id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
+        if ([delegate respondsToSelector:@selector(tabStripView:prepareToSelectTabID:)]) {
+            [delegate tabStripView:weakSelf prepareToSelectTabID:tabID];
+        }
+    };
     item.onClose = ^{
         [weakSelf.delegate tabStripView:weakSelf didCloseTabID:tabID];
     };

@@ -18,7 +18,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 @property (nonatomic, assign) NSUInteger nilMainFrameNavigationCount;
 @property (nonatomic, assign, readwrite) NSInteger titleUpdateGeneration;
 /// 已创建 WebView、待 navigationDelegate 挂上后再加载 restorableURL。
-@property (nonatomic, assign) BOOL pendingRestorableLoad;
+@property (nonatomic, assign, readwrite) BOOL pendingRestorableLoad;
 @property (nonatomic, assign) BOOL observingWebViewTitle;
 @property (nonatomic, assign) NSInteger navigationGenerationCounter;
 @end
@@ -309,9 +309,6 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     if (self.isNewTabPage) {
         return;
     }
-    if (self.webView != nil) {
-        return;
-    }
     if (self.pendingHTMLString.length > 0) {
         [self ensureWebView];
         self.pendingRestorableLoad = YES;
@@ -320,13 +317,22 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     NSURL *url = [BrowserWebView publicURLFromInternalURL:self.restorableURL] ?: self.restorableURL;
     BOOL canRestore = [BrowsingPreferences isPersistableURL:url] || url.isFileURL;
     if (!canRestore) {
-        [self loadNewTabPage];
+        if (self.webView == nil) {
+            [self loadNewTabPage];
+        }
         return;
     }
     self.restorableURL = url;
     [self ensureWebView];
-    // 不在这里 loadRequest：须等窗口把 navigationDelegate 挂上，否则 #hash 恢复会未经拦截直接发网 → 代理下 404。
-    self.pendingRestorableLoad = YES;
+    // prewarm 可能已建好空 WebView；仅在尚未导航时标记待加载，等 attach 后再 load。
+    NSURL *currentURL = self.webView.URL;
+    NSString *currentAbsolute = currentURL.absoluteString ?: @"";
+    BOOL needsRestoreLoad = (currentURL == nil)
+        || currentAbsolute.length == 0
+        || [currentAbsolute isEqualToString:@"about:blank"];
+    if (needsRestoreLoad) {
+        self.pendingRestorableLoad = YES;
+    }
 }
 
 - (void)loadPendingRestorableURLIfNeeded {

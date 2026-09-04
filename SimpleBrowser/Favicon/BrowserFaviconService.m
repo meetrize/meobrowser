@@ -2,16 +2,22 @@
 #import "BrowserFaviconCache.h"
 #import "BrowserFaviconHTMLParser.h"
 #import "BrowserFaviconUtil.h"
+#import "BrowserSystemURLSession.h"
 
 NSErrorDomain const BrowserFaviconErrorDomain = @"BrowserFaviconErrorDomain";
 NSNotificationName const BrowserFaviconDidUpdateNotification = @"BrowserFaviconDidUpdateNotification";
 NSString * const BrowserFaviconHostUserInfoKey = @"host";
 
-static const NSTimeInterval kChannelTimeout = 8.0;
-static const NSTimeInterval kChannelWaitTimeout = 9.0;
+/// 单请求超时；境外/不可达源尽快失败，避免串行空等。
+static const NSTimeInterval kChannelTimeout = 3.0;
+static const NSTimeInterval kChannelWaitTimeout = 3.5;
+/// Cravatar + DDG 竞速总预算。
+static const NSTimeInterval kThirdPartyRaceBudget = 3.0;
 static const NSUInteger kMaxIconBytes = 512 * 1024;
 static const NSUInteger kMaxHTMLBytes = 64 * 1024;
 static const NSUInteger kMaxConcurrentFetches = 2;
+/// 站点候选上限（含 HTML link + well-known），避免挂死站拖死瀑布。
+static const NSUInteger kMaxSiteCandidates = 4;
 /// 失败 host 短负缓存，避免坏站打爆 utility 队列；Silent 拉取跳过。
 static const NSTimeInterval kNegativeCacheTTL = 10.0 * 60.0;
 /// 低于此像素边长视为「偏糊」，若还有更高优先级候选则继续尝试。
@@ -80,13 +86,10 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
         _boundedMaxBytes = [NSMutableDictionary dictionary];
         _boundedCompletions = [NSMutableDictionary dictionary];
 
-        NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-        config.timeoutIntervalForRequest = kChannelTimeout;
-        config.timeoutIntervalForResource = kChannelTimeout;
-        config.HTTPMaximumConnectionsPerHost = 4;
-        _session = [NSURLSession sessionWithConfiguration:config
-                                                 delegate:self
-                                            delegateQueue:nil];
+        _session = [BrowserSystemURLSession ephemeralSessionWithRequestTimeout:kChannelTimeout
+                                                                resourceTimeout:kChannelTimeout
+                                                                       delegate:self
+                                                                  delegateQueue:nil];
         [self loadNegativeFailures];
     }
     return self;
@@ -359,12 +362,10 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
             }
         }
         [self.session invalidateAndCancel];
-        NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-        config.timeoutIntervalForRequest = kChannelTimeout;
-        config.timeoutIntervalForResource = kChannelTimeout;
-        self.session = [NSURLSession sessionWithConfiguration:config
-                                                     delegate:self
-                                                delegateQueue:nil];
+        self.session = [BrowserSystemURLSession ephemeralSessionWithRequestTimeout:kChannelTimeout
+                                                                   resourceTimeout:kChannelTimeout
+                                                                          delegate:self
+                                                                     delegateQueue:nil];
         self.boundedBuffers = [NSMutableDictionary dictionary];
         self.boundedMaxBytes = [NSMutableDictionary dictionary];
         self.boundedCompletions = [NSMutableDictionary dictionary];
@@ -439,34 +440,26 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
     NSString *ddgURL =
         [NSString stringWithFormat:@"https://icons.duckduckgo.com/ip3/%@.ico", job.host];
 
-    // IP / 无真实站点图标时 Cravatar 通常比 Google 默认地球更清晰 → IP 优先 Cravatar
-    if (hostIsIP && !job.cancelled) {
-        if ([self tryThirdPartyURLString:cravatarURL channel:@"cravatar" job:job allowSmall:YES]) {
-            return;
-        }
-    }
-
-    // Google s2（真实图标通常最清晰；默认模糊地球会被拒绝）
+    // 第三方竞速：Cravatar（国内可达性更好）+ DDG；Google s2 延后，避免先空等境外源。
     if (!job.cancelled) {
-        if ([self tryThirdPartyURLString:googleURL channel:@"google" job:job allowSmall:YES]) {
+        NSMutableArray<NSDictionary *> *race = [NSMutableArray array];
+        [race addObject:@{@"url": cravatarURL, @"channel": @"cravatar"}];
+        if (!hostIsIP) {
+            [race addObject:@{@"url": ddgURL, @"channel": @"duckduckgo"}];
+        }
+        if ([self tryRaceThirdPartyEntries:race job:job allowSmall:YES]) {
             return;
         }
     }
 
-    // 站点候选（HTML / apple-touch / favicon.ico）
+    // 站点候选（HTML / 精简 well-known），数量封顶。
     if ([self trySiteCandidatesForJob:job]) {
         return;
     }
 
-    // 域名场景：站点失败后再用 Cravatar
-    if (!hostIsIP && !job.cancelled) {
-        if ([self tryThirdPartyURLString:cravatarURL channel:@"cravatar" job:job allowSmall:YES]) {
-            return;
-        }
-    }
-
+    // Google 最后一试（常因代理/墙超时，故降权）。
     if (!job.cancelled) {
-        if ([self tryThirdPartyURLString:ddgURL channel:@"duckduckgo" job:job allowSmall:YES]) {
+        if ([self tryThirdPartyURLString:googleURL channel:@"google" job:job allowSmall:YES]) {
             return;
         }
     }
@@ -560,14 +553,10 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
         appendURL(url);
     }
 
-    // 2) 约定高清路径（先于 favicon.ico）
+    // 2) 约定路径：只保留少数高价值候选，避免境外站串行空等。
     NSURL *origin = [self originURLFromPageURL:job.pageURL];
     NSArray<NSString *> *wellKnownPaths = @[
         @"/apple-touch-icon.png",
-        @"/apple-touch-icon-precomposed.png",
-        @"/apple-touch-icon-180x180.png",
-        @"/apple-touch-icon-152x152.png",
-        @"/favicon-192x192.png",
         @"/favicon-32x32.png",
         @"/favicon.ico",
     ];
@@ -577,7 +566,75 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
         appendURL(components.URL);
     }
 
+    if (ordered.count > kMaxSiteCandidates) {
+        return [ordered subarrayWithRange:NSMakeRange(0, kMaxSiteCandidates)];
+    }
     return [ordered copy];
+}
+
+- (BOOL)tryRaceThirdPartyEntries:(NSArray<NSDictionary *> *)entries
+                             job:(BrowserFaviconFetchJob *)job
+                       allowSmall:(BOOL)allowSmall {
+    if (entries.count == 0 || job.cancelled) {
+        return NO;
+    }
+
+    __block BOOL claimed = NO;
+    __block NSImage *winnerImage = nil;
+    __block NSURL *winnerURL = nil;
+    __block NSString *winnerChannel = nil;
+    __block NSInteger pending = (NSInteger)entries.count;
+    NSObject *lock = [[NSObject alloc] init];
+    dispatch_semaphore_t gate = dispatch_semaphore_create(0);
+
+    for (NSDictionary *entry in entries) {
+        NSString *urlString = entry[@"url"];
+        NSString *channel = entry[@"channel"];
+        if (urlString.length == 0 || channel.length == 0) {
+            @synchronized (lock) {
+                pending -= 1;
+                if (pending <= 0 && !claimed) {
+                    dispatch_semaphore_signal(gate);
+                }
+            }
+            continue;
+        }
+        [self downloadImageFromURLString:urlString completion:^(NSImage *img, NSURL *url, NSError *error) {
+            (void)error;
+            @synchronized (lock) {
+                pending -= 1;
+                BOOL usable = (img != nil);
+                if (usable && !allowSmall && BrowserFaviconMaxPixelEdge(img) < kPreferredMinPixelEdge) {
+                    usable = NO;
+                }
+                if (usable
+                    && ([channel isEqualToString:@"google"] || [channel isEqualToString:@"duckduckgo"])
+                    && BrowserFaviconImageLooksLikeGenericGlobePlaceholder(img)) {
+                    usable = NO;
+                }
+                if (usable && !claimed) {
+                    claimed = YES;
+                    winnerImage = img;
+                    winnerURL = url;
+                    winnerChannel = channel;
+                    dispatch_semaphore_signal(gate);
+                } else if (pending <= 0 && !claimed) {
+                    dispatch_semaphore_signal(gate);
+                }
+            }
+        }];
+    }
+
+    (void)BrowserFaviconWaitSemaphore(gate, kThirdPartyRaceBudget);
+    if (job.cancelled) {
+        [self completeJob:job iconURL:nil image:nil error:[self cancelledError]];
+        return YES;
+    }
+    if (winnerImage != nil && winnerChannel.length > 0) {
+        [self succeedJob:job image:winnerImage sourceURL:winnerURL channel:winnerChannel];
+        return YES;
+    }
+    return NO;
 }
 
 - (BOOL)tryThirdPartyURLString:(NSString *)urlString
@@ -640,6 +697,9 @@ static BOOL BrowserFaviconWaitSemaphore(dispatch_semaphore_t sem, NSTimeInterval
         }
         NSArray<NSURL *> *urls = [BrowserFaviconHTMLParser iconURLsFromHTMLData:htmlData pageURL:htmlURL];
         if (urls.count > 0) {
+            if (urls.count > kMaxSiteCandidates) {
+                return [urls subarrayWithRange:NSMakeRange(0, kMaxSiteCandidates)];
+            }
             return urls;
         }
     }

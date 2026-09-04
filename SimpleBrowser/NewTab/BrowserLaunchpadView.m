@@ -383,8 +383,16 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
         return;
     }
     if (hidden) {
-        [self releaseWallpaperIfNeeded];
         [self cancelPendingIconRefresh];
+        // 与切页冷唤醒错开：大图释放放到下一拍，避免与 WKWebView 创建同栈抢主线程。
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.hidden) {
+                return;
+            }
+            [strongSelf releaseWallpaperIfNeeded];
+        });
     } else if (self.window != nil) {
         [self acquireWallpaperIfNeeded];
         [self refreshWallpaperPresentation];

@@ -55,6 +55,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, assign) BOOL pendingHardRecover;
 /// 硬恢复错误文案（展示于原生错误页）。
 @property (nonatomic, copy, nullable) NSString *hardRecoverMessage;
+/// 已 wake/prewarm 但尚未在挂上 delegate 后 load restorable（切页冷启动可据此延后挂载）。
+@property (nonatomic, assign, readonly) BOOL pendingRestorableLoad;
 
 + (instancetype)tabWithConfiguration:(WKWebViewConfiguration *)configuration;
 /// 接入已由 WebKit 指定 configuration 创建的 WebView（须用于 createWebView 回调）。

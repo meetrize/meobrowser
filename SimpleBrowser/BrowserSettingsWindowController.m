@@ -484,7 +484,9 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                                                                target:self
                                                                action:@selector(openSystemLocationSettingsClicked:)];
     self.openSystemLocationSettingsButton.bezelStyle = NSBezelStyleRounded;
-    self.privacyHintLabel = [self makeHint:@"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。"];
+    self.privacyHintLabel = [self makeHint:
+        @"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。\n"
+        @"网页与图标等网络请求均遵循系统「网络」中的代理设置；境外站点请在系统中配置可用代理，应用不会为加速而绕过代理。"];
 
     // —— 开发者 ——
     self.allowWebInspectionCheckbox = [NSButton checkboxWithTitle:@"允许网页检查"

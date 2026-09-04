@@ -1,4 +1,5 @@
 #import "BrowserTextTranslationService.h"
+#import "BrowserSystemURLSession.h"
 
 @interface BrowserTextTranslationService ()
 @property (nonatomic, strong) NSURLSession *urlSession;
@@ -18,9 +19,8 @@
 - (instancetype)init {
     self = [super init];
     if (self) {
-        NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-        config.timeoutIntervalForRequest = 20.0;
-        config.timeoutIntervalForResource = 45.0;
+        NSURLSessionConfiguration *config =
+            [BrowserSystemURLSession ephemeralConfigurationWithRequestTimeout:20.0 resourceTimeout:45.0];
         config.HTTPAdditionalHeaders = @{
             @"User-Agent": @"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
             @"Accept": @"*/*",

@@ -793,6 +793,10 @@ NSColor *BrowserTabActiveFillColor(void) {
 
     // 选中与拖拽解耦：先进入 tracking 排空延迟事件，再在 mouseUp / drag-commit 时选中。
     // 旧路径在 mouseDown 同步 onSelect→refreshTabsUI，主线程一卡就把单击判成拖拽。
+    if (self.onSelectGestureBegan) {
+        self.onSelectGestureBegan();
+    }
+
     NSWindow *window = self.window;
     if (!window) {
         if (self.onSelect) {

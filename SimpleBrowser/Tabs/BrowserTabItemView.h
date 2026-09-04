@@ -44,6 +44,8 @@ FOUNDATION_EXPORT const CGFloat BrowserTabFaviconTitleGap;
 /// 悬停完整提示（标题 + 网址）；标题栏 accessory 内系统 toolTip 不可靠，由自定义浮层展示。
 @property (nonatomic, copy, nullable) NSString *tabToolTip;
 @property (nonatomic, copy, nullable) void (^onSelect)(void);
+/// 按下开始选中手势时调用（tracking 前）；用于预热休眠 WebView，勿做重 UI。
+@property (nonatomic, copy, nullable) void (^onSelectGestureBegan)(void);
 @property (nonatomic, copy, nullable) void (^onClose)(void);
 /// Option+点击关闭按钮时调用；未设置时退回 onClose
 @property (nonatomic, copy, nullable) void (^onCloseTabsToTheRight)(void);

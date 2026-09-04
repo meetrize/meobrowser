@@ -92,6 +92,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationSession.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationWatchdog.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserReachabilityProbe.m \
+                   $(BROWSER_SRC_DIR)/Navigation/BrowserSystemURLSession.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserTabLoadIsolator.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationDiagnostics.m \
                    $(BROWSER_SRC_DIR)/Feed/BrowserFeedItem.m \

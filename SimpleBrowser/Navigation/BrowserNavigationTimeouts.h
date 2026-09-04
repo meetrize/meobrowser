@@ -8,7 +8,7 @@ FOUNDATION_EXPORT const NSTimeInterval BrowserMainFrameNavigationTimeout;
 /// 从 loadURL / loadRequest 起算的总导航超时（秒）。覆盖「从未 didStartProvisional」的空等。
 FOUNDATION_EXPORT const NSTimeInterval BrowserNavigationOverallTimeout;
 
-/// commit 后文档仍 isLoading 的宽限（秒）。NH-1：到期 stopLoading 并清加载 UI，不换错误页。
+/// commit 后文档仍 isLoading 的宽限（秒）。到期 stopLoading 并清加载 UI，不换错误页（默认 10s）。
 FOUNDATION_EXPORT const NSTimeInterval BrowserDocumentLoadGraceTimeout;
 
 /// `__meo_hf` / hash 恢复等短宽限（秒），给 window.stop() 与 SPA 留出时间。
