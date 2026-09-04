@@ -1,4 +1,5 @@
 #import "FormMemo.h"
+#import "MeoSiteMatch.h"
 
 @implementation FormMemoField
 
@@ -98,7 +99,9 @@
     copy.memoID = self.memoID;
     copy.title = self.title;
     copy.host = self.host;
+    copy.port = self.port;
     copy.pathPrefix = self.pathPrefix;
+    copy.pathMatchMode = self.pathMatchMode;
     copy.isDefault = self.isDefault;
     NSMutableArray<FormMemoField *> *fields = [NSMutableArray arrayWithCapacity:self.fields.count];
     for (FormMemoField *field in self.fields) {
@@ -121,40 +124,18 @@
 }
 
 - (BOOL)matchesURL:(NSURL *)url {
-    if (!url || self.host.length == 0) {
-        return NO;
-    }
-    if (url.isFileURL) {
-        if (![self.host isEqualToString:@"file"] && ![self.host isEqualToString:@"localhost"]) {
-            return NO;
-        }
-        if (self.pathPrefix.length > 0) {
-            NSString *path = url.path ?: @"";
-            if (![path containsString:self.pathPrefix] && ![path hasPrefix:self.pathPrefix]) {
-                return NO;
-            }
-        }
-        return YES;
-    }
+    return [MeoSiteMatch matchesURL:url
+                               host:self.host
+                               port:self.port
+                        pathPattern:self.pathPrefix
+                               mode:self.pathMatchMode];
+}
 
-    NSString *host = url.host.lowercaseString;
-    if (host.length == 0) {
-        return NO;
-    }
-    if (![host isEqualToString:self.host]) {
-        NSString *strippedHost = [host hasPrefix:@"www."] ? [host substringFromIndex:4] : host;
-        NSString *strippedSelf = [self.host hasPrefix:@"www."] ? [self.host substringFromIndex:4] : self.host;
-        if (![strippedHost isEqualToString:strippedSelf]) {
-            return NO;
-        }
-    }
-    if (self.pathPrefix.length > 0) {
-        NSString *path = url.path.length > 0 ? url.path : @"/";
-        if (![path hasPrefix:self.pathPrefix]) {
-            return NO;
-        }
-    }
-    return YES;
+- (NSInteger)matchSpecificityScore {
+    return [MeoSiteMatch specificityScoreForHost:self.host
+                                            port:self.port
+                                     pathPattern:self.pathPrefix
+                                            mode:self.pathMatchMode];
 }
 
 - (NSDictionary *)dictionaryRepresentation {
@@ -171,8 +152,20 @@
         @"waitTimeoutMs": @(self.waitTimeoutMs > 0 ? self.waitTimeoutMs : 8000),
         @"updatedAt": @(self.updatedAt),
     } mutableCopy];
+    if (self.port != nil) {
+        dict[@"port"] = self.port;
+    }
     if (self.pathPrefix.length > 0) {
         dict[@"pathPrefix"] = self.pathPrefix;
+    }
+    MeoSitePathMatchMode mode =
+        self.pathMatchMode.length > 0
+            ? self.pathMatchMode
+            : [MeoSiteMatch inferredPathMatchModeForPattern:self.pathPrefix];
+    if (self.pathPrefix.length > 0 && ![mode isEqualToString:MeoSitePathMatchModePrefix]) {
+        dict[@"pathMatchMode"] = mode;
+    } else if (self.pathMatchMode.length > 0) {
+        dict[@"pathMatchMode"] = self.pathMatchMode;
     }
     return dict;
 }
@@ -204,6 +197,14 @@
     }
     NSString *pathPrefix = dictionary[@"pathPrefix"];
     memo.pathPrefix = [pathPrefix isKindOfClass:[NSString class]] ? pathPrefix : nil;
+    id portValue = dictionary[@"port"];
+    if ([portValue isKindOfClass:[NSNumber class]]) {
+        memo.port = (NSNumber *)portValue;
+    } else {
+        memo.port = nil;
+    }
+    NSString *pathMode = dictionary[@"pathMatchMode"];
+    memo.pathMatchMode = [pathMode isKindOfClass:[NSString class]] ? pathMode : nil;
 
     NSMutableArray<FormMemoField *> *fields = [NSMutableArray array];
     id rawFields = dictionary[@"fields"];

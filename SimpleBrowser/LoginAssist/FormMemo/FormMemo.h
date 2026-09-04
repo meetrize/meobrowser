@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "MeoSiteMatch.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -21,7 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *memoID;
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, copy) NSString *host;
+@property (nonatomic, strong, nullable) NSNumber *port;
 @property (nonatomic, copy, nullable) NSString *pathPrefix;
+@property (nonatomic, copy, nullable) MeoSitePathMatchMode pathMatchMode;
 @property (nonatomic, assign) BOOL isDefault;
 @property (nonatomic, copy) NSArray<FormMemoField *> *fields;
 /// waitFor 超时（毫秒），默认 8000。
@@ -31,6 +34,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)memoWithHost:(NSString *)host title:(NSString *)title;
 
 - (BOOL)matchesURL:(NSURL *)url;
+- (NSInteger)matchSpecificityScore;
 - (NSArray<FormMemoField *> *)enabledFields;
 - (NSDictionary *)dictionaryRepresentation;
 + (nullable instancetype)memoWithDictionary:(NSDictionary *)dictionary;

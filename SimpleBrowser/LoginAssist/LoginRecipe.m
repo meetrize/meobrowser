@@ -1,4 +1,5 @@
 #import "LoginRecipe.h"
+#import "MeoSiteMatch.h"
 
 LoginRecipeMode const LoginRecipeModePassword = @"password";
 LoginRecipeMode const LoginRecipeModeSMSOTP = @"sms_otp";
@@ -113,7 +114,9 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
     copy.recipeID = self.recipeID;
     copy.title = self.title;
     copy.host = self.host;
+    copy.port = self.port;
     copy.pathPrefix = self.pathPrefix;
+    copy.pathMatchMode = self.pathMatchMode;
     copy.mode = self.mode;
     copy.autoLogin = self.autoLogin;
     copy.isDefault = self.isDefault;
@@ -155,40 +158,18 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
 }
 
 - (BOOL)matchesURL:(NSURL *)url {
-    if (!url || self.host.length == 0) {
-        return NO;
-    }
-    if (url.isFileURL) {
-        if (![self.host isEqualToString:@"file"] && ![self.host isEqualToString:@"localhost"]) {
-            return NO;
-        }
-        if (self.pathPrefix.length > 0) {
-            NSString *path = url.path ?: @"";
-            if (![path containsString:self.pathPrefix] && ![path hasPrefix:self.pathPrefix]) {
-                return NO;
-            }
-        }
-        return YES;
-    }
+    return [MeoSiteMatch matchesURL:url
+                               host:self.host
+                               port:self.port
+                        pathPattern:self.pathPrefix
+                               mode:self.pathMatchMode];
+}
 
-    NSString *host = url.host.lowercaseString;
-    if (host.length == 0) {
-        return NO;
-    }
-    if (![host isEqualToString:self.host]) {
-        NSString *strippedHost = [host hasPrefix:@"www."] ? [host substringFromIndex:4] : host;
-        NSString *strippedSelf = [self.host hasPrefix:@"www."] ? [self.host substringFromIndex:4] : self.host;
-        if (![strippedHost isEqualToString:strippedSelf]) {
-            return NO;
-        }
-    }
-    if (self.pathPrefix.length > 0) {
-        NSString *path = url.path.length > 0 ? url.path : @"/";
-        if (![path hasPrefix:self.pathPrefix]) {
-            return NO;
-        }
-    }
-    return YES;
+- (NSInteger)matchSpecificityScore {
+    return [MeoSiteMatch specificityScoreForHost:self.host
+                                            port:self.port
+                                     pathPattern:self.pathPrefix
+                                            mode:self.pathMatchMode];
 }
 
 - (NSDictionary *)dictionaryRepresentation {
@@ -204,8 +185,20 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
         @"otpMaxWaitMs": @(self.otpMaxWaitMs > 0 ? self.otpMaxWaitMs : 120000),
         @"updatedAt": @(self.updatedAt),
     } mutableCopy];
+    if (self.port != nil) {
+        dict[@"port"] = self.port;
+    }
     if (self.pathPrefix.length > 0) {
         dict[@"pathPrefix"] = self.pathPrefix;
+    }
+    MeoSitePathMatchMode mode =
+        self.pathMatchMode.length > 0
+            ? self.pathMatchMode
+            : [MeoSiteMatch inferredPathMatchModeForPattern:self.pathPrefix];
+    if (self.pathPrefix.length > 0 && ![mode isEqualToString:MeoSitePathMatchModePrefix]) {
+        dict[@"pathMatchMode"] = mode;
+    } else if (self.pathMatchMode.length > 0) {
+        dict[@"pathMatchMode"] = self.pathMatchMode;
     }
     if (self.usernameSelector.length > 0) {
         dict[@"usernameSelector"] = self.usernameSelector;
@@ -274,6 +267,14 @@ LoginRecipeMode const LoginRecipeModeHybrid = @"hybrid";
 
     NSString *pathPrefix = dictionary[@"pathPrefix"];
     recipe.pathPrefix = [pathPrefix isKindOfClass:[NSString class]] ? pathPrefix : nil;
+    id portValue = dictionary[@"port"];
+    if ([portValue isKindOfClass:[NSNumber class]]) {
+        recipe.port = (NSNumber *)portValue;
+    } else {
+        recipe.port = nil;
+    }
+    NSString *pathMode = dictionary[@"pathMatchMode"];
+    recipe.pathMatchMode = [pathMode isKindOfClass:[NSString class]] ? pathMode : nil;
     NSString *userSel = dictionary[@"usernameSelector"];
     recipe.usernameSelector = [userSel isKindOfClass:[NSString class]] ? userSel : nil;
     NSString *passSel = dictionary[@"passwordSelector"];

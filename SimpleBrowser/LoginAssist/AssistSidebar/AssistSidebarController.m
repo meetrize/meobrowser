@@ -6,6 +6,7 @@
 #import "LoginRecipeStore.h"
 #import "FormMemo.h"
 #import "FormMemoStore.h"
+#import "MeoSiteMatch.h"
 #import "SBTextField.h"
 #import <QuartzCore/QuartzCore.h>
 
@@ -1225,22 +1226,23 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 
     if (item.kind == AssistSidebarRowKindRecipe) {
         LoginRecipe *recipe = item.recipe;
-        NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
-        title.stringValue = recipe.isDefault ? [NSString stringWithFormat:@"★ %@", name] : name;
-        NSMutableString *sub = [NSMutableString stringWithString:recipe.host ?: @""];
-        if (recipe.pathPrefix.length > 0) {
-            [sub appendFormat:@" · %@", recipe.pathPrefix];
+        NSString *pattern = [MeoSiteMatch sitePatternForHost:recipe.host ?: @""
+                                                        port:recipe.port
+                                                 pathPattern:recipe.pathPrefix];
+        if (pattern.length == 0) {
+            pattern = @"/";
         }
-        subtitle.stringValue = sub;
+        title.stringValue = recipe.isDefault ? [NSString stringWithFormat:@"★ %@", pattern] : pattern;
+        subtitle.stringValue = @"";
         action.title = @"登录";
     } else {
         FormMemo *memo = item.memo;
-        NSString *name = memo.title.length > 0 ? memo.title : memo.host;
+        NSString *pattern = [MeoSiteMatch sitePatternForHost:memo.host ?: @""
+                                                        port:memo.port
+                                                 pathPattern:memo.pathPrefix];
+        NSString *name = memo.title.length > 0 ? memo.title : (pattern.length > 0 ? pattern : memo.host);
         title.stringValue = memo.isDefault ? [NSString stringWithFormat:@"★ %@", name] : name;
-        NSMutableString *sub = [NSMutableString stringWithString:memo.host ?: @""];
-        if (memo.pathPrefix.length > 0) {
-            [sub appendFormat:@" · %@", memo.pathPrefix];
-        }
+        NSMutableString *sub = [NSMutableString stringWithString:pattern ?: @""];
         [sub appendFormat:@" · %lu 字段", (unsigned long)memo.fields.count];
         subtitle.stringValue = sub;
         action.title = @"填入";

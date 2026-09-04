@@ -4,6 +4,7 @@
 #import "LoginRecipe.h"
 #import "LoginRecipeStore.h"
 #import "LoginCredentialStore.h"
+#import "MeoSiteMatch.h"
 
 @interface SaveRecipePromptCoordinator ()
 @property (nonatomic, weak) BrowserWindowController *windowController;
@@ -32,10 +33,7 @@
 }
 
 - (NSString *)hostKeyForURL:(NSURL *)url {
-    if (url.isFileURL) {
-        return @"file";
-    }
-    return url.host.lowercaseString ?: @"";
+    return [MeoSiteMatch normalizedHostForURL:url] ?: @"";
 }
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(NSURL *)url {
@@ -155,6 +153,18 @@
             LoginRecipe *recipe = existing ? [existing copy] : [LoginRecipe recipeWithHost:resolvedHost title:resolvedHost];
             recipe.title = resolvedHost;
             recipe.host = resolvedHost.lowercaseString;
+            if (!existing) {
+                NSURL *pageURL = webView.URL;
+                recipe.port = [MeoSiteMatch portNumberForURL:pageURL];
+                recipe.pathPrefix = [MeoSiteMatch pathPatternForURL:pageURL];
+                recipe.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:recipe.pathPrefix];
+                NSString *scope = [MeoSiteMatch scopeDisplayStringForHost:recipe.host port:recipe.port];
+                if (recipe.pathPrefix.length > 0) {
+                    recipe.title = [NSString stringWithFormat:@"%@%@", scope, recipe.pathPrefix];
+                } else {
+                    recipe.title = scope;
+                }
+            }
             recipe.usernameSelector = [draft[@"usernameSelector"] isKindOfClass:[NSString class]] ? draft[@"usernameSelector"] : @"";
             recipe.passwordSelector = [draft[@"passwordSelector"] isKindOfClass:[NSString class]] ? draft[@"passwordSelector"] : @"";
             recipe.submitSelector = [draft[@"submitSelector"] isKindOfClass:[NSString class]] ? draft[@"submitSelector"] : @"";

@@ -5,6 +5,7 @@
 #import "LoginCredentialStore.h"
 #import "BrowserTransientToast.h"
 #import "BrowserRiskHostPolicy.h"
+#import "MeoSiteMatch.h"
 
 @interface LoginFieldSaveCoordinator ()
 @property (nonatomic, weak) BrowserWindowController *windowController;
@@ -22,28 +23,11 @@
 }
 
 - (NSString *)hostKeyForURL:(NSURL *)url {
-    if (!url) {
-        return @"";
-    }
-    if (url.isFileURL) {
-        return @"file";
-    }
-    return url.host.lowercaseString ?: @"";
+    return [MeoSiteMatch normalizedHostForURL:url] ?: @"";
 }
 
 - (nullable NSString *)pathPrefixForURL:(NSURL *)url {
-    if (!url || url.isFileURL) {
-        if (url.isFileURL) {
-            NSString *last = url.lastPathComponent;
-            return last.length > 0 ? last : nil;
-        }
-        return nil;
-    }
-    NSString *path = url.path ?: @"";
-    if (path.length == 0 || [path isEqualToString:@"/"]) {
-        return nil;
-    }
-    return path;
+    return [MeoSiteMatch pathPatternForURL:url];
 }
 
 - (NSURL *)resolveURL:(WKWebView *)webView body:(NSDictionary *)body {
@@ -54,17 +38,34 @@
     return url;
 }
 
-- (LoginRecipe *)recipeForURL:(NSURL *)url host:(NSString *)host createIfNeeded:(BOOL)create created:(BOOL *)createdOut {
-    LoginRecipeStore *store = [LoginRecipeStore sharedStore];
-    LoginRecipe *recipe = [store defaultRecipeMatchingURL:url];
-    if (!recipe) {
-        recipe = [store recipesMatchingURL:url].firstObject;
+- (LoginRecipe *)recipeReusableForSavingURL:(NSURL *)url {
+    for (LoginRecipe *recipe in [[LoginRecipeStore sharedStore] recipesMatchingURL:url]) {
+        if ([MeoSiteMatch shouldReuseHost:recipe.host
+                                     port:recipe.port
+                              pathPattern:recipe.pathPrefix
+                                     mode:recipe.pathMatchMode
+                             forSavingURL:url]) {
+            return recipe;
+        }
     }
+    return nil;
+}
+
+- (LoginRecipe *)recipeForURL:(NSURL *)url host:(NSString *)host createIfNeeded:(BOOL)create created:(BOOL *)createdOut {
+    LoginRecipe *recipe = [self recipeReusableForSavingURL:url];
     BOOL created = NO;
     if (!recipe && create) {
         created = YES;
-        recipe = [LoginRecipe recipeWithHost:host title:host];
-        recipe.pathPrefix = [self pathPrefixForURL:url];
+        NSString *path = [MeoSiteMatch pathPatternForURL:url];
+        NSNumber *port = [MeoSiteMatch portNumberForURL:url];
+        NSString *title = [MeoSiteMatch scopeDisplayStringForHost:host port:port];
+        if (path.length > 0) {
+            title = [NSString stringWithFormat:@"%@%@", title, path];
+        }
+        recipe = [LoginRecipe recipeWithHost:host title:title];
+        recipe.port = port;
+        recipe.pathPrefix = path;
+        recipe.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:path];
         recipe.isDefault = YES;
         recipe.autoLogin = NO;
         recipe.mode = LoginRecipeModePassword;

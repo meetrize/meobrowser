@@ -98,6 +98,11 @@ NSNotificationName const LoginRecipeStoreDidChangeNotification = @"LoginRecipeSt
         }
     }
     [matched sortUsingComparator:^NSComparisonResult(LoginRecipe *a, LoginRecipe *b) {
+        NSInteger sa = [a matchSpecificityScore];
+        NSInteger sb = [b matchSpecificityScore];
+        if (sa != sb) {
+            return sa > sb ? NSOrderedAscending : NSOrderedDescending;
+        }
         if (a.isDefault != b.isDefault) {
             return a.isDefault ? NSOrderedAscending : NSOrderedDescending;
         }
@@ -153,8 +158,16 @@ NSNotificationName const LoginRecipeStoreDidChangeNotification = @"LoginRecipeSt
 
     if (recipe.isDefault) {
         for (LoginRecipe *other in self.recipes) {
-            if (![other.recipeID isEqualToString:recipe.recipeID] &&
-                [other.host isEqualToString:recipe.host]) {
+            if ([other.recipeID isEqualToString:recipe.recipeID]) {
+                continue;
+            }
+            if (![other.host isEqualToString:recipe.host]) {
+                continue;
+            }
+            BOOL samePort = (other.port == nil && recipe.port == nil) ||
+                (other.port != nil && recipe.port != nil &&
+                 other.port.integerValue == recipe.port.integerValue);
+            if (samePort) {
                 other.isDefault = NO;
             }
         }

@@ -124,6 +124,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/TabOverview/BrowserTabOverviewView.m \
                    $(BROWSER_SRC_DIR)/TabOverview/BrowserTabOverviewController.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipe.m \
+                   $(BROWSER_SRC_DIR)/LoginAssist/MeoSiteMatch.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRecipeStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginCredentialStore.m \
                    $(BROWSER_SRC_DIR)/LoginAssist/LoginRunner.m \

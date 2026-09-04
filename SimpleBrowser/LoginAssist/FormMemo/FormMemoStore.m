@@ -97,6 +97,11 @@ NSNotificationName const FormMemoStoreDidChangeNotification = @"FormMemoStoreDid
         }
     }
     [matched sortUsingComparator:^NSComparisonResult(FormMemo *a, FormMemo *b) {
+        NSInteger sa = [a matchSpecificityScore];
+        NSInteger sb = [b matchSpecificityScore];
+        if (sa != sb) {
+            return sa > sb ? NSOrderedAscending : NSOrderedDescending;
+        }
         if (a.isDefault != b.isDefault) {
             return a.isDefault ? NSOrderedAscending : NSOrderedDescending;
         }
@@ -152,8 +157,16 @@ NSNotificationName const FormMemoStoreDidChangeNotification = @"FormMemoStoreDid
 
     if (memo.isDefault) {
         for (FormMemo *other in self.memos) {
-            if (![other.memoID isEqualToString:memo.memoID] &&
-                [other.host isEqualToString:memo.host]) {
+            if ([other.memoID isEqualToString:memo.memoID]) {
+                continue;
+            }
+            if (![other.host isEqualToString:memo.host]) {
+                continue;
+            }
+            BOOL samePort = (other.port == nil && memo.port == nil) ||
+                (other.port != nil && memo.port != nil &&
+                 other.port.integerValue == memo.port.integerValue);
+            if (samePort) {
                 other.isDefault = NO;
             }
         }

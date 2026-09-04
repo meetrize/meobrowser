@@ -2,6 +2,7 @@
 #import "FormMemo.h"
 #import "FormMemoStore.h"
 #import "LoginElementPicker.h"
+#import "MeoSiteMatch.h"
 #import "SBTextField.h"
 #import "SBTextView.h"
 #import <WebKit/WebKit.h>
@@ -10,8 +11,8 @@
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, copy, readwrite, nullable) NSString *editingMemoID;
 @property (nonatomic, strong) SBTextField *titleField;
-@property (nonatomic, strong) SBTextField *hostField;
-@property (nonatomic, strong) SBTextField *pathPrefixField;
+@property (nonatomic, strong) SBTextField *sitePatternField;
+@property (nonatomic, strong) NSTextField *pathHintLabel;
 @property (nonatomic, strong) NSButton *defaultCheck;
 @property (nonatomic, strong) NSTableView *fieldsTable;
 @property (nonatomic, strong) NSMutableArray<FormMemoField *> *editingFields;
@@ -77,8 +78,13 @@
     heading.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.titleField = [self makeField];
-    self.hostField = [self makeField];
-    self.pathPrefixField = [self makeField];
+    self.sitePatternField = [self makeField];
+    self.sitePatternField.placeholderString = @"host:port/tickets/new 或 host/form/*";
+    self.pathHintLabel = [NSTextField wrappingLabelWithString:
+        @"完整匹配：主机[:端口][/路径]。路径支持 * / ?；仅写主机（及端口）表示该范围全部路径。"];
+    self.pathHintLabel.font = [NSFont systemFontOfSize:10];
+    self.pathHintLabel.textColor = [NSColor tertiaryLabelColor];
+    self.pathHintLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.defaultCheck = [NSButton checkboxWithTitle:@"设为默认"
                                              target:nil
                                              action:nil];
@@ -182,8 +188,8 @@
     NSStackView *stack = [NSStackView stackViewWithViews:@[
         heading,
         [self rowWithCaption:@"名称" field:self.titleField],
-        [self rowWithCaption:@"主机" field:self.hostField],
-        [self rowWithCaption:@"路径" field:self.pathPrefixField],
+        [self rowWithCaption:@"匹配" field:self.sitePatternField],
+        self.pathHintLabel,
         self.defaultCheck,
         fieldsScroll,
         fieldButtons,
@@ -217,12 +223,16 @@
 
 #pragma mark - Public
 
+- (void)setSitePatternHost:(NSString *)host port:(NSNumber *)port path:(NSString *)path {
+    self.sitePatternField.stringValue =
+        [MeoSiteMatch sitePatternForHost:host ?: @"" port:port pathPattern:path] ?: @"";
+}
+
 - (void)clear {
     self.editingMemoID = nil;
     self.isNewMemo = NO;
     self.titleField.stringValue = @"";
-    self.hostField.stringValue = @"";
-    self.pathPrefixField.stringValue = @"";
+    self.sitePatternField.stringValue = @"";
     self.defaultCheck.state = NSControlStateValueOff;
     [self.editingFields removeAllObjects];
     [self.fieldsTable reloadData];
@@ -242,8 +252,7 @@
     self.isNewMemo = NO;
     self.editingMemoID = memo.memoID;
     self.titleField.stringValue = memo.title ?: @"";
-    self.hostField.stringValue = memo.host ?: @"";
-    self.pathPrefixField.stringValue = memo.pathPrefix ?: @"";
+    [self setSitePatternHost:memo.host port:memo.port path:memo.pathPrefix];
     self.defaultCheck.state = memo.isDefault ? NSControlStateValueOn : NSControlStateValueOff;
     [self.editingFields removeAllObjects];
     for (FormMemoField *field in memo.fields) {
@@ -273,22 +282,15 @@
     if ([self.delegate respondsToSelector:@selector(memoEditorCurrentURL:)]) {
         url = [self.delegate memoEditorCurrentURL:self];
     }
-    if (url.isFileURL) {
-        self.hostField.stringValue = @"file";
-        self.titleField.stringValue = @"本地表单备忘";
-        if (url.path.lastPathComponent.length > 0) {
-            self.pathPrefixField.stringValue = url.path.lastPathComponent;
-        }
-    } else if (url.host.length > 0) {
-        self.hostField.stringValue = url.host.lowercaseString;
-        self.titleField.stringValue = url.host;
-    }
-    FormMemoField *seed = [FormMemoField fieldWithLabel:@"字段1" selector:@"" value:@""];
-    [self.editingFields addObject:seed];
-    [self.fieldsTable reloadData];
-    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
-    [self loadFieldEditorFromIndex:0];
-    self.statusLabel.stringValue = @"新建备忘：填写后点「保存」。";
+    NSString *host = [MeoSiteMatch normalizedHostForURL:url];
+    NSNumber *port = [MeoSiteMatch portNumberForURL:url];
+    NSString *path = [MeoSiteMatch pathPatternForURL:url];
+    [self setSitePatternHost:host port:port path:path];
+    NSString *pattern = self.sitePatternField.stringValue;
+    self.titleField.stringValue = pattern.length > 0
+        ? [NSString stringWithFormat:@"%@ 备忘", pattern]
+        : @"新备忘";
+    self.statusLabel.stringValue = @"已填入当前页完整匹配路径，可改主机/端口/通配后保存。";
 }
 
 #pragma mark - Fields table
@@ -457,9 +459,14 @@
 - (void)saveClicked:(id)sender {
     (void)sender;
     [self applyFieldEditor:nil];
-    NSString *host = [self.hostField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (host.length == 0) {
-        self.statusLabel.stringValue = @"请填写主机。";
+    NSString *host = nil;
+    NSNumber *port = nil;
+    NSString *path = nil;
+    if (![MeoSiteMatch parseSitePattern:self.sitePatternField.stringValue
+                                   host:&host
+                                   port:&port
+                            pathPattern:&path] || host.length == 0) {
+        self.statusLabel.stringValue = @"请填写完整匹配，例如 host:56546/tickets/new";
         return;
     }
 
@@ -470,10 +477,13 @@
     if (!memo) {
         memo = [FormMemo memoWithHost:host title:self.titleField.stringValue];
     }
-    memo.host = host.lowercaseString;
-    memo.title = self.titleField.stringValue.length > 0 ? self.titleField.stringValue : host;
-    NSString *path = [self.pathPrefixField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    memo.host = host;
+    memo.port = port;
+    memo.title = self.titleField.stringValue.length > 0
+        ? self.titleField.stringValue
+        : [MeoSiteMatch sitePatternForHost:host port:port pathPattern:path];
     memo.pathPrefix = path.length > 0 ? path : nil;
+    memo.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:memo.pathPrefix];
     memo.isDefault = (self.defaultCheck.state == NSControlStateValueOn);
     NSMutableArray<FormMemoField *> *fields = [NSMutableArray array];
     for (FormMemoField *field in self.editingFields) {

@@ -32,14 +32,21 @@ static NSString * const kSyncFormMemoMetaKey = @"meo.sync.formMemoMeta";
     for (FormMemoField *field in memo.fields) {
         [fields addObject:[field dictionaryRepresentation]];
     }
-    return @{
+    NSMutableDictionary *payload = [@{
         @"title": memo.title ?: @"",
         @"host": memo.host ?: @"",
         @"pathPrefix": memo.pathPrefix ?: @"",
         @"isDefault": @(memo.isDefault),
         @"waitTimeoutMs": @(memo.waitTimeoutMs),
         @"fields": fields,
-    };
+    } mutableCopy];
+    if (memo.port != nil) {
+        payload[@"port"] = memo.port;
+    }
+    if (memo.pathMatchMode.length > 0) {
+        payload[@"pathMatchMode"] = memo.pathMatchMode;
+    }
+    return payload;
 }
 
 - (SyncRecord *)recordFromMemo:(FormMemo *)memo meta:(NSDictionary *)meta {
@@ -81,6 +88,10 @@ static NSString * const kSyncFormMemoMetaKey = @"meo.sync.formMemoMeta";
     memo.host = [host isKindOfClass:[NSString class]] ? host.lowercaseString : @"";
     NSString *pathPrefix = p[@"pathPrefix"];
     memo.pathPrefix = [pathPrefix isKindOfClass:[NSString class]] && pathPrefix.length > 0 ? pathPrefix : nil;
+    id portValue = p[@"port"];
+    memo.port = [portValue isKindOfClass:[NSNumber class]] ? (NSNumber *)portValue : nil;
+    NSString *pathMode = p[@"pathMatchMode"];
+    memo.pathMatchMode = [pathMode isKindOfClass:[NSString class]] ? pathMode : nil;
     memo.isDefault = [p[@"isDefault"] boolValue];
     if (p[@"waitTimeoutMs"] != nil) {
         memo.waitTimeoutMs = [p[@"waitTimeoutMs"] integerValue];

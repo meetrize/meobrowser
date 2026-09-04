@@ -3,6 +3,7 @@
 #import "LoginRecipeStore.h"
 #import "LoginCredentialStore.h"
 #import "LoginElementPicker.h"
+#import "MeoSiteMatch.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 
@@ -43,9 +44,8 @@
 @interface AssistSidebarRecipeEditor ()
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, copy, readwrite, nullable) NSString *editingRecipeID;
-@property (nonatomic, strong) SBTextField *titleField;
-@property (nonatomic, strong) SBTextField *hostField;
-@property (nonatomic, strong) SBTextField *pathPrefixField;
+@property (nonatomic, strong) SBTextField *sitePatternField;
+@property (nonatomic, strong) NSTextField *pathHintLabel;
 @property (nonatomic, strong) NSPopUpButton *modePopup;
 @property (nonatomic, strong) SBTextField *usernameField;
 @property (nonatomic, strong) SBSecureTextField *passwordField;
@@ -360,9 +360,13 @@
     heading.font = [NSFont boldSystemFontOfSize:12];
     heading.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.titleField = [self makeField];
-    self.hostField = [self makeField];
-    self.pathPrefixField = [self makeField];
+    self.sitePatternField = [self makeField];
+    self.sitePatternField.placeholderString = @"host:port/login.html 或 host/login/*";
+    self.pathHintLabel = [NSTextField wrappingLabelWithString:
+        @"完整匹配：主机[:端口][/路径]。路径支持 * / ?；仅写主机（及端口）表示该范围全部路径。"];
+    self.pathHintLabel.font = [NSFont systemFontOfSize:10];
+    self.pathHintLabel.textColor = [NSColor tertiaryLabelColor];
+    self.pathHintLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.modePopup.translatesAutoresizingMaskIntoConstraints = NO;
     [self.modePopup removeAllItems];
@@ -465,12 +469,11 @@
     self.sendCodeRow = [self rowWithCaption:@"发码" field:self.sendCodeSelectorField pickAction:@selector(pickSend:)];
     self.submitSelectorRow = [self rowWithCaption:@"提交" field:self.submitSelectorField pickAction:@selector(pickSubmit:)];
 
-    // 顺序：基础信息 → 帐密 →（短信字段）→ 自定义字段 → 提交方式 → 选项
+    // 顺序：匹配路径 → 帐密 →（短信字段）→ 自定义字段 → 提交方式 → 选项
     self.formStack = [NSStackView stackViewWithViews:@[
         heading,
-        [self rowWithCaption:@"名称" field:self.titleField pickAction:nil],
-        [self rowWithCaption:@"主机" field:self.hostField pickAction:nil],
-        [self rowWithCaption:@"路径" field:self.pathPrefixField pickAction:nil],
+        [self rowWithCaption:@"匹配" field:self.sitePatternField pickAction:nil],
+        self.pathHintLabel,
         modeRow,
         self.usernameRow,
         self.passwordRow,
@@ -525,12 +528,15 @@
 
 #pragma mark - Public
 
+- (void)setSitePatternHost:(NSString *)host port:(NSNumber *)port path:(NSString *)path {
+    self.sitePatternField.stringValue =
+        [MeoSiteMatch sitePatternForHost:host ?: @"" port:port pathPattern:path] ?: @"";
+}
+
 - (void)clear {
     self.editingRecipeID = nil;
     self.isNewRecipe = NO;
-    self.titleField.stringValue = @"";
-    self.hostField.stringValue = @"";
-    self.pathPrefixField.stringValue = @"";
+    self.sitePatternField.stringValue = @"";
     [self.modePopup selectItemAtIndex:0];
     self.usernameField.stringValue = @"";
     self.passwordField.stringValue = @"";
@@ -559,9 +565,7 @@
     }
     self.isNewRecipe = NO;
     self.editingRecipeID = recipe.recipeID;
-    self.titleField.stringValue = recipe.title ?: @"";
-    self.hostField.stringValue = recipe.host ?: @"";
-    self.pathPrefixField.stringValue = recipe.pathPrefix ?: @"";
+    [self setSitePatternHost:recipe.host port:recipe.port path:recipe.pathPrefix];
     [self selectMode:recipe.mode ?: LoginRecipeModePassword];
     self.usernameSelectorField.stringValue = recipe.usernameSelector ?: @"";
     self.passwordSelectorField.stringValue = recipe.passwordSelector ?: @"";
@@ -585,8 +589,7 @@
     self.usernameField.stringValue = credentials.username ?: @"";
     self.passwordField.stringValue = credentials.password ?: @"";
     self.phoneField.stringValue = credentials.phone ?: @"";
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"编辑「%@」",
-                                    recipe.title.length > 0 ? recipe.title : recipe.host];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"编辑「%@」", self.sitePatternField.stringValue];
 }
 
 - (void)beginNewRecipePrefillingFromCurrentURL {
@@ -597,17 +600,11 @@
     if ([self.delegate respondsToSelector:@selector(recipeEditorCurrentURL:)]) {
         url = [self.delegate recipeEditorCurrentURL:self];
     }
-    if (url.isFileURL) {
-        self.hostField.stringValue = @"file";
-        self.titleField.stringValue = @"本地测试页";
-        if (url.path.lastPathComponent.length > 0) {
-            self.pathPrefixField.stringValue = url.path.lastPathComponent;
-        }
-    } else if (url.host.length > 0) {
-        self.hostField.stringValue = url.host.lowercaseString;
-        self.titleField.stringValue = url.host;
-    }
-    self.statusLabel.stringValue = @"新建登录：填写后点「保存」。";
+    NSString *host = [MeoSiteMatch normalizedHostForURL:url];
+    NSNumber *port = [MeoSiteMatch portNumberForURL:url];
+    NSString *path = [MeoSiteMatch pathPatternForURL:url];
+    [self setSitePatternHost:host port:port path:path];
+    self.statusLabel.stringValue = @"已填入当前页完整匹配路径，可改主机/端口/通配后保存。";
 }
 
 #pragma mark - Mode
@@ -744,22 +741,27 @@
 
 - (void)saveClicked:(id)sender {
     (void)sender;
-    NSString *host = [self.hostField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].lowercaseString;
-    if (host.length == 0) {
-        self.statusLabel.stringValue = @"请填写主机名。";
+    NSString *raw = self.sitePatternField.stringValue;
+    NSString *host = nil;
+    NSNumber *port = nil;
+    NSString *path = nil;
+    if (![MeoSiteMatch parseSitePattern:raw host:&host port:&port pathPattern:&path] || host.length == 0) {
+        self.statusLabel.stringValue = @"请填写完整匹配，例如 host:56546/login.html";
         return;
     }
     LoginRecipe *recipe = nil;
     if (self.editingRecipeID.length > 0) {
         recipe = [[[LoginRecipeStore sharedStore] recipeWithID:self.editingRecipeID] copy];
     }
+    NSString *autoTitle = [MeoSiteMatch sitePatternForHost:host port:port pathPattern:path];
     if (!recipe) {
-        recipe = [LoginRecipe recipeWithHost:host title:self.titleField.stringValue];
+        recipe = [LoginRecipe recipeWithHost:host title:autoTitle];
     }
-    recipe.title = self.titleField.stringValue.length > 0 ? self.titleField.stringValue : host;
+    recipe.title = autoTitle;
     recipe.host = host;
-    NSString *path = [self.pathPrefixField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    recipe.port = port;
     recipe.pathPrefix = path.length > 0 ? path : nil;
+    recipe.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:recipe.pathPrefix];
     recipe.usernameSelector = self.usernameSelectorField.stringValue;
     recipe.passwordSelector = self.passwordSelectorField.stringValue;
     recipe.submitSelector = self.submitSelectorField.stringValue;

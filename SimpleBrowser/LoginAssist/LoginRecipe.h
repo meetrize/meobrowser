@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "MeoSiteMatch.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -26,7 +27,11 @@ extern LoginRecipeMode const LoginRecipeModeHybrid;
 @property (nonatomic, copy) NSString *recipeID;
 @property (nonatomic, copy) NSString *title;
 @property (nonatomic, copy) NSString *host;
+/// 非默认端口；nil = 任意端口（兼容旧数据）。
+@property (nonatomic, strong, nullable) NSNumber *port;
 @property (nonatomic, copy, nullable) NSString *pathPrefix;
+/// 缺省时按 pathPrefix 是否含通配符推断。
+@property (nonatomic, copy, nullable) MeoSitePathMatchMode pathMatchMode;
 @property (nonatomic, copy) LoginRecipeMode mode;
 @property (nonatomic, assign) BOOL autoLogin;
 @property (nonatomic, assign) BOOL isDefault;
@@ -50,6 +55,7 @@ extern LoginRecipeMode const LoginRecipeModeHybrid;
 + (instancetype)recipeWithHost:(NSString *)host title:(NSString *)title;
 
 - (BOOL)matchesURL:(NSURL *)url;
+- (NSInteger)matchSpecificityScore;
 - (BOOL)requiresOTPWait;
 /// 已启用且带选择器的自定义字段。
 - (NSArray<LoginRecipeExtraField *> *)enabledExtraFields;

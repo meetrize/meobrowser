@@ -5,6 +5,7 @@
 #import "FormMemoPreferences.h"
 #import "BrowserTransientToast.h"
 #import "BrowserRiskHostPolicy.h"
+#import "MeoSiteMatch.h"
 
 @interface FormMemoPageSaveCoordinator ()
 @property (nonatomic, weak) BrowserWindowController *windowController;
@@ -22,28 +23,11 @@
 }
 
 - (NSString *)hostKeyForURL:(NSURL *)url {
-    if (!url) {
-        return @"";
-    }
-    if (url.isFileURL) {
-        return @"file";
-    }
-    return url.host.lowercaseString ?: @"";
+    return [MeoSiteMatch normalizedHostForURL:url] ?: @"";
 }
 
 - (nullable NSString *)pathPrefixForURL:(NSURL *)url {
-    if (!url) {
-        return nil;
-    }
-    if (url.isFileURL) {
-        NSString *last = url.lastPathComponent;
-        return last.length > 0 ? last : nil;
-    }
-    NSString *path = url.path ?: @"";
-    if (path.length == 0 || [path isEqualToString:@"/"]) {
-        return nil;
-    }
-    return path;
+    return [MeoSiteMatch pathPatternForURL:url];
 }
 
 - (BOOL)valueLooksSensitive:(NSString *)value label:(NSString *)label {
@@ -177,18 +161,31 @@
                   host:(NSString *)host
                    url:(NSURL *)url {
     FormMemoStore *store = [FormMemoStore sharedStore];
-    FormMemo *memo = [store defaultMemoMatchingURL:url];
-    if (!memo) {
-        NSArray<FormMemo *> *matched = [store memosMatchingURL:url];
-        memo = matched.firstObject;
+    FormMemo *memo = nil;
+    for (FormMemo *candidate in [store memosMatchingURL:url]) {
+        if ([MeoSiteMatch shouldReuseHost:candidate.host
+                                     port:candidate.port
+                              pathPattern:candidate.pathPrefix
+                                     mode:candidate.pathMatchMode
+                             forSavingURL:url]) {
+            memo = candidate;
+            break;
+        }
     }
 
     BOOL created = NO;
     if (!memo) {
         created = YES;
-        NSString *title = [NSString stringWithFormat:@"%@ 备忘", host];
+        NSNumber *port = [MeoSiteMatch portNumberForURL:url];
+        NSString *path = [MeoSiteMatch pathPatternForURL:url];
+        NSString *scope = [MeoSiteMatch scopeDisplayStringForHost:host port:port];
+        NSString *title = path.length > 0
+            ? [NSString stringWithFormat:@"%@%@ 备忘", scope, path]
+            : [NSString stringWithFormat:@"%@ 备忘", scope];
         memo = [FormMemo memoWithHost:host title:title];
-        memo.pathPrefix = [self pathPrefixForURL:url];
+        memo.port = port;
+        memo.pathPrefix = path;
+        memo.pathMatchMode = [MeoSiteMatch inferredPathMatchModeForPattern:path];
         memo.isDefault = YES;
         memo.fields = @[];
     } else {
