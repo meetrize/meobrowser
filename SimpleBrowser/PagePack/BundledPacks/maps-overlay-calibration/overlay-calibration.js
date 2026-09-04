@@ -1,6 +1,6 @@
 /**
- * MeoBrowser — 地图叠加校准 v1.2.3 (MOC-5)
- * 自建 Leaflet 透明路网/标注层，与 Google Maps 相机同步；仅对该层做东/北米偏移。
+ * MeoBrowser — 地图叠加校准 v1.2.4 (MOC-5)
+ * 自建 Leaflet 透明路网/标注层，与 Google Maps 相机同步；东/北米偏移写入 Leaflet 中心（非 CSS 平移），视口始终铺满瓦片。
  * URL 中 Xm = 视口垂直地面跨度（米），换算 zoom 必须乘上地图画布 CSS 高度。
  * 请在 Google Maps「图层」中关闭 Labels，避免双份标注。
  */
@@ -253,6 +253,36 @@
     return { dx: east / mpp, dy: -north / mpp, mpp: mpp };
   }
 
+  /** 东/北米 → 经纬度差（近似，本地校准足够） */
+  function metersToLatLngDelta(east, north, lat) {
+    var cos = Math.cos((lat || 0) * Math.PI / 180);
+    if (Math.abs(cos) < 0.01) cos = cos >= 0 ? 0.01 : -0.01;
+    return {
+      dLat: (north || 0) / 111320,
+      dLng: (east || 0) / (111320 * cos)
+    };
+  }
+
+  /**
+   * 方案 A：正东/正北视觉偏移 ≡ Leaflet 中心反向移动。
+   * 相对 Google 卫星中心，路网看起来东/北移，但瓦片仍铺满整个视口（无底边缺口）。
+   */
+  function overlayCameraCenter(view) {
+    var lat = view.lat;
+    var lng = view.lng;
+    if (state.config && !state.config.paused && state.config.selfOverlay) {
+      var d = metersToLatLngDelta(state.eastMeters, state.northMeters, lat);
+      lat = lat - d.dLat;
+      lng = lng - d.dLng;
+    }
+    return { lat: lat, lng: lng };
+  }
+
+  function clearCssShift() {
+    var shift = document.getElementById('meo-mapalign-leaflet-shift');
+    if (shift) shift.style.transform = 'translate3d(0,0,0)';
+  }
+
   function isMapsContext() {
     var h = (location.hostname || '').toLowerCase();
     var p = location.pathname || '';
@@ -287,18 +317,6 @@
     state.overlayReady = false;
     var host = document.getElementById(HOST_ID);
     if (host && host.parentNode) host.parentNode.removeChild(host);
-  }
-
-  function applyOverlayPixelOffset() {
-    var shift = document.getElementById('meo-mapalign-leaflet-shift');
-    if (!shift) return;
-    if (state.config.paused || !state.config.selfOverlay) {
-      shift.style.transform = 'translate3d(0,0,0)';
-      return;
-    }
-    var view = readMapView();
-    var px = metersToPixels(state.eastMeters, state.northMeters, view.lat, view.zoom);
-    shift.style.transform = 'translate3d(' + px.dx.toFixed(2) + 'px,' + px.dy.toFixed(2) + 'px,0)';
   }
 
   function setTileStyle(styleKey) {
@@ -358,9 +376,6 @@
       state.leafletMap = null;
     }
 
-    var view = readMapView();
-    var z = clampZoom(view.zoom);
-
     state.leafletMap = L.map(el, {
       zoomControl: false,
       attributionControl: false,
@@ -380,16 +395,15 @@
 
     setTileStyle(state.config.tileStyle || 'googleRoads');
     try { state.leafletMap.invalidateSize(false); } catch (eInv) {}
-    state.leafletMap.setView([view.lat, view.lng], z, { animate: false });
+    clearCssShift();
     state.overlayReady = true;
     state.lastViewKey = '';
     syncOverlayFromGoogle(true);
-    applyOverlayPixelOffset();
     updateHostVisibility();
     state.lastDiag = {
       mode: 'self-overlay',
-      note: '自建叠加层已启用。请在 Google 图层中关闭 Labels。默认用谷歌路网瓦片（避免 CSP）。',
-      arch: { kind: 'moc5-leaflet', tileStyle: state.config.tileStyle }
+      note: '自建叠加层已启用（相机偏移，无裁切空白）。请关闭 Google Labels。',
+      arch: { kind: 'moc5-leaflet-camera-offset', tileStyle: state.config.tileStyle }
     };
     updateStatusUI();
     try { console.info('[MeoMapAlign] self-overlay ready', state.config.tileStyle); } catch (e2) {}
@@ -400,20 +414,27 @@
     if (!state.leafletMap || !state.config.selfOverlay) return;
     var view = readMapView();
     if (view.source === 'fallback' && !force) return;
-    // 保留更高精度浮点 zoom，避免 0.25 量化造成比例微差
     var z = Math.round(clampZoom(view.zoom) * 1000) / 1000;
+    var cam = overlayCameraCenter(view);
     var vpH = (view.viewport && view.viewport.h) || 0;
-    var key = view.lat.toFixed(5) + ',' + view.lng.toFixed(5) + ',' + z.toFixed(3) + ',h' + Math.round(vpH);
-    if (!force && key === state.lastViewKey) {
-      applyOverlayPixelOffset();
-      return;
-    }
+    var key =
+      cam.lat.toFixed(6) + ',' + cam.lng.toFixed(6) + ',' + z.toFixed(3) +
+      ',h' + Math.round(vpH) +
+      ',e' + Math.round(state.eastMeters) +
+      ',n' + Math.round(state.northMeters) +
+      ',p' + (state.config.paused ? 1 : 0);
+    if (!force && key === state.lastViewKey) return;
     state.lastViewKey = key;
+    clearCssShift();
     try {
       state.leafletMap.invalidateSize(false);
-      state.leafletMap.setView([view.lat, view.lng], z, { animate: false });
+      state.leafletMap.setView([cam.lat, cam.lng], z, { animate: false });
     } catch (e) {}
-    applyOverlayPixelOffset();
+  }
+
+  /** 滑条/配置变更：刷新相机偏移 */
+  function applyOverlayPixelOffset() {
+    syncOverlayFromGoogle(true);
   }
 
   function updateHostVisibility() {
@@ -472,7 +493,7 @@
       '    <button type="button" class="meo-ma-btn" data-act="resync">同步视图</button>' +
       '    <button type="button" class="meo-ma-btn" data-act="copydiag">复制诊断</button>' +
       '  </div>' +
-      '  <div class="meo-ma-footer meo-ma-warn">只移动自建路网/标注层，不移动 Google 卫星底图。请在 Maps「图层」关闭 Labels。</div>' +
+      '  <div class="meo-ma-footer meo-ma-warn">偏移写入自建层相机（视口铺满瓦片），不移动 Google 卫星。请关闭 Labels。</div>' +
       '</div>';
 
     (document.body || document.documentElement).appendChild(root);
@@ -713,11 +734,13 @@
 
   function getDiagnostics() {
     var view = readMapView();
+    var cam = overlayCameraCenter(view);
     return {
-      version: '1.2.3',
-      mode: 'moc5-self-overlay',
+      version: '1.2.4',
+      mode: 'moc5-camera-offset',
       href: location.href,
       view: view,
+      overlayCenter: cam,
       cellId: state.cellId,
       eastMeters: state.eastMeters,
       northMeters: state.northMeters,
@@ -729,6 +752,7 @@
       tileLoads: state.tileLoads,
       tileErrors: state.tileErrors,
       leafletZoom: state.leafletMap ? state.leafletMap.getZoom() : null,
+      leafletCenter: state.leafletMap ? state.leafletMap.getCenter() : null,
       pixelOffset: metersToPixels(state.eastMeters, state.northMeters, view.lat, view.zoom),
       diag: state.lastDiag,
       regionCount: (state.config.regions || []).length
@@ -825,7 +849,7 @@
       } else {
         state.lastDiag = {
           mode: 'no-leaflet',
-          note: 'Leaflet 未挂到 window.L（若仍失败请重启并确认 Pack 1.2.3）'
+          note: 'Leaflet 未挂到 window.L（若仍失败请重启并确认 Pack 1.2.4）'
         };
         updateStatusUI();
         try { console.warn('[MeoMapAlign] Leaflet missing', typeof define, typeof module); } catch (e) {}
@@ -837,7 +861,7 @@
     window.addEventListener('popstate', onMaybeNavigate);
     window.addEventListener('resize', onViewportResize);
     startPolling();
-    try { console.info('[MeoMapAlign] HUD ready (MOC-5 1.2.3)'); } catch (e3) {}
+    try { console.info('[MeoMapAlign] HUD ready (MOC-5 1.2.4 camera-offset)'); } catch (e3) {}
   }
 
   window.MeoMapAlign = window.__MeoMapAlign = {
