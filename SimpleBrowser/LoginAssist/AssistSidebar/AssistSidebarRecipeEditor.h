@@ -24,6 +24,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)loadRecipe:(nullable LoginRecipe *)recipe;
 - (void)beginNewRecipePrefillingFromCurrentURL;
 - (void)clear;
+/// 相对上次 load/clear/成功保存 是否有未保存改动。
+- (BOOL)hasUnsavedChanges;
+/// 尝试保存；成功返回 YES（并刷新脏检测基线）。
+- (BOOL)saveIfPossible;
 
 @end
 

@@ -25,6 +25,7 @@
 @property (nonatomic, strong) NSButton *saveButton;
 @property (nonatomic, strong) NSButton *deleteButton;
 @property (nonatomic, assign) BOOL isNewMemo;
+@property (nonatomic, copy, nullable) NSString *baselineSnapshot;
 @end
 
 @implementation AssistSidebarMemoEditor
@@ -223,6 +224,42 @@
 
 #pragma mark - Public
 
+- (NSString *)formSnapshotString {
+    [self applyFieldEditor:nil];
+    NSMutableArray *fields = [NSMutableArray array];
+    for (FormMemoField *field in self.editingFields) {
+        [fields addObject:@{
+            @"id": field.fieldID ?: @"",
+            @"label": field.label ?: @"",
+            @"selector": field.selector ?: @"",
+            @"value": field.value ?: @"",
+            @"enabled": @(field.enabled),
+        }];
+    }
+    NSDictionary *payload = @{
+        @"title": self.titleField.stringValue ?: @"",
+        @"site": self.sitePatternField.stringValue ?: @"",
+        @"isDefault": @(self.defaultCheck.state == NSControlStateValueOn),
+        @"fields": fields,
+        @"isNew": @(self.isNewMemo),
+        @"memoID": self.editingMemoID ?: @"",
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+}
+
+- (void)captureBaselineSnapshot {
+    self.baselineSnapshot = [self formSnapshotString];
+}
+
+- (BOOL)hasUnsavedChanges {
+    if (self.view.hidden) {
+        return NO;
+    }
+    NSString *baseline = self.baselineSnapshot ?: @"";
+    return ![[self formSnapshotString] isEqualToString:baseline];
+}
+
 - (void)setSitePatternHost:(NSString *)host port:(NSNumber *)port path:(NSString *)path {
     self.sitePatternField.stringValue =
         [MeoSiteMatch sitePatternForHost:host ?: @"" port:port pathPattern:path] ?: @"";
@@ -242,6 +279,7 @@
     self.fieldEnabledCheck.state = NSControlStateValueOn;
     self.deleteButton.enabled = NO;
     self.statusLabel.stringValue = @"勿存放密码；密码请用登录配置。";
+    [self captureBaselineSnapshot];
 }
 
 - (void)loadMemo:(FormMemo *)memo {
@@ -272,6 +310,7 @@
     self.statusLabel.stringValue = [NSString stringWithFormat:@"编辑「%@」· %lu 字段",
                                     memo.title.length > 0 ? memo.title : memo.host,
                                     (unsigned long)memo.fields.count];
+    [self captureBaselineSnapshot];
 }
 
 - (void)beginNewMemoPrefillingFromCurrentURL {
@@ -458,6 +497,10 @@
 
 - (void)saveClicked:(id)sender {
     (void)sender;
+    [self saveIfPossible];
+}
+
+- (BOOL)saveIfPossible {
     [self applyFieldEditor:nil];
     NSString *host = nil;
     NSNumber *port = nil;
@@ -467,7 +510,7 @@
                                    port:&port
                             pathPattern:&path] || host.length == 0) {
         self.statusLabel.stringValue = @"请填写完整匹配，例如 host:56546/tickets/new";
-        return;
+        return NO;
     }
 
     FormMemo *memo = nil;
@@ -494,15 +537,17 @@
     NSError *error = nil;
     if (![[FormMemoStore sharedStore] upsertMemo:memo error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
-        return;
+        return NO;
     }
     self.isNewMemo = NO;
     self.editingMemoID = memo.memoID;
     self.deleteButton.enabled = YES;
     self.statusLabel.stringValue = @"备忘已保存。";
+    [self captureBaselineSnapshot];
     if ([self.delegate respondsToSelector:@selector(memoEditor:didSaveMemo:)]) {
         [self.delegate memoEditor:self didSaveMemo:memo];
     }
+    return YES;
 }
 
 - (void)deleteClicked:(id)sender {

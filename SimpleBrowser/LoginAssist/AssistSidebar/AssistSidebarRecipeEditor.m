@@ -64,6 +64,7 @@
 @property (nonatomic, strong) NSView *usernameRow;
 @property (nonatomic, strong) NSView *passwordRow;
 @property (nonatomic, strong) NSView *submitSelectorRow;
+@property (nonatomic, copy, nullable) NSString *baselineSnapshot;
 @end
 
 @implementation AssistSidebarRecipeEditor
@@ -490,6 +491,48 @@
 
 #pragma mark - Public
 
+- (NSString *)formSnapshotString {
+    [self syncExtraFieldsFromUI];
+    NSMutableArray *extras = [NSMutableArray array];
+    for (LoginRecipeExtraField *field in self.editingExtraFields) {
+        [extras addObject:@{
+            @"id": field.fieldID ?: @"",
+            @"label": field.label ?: @"",
+            @"selector": field.selector ?: @"",
+            @"value": field.value ?: @"",
+            @"enabled": @(field.enabled),
+        }];
+    }
+    NSDictionary *payload = @{
+        @"site": self.sitePatternField.stringValue ?: @"",
+        @"user": self.usernameField.stringValue ?: @"",
+        @"pass": self.passwordField.stringValue ?: @"",
+        @"userSel": self.usernameSelectorField.stringValue ?: @"",
+        @"passSel": self.passwordSelectorField.stringValue ?: @"",
+        @"submitSel": self.submitSelectorField.stringValue ?: @"",
+        @"submitByEnter": @(self.submitByEnterCheck.state == NSControlStateValueOn),
+        @"autoLogin": @(self.autoLoginCheck.state == NSControlStateValueOn),
+        @"isDefault": @(self.defaultCheck.state == NSControlStateValueOn),
+        @"extras": extras,
+        @"isNew": @(self.isNewRecipe),
+        @"recipeID": self.editingRecipeID ?: @"",
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    return data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+}
+
+- (void)captureBaselineSnapshot {
+    self.baselineSnapshot = [self formSnapshotString];
+}
+
+- (BOOL)hasUnsavedChanges {
+    if (self.view.hidden) {
+        return NO;
+    }
+    NSString *baseline = self.baselineSnapshot ?: @"";
+    return ![[self formSnapshotString] isEqualToString:baseline];
+}
+
 - (void)setSitePatternHost:(NSString *)host port:(NSNumber *)port path:(NSString *)path {
     self.sitePatternField.stringValue =
         [MeoSiteMatch sitePatternForHost:host ?: @"" port:port pathPattern:path] ?: @"";
@@ -513,6 +556,7 @@
     [self rebuildExtraFieldRows];
     [self updateSubmitSelectorEnabled];
     self.statusLabel.stringValue = @"凭证保存在应用内部存储。";
+    [self captureBaselineSnapshot];
 }
 
 - (void)loadRecipe:(LoginRecipe *)recipe {
@@ -542,6 +586,7 @@
     self.usernameField.stringValue = credentials.username ?: @"";
     self.passwordField.stringValue = credentials.password ?: @"";
     self.statusLabel.stringValue = [NSString stringWithFormat:@"编辑「%@」", self.sitePatternField.stringValue];
+    [self captureBaselineSnapshot];
 }
 
 - (void)beginNewRecipePrefillingFromCurrentURL {
@@ -557,6 +602,7 @@
     NSString *path = [MeoSiteMatch pathPatternForURL:url];
     [self setSitePatternHost:host port:port path:path];
     self.statusLabel.stringValue = @"已填入当前页完整匹配路径，可改主机/端口/通配后保存。";
+    // 保留 clear 的基线，使预填后的新建稿视为未保存。
 }
 
 #pragma mark - Submit mode
@@ -632,13 +678,17 @@
 
 - (void)saveClicked:(id)sender {
     (void)sender;
+    [self saveIfPossible];
+}
+
+- (BOOL)saveIfPossible {
     NSString *raw = self.sitePatternField.stringValue;
     NSString *host = nil;
     NSNumber *port = nil;
     NSString *path = nil;
     if (![MeoSiteMatch parseSitePattern:raw host:&host port:&port pathPattern:&path] || host.length == 0) {
         self.statusLabel.stringValue = @"请填写完整匹配，例如 host:56546/login.html";
-        return;
+        return NO;
     }
     LoginRecipe *recipe = nil;
     if (self.editingRecipeID.length > 0) {
@@ -671,8 +721,6 @@
     }
     recipe.extraFields = extras;
 
-    // 先固定表单快照：upsert 会同步发通知 → reloadList → loadRecipe，
-    // 若先 upsert 再读输入框，会被旧凭证值冲掉（RE-0）。
     LoginCredentials *credentials = [[LoginCredentials alloc] init];
     credentials.username = self.usernameField.stringValue ?: @"";
     credentials.password = self.passwordField.stringValue ?: @"";
@@ -683,19 +731,21 @@
                                                  forRecipeID:recipe.recipeID
                                                        error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"凭证保存失败";
-        return;
+        return NO;
     }
     if (![[LoginRecipeStore sharedStore] upsertRecipe:recipe error:&error]) {
         self.statusLabel.stringValue = error.localizedDescription ?: @"保存失败";
-        return;
+        return NO;
     }
     self.isNewRecipe = NO;
     self.editingRecipeID = recipe.recipeID;
     self.deleteButton.enabled = YES;
     self.statusLabel.stringValue = @"已保存。";
+    [self captureBaselineSnapshot];
     if ([self.delegate respondsToSelector:@selector(recipeEditor:didSaveRecipe:)]) {
         [self.delegate recipeEditor:self didSaveRecipe:recipe];
     }
+    return YES;
 }
 
 - (void)deleteClicked:(id)sender {

@@ -262,6 +262,9 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 @property (nonatomic, copy, nullable) NSString *selectedRecipeID;
 @property (nonatomic, copy, nullable) NSString *selectedMemoID;
 @property (nonatomic, assign) BOOL suppressingSelectionLoad;
+@property (nonatomic, copy, nullable) NSString *lastSyncedURLKey;
+@property (nonatomic, copy, nullable) NSString *suppressSyncUntilURLLeaves;
+@property (nonatomic, assign) BOOL promptingForUnsavedChanges;
 @end
 
 @implementation AssistSidebarController
@@ -297,6 +300,52 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     if (self.visible) {
         [self reloadList];
     }
+}
+
+- (NSString *)urlKeyForURL:(NSURL *)url {
+    if (!url) {
+        return @"";
+    }
+    NSString *abs = url.absoluteString;
+    return abs.length > 0 ? abs : @"";
+}
+
+- (void)updateTitleForURL:(NSURL *)url {
+    NSString *host = [MeoSiteMatch normalizedHostForURL:url];
+    NSNumber *port = [MeoSiteMatch portNumberForURL:url];
+    NSString *scope = [MeoSiteMatch scopeDisplayStringForHost:host ?: @"" port:port];
+    if (scope.length > 0) {
+        self.titleLabel.stringValue = [NSString stringWithFormat:@"助手 · %@", scope];
+    } else {
+        self.titleLabel.stringValue = @"助手";
+    }
+}
+
+- (BOOL)detailEditorHasUnsavedChanges {
+    if (!self.recipeEditor.view.hidden && [self.recipeEditor hasUnsavedChanges]) {
+        return YES;
+    }
+    if (!self.memoEditor.view.hidden && [self.memoEditor hasUnsavedChanges]) {
+        return YES;
+    }
+    return NO;
+}
+
+- (BOOL)saveVisibleDetailEditorIfPossible {
+    if (!self.recipeEditor.view.hidden) {
+        return [self.recipeEditor saveIfPossible];
+    }
+    if (!self.memoEditor.view.hidden) {
+        return [self.memoEditor saveIfPossible];
+    }
+    return YES;
+}
+
+- (NSString *)unsavedAlertMessageText {
+    if (!self.recipeEditor.view.hidden) {
+        return @"登录配置尚未保存";
+    }
+    return @"站点备忘尚未保存";
 }
 
 #pragma mark - UI
@@ -616,7 +665,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated {
     BOOL already = (self.visible == visible);
     if (already && visible && self.widthConstraint.constant > 1) {
-        [self reloadList];
+        [self syncToCurrentURL];
         return;
     }
     if (already && !visible && self.widthConstraint.constant < 1) {
@@ -638,7 +687,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
         if (!self.visible) {
             self.view.hidden = YES;
         } else {
-            [self reloadList];
+            [self syncToCurrentURL];
             [self consumePendingReveal];
         }
     };
@@ -768,6 +817,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 - (void)setScope:(AssistSidebarScope)scope {
     _scope = scope;
     self.scopeControl.selectedSegment = (NSInteger)scope;
+    self.suppressSyncUntilURLLeaves = nil;
     if (self.visible) {
         [self reloadList];
     }
@@ -776,6 +826,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 - (void)setTypeFilter:(AssistSidebarTypeFilter)typeFilter {
     _typeFilter = typeFilter;
     self.typeControl.selectedSegment = (NSInteger)typeFilter;
+    self.suppressSyncUntilURLLeaves = nil;
     if (self.visible) {
         [self reloadList];
     }
@@ -826,7 +877,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     return [hay containsString:q.lowercaseString];
 }
 
-- (void)reloadList {
+- (void)rebuildRows {
     NSURL *url = [self currentURL];
     NSMutableArray<AssistSidebarRow *> *rows = [NSMutableArray array];
 
@@ -891,39 +942,189 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 
     self.rows = rows;
     [self.tableView reloadData];
-    [self restoreSelection];
     [self refreshEmptyState];
     [self updateEditButtonEnabled];
+    [self updateTitleForURL:url];
+}
 
-    // 编辑中保留表单，避免 Store 通知把未保存/刚保存的输入冲掉（RE-0）。
-    BOOL editingNewMemo = (!self.memoEditor.view.hidden && self.memoEditor.editingMemoID.length == 0);
-    BOOL editingNewRecipe = (!self.recipeEditor.view.hidden && self.recipeEditor.editingRecipeID.length == 0);
-    BOOL preservingRecipeEditor =
-        (!self.recipeEditor.view.hidden &&
-         self.recipeEditor.editingRecipeID.length > 0 &&
-         [self.recipeEditor.editingRecipeID isEqualToString:self.selectedRecipeID]);
-    BOOL preservingMemoEditor =
-        (!self.memoEditor.view.hidden &&
-         self.memoEditor.editingMemoID.length > 0 &&
-         [self.memoEditor.editingMemoID isEqualToString:self.selectedMemoID]);
-    if (editingNewMemo || editingNewRecipe || preservingRecipeEditor || preservingMemoEditor) {
+- (BOOL)rowsContainRecipeID:(NSString *)recipeID {
+    if (recipeID.length == 0) {
+        return NO;
+    }
+    for (AssistSidebarRow *row in self.rows) {
+        if (row.kind == AssistSidebarRowKindRecipe &&
+            [row.recipe.recipeID isEqualToString:recipeID]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (BOOL)rowsContainMemoID:(NSString *)memoID {
+    if (memoID.length == 0) {
+        return NO;
+    }
+    for (AssistSidebarRow *row in self.rows) {
+        if (row.kind == AssistSidebarRowKindMemo &&
+            [row.memo.memoID isEqualToString:memoID]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (void)selectDefaultForCurrentURL {
+    NSURL *url = [self currentURL];
+    BOOL showRecipes = (self.typeFilter == AssistSidebarTypeFilterAll ||
+                        self.typeFilter == AssistSidebarTypeFilterRecipes);
+    BOOL showMemos = (self.typeFilter == AssistSidebarTypeFilterAll ||
+                      self.typeFilter == AssistSidebarTypeFilterMemos);
+
+    LoginRecipe *defaultRecipe = nil;
+    FormMemo *defaultMemo = nil;
+    if (url) {
+        if (showRecipes) {
+            defaultRecipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:url];
+            if (defaultRecipe && ![self rowsContainRecipeID:defaultRecipe.recipeID]) {
+                defaultRecipe = nil;
+            }
+        }
+        if (showMemos) {
+            defaultMemo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:url];
+            if (defaultMemo && ![self rowsContainMemoID:defaultMemo.memoID]) {
+                defaultMemo = nil;
+            }
+        }
+    }
+
+    if (defaultRecipe) {
+        [self selectRecipeID:defaultRecipe.recipeID];
         return;
     }
-    if (self.selectedMemoID.length > 0) {
-        FormMemo *memo = [[FormMemoStore sharedStore] memoWithID:self.selectedMemoID];
-        if (memo) {
-            [self showMemoEditorLoading:memo];
-        } else {
-            [self hideDetailEditors];
-        }
-    } else if (self.selectedRecipeID.length > 0) {
-        LoginRecipe *recipe = [[LoginRecipeStore sharedStore] recipeWithID:self.selectedRecipeID];
-        if (recipe) {
-            [self showRecipeEditorLoading:recipe];
-        } else {
-            [self hideDetailEditors];
-        }
+    if (defaultMemo) {
+        [self selectMemoID:defaultMemo.memoID];
+        return;
     }
+
+    self.selectedRecipeID = nil;
+    self.selectedMemoID = nil;
+    self.suppressingSelectionLoad = YES;
+    [self.tableView deselectAll:nil];
+    self.suppressingSelectionLoad = NO;
+    [self hideDetailEditors];
+    [self updateEditButtonEnabled];
+}
+
+- (void)applyURLContextSelectingDefault:(BOOL)selectDefault {
+    [self rebuildRows];
+    if (selectDefault) {
+        [self selectDefaultForCurrentURL];
+        return;
+    }
+
+    // Store/过滤：保留未保存编辑（RE-0）；选中仍有效时恢复高亮。
+    BOOL editingNewMemo = (!self.memoEditor.view.hidden && self.memoEditor.editingMemoID.length == 0);
+    BOOL editingNewRecipe = (!self.recipeEditor.view.hidden && self.recipeEditor.editingRecipeID.length == 0);
+    BOOL dirtyRecipe = (!self.recipeEditor.view.hidden && [self.recipeEditor hasUnsavedChanges]);
+    BOOL dirtyMemo = (!self.memoEditor.view.hidden && [self.memoEditor hasUnsavedChanges]);
+    BOOL preservingRecipeEditor =
+        (!self.recipeEditor.view.hidden &&
+         (editingNewRecipe || dirtyRecipe ||
+          (self.recipeEditor.editingRecipeID.length > 0 &&
+           [self.recipeEditor.editingRecipeID isEqualToString:self.selectedRecipeID])));
+    BOOL preservingMemoEditor =
+        (!self.memoEditor.view.hidden &&
+         (editingNewMemo || dirtyMemo ||
+          (self.memoEditor.editingMemoID.length > 0 &&
+           [self.memoEditor.editingMemoID isEqualToString:self.selectedMemoID])));
+    if (preservingRecipeEditor || preservingMemoEditor) {
+        [self restoreSelection];
+        return;
+    }
+
+    if (self.selectedRecipeID.length > 0 && [self rowsContainRecipeID:self.selectedRecipeID]) {
+        [self selectRecipeID:self.selectedRecipeID];
+        return;
+    }
+    if (self.selectedMemoID.length > 0 && [self rowsContainMemoID:self.selectedMemoID]) {
+        [self selectMemoID:self.selectedMemoID];
+        return;
+    }
+    [self selectDefaultForCurrentURL];
+}
+
+- (void)syncToCurrentURL {
+    if (!self.visible) {
+        return;
+    }
+    NSURL *url = [self currentURL];
+    NSString *key = [self urlKeyForURL:url];
+
+    if (self.suppressSyncUntilURLLeaves.length > 0) {
+        if ([self.suppressSyncUntilURLLeaves isEqualToString:key]) {
+            return;
+        }
+        self.suppressSyncUntilURLLeaves = nil;
+    }
+
+    if (self.lastSyncedURLKey != nil && [self.lastSyncedURLKey isEqualToString:key]) {
+        // 同 URL：只刷新列表，不强制换默认项。
+        [self applyURLContextSelectingDefault:NO];
+        return;
+    }
+
+    if (self.promptingForUnsavedChanges) {
+        return;
+    }
+
+    if ([self detailEditorHasUnsavedChanges]) {
+        NSWindow *window = self.view.window;
+        if (!window) {
+            [self applyURLContextSelectingDefault:YES];
+            self.lastSyncedURLKey = key;
+            return;
+        }
+        self.promptingForUnsavedChanges = YES;
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [self unsavedAlertMessageText];
+        alert.informativeText = @"当前页已切换。保存后将刷新列表与表单；取消则暂不跟随新页面。";
+        alert.alertStyle = NSAlertStyleWarning;
+        [alert addButtonWithTitle:@"保存"];
+        [alert addButtonWithTitle:@"丢弃"];
+        [alert addButtonWithTitle:@"取消"];
+        __weak typeof(self) weakSelf = self;
+        [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse code) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            strongSelf.promptingForUnsavedChanges = NO;
+            if (code == NSAlertThirdButtonReturn) {
+                // 取消：保持旧 UI；抑制对该新 URL 的重复弹窗，直到 URL 再变。
+                strongSelf.suppressSyncUntilURLLeaves = key;
+                return;
+            }
+            if (code == NSAlertFirstButtonReturn) {
+                if (![strongSelf saveVisibleDetailEditorIfPossible]) {
+                    strongSelf.suppressSyncUntilURLLeaves = key;
+                    return;
+                }
+            }
+            strongSelf.suppressSyncUntilURLLeaves = nil;
+            [strongSelf applyURLContextSelectingDefault:YES];
+            strongSelf.lastSyncedURLKey = key;
+            [strongSelf consumePendingReveal];
+        }];
+        return;
+    }
+
+    [self applyURLContextSelectingDefault:YES];
+    self.lastSyncedURLKey = key;
+}
+
+- (void)reloadList {
+    // 同 URL 刷新（Store/搜索/过滤）：不弹脏窗，尽量保留编辑中表单。
+    [self applyURLContextSelectingDefault:NO];
 }
 
 - (void)refreshEmptyState {
@@ -937,7 +1138,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     self.emptyContainer.hidden = !empty;
     self.scrollView.hidden = empty;
     if (self.scope == AssistSidebarScopeMatched) {
-        self.emptyTitleLabel.stringValue = @"当前页暂无配置";
+        self.emptyTitleLabel.stringValue = @"当前页暂无登录配置";
         self.emptyDetailLabel.stringValue = @"可为当前网址新建登录配置或站点备忘。也可切换到「全部」查看已有条目。";
     } else {
         self.emptyTitleLabel.stringValue = @"没有匹配的条目";
@@ -984,6 +1185,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 
 - (void)revealRecipeID:(NSString *)recipeID {
     self.typeFilter = AssistSidebarTypeFilterRecipes;
+    self.suppressSyncUntilURLLeaves = nil;
     if (recipeID.length > 0) {
         self.pendingRevealRecipeID = recipeID;
     }
@@ -997,6 +1199,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 
 - (void)revealMemoID:(NSString *)memoID {
     self.typeFilter = AssistSidebarTypeFilterMemos;
+    self.suppressSyncUntilURLLeaves = nil;
     if (memoID.length > 0) {
         self.pendingRevealMemoID = memoID;
     }

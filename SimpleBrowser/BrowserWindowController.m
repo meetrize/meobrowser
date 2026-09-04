@@ -2583,7 +2583,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (NSURL *)assistSidebarCurrentURL:(AssistSidebarController *)controller {
     (void)controller;
-    return self.webView.URL;
+    return [BrowserWebView publicURLFromInternalURL:self.webView.URL] ?: self.webView.URL;
 }
 
 - (WKWebView *)assistSidebarWebViewForPicking:(AssistSidebarController *)controller {
@@ -5087,7 +5087,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (void)reloadAssistSidebarIfVisible {
     if (self.assistSidebarController.visible) {
-        [self.assistSidebarController reloadList];
+        [self.assistSidebarController syncToCurrentURL];
     }
 }
 
@@ -6477,6 +6477,7 @@ didBecomeDownload:(WKDownload *)download {
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
         [self updateReloadStopButtonAppearance];
         [self reloadPagePackSidebarIfVisible];
+        [self reloadAssistSidebarIfVisible];
         if (self.transparentModeEnabled) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
         }

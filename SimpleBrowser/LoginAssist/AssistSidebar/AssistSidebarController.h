@@ -39,6 +39,9 @@ typedef NS_ENUM(NSInteger, AssistSidebarTypeFilter) {
 @property (nonatomic, assign) AssistSidebarTypeFilter typeFilter;
 
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated;
+/// 按当前页 URL 同步列表与默认详情（标签切换 / 导航完成）。
+- (void)syncToCurrentURL;
+/// 同 URL 下刷新列表（Store/过滤），保留未保存编辑。
 - (void)reloadList;
 - (void)revealRecipeID:(nullable NSString *)recipeID;
 - (void)revealMemoID:(nullable NSString *)memoID;
