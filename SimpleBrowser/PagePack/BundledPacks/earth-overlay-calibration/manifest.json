@@ -1,8 +1,8 @@
 {
   "id": "earth-overlay-calibration",
   "name": "地球叠加校准",
-  "version": "1.0.10",
-  "description": "Google Earth Web：偏移屏幕像素锚定（放大不左右跳）；垂直 FOV。不影响 Maps。",
+  "version": "1.0.13",
+  "description": "Google Earth Web：动态探测历史图像条等 Shadow UI，自动重贴齐；panBy 续下方瓦片。不影响 Maps。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://earth-overlay-calibration",
   "enabled": true,

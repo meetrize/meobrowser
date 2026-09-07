@@ -1,18 +1,35 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.2 · Earth Pack 1.0.10
- * Earth：setView 钉卫星中心 + 地理偏移转屏幕像素 translate，避免放大时偏左再跳右。
+ * Maps Pack 1.3.3 · Earth Pack 1.0.13
+ * Earth：宿主贴齐 canvas；顶栏/历史图像条等 Shadow UI 动态探测；偏移用 panBy 续瓦片。
  */
 (function () {
   'use strict';
 
+  function guessSiteFromHost() {
+    try {
+      var h = (location.hostname || '').toLowerCase();
+      if (h === 'earth.google.com' || h.indexOf('.earth.google.') !== -1 || h.indexOf('earth.google.') === 0) {
+        return 'earth';
+      }
+      if (h === 'maps.google.com') return 'maps';
+      if (h.indexOf('google.') !== -1 && (location.pathname || '').indexOf('/maps') === 0) return 'maps';
+    } catch (e0) {}
+    return null;
+  }
+
   var PACK_META = (typeof window !== 'undefined' && window.__MeoMapAlignPackMeta) || {};
-  var PACK_ID = PACK_META.id || 'maps-overlay-calibration';
-  var PACK_VERSION = PACK_META.version || '1.3.1';
+  var HOST_SITE_GUESS = guessSiteFromHost();
+  // pack-identity 未注入时按域名回退，避免 Earth 误用 Maps 默认 version/id/存储键
   var SITE_LOCK = PACK_META.siteLock || null;
+  var EFFECTIVE_SITE = SITE_LOCK || HOST_SITE_GUESS;
+  var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
+    ? 'earth-overlay-calibration'
+    : 'maps-overlay-calibration');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.13' : '1.3.3');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
-  var STORAGE_KEY = SITE_LOCK === 'earth'
+  var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
     ? 'meo.earthOverlayCalibration.v1'
     : 'meo.mapsOverlayCalibration.v1';
   var MAPS_STORAGE_KEY = 'meo.mapsOverlayCalibration.v1';
@@ -22,6 +39,8 @@
   var DEFAULT_MAX = 2000;
   var EARTH_TILT_MAX = 2;
   var EARTH_HEADING_MAX = 5;
+  /** Earth Web 顶栏常见高度；仅作探测失败时的下限（搜索条），历史图像条靠 Shadow 动态探测 */
+  var EARTH_DEFAULT_CHROME_TOP = 56;
 
   if (window.__MeoMapAlign && typeof window.__MeoMapAlign.teardown === 'function') {
     try { window.__MeoMapAlign.teardown(); } catch (e) {}
@@ -302,6 +321,8 @@
     for (var i = 0; i < nodes.length; i++) {
       var r = nodes[i].getBoundingClientRect();
       if (r.width < 160 || r.height < 160) continue;
+      // 忽略完全在视口外的
+      if (r.bottom < 40 || r.right < 40) continue;
       var area = r.width * r.height;
       if (area > bestArea) {
         bestArea = area;
@@ -310,6 +331,8 @@
           h: r.height,
           left: r.left,
           top: r.top,
+          right: r.right,
+          bottom: r.bottom,
           source: 'canvas'
         };
       }
@@ -317,37 +340,259 @@
     return best;
   }
 
+  function earthWindowSize() {
+    var winW = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1280);
+    var winH = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 800);
+    try {
+      if (window.visualViewport && window.visualViewport.width > 0 && window.visualViewport.height > 0) {
+        winW = Math.max(winW, Math.round(window.visualViewport.width));
+        winH = Math.max(winH, Math.round(window.visualViewport.height));
+      }
+    } catch (e0) {}
+    return { w: winW, h: winH };
+  }
+
+  /** 遍历 light + open shadow（Earth UI 多在 earth-app shadow 内） */
+  function forEachEarthDomRoot(visit) {
+    var roots = [];
+    try {
+      if (document) roots.push(document);
+    } catch (e0) {}
+    try {
+      var hosts = document.querySelectorAll('earth-app, earth-view, earth-toolbar, [is="earth-app"]');
+      var i;
+      for (i = 0; i < hosts.length; i++) {
+        if (hosts[i].shadowRoot) roots.push(hosts[i].shadowRoot);
+      }
+    } catch (e1) {}
+    var qi;
+    for (qi = 0; qi < roots.length; qi++) {
+      try { visit(roots[qi]); } catch (e2) {}
+      try {
+        var nested = roots[qi].querySelectorAll('*');
+        var j;
+        var n = 0;
+        for (j = 0; j < nested.length && n < 80; j++) {
+          if (nested[j].shadowRoot) {
+            n++;
+            try { visit(nested[j].shadowRoot); } catch (e3) {}
+          }
+        }
+      } catch (e4) {}
+    }
+  }
+
   /**
-   * 视口尺寸。Earth：zoom 优先用主 canvas 高宽（与地球实际成像一致），
-   * 叠加层仍像素全屏；用 window 高算 zoom 会偏大、路网显得比底图大。
+   * 探测 Earth 顶部 chrome 底边（搜索条 + 历史图像时间轴等）。
+   * 须穿透 shadow；返回视口坐标 y（bottom of top chrome）。
+   */
+  function detectEarthChromeTop(winW, winH) {
+    var maxBottom = Math.min(220, winH * 0.36);
+    var best = 0;
+
+    function considerRect(r, loose) {
+      if (!r) return;
+      if (r.width < 2 || r.height < 2) return;
+      if (r.top > (loose ? 48 : 16)) return;
+      if (r.bottom <= best) return;
+      if (r.bottom > maxBottom) return;
+      if (r.height > winH * 0.4) return;
+      var wide = r.width >= winW * 0.28;
+      var midBar = r.width >= winW * 0.18 && r.height >= 36 && r.top < 80;
+      if (!wide && !midBar && !loose) return;
+      best = r.bottom;
+    }
+
+    function scanRoot(root) {
+      var nodes;
+      try {
+        nodes = root.querySelectorAll(
+          'header, nav, form, [role="banner"], [role="toolbar"], [class*="toolbar"], [class*="Toolbar"],' +
+          '[class*="timeline"], [class*="Timeline"], [class*="historical"], [class*="Historical"],' +
+          '[aria-label*="Historical"], [aria-label*="historical"], [aria-label*="历史"],' +
+          '[aria-label*="Timelapse"], [aria-label*="timelapse"], input, button'
+        );
+      } catch (e0) {
+        try { nodes = root.querySelectorAll('header, nav, form, div, section'); } catch (e1) { return; }
+      }
+      var i;
+      for (i = 0; i < nodes.length && i < 200; i++) {
+        var el = nodes[i];
+        if (!el || el.id === HOST_ID || el.id === ROOT_ID) continue;
+        if (el.tagName === 'CANVAS') continue;
+        var r;
+        try { r = el.getBoundingClientRect(); } catch (e2) { continue; }
+        if (r.height < 24) continue;
+        considerRect(r, false);
+      }
+      try {
+        var all = root.querySelectorAll('div, header, nav, section, form');
+        var checked = 0;
+        for (i = 0; i < all.length && checked < 150; i++) {
+          var el2 = all[i];
+          if (!el2 || el2.id === HOST_ID || el2.id === ROOT_ID) continue;
+          var st;
+          try { st = window.getComputedStyle(el2); } catch (e3) { continue; }
+          if (!st) continue;
+          if (st.position !== 'fixed' && st.position !== 'sticky' && st.position !== 'absolute') continue;
+          if (st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) === 0) continue;
+          checked++;
+          try { considerRect(el2.getBoundingClientRect(), true); } catch (e4) {}
+        }
+      } catch (e5) {}
+    }
+
+    forEachEarthDomRoot(scanRoot);
+
+    try {
+      var kids = document.body ? document.body.children : [];
+      var k;
+      for (k = 0; k < kids.length && k < 40; k++) {
+        if (!kids[k] || kids[k].id === HOST_ID || kids[k].id === ROOT_ID) continue;
+        if (kids[k].tagName === 'CANVAS') continue;
+        try { considerRect(kids[k].getBoundingClientRect(), false); } catch (e6) {}
+      }
+    } catch (e7) {}
+
+    return best > 28 ? best : 0;
+  }
+
+  /** 探测右侧面板（知识卡片等）左缘 */
+  function detectEarthChromeRight(winW, winH) {
+    var minLeft = winW * 0.52;
+    var bestLeft = winW;
+
+    function scanRoot(root) {
+      var nodes;
+      try { nodes = root.querySelectorAll('div, aside, section'); } catch (e0) { return; }
+      var i;
+      var checked = 0;
+      for (i = 0; i < nodes.length && checked < 120; i++) {
+        var el = nodes[i];
+        if (!el || el.id === HOST_ID || el.id === ROOT_ID) continue;
+        var r;
+        try { r = el.getBoundingClientRect(); } catch (e1) { continue; }
+        if (r.width < 200 || r.width > winW * 0.48) continue;
+        if (r.height < winH * 0.25) continue;
+        if (r.right < winW - 12) continue;
+        if (r.left < minLeft) continue;
+        if (r.top > winH * 0.4) continue;
+        var st;
+        try {
+          st = window.getComputedStyle(el);
+          if (st && (st.visibility === 'hidden' || st.display === 'none')) continue;
+        } catch (e2) {}
+        checked++;
+        if (r.left < bestLeft) bestLeft = r.left;
+      }
+    }
+
+    forEachEarthDomRoot(scanRoot);
+    return bestLeft < winW - 80 ? bestLeft : winW;
+  }
+
+  /**
+   * Earth 相机视口 = WebGL canvas（或窗口）。
+   * 注意：顶栏常画在 canvas 之上，不能把 chrome 从 zoom/宿主尺寸里抠掉，否则 look-at 中心上移。
+   */
+  function findEarthCameraViewport() {
+    var win = earthWindowSize();
+    var canvas = findBestCanvasViewport();
+    if (canvas && canvas.w >= 200 && canvas.h >= 200) {
+      var left = Math.max(0, canvas.left);
+      var top = Math.max(0, canvas.top);
+      var right = Math.max(canvas.left + canvas.w, left + 1);
+      var bottom = Math.max(canvas.top + canvas.h, top + 1);
+      // 动画中 canvas 偶发偏短：与窗口取并集，避免下方缺一截
+      if (canvas.top <= 4 && canvas.left <= 4 &&
+          canvas.w >= win.w * 0.85 && canvas.h >= win.h * 0.7) {
+        right = Math.max(right, win.w);
+        bottom = Math.max(bottom, win.h);
+      }
+      return {
+        left: left,
+        top: top,
+        w: Math.max(1, right - left),
+        h: Math.max(1, bottom - top),
+        right: right,
+        bottom: bottom,
+        source: 'earth-canvas'
+      };
+    }
+    return {
+      left: 0,
+      top: 0,
+      w: win.w,
+      h: win.h,
+      right: win.w,
+      bottom: win.h,
+      source: 'window'
+    };
+  }
+
+  /** 顶栏/侧栏 inset（像素），供 clip-path；不改变相机视口 */
+  function findEarthChromeInsets(cameraVp) {
+    var win = earthWindowSize();
+    var top = 0;
+    var right = 0;
+    var bottom = 0;
+    var left = 0;
+    var source = 'none';
+    var nearlyFull =
+      !cameraVp ||
+      (cameraVp.top <= 8 &&
+        cameraVp.left <= 8 &&
+        cameraVp.w >= win.w * 0.85 &&
+        cameraVp.h >= win.h * 0.7);
+
+    if (nearlyFull) {
+      var chromeTop = detectEarthChromeTop(win.w, win.h);
+      var chromeRightEdge = detectEarthChromeRight(win.w, win.h);
+      if (chromeTop <= 28) {
+        chromeTop = EARTH_DEFAULT_CHROME_TOP;
+        source = 'default-top';
+      } else {
+        source = 'detect';
+      }
+      top = Math.max(0, Math.round(chromeTop));
+      if (chromeRightEdge < win.w - 80) {
+        right = Math.max(0, Math.round(win.w - chromeRightEdge));
+        source = source.indexOf('default') === 0 ? 'default-top+right' : 'detect';
+      }
+    } else if (cameraVp && cameraVp.top > 8) {
+      source = 'canvas-inset';
+    }
+    if (cameraVp) {
+      top = Math.max(0, top - Math.round(cameraVp.top || 0));
+      left = Math.max(0, left - Math.round(cameraVp.left || 0));
+    }
+    return { top: top, right: right, bottom: bottom, left: left, source: source };
+  }
+
+  /** 兼容旧名：相机视口（含 left/top） */
+  function findEarthMapViewport() {
+    return findEarthCameraViewport();
+  }
+
+  function earthLayoutFingerprint() {
+    var vp = findEarthCameraViewport();
+    var ch = findEarthChromeInsets(vp);
+    return [
+      Math.round(vp.left), Math.round(vp.top), Math.round(vp.w), Math.round(vp.h),
+      ch.top, ch.right, ch.bottom, ch.left, ch.source
+    ].join(',');
+  }
+
+  /**
+   * 视口尺寸。Earth：始终用 canvas/相机尺寸算 zoom（勿扣 chrome）。
    */
   function getGoogleViewportCssSize() {
-    var ttl = isEarthSite() ? 800 : 300;
+    var ttl = isEarthSite() ? (state.config && state.config.selfOverlay ? 200 : 500) : 300;
     var now = Date.now();
     if (_vpCache && (now - _vpCacheAt) < ttl) return _vpCache;
 
     if (isEarthSite()) {
-      var winW = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1280);
-      var winH = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 800);
-      try {
-        if (window.visualViewport && window.visualViewport.width > 0 && window.visualViewport.height > 0) {
-          winW = Math.max(winW, Math.round(window.visualViewport.width));
-          winH = Math.max(winH, Math.round(window.visualViewport.height));
-        }
-      } catch (e0) {}
-      var canvasVp = findBestCanvasViewport();
-      // canvas 至少占半屏才可信，否则回退 window
-      if (canvasVp && canvasVp.w >= winW * 0.45 && canvasVp.h >= winH * 0.45) {
-        _vpCache = {
-          w: canvasVp.w,
-          h: canvasVp.h,
-          left: canvasVp.left,
-          top: canvasVp.top,
-          source: 'earth-canvas'
-        };
-      } else {
-        _vpCache = { w: winW, h: winH, left: 0, top: 0, source: 'window' };
-      }
+      _vpCache = findEarthCameraViewport();
       _vpCacheAt = now;
       return _vpCache;
     }
@@ -379,30 +624,38 @@
   }
 
   /**
-   * Earth：强制像素全屏。禁止 height:auto（WebKit 会按内容收缩成「只有上半屏」）。
+   * Earth：宿主贴齐 canvas（与相机同中心）；chrome 用 clip-path 裁掉。
+   * 切勿把宿主 top 下移去「躲顶栏」——那会让路网相对卫星整体偏上。
    */
   function layoutEarthOverlayHost() {
-    if (!isEarthSite()) return false;
+    if (!isEarthSite()) return { ok: false, changed: false };
     var host = document.getElementById(HOST_ID);
-    if (!host) return false;
+    if (!host) return { ok: false, changed: false };
     _vpCache = null;
 
-    var w = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1280);
-    var h = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 800);
-    // visualViewport 更贴近实际可视区域（地址栏等）
-    try {
-      if (window.visualViewport && window.visualViewport.width > 0 && window.visualViewport.height > 0) {
-        w = Math.max(w, Math.round(window.visualViewport.width));
-        h = Math.max(h, Math.round(window.visualViewport.height));
-      }
-    } catch (e0) {}
+    var vp = findEarthCameraViewport();
+    var chrome = findEarthChromeInsets(vp);
+    var left = Math.round(vp.left || 0);
+    var top = Math.round(vp.top || 0);
+    var w = Math.max(1, Math.round(vp.w || 1));
+    var h = Math.max(1, Math.round(vp.h || 1));
+    var clip =
+      chrome.top + 'px ' +
+      chrome.right + 'px ' +
+      chrome.bottom + 'px ' +
+      chrome.left + 'px';
 
-    function forceBox(el) {
+    var prev = state._earthLayout;
+    var changed = !prev ||
+      prev.left !== left || prev.top !== top || prev.w !== w || prev.h !== h ||
+      prev.clip !== clip;
+
+    function forceBox(el, isHost) {
       if (!el) return;
-      el.style.setProperty('position', el === host ? 'fixed' : 'absolute', 'important');
+      el.style.setProperty('position', isHost ? 'fixed' : 'absolute', 'important');
       el.style.setProperty('inset', 'auto', 'important');
-      el.style.setProperty('left', '0px', 'important');
-      el.style.setProperty('top', '0px', 'important');
+      el.style.setProperty('left', (isHost ? left : 0) + 'px', 'important');
+      el.style.setProperty('top', (isHost ? top : 0) + 'px', 'important');
       el.style.setProperty('right', 'auto', 'important');
       el.style.setProperty('bottom', 'auto', 'important');
       el.style.setProperty('width', w + 'px', 'important');
@@ -417,25 +670,129 @@
       el.style.setProperty('overflow', 'hidden', 'important');
     }
 
-    forceBox(host);
-    forceBox(document.getElementById('meo-mapalign-leaflet-shift'));
+    forceBox(host, true);
+    host.style.setProperty('clip-path', 'inset(' + clip + ')', 'important');
+    host.style.setProperty('-webkit-clip-path', 'inset(' + clip + ')', 'important');
+
+    forceBox(document.getElementById('meo-mapalign-leaflet-shift'), false);
     var leafletEl = document.getElementById('meo-mapalign-leaflet');
-    forceBox(leafletEl);
+    forceBox(leafletEl, false);
     if (leafletEl) {
-      // L.map 会把该类设到同一节点
       leafletEl.style.setProperty('position', 'relative', 'important');
+      leafletEl.style.setProperty('left', '0px', 'important');
+      leafletEl.style.setProperty('top', '0px', 'important');
     }
 
-    state._earthLayout = { w: w, h: h, at: Date.now() };
+    state._earthLayout = {
+      left: left,
+      top: top,
+      w: w,
+      h: h,
+      source: vp.source,
+      chrome: chrome,
+      clip: clip,
+      at: Date.now()
+    };
+    state._earthLayoutFp = [
+      left, top, w, h, chrome.top, chrome.right, chrome.bottom, chrome.left, chrome.source
+    ].join(',');
+    _vpCache = {
+      left: left,
+      top: top,
+      w: w,
+      h: h,
+      source: vp.source
+    };
+    _vpCacheAt = Date.now();
 
-    if (state.leafletMap) {
+    if (changed && state.leafletMap) {
       try {
         state.leafletMap.invalidateSize({ pan: false, debounceMoveEnd: false });
       } catch (e1) {
         try { state.leafletMap.invalidateSize(false); } catch (e2) {}
       }
     }
-    return true;
+    return { ok: true, changed: changed };
+  }
+
+  /** 历史图像条开关 / canvas 尺寸变化 → 重贴齐并续瓦片 */
+  function refreshEarthLayoutIfNeeded(force) {
+    if (!isEarthSite() || !state.config || !state.config.selfOverlay) return false;
+    _vpCache = null;
+    var fp = earthLayoutFingerprint();
+    if (!force && fp === state._earthLayoutFp) return false;
+    var lay = layoutEarthOverlayHost();
+    state.lastViewKey = '';
+    syncOverlayFromGoogle(true);
+    forceOverlayPassThrough();
+    return !!(lay && lay.changed) || force;
+  }
+
+  function installEarthLayoutWatchers() {
+    if (!isEarthSite() || state._earthWatch) return;
+    state._earthWatch = true;
+    state._earthLayoutFp = '';
+
+    var bump = function () {
+      if (state._earthWatchTimer) clearTimeout(state._earthWatchTimer);
+      state._earthWatchTimer = setTimeout(function () {
+        state._earthWatchTimer = null;
+        try { refreshEarthLayoutIfNeeded(false); } catch (e0) {}
+      }, 80);
+    };
+
+    try {
+      if (typeof ResizeObserver !== 'undefined') {
+        state._earthRo = new ResizeObserver(bump);
+        var canvases = document.querySelectorAll('canvas');
+        var i;
+        for (i = 0; i < canvases.length && i < 8; i++) {
+          try { state._earthRo.observe(canvases[i]); } catch (e1) {}
+        }
+        try { state._earthRo.observe(document.documentElement); } catch (e2) {}
+        var apps = document.querySelectorAll('earth-app');
+        for (i = 0; i < apps.length; i++) {
+          try { state._earthRo.observe(apps[i]); } catch (e3) {}
+        }
+      }
+    } catch (e4) {}
+
+    try {
+      if (typeof MutationObserver !== 'undefined') {
+        state._earthMo = new MutationObserver(bump);
+        var opts = {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['style', 'class', 'hidden', 'aria-hidden']
+        };
+        if (document.body) state._earthMo.observe(document.body, opts);
+        var apps2 = document.querySelectorAll('earth-app');
+        var j;
+        for (j = 0; j < apps2.length; j++) {
+          try {
+            state._earthMo.observe(apps2[j], opts);
+            if (apps2[j].shadowRoot) state._earthMo.observe(apps2[j].shadowRoot, opts);
+          } catch (e5) {}
+        }
+      }
+    } catch (e6) {}
+  }
+
+  function uninstallEarthLayoutWatchers() {
+    state._earthWatch = false;
+    if (state._earthWatchTimer) {
+      clearTimeout(state._earthWatchTimer);
+      state._earthWatchTimer = null;
+    }
+    try {
+      if (state._earthRo) state._earthRo.disconnect();
+    } catch (e0) {}
+    state._earthRo = null;
+    try {
+      if (state._earthMo) state._earthMo.disconnect();
+    } catch (e1) {}
+    state._earthMo = null;
   }
 
   /**
@@ -510,7 +867,7 @@
 
   function siteHints(site) {
     if (site === 'earth') {
-      return 'Earth：偏移按地理 Δ→屏幕像素锚定；放大应保持相对卫星位置。请正俯视。';
+      return 'Earth：工具条开关会自动重贴齐；偏移用 panBy 续下方瓦片。请正俯视。';
     }
     return 'Maps：东/北为地面米，缩放保持地理对齐。请关闭 Labels。';
   }
@@ -726,16 +1083,15 @@
   }
 
   /**
-   * Earth：地图中心始终 = 卫星 look-at；地理 Δ 换成当前 zoom 下的屏幕像素 translate。
-   * 避免 setView(偏移中心) 在放大时 pixelOrigin/世界卷绕导致「越来越偏左，然后突然跳到右侧」。
+   * Earth：地图中心先钉 look-at，再用 panBy 施加地理 Δ（像素）。
+   * 不用 CSS translate：否则只挪已有瓦片、下方/侧边露白，不会自动续加载道路。
    */
   function applyEarthAnchoredOffset(view, zoom) {
-    var shift = document.getElementById('meo-mapalign-leaflet-shift');
     var map = state.leafletMap;
-    if (!shift || !map) return;
+    if (!map) return;
+    clearCssShift();
 
     if (!state.config || state.config.paused || !state.config.selfOverlay) {
-      clearCssShift();
       return;
     }
     if ((!state.deltaLat && !state.deltaLng) && (state.eastMeters || state.northMeters)) {
@@ -743,10 +1099,7 @@
     }
     var dLat = state.deltaLat || 0;
     var dLng = state.deltaLng || 0;
-    if (!dLat && !dLng) {
-      clearCssShift();
-      return;
-    }
+    if (!dLat && !dLng) return;
 
     var lat0 = view.lat;
     var lng0 = normalizeLng(view.lng);
@@ -759,20 +1112,18 @@
       p0 = map.project(L.latLng(lat0, lng0), z);
       p1 = map.project(L.latLng(lat1, lng1), z);
     } catch (e0) {
-      clearCssShift();
       return;
     }
-    // 等价于把相机放到 (lat1,lng1)：层平移 (p0-p1)
+    // 层向 (dx,dy) 平移 ≡ panBy(-dx,-dy)（Leaflet 内部减 offset）
     var dx = p0.x - p1.x;
     var dy = p0.y - p1.y;
-    if (!isFinite(dx) || !isFinite(dy)) {
-      clearCssShift();
-      return;
+    if (!isFinite(dx) || !isFinite(dy)) return;
+    if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) return;
+    try {
+      map.panBy([-dx, -dy], { animate: false, noMoveStart: true });
+    } catch (e1) {
+      try { map.panBy(L.point(-dx, -dy), { animate: false }); } catch (e2) {}
     }
-    // 亚像素，避免放大过程中累积取整误差
-    var t = 'translate3d(' + dx.toFixed(3) + 'px,' + dy.toFixed(3) + 'px,0)';
-    shift.style.transform = t;
-    shift.style.webkitTransform = t;
   }
 
   /** 强制整棵叠加树不接收指针（只在创建/换层时调用，勿在每张瓦片上扫 DOM） */
@@ -817,6 +1168,7 @@
   }
 
   function destroyLeaflet() {
+    uninstallEarthLayoutWatchers();
     try {
       if (state.leafletMap) {
         state.leafletMap.remove();
@@ -1026,14 +1378,14 @@
     state.lastDiag = {
       mode: site === 'earth' ? 'self-overlay-earth' : 'self-overlay',
       note: site === 'earth'
-        ? 'Earth 叠加：跟飞+浮点zoom+偏移 ' + (hostBox ? (hostBox.w + 'x' + hostBox.h) : '?')
+        ? 'Earth 叠加：动态chrome+canvas对齐+panBy续瓦片 ' + (hostBox ? (hostBox.w + 'x' + hostBox.h) : '?')
         : '自建叠加层已启用（相机偏移）。请关闭 Google Labels。',
       arch: {
         kind: 'moc5-leaflet-camera-offset',
         site: site,
         packId: PACK_ID,
         tileStyle: state.config.tileStyle,
-        earthLayout: earth ? 'px-fullscreen+follow' : 'fullscreen+transform',
+        earthLayout: earth ? 'canvas+clip+panBy+watch' : 'fullscreen+transform',
         hostBox: hostBox,
         mapBox: mapBox,
         win: { w: window.innerWidth, h: window.innerHeight }
@@ -1052,6 +1404,10 @@
       };
       setTimeout(bump, 50);
       setTimeout(bump, 400);
+      setTimeout(function () {
+        installEarthLayoutWatchers();
+        refreshEarthLayoutIfNeeded(true);
+      }, 600);
     }
     try { console.info('[MeoMapAlign] self-overlay ready', site, state.config.tileStyle); } catch (e2) {}
     return true;
@@ -1059,21 +1415,28 @@
 
   function syncOverlayFromGoogle(force) {
     if (!state.leafletMap || !state.config.selfOverlay) return;
+
+    var earth = isEarthSite();
+    // Earth：先贴齐地图显示区，再读相机（zoom 用同一套宽高）
+    if (earth) {
+      layoutEarthOverlayHost();
+    }
+
     var view = readMapView();
     if (view.source === 'fallback' && !force) return;
 
-    var earth = isEarthSite();
     var z = earth
       ? Math.round(clampZoom(view.zoom) * 100) / 100
       : Math.round(clampZoom(view.zoom) * 1000) / 1000;
     var cam = overlayCameraCenter(view);
     var vpH = (view.viewport && view.viewport.h) || 0;
-    // Earth：跟飞需要足够细的 lat/lng；偏移用 0.1m
+    var lay = state._earthLayout || {};
     var key = earth
       ? (view.site + ',' + cam.lat.toFixed(6) + ',' + cam.lng.toFixed(6) + ',z' + z.toFixed(2) +
         ',b' + (state.config.earthZoomBias != null ? state.config.earthZoomBias : 0) +
         ',dLat' + (state.deltaLat || 0).toFixed(8) +
         ',dLng' + (state.deltaLng || 0).toFixed(8) +
+        ',box' + (lay.left || 0) + 'x' + (lay.top || 0) + 'x' + (lay.w || 0) + 'x' + (lay.h || 0) +
         ',p' + (state.config.paused ? 1 : 0) + ',ok' + (view.calibrationSupported === false ? 0 : 1))
       : ((view.site || '') + ',' +
         cam.lat.toFixed(6) + ',' + cam.lng.toFixed(6) + ',' + z.toFixed(3) +
@@ -1097,7 +1460,6 @@
     state.lastViewKey = key;
     try {
       if (earth) {
-        // 中心钉卫星 look-at；偏移用屏幕像素（与 zoom 成比例，换瓦片级不跳左右）
         state.leafletMap.setView([view.lat, normalizeLng(view.lng)], z, {
           animate: false,
           reset: true
@@ -1588,6 +1950,8 @@
       version: PACK_VERSION,
       packId: PACK_ID,
       siteLock: SITE_LOCK,
+      packMetaPresent: !!(PACK_META && PACK_META.id),
+      effectiveSite: EFFECTIVE_SITE,
       mode: view.site === 'earth' ? 'moc-e-earth' : 'moc5-camera-offset',
       site: view.site || detectSite(),
       href: location.href,
@@ -1652,15 +2016,18 @@
 
   function startPolling() {
     stopPolling();
-    // Earth 开启叠加时要紧跟 URL；未开启则保持低频以免卡顿
+    // Earth 开启叠加时要紧跟 URL + chrome；未开启则保持低频以免卡顿
     var ms;
     if (isEarthSite()) {
-      ms = state.config.selfOverlay ? 350 : 2000;
+      ms = state.config.selfOverlay ? 280 : 2000;
     } else {
       ms = 500;
     }
     state.pollTimer = window.setInterval(function () {
       if (document.visibilityState === 'hidden') return;
+      if (isEarthSite() && state.config && state.config.selfOverlay) {
+        try { refreshEarthLayoutIfNeeded(false); } catch (e0) {}
+      }
       onMaybeNavigate();
     }, ms);
   }
@@ -1712,6 +2079,7 @@
 
   function teardown() {
     stopPolling();
+    uninstallEarthLayoutWatchers();
     uninstallHistoryHooks();
     window.removeEventListener('keydown', onKeydown, true);
     window.removeEventListener('popstate', onMaybeNavigate);
