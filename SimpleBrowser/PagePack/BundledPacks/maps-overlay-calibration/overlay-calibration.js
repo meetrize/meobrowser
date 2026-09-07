@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.6 · Earth Pack 1.0.16
- * 拖动跟飞：亚像素 panBy；平移松手后静默对齐 URL（不 setView），避免回弹。
+ * Maps Pack 1.3.7 · Earth Pack 1.0.17
+ * 东/北偏移按 0.5° 格子写入 localStorage；修复 schema v2 无法加载导致「记不住」。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.16' : '1.3.6');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.17' : '1.3.7');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -118,14 +118,16 @@
   }
 
   function importMapsRegionsIfNeeded(base) {
-    if (SITE_LOCK !== 'earth') return base;
+    // Earth 尚无本区记录时，可从 Maps 同源格子导入一份额（仅补空）
+    if (EFFECTIVE_SITE !== 'earth' && SITE_LOCK !== 'earth') return base;
     if (base.regions && base.regions.length) return base;
     try {
       var raw = localStorage.getItem(MAPS_STORAGE_KEY);
       if (!raw) return base;
       var parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.regions) && parsed.regions.length) {
-        base.regions = parsed.regions;
+        base.regions = parsed.regions.slice();
+        base._importedFromMaps = true;
       }
     } catch (e) {}
     return base;
@@ -136,10 +138,21 @@
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return importMapsRegionsIfNeeded(defaultConfig());
       var parsed = JSON.parse(raw);
-      if (!parsed || parsed.schemaVersion !== 1) return importMapsRegionsIfNeeded(defaultConfig());
+      if (!parsed || typeof parsed !== 'object') {
+        return importMapsRegionsIfNeeded(defaultConfig());
+      }
+      // 历史 bug：曾把 schemaVersion 写成 2，但加载只认 1 → 校准全丢。现接受 1/2。
+      var ver = parsed.schemaVersion;
+      if (ver != null && ver !== 1 && ver !== 2) {
+        // 仍尝试抢救 regions
+        var salvage = defaultConfig();
+        if (Array.isArray(parsed.regions)) salvage.regions = parsed.regions;
+        return importMapsRegionsIfNeeded(salvage);
+      }
       var base = defaultConfig();
+      base.schemaVersion = 2;
       base.paused = !!parsed.paused;
-      if (SITE_LOCK === 'earth') {
+      if (EFFECTIVE_SITE === 'earth' || SITE_LOCK === 'earth') {
         // 仅当用户曾在地球 Pack 里显式打开过才为 true
         base.selfOverlay = parsed.selfOverlay === true;
       } else {
@@ -164,14 +177,31 @@
         base.hud.offsetY = parsed.hud.offsetY || 0;
       }
       if (Array.isArray(parsed.regions)) base.regions = parsed.regions;
-      return importMapsRegionsIfNeeded(base);
+      base = importMapsRegionsIfNeeded(base);
+      // 若从 v1 升上来、或曾写入 schema=2 却读失败前留下的数据，统一回写 v2
+      if (ver !== 2 || base._importedFromMaps) {
+        try {
+          delete base._importedFromMaps;
+          base.schemaVersion = 2;
+          base.updatedAt = Date.now();
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(base));
+        } catch (eMig) {}
+      }
+      delete base._importedFromMaps;
+      return base;
     } catch (e) {
       return importMapsRegionsIfNeeded(defaultConfig());
     }
   }
 
   function saveConfig() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config)); } catch (e) {}
+    try {
+      if (!state.config) return;
+      state.config.schemaVersion = 2;
+      state.config.updatedAt = Date.now();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
+      state._lastPersistAt = Date.now();
+    } catch (e) {}
   }
 
   function clampMeters(v) {
@@ -868,9 +898,9 @@
 
   function siteHints(site) {
     if (site === 'earth') {
-      return 'Earth：拖动实时跟飞；工具条开关自动重贴齐。请正俯视。';
+      return 'Earth：东/北按地区自动记忆（localStorage）。拖动实时跟飞；请正俯视。';
     }
-    return 'Maps：拖动实时跟飞；东/北为地面米。请关闭 Labels。';
+    return 'Maps：东/北按地区自动记忆（localStorage）。拖动实时跟飞；请关闭 Labels。';
   }
 
   function emptyViewFallback(site) {
@@ -1688,7 +1718,9 @@
     });
 
     var selfCb = root.querySelector('input[data-opt="selfOverlay"]');
-    selfCb.checked = SITE_LOCK === 'earth' ? !!state.config.selfOverlay : (state.config.selfOverlay !== false);
+    selfCb.checked = (EFFECTIVE_SITE === 'earth' || SITE_LOCK === 'earth')
+      ? !!state.config.selfOverlay
+      : (state.config.selfOverlay !== false);
     selfCb.addEventListener('change', function () {
       state.config.selfOverlay = selfCb.checked;
       saveConfig();
@@ -1924,14 +1956,15 @@
       parts.push('瓦片全失败 · 换「谷歌路网」或查网络');
       el.className = 'meo-ma-status meo-ma-error';
     } else if (state.eastMeters === 0 && state.northMeters === 0) {
-      parts.push('本区未校准 · 拖滑条 / ± 微调');
+      parts.push('本区未校准 · 拖滑条自动记忆');
       el.className = 'meo-ma-status meo-ma-muted';
     } else {
-      parts.push('本区已校准·地理固定');
+      parts.push('本区已记忆 E' + state.eastMeters + ' N' + state.northMeters);
       el.className = 'meo-ma-status meo-ma-muted';
     }
     parts.push(view.site || detectSite() || '—');
     parts.push('格 ' + (state.cellId || '—'));
+    parts.push((state.config.regions || []).length + '区');
     parts.push(state.config.tileStyle || 'googleRoads');
     parts.push('z≈' + (Math.round(view.zoom * 100) / 100));
     if (view.metersVertical) parts.push(Math.round(view.metersVertical) + 'm↕');
@@ -2004,7 +2037,9 @@
       pixelOffset: metersToPixels(state.eastMeters, state.northMeters, view.lat, view.zoom),
       probe: collectProbeHints(),
       diag: state.lastDiag,
-      regionCount: (state.config.regions || []).length
+      regionCount: (state.config.regions || []).length,
+      storageKey: STORAGE_KEY,
+      lastPersistAt: state._lastPersistAt || null
     };
   }
 

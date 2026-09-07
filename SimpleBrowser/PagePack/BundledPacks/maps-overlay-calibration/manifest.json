@@ -1,8 +1,8 @@
 {
   "id": "maps-overlay-calibration",
   "name": "地图叠加校准",
-  "version": "1.3.6",
-  "description": "Google Maps 专用：拖动跟飞松手不回弹。Earth 请用「地球叠加校准」。",
+  "version": "1.3.7",
+  "description": "Google Maps 专用：东/北按地区记忆（localStorage）。Earth 请用「地球叠加校准」。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://maps-overlay-calibration",
   "enabled": true,

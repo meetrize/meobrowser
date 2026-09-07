@@ -66,12 +66,14 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.6**（跟飞；平移松手不回弹） |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.16**（跟飞；平移松手不回弹） |
+| `maps-overlay-calibration` | Google Maps | **1.3.7**（localStorage 地区记忆；跟飞） |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.17**（独立 localStorage；跟飞） |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.17 / Maps 1.3.7** 修复偏移「记不住」：保存 schemaVersion=2 但加载只认 1，导致每次丢弃 regions；现接受 v1/v2。存储仍为页内 `localStorage`（Maps / Earth 分键）。
+>
 > 2026-09-07：**1.0.16 / Maps 1.3.6** 松手回弹：pointer `panBy` 与 URL 相机有亚像素差，`setView` 精校准会拽回；平移 catchup 改为静默记键不移动；`movementX`+小数累积改善跟手。
 >
 > 2026-09-07：**1.0.15 / Maps 1.3.5** 松手闪回：settle 用旧 URL `setView` 导致；改为 `_pendingLiveToken` 挡住拖前相机，仅当 URL `@…` 段变化后再精校准。

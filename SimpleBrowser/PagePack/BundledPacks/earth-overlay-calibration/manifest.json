@@ -1,8 +1,8 @@
 {
   "id": "earth-overlay-calibration",
   "name": "地球叠加校准",
-  "version": "1.0.16",
-  "description": "Google Earth Web：拖动跟飞松手不回弹（平移静默对齐）。不影响 Maps。",
+  "version": "1.0.17",
+  "description": "Google Earth Web：东/北偏移按地区记忆（localStorage）。不影响 Maps。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://earth-overlay-calibration",
   "enabled": true,
