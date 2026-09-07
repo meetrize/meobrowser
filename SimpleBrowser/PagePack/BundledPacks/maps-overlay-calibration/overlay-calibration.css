@@ -188,6 +188,19 @@
   #meo-mapalign-root .meo-ma-nudge:hover {
     background: rgba(255, 255, 255, 0.18);
   }
+  #meo-mapalign-root .meo-ma-dpad-btn {
+    background: rgba(255, 255, 255, 0.12);
+    color: #f5f5f7;
+  }
+  #meo-mapalign-root .meo-ma-dpad-btn:hover {
+    background: rgba(10, 132, 255, 0.35);
+  }
+  #meo-mapalign-root .meo-ma-dpad-btn:active {
+    background: rgba(10, 132, 255, 0.5);
+  }
+  #meo-mapalign-root .meo-ma-dpad-center {
+    background: rgba(255, 255, 255, 0.08);
+  }
 }
 
 #meo-mapalign-root .meo-ma-titlebar {
@@ -235,11 +248,90 @@
 #meo-mapalign-root .meo-ma-row label { width: 20px; flex-shrink: 0; }
 #meo-mapalign-root .meo-ma-row input[type="range"] { flex: 1; min-width: 0; }
 #meo-mapalign-root .meo-ma-val {
-  width: 64px;
+  min-width: 56px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 12px;
   flex-shrink: 0;
+  font-weight: 600;
+}
+
+/* 手柄十字：上北下南左西右东 + 右侧滑条 */
+#meo-mapalign-root .meo-ma-dpad-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin: 10px 0 6px;
+  flex-wrap: nowrap;
+}
+
+#meo-mapalign-root .meo-ma-dpad {
+  display: grid;
+  grid-template-columns: 44px 44px 44px;
+  grid-template-rows: 44px 44px 44px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+#meo-mapalign-root .meo-ma-dpad-up { grid-column: 2; grid-row: 1; }
+#meo-mapalign-root .meo-ma-dpad-left { grid-column: 1; grid-row: 2; }
+#meo-mapalign-root .meo-ma-dpad-center { grid-column: 2; grid-row: 2; }
+#meo-mapalign-root .meo-ma-dpad-right { grid-column: 3; grid-row: 2; }
+#meo-mapalign-root .meo-ma-dpad-down { grid-column: 2; grid-row: 3; }
+
+#meo-mapalign-root .meo-ma-dpad-center {
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+#meo-mapalign-root .meo-ma-dpad-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  color: inherit;
+  font: 700 14px/1.05 -apple-system, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+#meo-mapalign-root .meo-ma-dpad-btn span {
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.72;
+  margin-top: 1px;
+}
+
+#meo-mapalign-root .meo-ma-dpad-btn:hover {
+  background: rgba(10, 132, 255, 0.18);
+}
+
+#meo-mapalign-root .meo-ma-dpad-btn:active {
+  background: rgba(10, 132, 255, 0.32);
+  transform: scale(0.96);
+}
+
+#meo-mapalign-root .meo-ma-dpad-readout {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+#meo-mapalign-root .meo-ma-dpad-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 #meo-mapalign-root .meo-ma-nudge {

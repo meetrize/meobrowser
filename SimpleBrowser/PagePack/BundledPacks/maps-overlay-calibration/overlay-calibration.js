@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.8 · Earth Pack 1.0.18
- * Earth：刷新后若已勾选自建层则自动重建并重试（等 body/代理/画布尺寸）。
+ * Maps Pack 1.3.12 · Earth Pack 1.0.22
+ * 修复：HUD_SHADOW_CSS 缺分号导致 ensureHUD 被拼进字符串、校准按钮不出现。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.18' : '1.3.8');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.22' : '1.3.12');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -1696,10 +1696,100 @@
     upsertRegion(cid, state.eastMeters, state.northMeters, view);
   }
 
+  function hudHost() {
+    return document.getElementById(ROOT_ID);
+  }
+
+  /** HUD 内容在 open ShadowRoot 内（防 Earth 全局 CSS / 清掉页级 style） */
+  function hudRoot() {
+    var host = hudHost();
+    if (!host) return null;
+    return host.shadowRoot || host;
+  }
+
+  /** Shadow 内自洽样式；不依赖 document 上的 PagePack <style> */
+  var HUD_SHADOW_CSS =
+    ':host{position:fixed!important;inset:0!important;width:auto!important;height:auto!important;' +
+    'margin:0!important;padding:0!important;border:0!important;z-index:2147483646!important;overflow:visible!important;' +
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;line-height:1.35;color:#1d1d1f;' +
+    'pointer-events:none!important;background:transparent!important;}' +
+    '*,*::before,*::after{box-sizing:border-box;}' +
+    '.meo-ma-panel,.meo-ma-fab{pointer-events:auto!important;}' +
+    '.meo-ma-fab{position:fixed!important;right:16px!important;bottom:88px!important;left:auto!important;top:auto!important;' +
+    'z-index:2147483647!important;min-width:56px;height:34px;padding:0 14px;border:0;border-radius:17px;' +
+    'background:rgba(28,28,30,.92)!important;color:#f5f5f7!important;' +
+    'font:600 13px/34px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;cursor:pointer;' +
+    'box-shadow:0 4px 16px rgba(0,0,0,.35);}' +
+    '.meo-ma-panel{position:fixed!important;right:16px!important;bottom:88px!important;left:auto!important;top:auto!important;' +
+    'z-index:2147483647!important;width:400px;max-width:calc(100vw - 24px);padding:10px 12px 12px;border-radius:12px;' +
+    'background:rgba(245,245,247,.96)!important;box-shadow:0 8px 28px rgba(0,0,0,.28);border:1px solid rgba(0,0,0,.08);' +
+    'color:#1d1d1f;font:12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}' +
+    '.meo-ma-titlebar{display:flex;align-items:center;gap:8px;cursor:grab;user-select:none;-webkit-user-select:none;' +
+    'margin-bottom:8px;font-weight:650;}' +
+    '.meo-ma-titlebar .meo-ma-grow{flex:1;}' +
+    '.meo-ma-icon-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:14px;padding:2px 4px;opacity:.75;}' +
+    '.meo-ma-status{margin-bottom:8px;font-size:11px;}' +
+    '.meo-ma-banner{margin:0 0 8px;padding:6px 8px;border-radius:8px;background:rgba(255,204,0,.18);font-size:11px;line-height:1.35;}' +
+    '.meo-ma-muted{color:#6e6e73;}' +
+    '.meo-ma-warn{color:#9a6700;}' +
+    '.meo-ma-error{color:#d70015;}' +
+    '.meo-ma-val{min-width:56px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;flex-shrink:0;font-weight:600;}' +
+    '.meo-ma-row{display:flex;align-items:center;gap:6px;margin:0;width:100%;}' +
+    '.meo-ma-row label{width:20px;flex-shrink:0;font-weight:600;}' +
+    '.meo-ma-row input[type="range"]{flex:1;min-width:0;margin:0;accent-color:#0a84ff;}' +
+    '.meo-ma-dpad-wrap{display:flex;align-items:stretch;gap:12px;margin:10px 0 6px;flex-wrap:nowrap;}' +
+    '.meo-ma-dpad{display:grid;grid-template-columns:44px 44px 44px;grid-template-rows:44px 44px 44px;gap:4px;flex-shrink:0;}' +
+    '.meo-ma-dpad-up{grid-column:2;grid-row:1;}' +
+    '.meo-ma-dpad-left{grid-column:1;grid-row:2;}' +
+    '.meo-ma-dpad-center{grid-column:2;grid-row:2;border-radius:10px;background:rgba(0,0,0,.06);}' +
+    '.meo-ma-dpad-right{grid-column:3;grid-row:2;}' +
+    '.meo-ma-dpad-down{grid-column:2;grid-row:3;}' +
+    '.meo-ma-dpad-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;margin:0;padding:0;' +
+    'border:0;border-radius:10px;background:rgba(0,0,0,.08);color:inherit;font:700 14px/1.05 -apple-system,sans-serif;' +
+    'cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:manipulation;}' +
+    '.meo-ma-dpad-btn span{font-size:9px;font-weight:600;opacity:.72;margin-top:1px;}' +
+    '.meo-ma-dpad-btn:hover{background:rgba(10,132,255,.18);}' +
+    '.meo-ma-dpad-btn:active{background:rgba(10,132,255,.32);transform:scale(.96);}' +
+    '.meo-ma-dpad-readout{display:flex;flex-direction:column;justify-content:center;gap:10px;min-width:0;flex:1;}' +
+    '.meo-ma-dpad-hint{margin:0;font-size:10px;line-height:1.3;}' +
+    '.meo-ma-steps-label{margin:8px 0 2px;font-size:11px;}' +
+    '.meo-ma-layers,.meo-ma-styles{display:flex;flex-wrap:wrap;gap:8px 12px;margin:6px 0 4px;font-size:11px;}' +
+    '.meo-ma-layers label,.meo-ma-styles label{display:inline-flex;align-items:center;gap:4px;cursor:pointer;}' +
+    '.meo-ma-steps{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;}' +
+    'button.meo-ma-btn{border:0;border-radius:6px;padding:4px 8px;background:rgba(0,0,0,.06);color:inherit;font:inherit;cursor:pointer;}' +
+    'button.meo-ma-btn.active{background:rgba(10,132,255,.22);font-weight:600;}' +
+    '.meo-ma-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}' +
+    '.meo-ma-footer{margin-top:8px;font-size:10px;}' +
+    '.meo-ma-earth-zoom{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0;}' +
+    '.meo-ma-earth-zoom[hidden]{display:none!important;}' +
+    '@media (prefers-color-scheme:dark){' +
+    ':host{color:#f5f5f7;}' +
+    '.meo-ma-panel{background:rgba(36,36,38,.96)!important;border-color:rgba(255,255,255,.1);color:#f5f5f7;}' +
+    '.meo-ma-muted{color:#a1a1a6;}.meo-ma-warn{color:#ffd60a;}.meo-ma-error{color:#ff453a;}' +
+    'button.meo-ma-btn{background:rgba(255,255,255,.1);color:#f5f5f7;}' +
+    '.meo-ma-dpad-btn{background:rgba(255,255,255,.12);color:#f5f5f7;}' +
+    '.meo-ma-dpad-btn:hover{background:rgba(10,132,255,.35);}' +
+    '.meo-ma-dpad-btn:active{background:rgba(10,132,255,.5);}' +
+    '.meo-ma-dpad-center{background:rgba(255,255,255,.08);}' +
+    '}';
+
   function ensureHUD() {
     if (document.getElementById(ROOT_ID)) return;
+    var host = document.createElement('div');
+    host.id = ROOT_ID;
+    var shadow;
+    try {
+      shadow = host.attachShadow({ mode: 'open' });
+    } catch (eSh) {
+      shadow = host;
+    }
+    var styleEl = document.createElement('style');
+    styleEl.setAttribute('data-meo-hud', '1');
+    styleEl.textContent = HUD_SHADOW_CSS;
+    shadow.appendChild(styleEl);
+
     var root = document.createElement('div');
-    root.id = ROOT_ID;
+    root.className = 'meo-ma-hud';
     root.innerHTML =
       '<button type="button" class="meo-ma-fab" title="地图叠加校准 (Alt+Shift+M)">校准</button>' +
       '<div class="meo-ma-panel" hidden>' +
@@ -1713,19 +1803,27 @@
       '    <label><input type="checkbox" data-opt="selfOverlay" checked>自建叠加层</label>' +
       '  </div>' +
       '  <div class="meo-ma-styles" data-role="styles"></div>' +
-      '  <div class="meo-ma-row">' +
-      '    <label>东</label>' +
-      '    <button type="button" class="meo-ma-nudge" data-nudge="east" data-dir="-1" title="减少一档">−</button>' +
-      '    <input type="range" data-axis="east" min="-2000" max="2000" step="0.5" value="0">' +
-      '    <button type="button" class="meo-ma-nudge" data-nudge="east" data-dir="1" title="增加一档">+</button>' +
-      '    <span class="meo-ma-val" data-val="east">0 m</span>' +
-      '  </div>' +
-      '  <div class="meo-ma-row">' +
-      '    <label>北</label>' +
-      '    <button type="button" class="meo-ma-nudge" data-nudge="north" data-dir="-1" title="减少一档">−</button>' +
-      '    <input type="range" data-axis="north" min="-2000" max="2000" step="0.5" value="0">' +
-      '    <button type="button" class="meo-ma-nudge" data-nudge="north" data-dir="1" title="增加一档">+</button>' +
-      '    <span class="meo-ma-val" data-val="north">0 m</span>' +
+      '  <div class="meo-ma-dpad-wrap">' +
+      '    <div class="meo-ma-dpad" role="group" aria-label="东西南北偏移">' +
+      '      <button type="button" class="meo-ma-dpad-btn meo-ma-dpad-up" data-nudge="north" data-dir="1" title="北 +">▲<span>北</span></button>' +
+      '      <button type="button" class="meo-ma-dpad-btn meo-ma-dpad-left" data-nudge="east" data-dir="-1" title="西 −">◀<span>西</span></button>' +
+      '      <div class="meo-ma-dpad-center" aria-hidden="true"></div>' +
+      '      <button type="button" class="meo-ma-dpad-btn meo-ma-dpad-right" data-nudge="east" data-dir="1" title="东 +">▶<span>东</span></button>' +
+      '      <button type="button" class="meo-ma-dpad-btn meo-ma-dpad-down" data-nudge="north" data-dir="-1" title="南 −">▼<span>南</span></button>' +
+      '    </div>' +
+      '    <div class="meo-ma-dpad-readout">' +
+      '      <div class="meo-ma-row">' +
+      '        <label title="东为正">东</label>' +
+      '        <input type="range" data-axis="east" min="-2000" max="2000" step="0.5" value="0" aria-label="东西偏移米">' +
+      '        <span class="meo-ma-val" data-val="east">0 m</span>' +
+      '      </div>' +
+      '      <div class="meo-ma-row">' +
+      '        <label title="北为正">北</label>' +
+      '        <input type="range" data-axis="north" min="-2000" max="2000" step="0.5" value="0" aria-label="南北偏移米">' +
+      '        <span class="meo-ma-val" data-val="north">0 m</span>' +
+      '      </div>' +
+      '      <p class="meo-ma-muted meo-ma-dpad-hint">十字：上北下南左西右东 · 滑条粗调</p>' +
+      '    </div>' +
       '  </div>' +
       '  <div class="meo-ma-steps-label meo-ma-muted">微调步进</div>' +
       '  <div class="meo-ma-steps" data-role="steps"></div>' +
@@ -1744,17 +1842,18 @@
       '  </div>' +
       '  <div class="meo-ma-footer meo-ma-warn" data-role="footer">东/北为地面米（地理固定）；缩放后仍钉在同一卫星位置。</div>' +
       '</div>';
-
-    (document.body || document.documentElement).appendChild(root);
+    shadow.appendChild(root);
+    (document.body || document.documentElement).appendChild(host);
 
     var fab = root.querySelector('.meo-ma-fab');
     var panel = root.querySelector('.meo-ma-panel');
+    // 内联兜底：即使 Shadow CSS 异常，FAB/面板仍可见可点
     fab.style.cssText = 'position:fixed;right:16px;bottom:88px;z-index:2147483647;' +
       'min-width:56px;height:34px;padding:0 14px;border:0;border-radius:17px;' +
       'background:rgba(28,28,30,0.92);color:#f5f5f7;font:600 13px/34px -apple-system,sans-serif;' +
       'cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.35);pointer-events:auto;';
     panel.style.cssText = 'position:fixed;right:16px;bottom:88px;z-index:2147483647;' +
-      'width:360px;max-width:calc(100vw - 24px);padding:10px 12px 12px;border-radius:12px;' +
+      'width:400px;max-width:calc(100vw - 24px);padding:10px 12px 12px;border-radius:12px;' +
       'background:rgba(245,245,247,0.96);box-shadow:0 8px 28px rgba(0,0,0,0.28);' +
       'border:1px solid rgba(0,0,0,0.08);pointer-events:auto;color:#1d1d1f;' +
       'font:12px/1.35 -apple-system,sans-serif;';
@@ -1811,15 +1910,55 @@
     }
 
     root.querySelectorAll('[data-nudge]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
+      var stopRepeat = function () {
+        if (btn._meoRepeatTimer) {
+          clearInterval(btn._meoRepeatTimer);
+          btn._meoRepeatTimer = null;
+        }
+        if (btn._meoRepeatDelay) {
+          clearTimeout(btn._meoRepeatDelay);
+          btn._meoRepeatDelay = null;
+        }
+      };
+      var fire = function () {
         var axis = btn.getAttribute('data-nudge');
         var dir = parseInt(btn.getAttribute('data-dir'), 10) || 0;
         if (!axis || !dir) return;
         nudgeAxis(axis, dir);
+      };
+      btn.addEventListener('click', function (ev) {
+        if (btn._meoDidRepeat) {
+          btn._meoDidRepeat = false;
+          ev.preventDefault();
+          return;
+        }
+        fire();
       });
+      btn.addEventListener('pointerdown', function (ev) {
+        if (ev.button != null && ev.button !== 0) return;
+        btn._meoDidRepeat = false;
+        stopRepeat();
+        try { btn.setPointerCapture(ev.pointerId); } catch (e0) {}
+        btn._meoRepeatDelay = setTimeout(function () {
+          btn._meoRepeatDelay = null;
+          fire();
+          btn._meoDidRepeat = true;
+          btn._meoRepeatTimer = setInterval(function () {
+            fire();
+            btn._meoDidRepeat = true;
+          }, 80);
+        }, 380);
+      });
+      btn.addEventListener('pointerup', stopRepeat);
+      btn.addEventListener('pointercancel', stopRepeat);
+      btn.addEventListener('pointerleave', stopRepeat);
+      btn.addEventListener('lostpointercapture', stopRepeat);
     });
 
     root.querySelectorAll('input[data-axis]').forEach(function (input) {
+      var max = state.config.maxAbsMeters || DEFAULT_MAX;
+      input.min = String(-max);
+      input.max = String(max);
       input.addEventListener('input', function () {
         var axis = input.getAttribute('data-axis');
         setAxisMeters(axis, parseFloat(input.value) || 0);
@@ -1837,7 +1976,6 @@
         if (typeof L === 'undefined' && window.leaflet) {
           try { window.L = window.leaflet; } catch (eL) {}
         }
-        // Earth：每次勾选重建，避免半初始化空白层
         if (isEarthSite() && state.leafletMap) {
           try { state.leafletMap.remove(); } catch (eRm) {}
           state.leafletMap = null;
@@ -1856,7 +1994,6 @@
       } else {
         destroyLeaflet();
       }
-      // 切换叠加后重设轮询频率（Earth 开启时 350ms 跟飞）
       startPolling();
       updateHostVisibility();
       applyOverlayPixelOffset();
@@ -1914,7 +2051,7 @@
 
   function onDragMove(ev) {
     if (!state.drag) return;
-    var panel = document.querySelector('#' + ROOT_ID + ' .meo-ma-panel');
+    var panel = hudRoot() && hudRoot().querySelector('.meo-ma-panel');
     if (!panel) return;
     var left = state.drag.origLeft + (ev.clientX - state.drag.startX);
     var top = state.drag.origTop + (ev.clientY - state.drag.startY);
@@ -1937,7 +2074,7 @@
   }
 
   function applyHudPosition() {
-    var panel = document.querySelector('#' + ROOT_ID + ' .meo-ma-panel');
+    var panel = hudRoot() && hudRoot().querySelector('.meo-ma-panel');
     if (!panel || state.config.hud.corner !== 'custom' || !state.config.hud.offsetX) return;
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
@@ -1949,29 +2086,27 @@
     state.collapsed = collapsed;
     state.config.hud.collapsed = collapsed;
     saveConfig();
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     root.querySelector('.meo-ma-fab').hidden = !collapsed;
     root.querySelector('.meo-ma-panel').hidden = collapsed;
   }
 
   function syncSliders() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     var max = state.config.maxAbsMeters || DEFAULT_MAX;
-    var step = currentStepMeters();
-    // range 最小刻度取 0.5，避免步进 5/10 时拖不动细调；细调用 ±
-    var rangeStep = step <= 0.5 ? 0.5 : (step < 1 ? step : 0.5);
-    root.querySelectorAll('input[data-axis]').forEach(function (input) {
-      input.min = String(-max);
-      input.max = String(max);
-      input.step = String(rangeStep);
-      input.value = String(input.getAttribute('data-axis') === 'east' ? state.eastMeters : state.northMeters);
-    });
     var ve = root.querySelector('[data-val="east"]');
     var vn = root.querySelector('[data-val="north"]');
     if (ve) ve.textContent = formatMeters(state.eastMeters);
     if (vn) vn.textContent = formatMeters(state.northMeters);
+    root.querySelectorAll('input[data-axis]').forEach(function (input) {
+      input.min = String(-max);
+      input.max = String(max);
+      var axis = input.getAttribute('data-axis');
+      var v = axis === 'north' ? state.northMeters : state.eastMeters;
+      if (Math.abs(parseFloat(input.value) - v) > 0.01) input.value = String(v);
+    });
   }
 
   function formatMeters(v) {
@@ -1983,7 +2118,7 @@
   }
 
   function updateStepButtons() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     var step = currentStepMeters();
     root.querySelectorAll('[data-step]').forEach(function (b) {
@@ -1993,7 +2128,7 @@
   }
 
   function updateEarthBiasLabel() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     var row = root.querySelector('[data-role="earth-zoom"]');
     if (row) row.hidden = !isEarthSite();
@@ -2005,7 +2140,7 @@
   }
 
   function updateStyleButtons() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     var cur = state.config.tileStyle || 'googleRoads';
     root.querySelectorAll('input[data-style]').forEach(function (r) {
@@ -2014,7 +2149,7 @@
   }
 
   function updateSiteChrome() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     var site = detectSite() || 'maps';
     var view = readMapView();
@@ -2038,7 +2173,7 @@
   }
 
   function updateStatusUI() {
-    var root = document.getElementById(ROOT_ID);
+    var root = hudRoot();
     if (!root) return;
     updateSiteChrome();
     var el = root.querySelector('[data-role="status"]');
@@ -2172,8 +2307,12 @@
     if (!t) return false;
     try {
       if (t.id === ROOT_ID || t.id === HOST_ID) return true;
+      if (t.getRootNode) {
+        var rn = t.getRootNode();
+        if (rn && rn.host && (rn.host.id === ROOT_ID || rn.host.id === HOST_ID)) return true;
+      }
       if (t.closest) {
-        if (t.closest('#' + ROOT_ID)) return true;
+        if (t.closest('#' + ROOT_ID) || t.closest('#' + HOST_ID)) return true;
       }
     } catch (e0) {}
     return false;

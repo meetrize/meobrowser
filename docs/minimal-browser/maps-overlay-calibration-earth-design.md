@@ -24,7 +24,7 @@
 
 用户在 Google Earth Web 看云南大理一带卫星影像时，地名/路网（若开启）与影像错位，希望与 Maps 相同：
 
-1. 页内 HUD 调东/北偏移（滑条 + ± 微调）  
+1. 页内 HUD 调东/北偏移（十字方向键：上北下南左西右东 + 步进）  
 2. 只移动自建路网/标注，卫星不动  
 3. 区域记忆、暂停、重置、诊断  
 
@@ -66,12 +66,20 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.8** |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.18**（刷新后自动恢复自建层） |
+| `maps-overlay-calibration` | Google Maps | **1.3.12** |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.22** |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.22 / Maps 1.3.12** 校准 FAB 消失：`HUD_SHADOW_CSS` 拼接缺分号，`ensureHUD` 被当成表达式拼进字符串（`typeof ensureHUD === 'undefined'`），HUD 从未创建。
+>
+> 2026-09-07：**1.0.21 / Maps 1.3.11** 十字键右侧恢复东/北滑条（粗调）；与方向键共用偏移状态。
+>
+> 2026-09-07：**1.0.20 / Maps 1.3.10** Earth 上 HUD 样式失效：页级 PagePack `<style>` 被 SPA 清掉或被全局 CSS 覆盖；FAB/面板靠内联仍可见，十字键等依赖 CSS。改为 HUD 放入 open Shadow DOM 并内嵌样式；PagePack 在 document-end 再注一次 CSS（Leaflet 宿主）。
+>
+> 2026-09-07：**1.0.19 / Maps 1.3.9** 东/北滑条改为十字方向键（上北 · 下南 · 左西 · 右东）；长按连发；步进仍用「微调步进」。
+>
 > 2026-09-07：**1.0.18** 刷新后勾选「自建叠加层」但看不见层：启动只创建一次且过早失败；增加 `ensureSelfOverlayAlive` 重试/巡检，代理就绪后重建瓦片。
 >
 > 2026-09-07：**1.0.17 / Maps 1.3.7** 修复偏移「记不住」：保存 schemaVersion=2 但加载只认 1，导致每次丢弃 regions；现接受 v1/v2。存储仍为页内 `localStorage`（Maps / Earth 分键）。

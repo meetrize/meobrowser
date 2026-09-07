@@ -174,7 +174,10 @@
     @try {
         NSArray<PagePack *> *packs = [[PagePackStore sharedStore] enabledPacksMatchingURL:url];
         for (PagePack *pack in packs) {
-            if (phase == PagePackInjectionPhaseDocumentStart) {
+            // Earth 等 SPA 常在 document-start 之后重建 DOM，会清掉已注入的 <style>；
+            // document-end 再注一次，保证 Leaflet/HUD 规则仍在。
+            if (phase == PagePackInjectionPhaseDocumentStart ||
+                phase == PagePackInjectionPhaseDocumentEnd) {
                 [self injectCSSForPack:pack webView:webView];
             }
             [self injectJSForPack:pack webView:webView phase:phase includeAll:NO];
