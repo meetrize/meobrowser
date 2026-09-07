@@ -66,12 +66,16 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.2**（地理固定 Δlat/Δlng） |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.13**（Shadow 动态 chrome + panBy 续瓦片） |
+| `maps-overlay-calibration` | Google Maps | **1.3.5**（实时跟飞；松手不闪回） |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.15**（实时跟飞；松手不闪回） |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.15 / Maps 1.3.5** 松手闪回：settle 用旧 URL `setView` 导致；改为 `_pendingLiveToken` 挡住拖前相机，仅当 URL `@…` 段变化后再精校准。
+>
+> 2026-09-07：**1.0.14 / Maps 1.3.4** 拖动延迟根因是跟飞依赖 URL，而 Google 常在松手后才 `replaceState`；改为 pointer 位移实时 `panBy`，松手后再用 URL 精校准。滚轮缩放期间提高采样频率。
+>
 > 2026-09-07：**1.0.13** 历史图像工具条可开关：穿透 `earth-app` Shadow DOM 动态探测顶栏，Resize/Mutation 观察后自动重贴齐；偏移改 `panBy` 让 Leaflet 续加载下方/侧边瓦片（CSS translate 会露白）。
 >
 > 2026-09-07：**1.0.12** 修正 1.0.11「把宿主 top 下移躲顶栏」导致 look-at 中心上移、路网相对卫星偏上；改为宿主仍贴齐 WebGL canvas，顶栏/侧栏用 `clip-path` 裁切。zoom 始终按 canvas 高度。

@@ -1,8 +1,8 @@
 {
   "id": "maps-overlay-calibration",
   "name": "地图叠加校准",
-  "version": "1.3.3",
-  "description": "Google Maps 专用：东/北地理固定偏移（缩放不漂移）。Earth 请用「地球叠加校准」。",
+  "version": "1.3.5",
+  "description": "Google Maps 专用：拖动实时跟飞；松手不闪回。Earth 请用「地球叠加校准」。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://maps-overlay-calibration",
   "enabled": true,

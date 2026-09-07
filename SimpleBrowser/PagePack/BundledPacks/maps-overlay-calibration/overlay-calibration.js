@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.3 · Earth Pack 1.0.13
- * Earth：宿主贴齐 canvas；顶栏/历史图像条等 Shadow UI 动态探测；偏移用 panBy 续瓦片。
+ * Maps Pack 1.3.5 · Earth Pack 1.0.15
+ * 拖动跟飞：pointer panBy；松手后等 URL 相机段变化再精校准（避免闪回拖前位置）。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.13' : '1.3.3');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.15' : '1.3.5');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -718,6 +718,7 @@
   /** 历史图像条开关 / canvas 尺寸变化 → 重贴齐并续瓦片 */
   function refreshEarthLayoutIfNeeded(force) {
     if (!isEarthSite() || !state.config || !state.config.selfOverlay) return false;
+    if (state._livePan) return false;
     _vpCache = null;
     var fp = earthLayoutFingerprint();
     if (!force && fp === state._earthLayoutFp) return false;
@@ -867,9 +868,9 @@
 
   function siteHints(site) {
     if (site === 'earth') {
-      return 'Earth：工具条开关会自动重贴齐；偏移用 panBy 续下方瓦片。请正俯视。';
+      return 'Earth：拖动实时跟飞；工具条开关自动重贴齐。请正俯视。';
     }
-    return 'Maps：东/北为地面米，缩放保持地理对齐。请关闭 Labels。';
+    return 'Maps：拖动实时跟飞；东/北为地面米。请关闭 Labels。';
   }
 
   function emptyViewFallback(site) {
@@ -1385,7 +1386,7 @@
         site: site,
         packId: PACK_ID,
         tileStyle: state.config.tileStyle,
-        earthLayout: earth ? 'canvas+clip+panBy+watch' : 'fullscreen+transform',
+        earthLayout: earth ? 'canvas+clip+panBy+live-drag' : 'fullscreen+live-drag',
         hostBox: hostBox,
         mapBox: mapBox,
         win: { w: window.innerWidth, h: window.innerHeight }
@@ -1415,6 +1416,15 @@
 
   function syncOverlayFromGoogle(force) {
     if (!state.leafletMap || !state.config.selfOverlay) return;
+    // 手指拖地图期间：只跟指针 panBy，避免旧 URL 把叠加层拽回去
+    if (state._livePan) return;
+
+    // 松手后 URL 尚未更新：禁止用拖前相机 setView（否则会闪回旧位置）
+    if (state._pendingLiveToken) {
+      var tokNow = cameraUrlToken();
+      if (tokNow === state._pendingLiveToken) return;
+      state._pendingLiveToken = null;
+    }
 
     var earth = isEarthSite();
     // Earth：先贴齐地图显示区，再读相机（zoom 用同一套宽高）
@@ -1481,6 +1491,7 @@
 
   /** 滑条/配置变更：刷新相机偏移 */
   function applyOverlayPixelOffset() {
+    state._pendingLiveToken = null;
     state.lastViewKey = '';
     syncOverlayFromGoogle(true);
   }
@@ -2001,8 +2012,163 @@
     }
   }
 
+  function isHudEventTarget(t) {
+    if (!t) return false;
+    try {
+      if (t.id === ROOT_ID || t.id === HOST_ID) return true;
+      if (t.closest) {
+        if (t.closest('#' + ROOT_ID)) return true;
+      }
+    } catch (e0) {}
+    return false;
+  }
+
+  function cameraUrlToken() {
+    try {
+      var href = location.href || '';
+      var i = href.indexOf('@');
+      if (i < 0) return href;
+      var end = href.length;
+      var slash = href.indexOf('/', i);
+      var q = href.indexOf('?', i);
+      var hash = href.indexOf('#', i);
+      if (slash > i && slash < end) end = slash;
+      if (q > i && q < end) end = q;
+      if (hash > i && hash < end) end = hash;
+      return href.slice(i, end);
+    } catch (e0) {
+      return String(location.href || '');
+    }
+  }
+
+  /** URL 相机段相对拖/滚前已变化时，才允许 setView 精校准 */
+  function tryCatchupLiveUrl() {
+    if (state._livePan) return false;
+    if (!state._pendingLiveToken) return false;
+    if (cameraUrlToken() === state._pendingLiveToken) return false;
+    state._pendingLiveToken = null;
+    state.lastViewKey = '';
+    try { syncOverlayFromGoogle(true); } catch (e0) {}
+    try { updateStatusUI(); } catch (e1) {}
+    return true;
+  }
+
+  function armLiveUrlCatchup(startToken) {
+    state._pendingLiveToken = startToken || cameraUrlToken();
+    if (state._liveSettleTimers) {
+      state._liveSettleTimers.forEach(function (id) { clearTimeout(id); });
+    }
+    state._liveSettleTimers = [];
+    // 只轮询「URL 是否变了」，变了才 sync；绝不在旧 URL 上 force setView
+    [50, 120, 250, 450, 800, 1300, 2000].forEach(function (delay) {
+      state._liveSettleTimers.push(setTimeout(function () {
+        tryCatchupLiveUrl();
+      }, delay));
+    });
+    // 若松手时 URL 已更新（少见），立刻跟上
+    tryCatchupLiveUrl();
+  }
+
+  function onLivePointerDown(ev) {
+    if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
+    if (ev.isPrimary === false) return;
+    if (ev.button != null && ev.button !== 0) return;
+    if (isHudEventTarget(ev.target)) return;
+    try {
+      var v = readMapView();
+      if (v && v.calibrationSupported === false) return;
+    } catch (e0) {}
+    state._livePan = {
+      pointerId: ev.pointerId,
+      x: ev.clientX,
+      y: ev.clientY,
+      moved: false,
+      startToken: cameraUrlToken()
+    };
+  }
+
+  function onLivePointerMove(ev) {
+    var lp = state._livePan;
+    if (!lp) return;
+    if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
+    if (!state.leafletMap || !state.config.selfOverlay) return;
+    var dx = ev.clientX - lp.x;
+    var dy = ev.clientY - lp.y;
+    if (!dx && !dy) return;
+    lp.x = ev.clientX;
+    lp.y = ev.clientY;
+    lp.moved = true;
+    try {
+      // 手指右移 → 底图右移 → Leaflet panBy 负 x（与 Google 拖拽同向）
+      state.leafletMap.panBy([-dx, -dy], { animate: false, noMoveStart: true });
+    } catch (e0) {
+      try { state.leafletMap.panBy(L.point(-dx, -dy), { animate: false }); } catch (e1) {}
+    }
+  }
+
+  function onLivePointerUp(ev) {
+    var lp = state._livePan;
+    if (!lp) return;
+    if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
+    var moved = !!lp.moved;
+    var startToken = lp.startToken || cameraUrlToken();
+    state._livePan = null;
+    if (moved) armLiveUrlCatchup(startToken);
+  }
+
+  function onLiveWheel(ev) {
+    if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
+    if (isHudEventTarget(ev.target)) return;
+    if (!state._pendingLiveToken) {
+      state._pendingLiveToken = cameraUrlToken();
+    }
+    state._liveWheelUntil = Date.now() + 450;
+    if (!state._liveWheelTimer) {
+      state._liveWheelTimer = setInterval(function () {
+        tryCatchupLiveUrl();
+        if (Date.now() > (state._liveWheelUntil || 0) || state._livePan) {
+          clearInterval(state._liveWheelTimer);
+          state._liveWheelTimer = null;
+          tryCatchupLiveUrl();
+        }
+      }, 50);
+    }
+  }
+
+  function installLiveFollowHooks() {
+    if (state._liveHooked) return;
+    state._liveHooked = true;
+    window.addEventListener('pointerdown', onLivePointerDown, true);
+    window.addEventListener('pointermove', onLivePointerMove, true);
+    window.addEventListener('pointerup', onLivePointerUp, true);
+    window.addEventListener('pointercancel', onLivePointerUp, true);
+    window.addEventListener('wheel', onLiveWheel, { capture: true, passive: true });
+  }
+
+  function uninstallLiveFollowHooks() {
+    if (!state._liveHooked) return;
+    state._liveHooked = false;
+    state._livePan = null;
+    state._pendingLiveToken = null;
+    window.removeEventListener('pointerdown', onLivePointerDown, true);
+    window.removeEventListener('pointermove', onLivePointerMove, true);
+    window.removeEventListener('pointerup', onLivePointerUp, true);
+    window.removeEventListener('pointercancel', onLivePointerUp, true);
+    window.removeEventListener('wheel', onLiveWheel, true);
+    if (state._liveWheelTimer) {
+      clearInterval(state._liveWheelTimer);
+      state._liveWheelTimer = null;
+    }
+    if (state._liveSettleTimers) {
+      state._liveSettleTimers.forEach(function (id) { clearTimeout(id); });
+      state._liveSettleTimers = null;
+    }
+  }
+
   function onMaybeNavigate() {
     if (!document.getElementById(ROOT_ID)) ensureHUD();
+    if (state._livePan) return;
+    if (state._pendingLiveToken && cameraUrlToken() === state._pendingLiveToken) return;
     var view = readMapView();
     var cid = cellIdFor(view.lat, view.lng);
     if (cid !== state.cellId) loadRegionForView();
@@ -2016,15 +2182,16 @@
 
   function startPolling() {
     stopPolling();
-    // Earth 开启叠加时要紧跟 URL + chrome；未开启则保持低频以免卡顿
+    // 叠加开启时提高 URL 采样；拖动实时性主要靠 pointer panBy
     var ms;
     if (isEarthSite()) {
-      ms = state.config.selfOverlay ? 280 : 2000;
+      ms = state.config.selfOverlay ? 200 : 2000;
     } else {
-      ms = 500;
+      ms = state.config && state.config.selfOverlay ? 200 : 500;
     }
     state.pollTimer = window.setInterval(function () {
       if (document.visibilityState === 'hidden') return;
+      if (state._livePan) return;
       if (isEarthSite() && state.config && state.config.selfOverlay) {
         try { refreshEarthLayoutIfNeeded(false); } catch (e0) {}
       }
@@ -2079,6 +2246,7 @@
 
   function teardown() {
     stopPolling();
+    uninstallLiveFollowHooks();
     uninstallEarthLayoutWatchers();
     uninstallHistoryHooks();
     window.removeEventListener('keydown', onKeydown, true);
@@ -2144,6 +2312,7 @@
     window.addEventListener('popstate', onMaybeNavigate);
     window.addEventListener('resize', onViewportResize);
     installHistoryHooks();
+    installLiveFollowHooks();
     startPolling();
     try {
       console.info('[MeoMapAlign] HUD ready', PACK_VERSION, detectSite(), collectProbeHints());
