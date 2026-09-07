@@ -66,12 +66,14 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.12** |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.22** |
+| `maps-overlay-calibration` | Google Maps | **1.3.13** |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.23** |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.23 / Maps 1.3.13** 松手惯性滑行脱锚：拖动靠 pointer `panBy`，松手后无事件且 pan catchup「静默记键」不 setView。改为速度外推 coast + URL 落点真正 `setView`（按设定东/北偏移锚定）。
+>
 > 2026-09-07：**1.0.22 / Maps 1.3.12** 校准 FAB 消失：`HUD_SHADOW_CSS` 拼接缺分号，`ensureHUD` 被当成表达式拼进字符串（`typeof ensureHUD === 'undefined'`），HUD 从未创建。
 >
 > 2026-09-07：**1.0.21 / Maps 1.3.11** 十字键右侧恢复东/北滑条（粗调）；与方向键共用偏移状态。

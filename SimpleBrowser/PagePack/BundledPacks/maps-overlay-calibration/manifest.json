@@ -1,8 +1,8 @@
 {
   "id": "maps-overlay-calibration",
   "name": "地图叠加校准",
-  "version": "1.3.12",
-  "description": "Google Maps 专用：修复校准按钮不显示。Earth 请用「地球叠加校准」。",
+  "version": "1.3.13",
+  "description": "Google Maps 专用：松手惯性滑行仍锚定叠加层。Earth 请用「地球叠加校准」。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://maps-overlay-calibration",
   "enabled": true,

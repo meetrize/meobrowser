@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.12 · Earth Pack 1.0.22
- * 修复：HUD_SHADOW_CSS 缺分号导致 ensureHUD 被拼进字符串、校准按钮不出现。
+ * Maps Pack 1.3.13 · Earth Pack 1.0.23
+ * 松手惯性滑行：速度外推 panBy + URL 落点真正 setView 锚定（含设定东/北偏移）。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.22' : '1.3.12');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.23' : '1.3.13');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -1562,12 +1562,10 @@
     if (state._pendingLiveToken) {
       var tokNow = cameraUrlToken();
       if (tokNow === state._pendingLiveToken) return;
-      // URL 已变：平移跟飞只记键，避免 replaceState 路径再 setView 回弹
-      if (state._liveCatchupMode === 'pan') {
-        state._syncSilent = true;
-      }
+      // URL 已变：清 token，走下方真正 setView 锚定（含惯性滑行落点）
       state._pendingLiveToken = null;
       state._liveCatchupMode = null;
+      stopLiveCoast();
     }
 
     var earth = isEarthSite();
@@ -2336,23 +2334,18 @@
     }
   }
 
-  /** URL 相机段已变化：平移跟飞→静默记键；滚轮→真正 setView */
+  /** URL 相机段已变化：一律按最终相机锚定（含东/北偏移）；不再静默跳过 setView */
   function tryCatchupLiveUrl() {
     if (state._livePan) return false;
     if (!state._pendingLiveToken) return false;
     if (cameraUrlToken() === state._pendingLiveToken) return false;
-    var mode = state._liveCatchupMode || 'pan';
     state._pendingLiveToken = null;
     state._liveCatchupMode = null;
     state.lastViewKey = '';
-    if (mode === 'pan') {
-      // 以 pointer 位置为准，避免 URL 精校准把多拖的几像素拽回去
-      state._syncSilent = true;
-    } else {
-      state._syncSilent = false;
-    }
-    try { syncOverlayFromGoogle(true); } catch (e0) {}
+    // 惯性结束后必须真正锚定；静默记键会让松手滑行段永久脱锚
     state._syncSilent = false;
+    stopLiveCoast();
+    try { syncOverlayFromGoogle(true); } catch (e0) {}
     try { updateStatusUI(); } catch (e1) {}
     return true;
   }
@@ -2364,12 +2357,95 @@
       state._liveSettleTimers.forEach(function (id) { clearTimeout(id); });
     }
     state._liveSettleTimers = [];
-    [50, 120, 250, 450, 800, 1300, 2000].forEach(function (delay) {
+    // 加密采样：惯性滑行期间 Google 可能较晚才 replaceState
+    [16, 33, 50, 80, 120, 180, 250, 350, 500, 700, 1000, 1400, 2000, 2800].forEach(function (delay) {
       state._liveSettleTimers.push(setTimeout(function () {
         tryCatchupLiveUrl();
       }, delay));
     });
     tryCatchupLiveUrl();
+  }
+
+  function leafletPanByPx(ix, iy) {
+    if (!ix && !iy) return;
+    if (!state.leafletMap) return;
+    try {
+      state.leafletMap.panBy([-ix, -iy], { animate: false, noMoveStart: true });
+    } catch (e0) {
+      try { state.leafletMap.panBy(L.point(-ix, -iy), { animate: false }); } catch (e1) {}
+    }
+  }
+
+  function stopLiveCoast() {
+    state._liveCoast = null;
+    if (state._liveCoastRaf) {
+      try { cancelAnimationFrame(state._liveCoastRaf); } catch (e0) {}
+      state._liveCoastRaf = null;
+    }
+  }
+
+  /**
+   * 松手后地图常有惯性滑行，此时无 pointer 事件；用最近速度外推 panBy，
+   * 直到 URL @ 段更新后由 tryCatchupLiveUrl 真正 setView 锚定。
+   */
+  function startLiveCoast(vx, vy) {
+    stopLiveCoast();
+    if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
+    var speed = Math.sqrt((vx || 0) * (vx || 0) + (vy || 0) * (vy || 0));
+    if (!(speed > 0.05)) return;
+    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    state._liveCoast = {
+      vx: vx || 0,
+      vy: vy || 0,
+      lastT: now,
+      accX: 0,
+      accY: 0,
+      until: now + 2200,
+      startToken: state._pendingLiveToken || cameraUrlToken()
+    };
+    function tick(ts) {
+      state._liveCoastRaf = null;
+      var coast = state._liveCoast;
+      if (!coast || state._livePan) return;
+      if (!state.leafletMap || !state.config.selfOverlay) {
+        stopLiveCoast();
+        return;
+      }
+      var t = (typeof ts === 'number') ? ts : ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
+      var dt = Math.max(0, Math.min(48, t - coast.lastT));
+      coast.lastT = t;
+      // URL 已变：停止外推，交给 catchup 锚定
+      if (coast.startToken && cameraUrlToken() !== coast.startToken) {
+        stopLiveCoast();
+        tryCatchupLiveUrl();
+        return;
+      }
+      if (t >= coast.until) {
+        stopLiveCoast();
+        return;
+      }
+      // 近似 Maps/Earth 惯性衰减（px/ms）
+      var friction = Math.pow(0.965, dt / 16);
+      coast.vx *= friction;
+      coast.vy *= friction;
+      var sp = Math.sqrt(coast.vx * coast.vx + coast.vy * coast.vy);
+      if (sp < 0.02) {
+        stopLiveCoast();
+        return;
+      }
+      coast.accX += coast.vx * dt;
+      coast.accY += coast.vy * dt;
+      var ix = coast.accX > 0 ? Math.floor(coast.accX) : Math.ceil(coast.accX);
+      var iy = coast.accY > 0 ? Math.floor(coast.accY) : Math.ceil(coast.accY);
+      if (ix || iy) {
+        coast.accX -= ix;
+        coast.accY -= iy;
+        leafletPanByPx(ix, iy);
+      }
+      tryCatchupLiveUrl();
+      state._liveCoastRaf = requestAnimationFrame(tick);
+    }
+    state._liveCoastRaf = requestAnimationFrame(tick);
   }
 
   function onLivePointerDown(ev) {
@@ -2381,6 +2457,7 @@
       var v = readMapView();
       if (v && v.calibrationSupported === false) return;
     } catch (e0) {}
+    stopLiveCoast();
     state._livePan = {
       pointerId: ev.pointerId,
       x: ev.clientX,
@@ -2388,7 +2465,8 @@
       moved: false,
       accX: 0,
       accY: 0,
-      startToken: cameraUrlToken()
+      startToken: cameraUrlToken(),
+      samples: []
     };
   }
 
@@ -2397,14 +2475,17 @@
     if (!lp) return;
     if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
     if (!state.leafletMap || !state.config.selfOverlay) return;
-    // movementX 与浏览器给地图的位移更一致；无则退回 client 差分
     var dx = (typeof ev.movementX === 'number') ? ev.movementX : (ev.clientX - lp.x);
     var dy = (typeof ev.movementY === 'number') ? ev.movementY : (ev.clientY - lp.y);
     lp.x = ev.clientX;
     lp.y = ev.clientY;
     if (!dx && !dy) return;
     lp.moved = true;
-    // Leaflet panBy 会取整：累积小数，减少跟手误差
+    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    lp.samples.push({ t: now, dx: dx, dy: dy });
+    while (lp.samples.length > 1 && (now - lp.samples[0].t) > 100) {
+      lp.samples.shift();
+    }
     lp.accX += dx;
     lp.accY += dy;
     var ix = lp.accX > 0 ? Math.floor(lp.accX) : Math.ceil(lp.accX);
@@ -2412,11 +2493,22 @@
     if (!ix && !iy) return;
     lp.accX -= ix;
     lp.accY -= iy;
-    try {
-      state.leafletMap.panBy([-ix, -iy], { animate: false, noMoveStart: true });
-    } catch (e0) {
-      try { state.leafletMap.panBy(L.point(-ix, -iy), { animate: false }); } catch (e1) {}
+    leafletPanByPx(ix, iy);
+  }
+
+  function velocityFromSamples(samples) {
+    if (!samples || samples.length < 2) return { vx: 0, vy: 0 };
+    var first = samples[0];
+    var last = samples[samples.length - 1];
+    var dt = last.t - first.t;
+    if (!(dt > 8)) return { vx: 0, vy: 0 };
+    var sx = 0;
+    var sy = 0;
+    for (var i = 0; i < samples.length; i++) {
+      sx += samples[i].dx;
+      sy += samples[i].dy;
     }
+    return { vx: sx / dt, vy: sy / dt };
   }
 
   function onLivePointerUp(ev) {
@@ -2425,13 +2517,18 @@
     if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
     var moved = !!lp.moved;
     var startToken = lp.startToken || cameraUrlToken();
+    var vel = velocityFromSamples(lp.samples);
     state._livePan = null;
-    if (moved) armLiveUrlCatchup(startToken, 'pan');
+    if (moved) {
+      armLiveUrlCatchup(startToken, 'pan');
+      startLiveCoast(vel.vx, vel.vy);
+    }
   }
 
   function onLiveWheel(ev) {
     if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
     if (isHudEventTarget(ev.target)) return;
+    stopLiveCoast();
     if (!state._pendingLiveToken) {
       state._pendingLiveToken = cameraUrlToken();
       state._liveCatchupMode = 'wheel';
@@ -2464,6 +2561,7 @@
     state._liveHooked = false;
     state._livePan = null;
     state._pendingLiveToken = null;
+    stopLiveCoast();
     window.removeEventListener('pointerdown', onLivePointerDown, true);
     window.removeEventListener('pointermove', onLivePointerMove, true);
     window.removeEventListener('pointerup', onLivePointerUp, true);

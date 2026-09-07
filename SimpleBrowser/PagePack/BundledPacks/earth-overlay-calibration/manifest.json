@@ -1,8 +1,8 @@
 {
   "id": "earth-overlay-calibration",
   "name": "地球叠加校准",
-  "version": "1.0.22",
-  "description": "Google Earth Web：修复校准按钮不显示。不影响 Maps。",
+  "version": "1.0.23",
+  "description": "Google Earth Web：松手惯性滑行仍锚定叠加层。不影响 Maps。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://earth-overlay-calibration",
   "enabled": true,
