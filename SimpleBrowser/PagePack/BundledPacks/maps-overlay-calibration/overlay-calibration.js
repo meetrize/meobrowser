@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.5 · Earth Pack 1.0.15
- * 拖动跟飞：pointer panBy；松手后等 URL 相机段变化再精校准（避免闪回拖前位置）。
+ * Maps Pack 1.3.6 · Earth Pack 1.0.16
+ * 拖动跟飞：亚像素 panBy；平移松手后静默对齐 URL（不 setView），避免回弹。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.15' : '1.3.5');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.16' : '1.3.6');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -1423,7 +1423,12 @@
     if (state._pendingLiveToken) {
       var tokNow = cameraUrlToken();
       if (tokNow === state._pendingLiveToken) return;
+      // URL 已变：平移跟飞只记键，避免 replaceState 路径再 setView 回弹
+      if (state._liveCatchupMode === 'pan') {
+        state._syncSilent = true;
+      }
       state._pendingLiveToken = null;
+      state._liveCatchupMode = null;
     }
 
     var earth = isEarthSite();
@@ -1468,6 +1473,11 @@
 
     if (!force && key === state.lastViewKey) return;
     state.lastViewKey = key;
+    // 平移跟飞松手后：只吸收 URL 键，不 setView（否则相对 pointer 多拖的几像素会被拽回）
+    if (state._syncSilent) {
+      state._syncSilent = false;
+      return;
+    }
     try {
       if (earth) {
         state.leafletMap.setView([view.lat, normalizeLng(view.lng)], z, {
@@ -1492,6 +1502,8 @@
   /** 滑条/配置变更：刷新相机偏移 */
   function applyOverlayPixelOffset() {
     state._pendingLiveToken = null;
+    state._syncSilent = false;
+    state._liveCatchupMode = null;
     state.lastViewKey = '';
     syncOverlayFromGoogle(true);
   }
@@ -2041,31 +2053,39 @@
     }
   }
 
-  /** URL 相机段相对拖/滚前已变化时，才允许 setView 精校准 */
+  /** URL 相机段已变化：平移跟飞→静默记键；滚轮→真正 setView */
   function tryCatchupLiveUrl() {
     if (state._livePan) return false;
     if (!state._pendingLiveToken) return false;
     if (cameraUrlToken() === state._pendingLiveToken) return false;
+    var mode = state._liveCatchupMode || 'pan';
     state._pendingLiveToken = null;
+    state._liveCatchupMode = null;
     state.lastViewKey = '';
+    if (mode === 'pan') {
+      // 以 pointer 位置为准，避免 URL 精校准把多拖的几像素拽回去
+      state._syncSilent = true;
+    } else {
+      state._syncSilent = false;
+    }
     try { syncOverlayFromGoogle(true); } catch (e0) {}
+    state._syncSilent = false;
     try { updateStatusUI(); } catch (e1) {}
     return true;
   }
 
-  function armLiveUrlCatchup(startToken) {
+  function armLiveUrlCatchup(startToken, mode) {
     state._pendingLiveToken = startToken || cameraUrlToken();
+    state._liveCatchupMode = mode || 'pan';
     if (state._liveSettleTimers) {
       state._liveSettleTimers.forEach(function (id) { clearTimeout(id); });
     }
     state._liveSettleTimers = [];
-    // 只轮询「URL 是否变了」，变了才 sync；绝不在旧 URL 上 force setView
     [50, 120, 250, 450, 800, 1300, 2000].forEach(function (delay) {
       state._liveSettleTimers.push(setTimeout(function () {
         tryCatchupLiveUrl();
       }, delay));
     });
-    // 若松手时 URL 已更新（少见），立刻跟上
     tryCatchupLiveUrl();
   }
 
@@ -2083,6 +2103,8 @@
       x: ev.clientX,
       y: ev.clientY,
       moved: false,
+      accX: 0,
+      accY: 0,
       startToken: cameraUrlToken()
     };
   }
@@ -2092,17 +2114,25 @@
     if (!lp) return;
     if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
     if (!state.leafletMap || !state.config.selfOverlay) return;
-    var dx = ev.clientX - lp.x;
-    var dy = ev.clientY - lp.y;
-    if (!dx && !dy) return;
+    // movementX 与浏览器给地图的位移更一致；无则退回 client 差分
+    var dx = (typeof ev.movementX === 'number') ? ev.movementX : (ev.clientX - lp.x);
+    var dy = (typeof ev.movementY === 'number') ? ev.movementY : (ev.clientY - lp.y);
     lp.x = ev.clientX;
     lp.y = ev.clientY;
+    if (!dx && !dy) return;
     lp.moved = true;
+    // Leaflet panBy 会取整：累积小数，减少跟手误差
+    lp.accX += dx;
+    lp.accY += dy;
+    var ix = lp.accX > 0 ? Math.floor(lp.accX) : Math.ceil(lp.accX);
+    var iy = lp.accY > 0 ? Math.floor(lp.accY) : Math.ceil(lp.accY);
+    if (!ix && !iy) return;
+    lp.accX -= ix;
+    lp.accY -= iy;
     try {
-      // 手指右移 → 底图右移 → Leaflet panBy 负 x（与 Google 拖拽同向）
-      state.leafletMap.panBy([-dx, -dy], { animate: false, noMoveStart: true });
+      state.leafletMap.panBy([-ix, -iy], { animate: false, noMoveStart: true });
     } catch (e0) {
-      try { state.leafletMap.panBy(L.point(-dx, -dy), { animate: false }); } catch (e1) {}
+      try { state.leafletMap.panBy(L.point(-ix, -iy), { animate: false }); } catch (e1) {}
     }
   }
 
@@ -2113,7 +2143,7 @@
     var moved = !!lp.moved;
     var startToken = lp.startToken || cameraUrlToken();
     state._livePan = null;
-    if (moved) armLiveUrlCatchup(startToken);
+    if (moved) armLiveUrlCatchup(startToken, 'pan');
   }
 
   function onLiveWheel(ev) {
@@ -2121,6 +2151,7 @@
     if (isHudEventTarget(ev.target)) return;
     if (!state._pendingLiveToken) {
       state._pendingLiveToken = cameraUrlToken();
+      state._liveCatchupMode = 'wheel';
     }
     state._liveWheelUntil = Date.now() + 450;
     if (!state._liveWheelTimer) {

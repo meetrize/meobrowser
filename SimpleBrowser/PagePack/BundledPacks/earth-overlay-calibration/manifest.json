@@ -1,8 +1,8 @@
 {
   "id": "earth-overlay-calibration",
   "name": "地球叠加校准",
-  "version": "1.0.15",
-  "description": "Google Earth Web：拖动实时跟飞；松手不闪回（等 URL 再精校准）。不影响 Maps。",
+  "version": "1.0.16",
+  "description": "Google Earth Web：拖动跟飞松手不回弹（平移静默对齐）。不影响 Maps。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://earth-overlay-calibration",
   "enabled": true,

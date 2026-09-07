@@ -66,12 +66,14 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.5**（实时跟飞；松手不闪回） |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.15**（实时跟飞；松手不闪回） |
+| `maps-overlay-calibration` | Google Maps | **1.3.6**（跟飞；平移松手不回弹） |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.16**（跟飞；平移松手不回弹） |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.16 / Maps 1.3.6** 松手回弹：pointer `panBy` 与 URL 相机有亚像素差，`setView` 精校准会拽回；平移 catchup 改为静默记键不移动；`movementX`+小数累积改善跟手。
+>
 > 2026-09-07：**1.0.15 / Maps 1.3.5** 松手闪回：settle 用旧 URL `setView` 导致；改为 `_pendingLiveToken` 挡住拖前相机，仅当 URL `@…` 段变化后再精校准。
 >
 > 2026-09-07：**1.0.14 / Maps 1.3.4** 拖动延迟根因是跟飞依赖 URL，而 Google 常在松手后才 `replaceState`；改为 pointer 位移实时 `panBy`，松手后再用 URL 精校准。滚轮缩放期间提高采样频率。
