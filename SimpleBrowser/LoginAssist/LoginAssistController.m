@@ -1204,7 +1204,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         return credentials.password ?: @"";
     }
     if ([slot isEqualToString:@"phone"]) {
-        return credentials.phone ?: @"";
+        // 兼容旧检测：手机号槽优先 phone，否则回退 username（密码登录站）。
+        if (credentials.phone.length > 0) {
+            return credentials.phone;
+        }
+        return credentials.username ?: @"";
     }
     return @"";
 }

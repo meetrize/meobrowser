@@ -109,8 +109,12 @@
         return YES;
     }
     if ([slot isEqualToString:@"phone"]) {
-        // 手机号仅存凭证；Recipe 模型不再有 phoneSelector。
-        credentials.phone = value;
+        // 手机号作帐号：写入 username，便于与 Recipe 用户名选择器/填入对齐。
+        if (recipe.usernameSelector.length == 0) {
+            recipe.usernameSelector = selector;
+        }
+        credentials.username = value;
+        credentials.phone = @"";
         return YES;
     }
     if ([slot isEqualToString:@"extra"]) {

@@ -108,8 +108,13 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
             }
             hasPreset = (credPass.length > 0);
         } else if ([slot isEqualToString:@"phone"]) {
+            // 手机号框在密码登录里常作帐号；Recipe 已无独立 phone 凭证时回退 username。
             label = @"手机号";
-            hasPreset = (credPhone.length > 0);
+            if (recipe.usernameSelector.length > 0 &&
+                (detectedSel.length == 0 || [recipe.usernameSelector isEqualToString:detectedSel])) {
+                selector = recipe.usernameSelector;
+            }
+            hasPreset = (credPhone.length > 0) || (credUser.length > 0);
         } else if ([slot isEqualToString:@"otp"]) {
             label = @"验证码";
             allowSave = NO;
@@ -374,26 +379,25 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    if (!el) return null;\n"
 "    if (isPasswordField(el)) return 'password';\n"
 "    if (isOTPField(el)) return 'otp';\n"
-"    if (isPhoneField(el)) return 'phone';\n"
+"    // 手机号框与帐号框统一为 username，对齐 Recipe/用户名凭证（密码登录站如 9yicp）。\n"
+"    if (isPhoneField(el)) return 'username';\n"
 "    if (isIdentifierField(el)) return 'username';\n"
-"    if (isAccountField(el)) {\n"
-"      const phoneLike = isPhoneField(el) && !/(user|login|account|email|mail|帐号|账号|帳號|邮箱|郵箱)/i.test(textBlob(el));\n"
-"      return phoneLike ? 'phone' : 'username';\n"
-"    }\n"
+"    if (isAccountField(el)) return 'username';\n"
 "    if (isEditableAssistInput(el)) return 'extra';\n"
 "    return null;\n"
 "  }\n"
 "  function buildSlots(ctx) {\n"
 "    const slots = [];\n"
 "    if (ctx.user) {\n"
-"      const phoneLike = isPhoneField(ctx.user) && !/(user|login|account|email|mail|帐号|账号|帳號|邮箱|郵箱)/i.test(textBlob(ctx.user));\n"
 "      const idLike = isIdentifierField(ctx.user);\n"
-"      slots.push({ slot: phoneLike ? 'phone' : 'username', el: ctx.user, selector: cssPath(ctx.user), label: fieldLabel(ctx.user),\n"
+"      // 主身份字段一律 username（含手机号登录），避免 phone 槽对不上 username 凭证。\n"
+"      slots.push({ slot: 'username', el: ctx.user, selector: cssPath(ctx.user), label: fieldLabel(ctx.user),\n"
 "        hasValueInDOM: !!(ctx.user.value && String(ctx.user.value).trim()) });\n"
 "      if (idLike) slots[slots.length - 1].label = fieldLabel(ctx.user) || '卡号/设备号';\n"
+"      else if (isPhoneField(ctx.user)) slots[slots.length - 1].label = fieldLabel(ctx.user) || '手机号';\n"
 "    }\n"
 "    if (ctx.phone && ctx.phone !== ctx.user) {\n"
-"      slots.push({ slot: 'phone', el: ctx.phone, selector: cssPath(ctx.phone), label: fieldLabel(ctx.phone),\n"
+"      slots.push({ slot: 'username', el: ctx.phone, selector: cssPath(ctx.phone), label: fieldLabel(ctx.phone) || '手机号',\n"
 "        hasValueInDOM: !!(ctx.phone.value && String(ctx.phone.value).trim()) });\n"
 "    }\n"
 "    if (ctx.pass) {\n"
@@ -498,13 +502,16 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    try { return document.querySelector(sel); } catch (e) { return null; }\n"
 "  }\n"
 "  function targetForSlot(slot, selector) {\n"
+"    let bySlot = null;\n"
 "    for (let i = 0; i < fieldTargets.length; i++) {\n"
 "      const t = fieldTargets[i];\n"
 "      if (!t) continue;\n"
-"      if (t.slot === slot && (!selector || !t.selector || t.selector === selector)) return t;\n"
 "      if (selector && t.selector === selector) return t;\n"
+"      if (t.slot === slot && (!selector || !t.selector || t.selector === selector)) return t;\n"
+"      if (t.slot === slot && !bySlot) bySlot = t;\n"
 "    }\n"
-"    return null;\n"
+"    // Recipe 选择器常与启发式 cssPath 不一致：同槽仍应用 hasPreset / 填入。\n"
+"    return bySlot;\n"
 "  }\n"
 "  function rightSideAvoidPx(el) {\n"
 "    const r = el.getBoundingClientRect();\n"
@@ -739,7 +746,8 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    if (kind === 'plus' && !allowSave) return null;\n"
 "    el.setAttribute(BTN_ATTR + '-host', '1');\n"
 "    const key = fieldBtnKey(formCtx, slotInfo, idx);\n"
-"    const sel = (tgt && tgt.selector) || slotInfo.selector;\n"
+"    // 按钮挂在当前可见字段上：填入用检测选择器；Recipe 选择器仅作 Native 侧回退。\n"
+"    const sel = slotInfo.selector || (tgt && tgt.selector) || '';\n"
 "    let btn = document.querySelector('button.' + FIELD_BTN + '[data-meo-key=\"' + key.replace(/\\\\/g,'\\\\\\\\').replace(/\"/g,'\\\\\"') + '\"]');\n"
 "    if (!btn) {\n"
 "      btn = document.createElement('button');\n"
@@ -796,8 +804,7 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "      });\n"
 "      if (!covered) {\n"
 "        const fakeCtx = { formId: framePrefix() + 'focus', user: null, pass: null, phone: null, otp: false, submit: null };\n"
-"        if (focusSlot.slot === 'phone') fakeCtx.phone = focusSlot.el;\n"
-"        else if (focusSlot.slot === 'password') fakeCtx.pass = focusSlot.el;\n"
+"        if (focusSlot.slot === 'password') fakeCtx.pass = focusSlot.el;\n"
 "        else fakeCtx.user = focusSlot.el;\n"
 "        const k = placeFieldButton(focusSlot.el, focusSlot, 0, fakeCtx);\n"
 "        if (k) activeKeys.add(k);\n"
