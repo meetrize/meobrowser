@@ -21,6 +21,7 @@
 #import "BrowserShortcutItem.h"
 #import "BrowserFaviconUtil.h"
 #import "PagePackSeedInstaller.h"
+#import "MeoApplication.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -381,6 +382,26 @@
         }
     }
     [BrowsingPreferences saveWindowSessions:sessions];
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    if (!flag) {
+        [self createBrowserWindowWithSession:nil];
+        return NO;
+    }
+    // Dock / 程序坞点击：只前置当前 key/main 窗，不要 arrangeInFront 全部窗口。
+    NSWindow *preferred = NSApp.keyWindow ?: NSApp.mainWindow;
+    if (!preferred) {
+        for (BrowserWindowController *wc in _browserWindows) {
+            if (wc.window.isVisible && !wc.window.isMiniaturized) {
+                preferred = wc.window;
+                break;
+            }
+        }
+    }
+    [MeoApplication activateFrontWindowOnlyPreferring:preferred];
+    return NO;
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

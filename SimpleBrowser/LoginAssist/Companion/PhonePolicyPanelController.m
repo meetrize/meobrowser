@@ -1,6 +1,7 @@
 #import "PhonePolicyPanelController.h"
 #import "PhonePolicyStore.h"
 #import "SBTextField.h"
+#import "MeoApplication.h"
 
 @interface PhonePolicyPanelController () <NSTableViewDataSource, NSTableViewDelegate>
 @property (nonatomic, strong) NSTableView *tableView;
@@ -117,7 +118,7 @@
     [self reload];
     [self showWindow:nil];
     [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    [MeoApplication activateFrontWindowOnlyPreferring:self.window];
 }
 
 - (void)reload {

@@ -6,6 +6,7 @@
 #import "CompanionChannel.h"
 #import "BrowserTransientToast.h"
 #import "SBTextField.h"
+#import "MeoApplication.h"
 
 @interface PhoneChatWindowController () <NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate>
 @property (nonatomic, copy) NSString *threadID;
@@ -63,7 +64,7 @@ static NSMutableDictionary<NSString *, PhoneChatWindowController *> *sOpenWindow
         existing.lastNotificationID = notificationID;
         [existing reloadMessagesScrollingToEnd:YES];
         [existing.window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
+        [MeoApplication activateFrontWindowOnlyPreferring:existing.window];
         [existing focusInput];
         return;
     }
@@ -71,7 +72,7 @@ static NSMutableDictionary<NSString *, PhoneChatWindowController *> *sOpenWindow
                                                                       notificationID:notificationID];
     sOpenWindows[thread.threadID] = wc;
     [wc showWindow:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    [MeoApplication activateFrontWindowOnlyPreferring:wc.window];
     [wc focusInput];
 }
 

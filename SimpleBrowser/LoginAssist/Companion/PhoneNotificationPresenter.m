@@ -1,4 +1,5 @@
 #import "PhoneNotificationPresenter.h"
+#import "MeoApplication.h"
 #import "PhoneNotificationSettings.h"
 #import <UserNotifications/UserNotifications.h>
 #import <AppKit/AppKit.h>
@@ -237,7 +238,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
          withCompletionHandler:(void (^)(void))completionHandler
 API_AVAILABLE(macos(10.14)) {
     (void)center;
-    [NSApp activateIgnoringOtherApps:YES];
+    [MeoApplication activateFrontWindowOnlyPreferring:NSApp.keyWindow];
 
     NSString *itemID = nil;
     NSDictionary *userInfo = response.notification.request.content.userInfo;

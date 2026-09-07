@@ -16,6 +16,7 @@ MEO_ENABLE_PRIVATE_INSPECTOR_SHOW ?= 1
 
 SOURCES := $(SRC_DIR)/main.m $(SRC_DIR)/AppDelegate.m $(SRC_DIR)/MainWindowController.m
 BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
+                   $(BROWSER_SRC_DIR)/MeoApplication.m \
                    $(BROWSER_SRC_DIR)/AppDelegate.m \
                    $(BROWSER_SRC_DIR)/BrowserAppInfo.m \
                    $(BROWSER_SRC_DIR)/BrowserWindowController.m \
@@ -272,7 +273,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '  <key>LSMinimumSystemVersion</key><string>11.0</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSHighResolutionCapable</key><true/>' >> $(1)/Contents/Info.plist
 	@echo '  <key>NSMainNibFile</key><string></string>' >> $(1)/Contents/Info.plist
-	@echo '  <key>NSPrincipalClass</key><string>NSApplication</string>' >> $(1)/Contents/Info.plist
+	@echo '  <key>NSPrincipalClass</key><string>MeoApplication</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleURLTypes</key>' >> $(1)/Contents/Info.plist
 	@echo '  <array>' >> $(1)/Contents/Info.plist
