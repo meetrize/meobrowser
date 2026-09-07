@@ -21,6 +21,12 @@
   display: none !important;
 }
 
+/* 松手惯性滑行：暂隐路网，避免外推速度与卫星不一致导致脱锚越来越大 */
+#meo-mapalign-leaflet-host.meo-ma-coast-hold {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
 #meo-mapalign-leaflet-shift {
   position: absolute !important;
   inset: 0 !important;

@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.13 · Earth Pack 1.0.23
- * 松手惯性滑行：速度外推 panBy + URL 落点真正 setView 锚定（含设定东/北偏移）。
+ * Maps Pack 1.3.14 · Earth Pack 1.0.24
+ * 松手惯性：不做速度外推（会快于卫星）；暂隐叠加层，URL 落点后再按偏移显示。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.23' : '1.3.13');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.24' : '1.3.14');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -1565,7 +1565,7 @@
       // URL 已变：清 token，走下方真正 setView 锚定（含惯性滑行落点）
       state._pendingLiveToken = null;
       state._liveCatchupMode = null;
-      stopLiveCoast();
+      clearCoastHold();
     }
 
     var earth = isEarthSite();
@@ -2334,7 +2334,7 @@
     }
   }
 
-  /** URL 相机段已变化：一律按最终相机锚定（含东/北偏移）；不再静默跳过 setView */
+  /** URL 相机段已变化：按最终相机锚定（含东/北偏移）并结束「惯性暂隐」 */
   function tryCatchupLiveUrl() {
     if (state._livePan) return false;
     if (!state._pendingLiveToken) return false;
@@ -2342,12 +2342,30 @@
     state._pendingLiveToken = null;
     state._liveCatchupMode = null;
     state.lastViewKey = '';
-    // 惯性结束后必须真正锚定；静默记键会让松手滑行段永久脱锚
     state._syncSilent = false;
-    stopLiveCoast();
     try { syncOverlayFromGoogle(true); } catch (e0) {}
+    clearCoastHold();
     try { updateStatusUI(); } catch (e1) {}
     return true;
+  }
+
+  /**
+   * 页内读不到 Google 惯性相机；速度外推又往往快于卫星 → 滑行中脱锚越来越大。
+   * 保守策略：平移松手后暂隐叠加层，等 URL @ 落点再 setView 显示（偏移仍生效）。
+   */
+  function setCoastHold(on) {
+    state._coastHold = !!on;
+    var host = document.getElementById(HOST_ID);
+    if (!host) return;
+    host.classList.toggle('meo-ma-coast-hold', !!on);
+  }
+
+  function clearCoastHold() {
+    if (state._coastHoldTimer) {
+      clearTimeout(state._coastHoldTimer);
+      state._coastHoldTimer = null;
+    }
+    setCoastHold(false);
   }
 
   function armLiveUrlCatchup(startToken, mode) {
@@ -2357,7 +2375,20 @@
       state._liveSettleTimers.forEach(function (id) { clearTimeout(id); });
     }
     state._liveSettleTimers = [];
-    // 加密采样：惯性滑行期间 Google 可能较晚才 replaceState
+    if (mode === 'pan') {
+      setCoastHold(true);
+      if (state._coastHoldTimer) clearTimeout(state._coastHoldTimer);
+      // URL 迟迟不更新时强制解除暂隐，避免路网一直消失
+      state._coastHoldTimer = setTimeout(function () {
+        state._coastHoldTimer = null;
+        if (!state._coastHold) return;
+        state._pendingLiveToken = null;
+        state._liveCatchupMode = null;
+        state.lastViewKey = '';
+        try { syncOverlayFromGoogle(true); } catch (e0) {}
+        clearCoastHold();
+      }, 3200);
+    }
     [16, 33, 50, 80, 120, 180, 250, 350, 500, 700, 1000, 1400, 2000, 2800].forEach(function (delay) {
       state._liveSettleTimers.push(setTimeout(function () {
         tryCatchupLiveUrl();
@@ -2376,78 +2407,6 @@
     }
   }
 
-  function stopLiveCoast() {
-    state._liveCoast = null;
-    if (state._liveCoastRaf) {
-      try { cancelAnimationFrame(state._liveCoastRaf); } catch (e0) {}
-      state._liveCoastRaf = null;
-    }
-  }
-
-  /**
-   * 松手后地图常有惯性滑行，此时无 pointer 事件；用最近速度外推 panBy，
-   * 直到 URL @ 段更新后由 tryCatchupLiveUrl 真正 setView 锚定。
-   */
-  function startLiveCoast(vx, vy) {
-    stopLiveCoast();
-    if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
-    var speed = Math.sqrt((vx || 0) * (vx || 0) + (vy || 0) * (vy || 0));
-    if (!(speed > 0.05)) return;
-    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    state._liveCoast = {
-      vx: vx || 0,
-      vy: vy || 0,
-      lastT: now,
-      accX: 0,
-      accY: 0,
-      until: now + 2200,
-      startToken: state._pendingLiveToken || cameraUrlToken()
-    };
-    function tick(ts) {
-      state._liveCoastRaf = null;
-      var coast = state._liveCoast;
-      if (!coast || state._livePan) return;
-      if (!state.leafletMap || !state.config.selfOverlay) {
-        stopLiveCoast();
-        return;
-      }
-      var t = (typeof ts === 'number') ? ts : ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
-      var dt = Math.max(0, Math.min(48, t - coast.lastT));
-      coast.lastT = t;
-      // URL 已变：停止外推，交给 catchup 锚定
-      if (coast.startToken && cameraUrlToken() !== coast.startToken) {
-        stopLiveCoast();
-        tryCatchupLiveUrl();
-        return;
-      }
-      if (t >= coast.until) {
-        stopLiveCoast();
-        return;
-      }
-      // 近似 Maps/Earth 惯性衰减（px/ms）
-      var friction = Math.pow(0.965, dt / 16);
-      coast.vx *= friction;
-      coast.vy *= friction;
-      var sp = Math.sqrt(coast.vx * coast.vx + coast.vy * coast.vy);
-      if (sp < 0.02) {
-        stopLiveCoast();
-        return;
-      }
-      coast.accX += coast.vx * dt;
-      coast.accY += coast.vy * dt;
-      var ix = coast.accX > 0 ? Math.floor(coast.accX) : Math.ceil(coast.accX);
-      var iy = coast.accY > 0 ? Math.floor(coast.accY) : Math.ceil(coast.accY);
-      if (ix || iy) {
-        coast.accX -= ix;
-        coast.accY -= iy;
-        leafletPanByPx(ix, iy);
-      }
-      tryCatchupLiveUrl();
-      state._liveCoastRaf = requestAnimationFrame(tick);
-    }
-    state._liveCoastRaf = requestAnimationFrame(tick);
-  }
-
   function onLivePointerDown(ev) {
     if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
     if (ev.isPrimary === false) return;
@@ -2457,7 +2416,7 @@
       var v = readMapView();
       if (v && v.calibrationSupported === false) return;
     } catch (e0) {}
-    stopLiveCoast();
+    clearCoastHold();
     state._livePan = {
       pointerId: ev.pointerId,
       x: ev.clientX,
@@ -2465,8 +2424,7 @@
       moved: false,
       accX: 0,
       accY: 0,
-      startToken: cameraUrlToken(),
-      samples: []
+      startToken: cameraUrlToken()
     };
   }
 
@@ -2481,11 +2439,6 @@
     lp.y = ev.clientY;
     if (!dx && !dy) return;
     lp.moved = true;
-    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    lp.samples.push({ t: now, dx: dx, dy: dy });
-    while (lp.samples.length > 1 && (now - lp.samples[0].t) > 100) {
-      lp.samples.shift();
-    }
     lp.accX += dx;
     lp.accY += dy;
     var ix = lp.accX > 0 ? Math.floor(lp.accX) : Math.ceil(lp.accX);
@@ -2496,39 +2449,20 @@
     leafletPanByPx(ix, iy);
   }
 
-  function velocityFromSamples(samples) {
-    if (!samples || samples.length < 2) return { vx: 0, vy: 0 };
-    var first = samples[0];
-    var last = samples[samples.length - 1];
-    var dt = last.t - first.t;
-    if (!(dt > 8)) return { vx: 0, vy: 0 };
-    var sx = 0;
-    var sy = 0;
-    for (var i = 0; i < samples.length; i++) {
-      sx += samples[i].dx;
-      sy += samples[i].dy;
-    }
-    return { vx: sx / dt, vy: sy / dt };
-  }
-
   function onLivePointerUp(ev) {
     var lp = state._livePan;
     if (!lp) return;
     if (ev.pointerId != null && lp.pointerId !== ev.pointerId) return;
     var moved = !!lp.moved;
     var startToken = lp.startToken || cameraUrlToken();
-    var vel = velocityFromSamples(lp.samples);
     state._livePan = null;
-    if (moved) {
-      armLiveUrlCatchup(startToken, 'pan');
-      startLiveCoast(vel.vx, vel.vy);
-    }
+    if (moved) armLiveUrlCatchup(startToken, 'pan');
   }
 
   function onLiveWheel(ev) {
     if (!state.leafletMap || !state.config || !state.config.selfOverlay) return;
     if (isHudEventTarget(ev.target)) return;
-    stopLiveCoast();
+    clearCoastHold();
     if (!state._pendingLiveToken) {
       state._pendingLiveToken = cameraUrlToken();
       state._liveCatchupMode = 'wheel';
@@ -2561,7 +2495,7 @@
     state._liveHooked = false;
     state._livePan = null;
     state._pendingLiveToken = null;
-    stopLiveCoast();
+    clearCoastHold();
     window.removeEventListener('pointerdown', onLivePointerDown, true);
     window.removeEventListener('pointermove', onLivePointerMove, true);
     window.removeEventListener('pointerup', onLivePointerUp, true);
