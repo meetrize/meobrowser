@@ -14,7 +14,7 @@
 | 失活媒体 | pause + mute；**不**自动 play |
 | 快照 | pause 发现媒体 / mediaHeavy → 跳过 `takeSnapshot`；无媒体则异步 capture |
 | 切页 | 同步关键路径；非关键 `dispatch_async` |
-| 拖拽 | 10 pt + ≥150 ms |
+| 拖拽 | 6 pt + ≥60 ms；大位移直开拖；先影子后选中 |
 | 休眠 | mediaHeavy → 90 s；预算优先淘汰 |
 | Process pool | **不做** |
 | 设置 UI | 可选；默认开启行为即可 |
@@ -38,7 +38,7 @@
 
 ### 任务
 
-1. [x] `BrowserTabItemView`：`kReorderDragThreshold = 10`；自 mouseDown 起 `kReorderDragMinDuration = 0.15` 秒后才允许 `onReorderDragBegan`
+1. [x] `BrowserTabItemView`：`kReorderDragThreshold = 6`；自 mouseDown 起 `kReorderDragMinDuration = 0.06`；大位移保留计时；先 `onReorderDragBegan` 再 `onSelect`
 2. [x] `refreshTabsUI`：拆出同步关键 vs `dispatch_async` 延后块；延后块校验 selectedTab 代际（`refreshTabsUIGeneration` + `tabID`）
 3. [x] 延后：`reloadShortcuts`、overview reload、证书/错误同步、透明样式、overview 按钮外观
 4. [x] `make browser`

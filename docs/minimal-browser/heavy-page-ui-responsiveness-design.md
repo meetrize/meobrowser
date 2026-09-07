@@ -72,8 +72,8 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
   └─ 异步：overview、证书条、透明样式等 ← HP-0
 
 标签手势
-  ├─ 距离阈值 ↑（约 10pt）
-  └─ 按下后 ≥150ms 才允许进入 reorder ← HP-0
+  ├─ 距离阈值 6pt + ≥60ms；大位移直开拖
+  └─ 先影子跟手，选中延后 ← HP-0 / 跟手优化
 
 休眠
   └─ mediaHeavy：闲置约 90s 可 hibernate ← HP-2
@@ -130,12 +130,15 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 
 ### 4.4 标签拖拽门控（HP-0）
 
-| 项 | 旧值 | 新值 |
-|----|------|------|
-| 距离阈值 | 4 pt | **10 pt** |
-| 时间门控 | 无 | 自 `mouseDown` 起 **≥150 ms** 且超距离才进入 reorder |
+| 项 | 初版 HP-0 | 跟手优化后 |
+|----|-----------|------------|
+| 距离阈值 | 10 pt | **6 pt** |
+| 时间门控 | ≥150 ms | 自真实 `mouseDown` 起 **≥60 ms** 且超距离才进入 reorder |
+| 确认帧 | 连续 2 帧 | **1**（超阈值即 commit） |
+| 大位移 | 一律重定原点并重置计时 | 单帧 ≥48 pt：已按住 ≥60 ms → **直接开拖**；极短按住 → 只重定防抖起点，**保留** `mouseDownTime` |
+| 开拖顺序 | 先 `onSelect` 再影子 | **先** `onReorderDragBegan`（影子）再 `onSelect`（仍同步；tracking 下不可依赖 `dispatch_async`） |
 
-选中仍可在 `mouseDown` 触发（保持现交互），但 **reorder 不得在短按抖动下启动**。
+**reorder 不得在短按抖动下启动**；快速拖出时不得因「瞬移拒绝」再等一整轮门控。开拖时先创建影子再选中，减轻 `refreshTabsUI` 挡住首帧跟手。
 
 ### 4.5 媒体标签加速休眠（HP-2）
 
@@ -197,7 +200,7 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 | 切回直播需用户再点播放 | 产品接受；可日后加「恢复后台媒体」开关 |
 | pause JS 对自定义播放器无效 | 尽力而为；加速休眠兜底 |
 | 延后 chrome 导致短暂徽章错位 | 仅延后非关键；关键导航态同步 |
-| 时间门控影响快速拖拽排序 | 150ms 仍短；真拖拽通常更长按 |
+| 时间门控影响快速拖拽排序 | 60ms + 大位移直开拖；瞬移不重置计时 |
 | 保护 host 上的直播不休眠 | 仍 pause；只是不 90s 销毁 |
 
 ---
@@ -206,7 +209,7 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 
 - [ ] 开直播页 → 切到其它标签：CPU/GPU 明显下降；切标签体感接近普通页
 - [ ] 主线程繁忙时单击标签：稳定选中，**不**误进排序拖影
-- [ ] 真拖拽排序仍可用（按住移动 >10pt 且 >150ms）
+- [ ] 真拖拽排序仍可用（按住移动 >6pt 且 >60ms）；快速拖出影子即时跟手
 - [ ] mediaHeavy 标签失活约 90s 后可进入休眠（非保护、非 resists）
 - [ ] 切回休眠标签：正常恢复 URL；**不**自动播放
 - [ ] `make browser` 通过

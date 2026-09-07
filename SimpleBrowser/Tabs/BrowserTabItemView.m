@@ -33,13 +33,15 @@ static const CGFloat kCloseTrailingPad = 6.0;
 static const CGFloat kCloseTitleGap = 4.0;
 static const CGFloat kTitleTrailingPad = 8.0;
 static const CGFloat kPinAfterFaviconGap = 4.0;
-/// 提高阈值 + 时间门控，避免主线程卡顿时微抖把单击判成拖拽。
-static const CGFloat kReorderDragThreshold = 10.0;
-static const NSTimeInterval kReorderDragMinDuration = 0.15;
-/// 单帧位移过大视为卡顿后的「瞬移」队列事件，重定起点而非开拖。
+/// 距离 + 时间门控：防卡顿微抖误拖，同时兼顾拖出跟手。
+static const CGFloat kReorderDragThreshold = 6.0;
+static const NSTimeInterval kReorderDragMinDuration = 0.06;
+/// 单帧位移过大：极短按住时视为卡顿「瞬移」；已按住够久则直接开拖。
 static const CGFloat kReorderDragTeleportReject = 48.0;
-/// 需连续多帧超阈值才 commit，吸收主线程恢复后的突发 dragged。
-static const NSInteger kReorderDragConfirmSamples = 2;
+/// 仅当 held 低于此值且单帧大跳时重定防抖起点（不抹掉原始 mouseDown 时间）。
+static const NSTimeInterval kReorderDragTeleportResetMaxHeld = 0.06;
+/// 超阈值即 commit（1 = 无需额外确认帧）。
+static const NSInteger kReorderDragConfirmSamples = 1;
 static const CGFloat kPinIconSize = 12.0;
 static const NSTimeInterval kTabHoverTipDelay = 0.65;
 
@@ -825,29 +827,43 @@ NSColor *BrowserTabActiveFillColor(void) {
             CGFloat deltaY = next.locationInWindow.y - start.y;
             CGFloat distance = hypot(deltaX, deltaY);
             if (!dragging) {
+                // 时间门控相对真实 mouseDown，瞬移重置不得抹掉。
                 NSTimeInterval held = next.timestamp - mouseDownTime;
+                BOOL shouldCommit = NO;
                 if (distance >= kReorderDragTeleportReject) {
-                    // 卡顿恢复后队列里的瞬移：重定原点，不累计确认帧。
-                    start = next.locationInWindow;
-                    mouseDownTime = next.timestamp;
+                    if (held >= kReorderDragMinDuration) {
+                        // 已按住够久后的大位移：有意快甩（拖出），直接开拖。
+                        shouldCommit = YES;
+                    } else if (held < kReorderDragTeleportResetMaxHeld) {
+                        // 极短按住下的孤立大跳：只重定防抖起点，保留 mouseDownTime。
+                        // 之后用原始按住时长 + 新起点距离继续判定，避免再等一整轮门控。
+                        start = next.locationInWindow;
+                        confirmSamples = 0;
+                        continue;
+                    } else {
+                        shouldCommit = YES;
+                    }
+                } else if (distance >= kReorderDragThreshold && held >= kReorderDragMinDuration) {
+                    confirmSamples += 1;
+                    if (confirmSamples >= kReorderDragConfirmSamples) {
+                        shouldCommit = YES;
+                    } else {
+                        continue;
+                    }
+                } else {
                     confirmSamples = 0;
                     continue;
                 }
-                if (distance < kReorderDragThreshold || held < kReorderDragMinDuration) {
-                    confirmSamples = 0;
-                    continue;
-                }
-                confirmSamples += 1;
-                if (confirmSamples < kReorderDragConfirmSamples) {
-                    continue;
-                }
-                dragging = YES;
-                // 真正开拖后再选中，避免选中阻塞干扰手势判别。
-                if (self.onSelect) {
-                    self.onSelect();
-                }
-                if (self.onReorderDragBegan) {
-                    self.onReorderDragBegan(next.locationInWindow);
+                if (shouldCommit) {
+                    dragging = YES;
+                    // 先出影子跟手，再选中：避免 select→refreshTabsUI 挡住 ghost 首帧。
+                    // 不用 dispatch_async：tracking 模式下 main queue 常要到松手才跑。
+                    if (self.onReorderDragBegan) {
+                        self.onReorderDragBegan(next.locationInWindow);
+                    }
+                    if (self.onSelect) {
+                        self.onSelect();
+                    }
                 }
             }
             if (self.onReorderDragMoved) {
