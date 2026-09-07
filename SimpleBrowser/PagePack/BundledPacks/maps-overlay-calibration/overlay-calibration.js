@@ -1,7 +1,7 @@
 /**
  * MeoBrowser — 地图/地球叠加校准（共享脚本；由 pack-identity.js 区分 Pack）
- * Maps Pack 1.3.7 · Earth Pack 1.0.17
- * 东/北偏移按 0.5° 格子写入 localStorage；修复 schema v2 无法加载导致「记不住」。
+ * Maps Pack 1.3.8 · Earth Pack 1.0.18
+ * Earth：刷新后若已勾选自建层则自动重建并重试（等 body/代理/画布尺寸）。
  */
 (function () {
   'use strict';
@@ -26,7 +26,7 @@
   var PACK_ID = PACK_META.id || (EFFECTIVE_SITE === 'earth'
     ? 'earth-overlay-calibration'
     : 'maps-overlay-calibration');
-  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.17' : '1.3.7');
+  var PACK_VERSION = PACK_META.version || (EFFECTIVE_SITE === 'earth' ? '1.0.18' : '1.3.8');
 
   // Earth 独立配置键：避免 Maps 的 selfOverlay=true 拖垮地球页；偏移格子可从 Maps 导入
   var STORAGE_KEY = EFFECTIVE_SITE === 'earth'
@@ -1280,6 +1280,110 @@
     }
   }
 
+  function bindLeafletGlobals() {
+    if (typeof L !== 'undefined') return true;
+    try {
+      if (typeof window !== 'undefined' && window.leaflet) {
+        window.L = window.leaflet;
+      }
+    } catch (e0) {}
+    return typeof L !== 'undefined';
+  }
+
+  function leafletMapLooksAlive() {
+    if (!state.leafletMap || !state.config || !state.config.selfOverlay) return false;
+    var host = document.getElementById(HOST_ID);
+    if (!host || !host.parentNode) return false;
+    if (host.classList.contains('meo-ma-hidden')) return false;
+    try {
+      var sz = state.leafletMap.getSize();
+      if (!sz || sz.x < 40 || sz.y < 40) return false;
+    } catch (e0) {
+      return false;
+    }
+    try {
+      var hr = host.getBoundingClientRect();
+      if (hr.width < 40 || hr.height < 40) return false;
+    } catch (e1) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 保证「自建叠加层」勾选时层真正存在可见。
+   * Earth 刷新后常出现：配置已是 true、勾选也在，但首次创建过早失败且不再重试。
+   */
+  function ensureSelfOverlayAlive(reason) {
+    if (!state.config || !state.config.selfOverlay) return false;
+    if (!isSupportedMapSite()) return false;
+    if (!bindLeafletGlobals()) return false;
+    if (!document.body) return false;
+
+    var earth = isEarthSite();
+    var hostMissing = !document.getElementById(HOST_ID);
+
+    if (!state.leafletMap || hostMissing) {
+      try {
+        var ok = !!createLeafletOverlay();
+        if (earth && ok && !hasMeoTileProxy()) {
+          state._earthWaitingProxy = true;
+        }
+        return ok;
+      } catch (e0) {
+        try { console.warn('[MeoMapAlign] ensure create failed', reason, e0); } catch (e1) {}
+        state.leafletMap = null;
+        state.overlayReady = false;
+        return false;
+      }
+    }
+
+    // 代理晚于首屏注入：用代理重建瓦片层
+    if (earth && state._earthWaitingProxy && hasMeoTileProxy()) {
+      state._earthWaitingProxy = false;
+      try {
+        setTileStyle(state.config.tileStyle || 'googleRoads');
+        layoutEarthOverlayHost();
+        state.leafletMap.invalidateSize(false);
+        state.lastViewKey = '';
+        syncOverlayFromGoogle(true);
+        forceOverlayPassThrough();
+        updateHostVisibility();
+      } catch (e2) {}
+      return leafletMapLooksAlive();
+    }
+
+    if (!leafletMapLooksAlive()) {
+      try {
+        if (earth) layoutEarthOverlayHost();
+        state.leafletMap.invalidateSize({ pan: false, debounceMoveEnd: false });
+        state.lastViewKey = '';
+        syncOverlayFromGoogle(true);
+        updateHostVisibility();
+        forceOverlayPassThrough();
+      } catch (e3) {}
+      if (!leafletMapLooksAlive()) {
+        var now = Date.now();
+        if (state._lastOverlayRebuildAt && (now - state._lastOverlayRebuildAt) < 1600) {
+          return false;
+        }
+        state._lastOverlayRebuildAt = now;
+        try {
+          if (state.leafletMap) state.leafletMap.remove();
+        } catch (e4) {}
+        state.leafletMap = null;
+        state.tileLayer = null;
+        state.overlayReady = false;
+        try {
+          return !!createLeafletOverlay();
+        } catch (e5) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   /** Earth：经原生 NSURLSession 拉瓦片 → data URL，绕过页内 CSP；尺寸固定 256 防错位 */
   function createMeoTileLayer(urlTemplate, opts) {
     if (!isEarthSite() || !hasMeoTileProxy() || typeof L === 'undefined') {
@@ -1425,18 +1529,23 @@
     updateStatusUI();
     if (earth) {
       var bump = function () {
+        try { ensureSelfOverlayAlive('earth-bump'); } catch (eB) {}
         _vpCache = null;
         layoutEarthOverlayHost();
         try { if (state.leafletMap) state.leafletMap.invalidateSize(false); } catch (e2) {}
         state.lastViewKey = '';
         syncOverlayFromGoogle(true);
         forceOverlayPassThrough();
+        updateHostVisibility();
         updateStatusUI();
       };
       setTimeout(bump, 50);
-      setTimeout(bump, 400);
+      setTimeout(bump, 300);
+      setTimeout(bump, 800);
+      setTimeout(bump, 1600);
       setTimeout(function () {
         installEarthLayoutWatchers();
+        try { ensureSelfOverlayAlive('earth-watch'); } catch (eW) {}
         refreshEarthLayoutIfNeeded(true);
       }, 600);
     }
@@ -2235,6 +2344,10 @@
     if (!document.getElementById(ROOT_ID)) ensureHUD();
     if (state._livePan) return;
     if (state._pendingLiveToken && cameraUrlToken() === state._pendingLiveToken) return;
+    // 勾选了自建层但刷新后层丢失 → 巡检重建
+    if (state.config && state.config.selfOverlay) {
+      try { ensureSelfOverlayAlive('nav'); } catch (eAlive) {}
+    }
     var view = readMapView();
     var cid = cellIdFor(view.lat, view.lng);
     if (cid !== state.cellId) loadRegionForView();
@@ -2258,6 +2371,9 @@
     state.pollTimer = window.setInterval(function () {
       if (document.visibilityState === 'hidden') return;
       if (state._livePan) return;
+      if (state.config && state.config.selfOverlay) {
+        try { ensureSelfOverlayAlive('poll'); } catch (eA) {}
+      }
       if (isEarthSite() && state.config && state.config.selfOverlay) {
         try { refreshEarthLayoutIfNeeded(false); } catch (e0) {}
       }
@@ -2354,25 +2470,36 @@
     var tries = 0;
     function tryOverlay() {
       tries++;
-      if (typeof L === 'undefined' && typeof window !== 'undefined' && window.leaflet) {
-        try { window.L = window.leaflet; } catch (e) {}
+      var alive = false;
+      try {
+        alive = ensureSelfOverlayAlive('boot-' + tries);
+      } catch (eBoot) {
+        alive = false;
       }
-      if (typeof L !== 'undefined') {
-        if (state.config.selfOverlay) createLeafletOverlay();
+      if (alive && leafletMapLooksAlive()) {
+        updateStatusUI();
         return;
       }
-      if (tries < 40) {
-        setTimeout(tryOverlay, 250);
-      } else {
+      // Earth SPA / 代理就绪较慢：多试一会儿
+      var maxTries = isEarthSite() ? 80 : 40;
+      if (tries < maxTries) {
+        setTimeout(tryOverlay, isEarthSite() ? 250 : 250);
+      } else if (state.config.selfOverlay && !state.leafletMap) {
         state.lastDiag = {
           mode: 'no-leaflet',
-          note: 'Leaflet 未挂到 window.L（若仍失败请重启并确认 Pack ' + PACK_VERSION + '）'
+          note: 'Leaflet/叠加层未能自动启动（Pack ' + PACK_VERSION + '）。请取消再勾选「自建叠加层」。'
         };
         updateStatusUI();
-        try { console.warn('[MeoMapAlign] Leaflet missing', typeof define, typeof module); } catch (e) {}
+        try { console.warn('[MeoMapAlign] overlay not alive after retries', detectSite()); } catch (e) {}
       }
     }
     tryOverlay();
+    // Earth：body 晚到时再补一次
+    if (isEarthSite() && state.config.selfOverlay) {
+      setTimeout(function () { try { ensureSelfOverlayAlive('boot-defer'); } catch (eD) {} }, 500);
+      setTimeout(function () { try { ensureSelfOverlayAlive('boot-defer2'); } catch (eD2) {} }, 1500);
+      setTimeout(function () { try { ensureSelfOverlayAlive('boot-defer3'); } catch (eD3) {} }, 3000);
+    }
 
     window.addEventListener('keydown', onKeydown, true);
     window.addEventListener('popstate', onMaybeNavigate);

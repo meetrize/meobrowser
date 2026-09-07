@@ -66,12 +66,14 @@
 
 | Pack id | 站点 | 版本线 |
 |---------|------|--------|
-| `maps-overlay-calibration` | Google Maps | **1.3.7**（localStorage 地区记忆；跟飞） |
-| `earth-overlay-calibration` | Google Earth Web | **1.0.17**（独立 localStorage；跟飞） |
+| `maps-overlay-calibration` | Google Maps | **1.3.8** |
+| `earth-overlay-calibration` | Google Earth Web | **1.0.18**（刷新后自动恢复自建层） |
 
 共享：同一套 `overlay-calibration.js`（`pack-identity.js` 区分）；偏移配置键分离（Earth=`meo.earthOverlayCalibration.v1`）。  
 隔离：各自 manifest / 启停 / Seed 安装。
 
+> 2026-09-07：**1.0.18** 刷新后勾选「自建叠加层」但看不见层：启动只创建一次且过早失败；增加 `ensureSelfOverlayAlive` 重试/巡检，代理就绪后重建瓦片。
+>
 > 2026-09-07：**1.0.17 / Maps 1.3.7** 修复偏移「记不住」：保存 schemaVersion=2 但加载只认 1，导致每次丢弃 regions；现接受 v1/v2。存储仍为页内 `localStorage`（Maps / Earth 分键）。
 >
 > 2026-09-07：**1.0.16 / Maps 1.3.6** 松手回弹：pointer `panBy` 与 URL 相机有亚像素差，`setView` 精校准会拽回；平移 catchup 改为静默记键不移动；`movementX`+小数累积改善跟手。
