@@ -34,7 +34,8 @@ MOC-3 / MOC-4 为体验增强，可另开迭代。
 | **MOC-2** | 种子安装与打磨 | **完成（代码）** | SeedInstaller、Bundle 拷贝、分层/诊断 |
 | **MOC-3** | Chrome 入口与导入导出 | 可选 | 工具栏/菜单、JSON 备份、点选图层 |
 | **MOC-4** | 原生桥 / Catalog | 可选 | ScriptMessage、远程更新种子 |
-| **MOC-5** | **自建透明路网叠加层** | **进行中（1.2.0）** | Leaflet 叠加 + 相机同步 + 仅偏移自建层 |
+| **MOC-5** | **自建透明路网叠加层** | **进行中（1.2.x）** | Leaflet 叠加 + 相机同步 + 仅偏移自建层 |
+| **MOC-E** | **Google Earth Web 扩展** | **拆成独立 Pack 1.0.0** | `earth-overlay-calibration`；Maps 1.3.1 不再匹配 Earth |
 
 ---
 

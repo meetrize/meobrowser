@@ -116,6 +116,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/PagePack/PagePackInjector.m \
                    $(BROWSER_SRC_DIR)/PagePack/PagePackSidebarController.m \
                    $(BROWSER_SRC_DIR)/PagePack/PagePackSeedInstaller.m \
+                   $(BROWSER_SRC_DIR)/PagePack/MeoMapAlignTileBridge.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarView.m \
@@ -345,10 +346,13 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json \
 		$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.css \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.css \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/manifest.json \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/pack-identity.js \
 		| $(BUILD_DIR)
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS $(BROWSER_RES_DIR)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
@@ -365,10 +369,18 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py" "$(BROWSER_RES_DIR)/CaptchaAssist/helpers/captcha_helper.py"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/pack-identity.js"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/overlay-calibration.js"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.css" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/overlay-calibration.css"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/leaflet.js"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.css" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/leaflet.css"
+	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/manifest.json"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/pack-identity.js" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/pack-identity.js"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/overlay-calibration.js"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.css" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/overlay-calibration.css"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.js" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/leaflet.js"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.css" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/leaflet.css"
 	@touch "$@"
 
 $(BROWSER_BINARY): $(BROWSER_OBJECTS) $(BROWSER_RES_STAMP) $(BROWSER_ENTITLEMENTS) Makefile

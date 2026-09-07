@@ -1,7 +1,7 @@
 # 地图叠加校准（Maps Overlay Calibration）— 设计方案
 
 > 目标：在 MeoBrowser 中为 **Google Maps（及同类 Web 地图）** 提供「卫星底图 ↔ 路网 / POI / 标注」**手动视觉对齐**能力：用户可按方向与距离偏移矢量叠加层，使标注落回正确位置。  
-> 状态：**设计定稿 + 机制结论修订** · 2026-09-04  
+> 状态：**设计定稿 + 机制结论修订** · 2026-09-04（Earth 扩展见 [maps-overlay-calibration-earth-design.md](maps-overlay-calibration-earth-design.md)）  
 > 开发计划：[maps-overlay-calibration-development-plan.md](maps-overlay-calibration-development-plan.md)  
 > 关联：[page-pack-design.md](page-pack-design.md) · [page-pack-development-plan.md](page-pack-development-plan.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [anti-bot-session-design.md](anti-bot-session-design.md) · [design.md](design.md)
 

@@ -11,6 +11,12 @@
   background: transparent !important;
 }
 
+/* 覆盖 leaflet.css 里 .leaflet-pane { pointer-events: auto }，否则会抢走地图拖拽 */
+#meo-mapalign-leaflet-host,
+#meo-mapalign-leaflet-host * {
+  pointer-events: none !important;
+}
+
 #meo-mapalign-leaflet-host.meo-ma-hidden {
   display: none !important;
 }
@@ -40,11 +46,76 @@
   display: none !important;
 }
 
+/* 宿主页常有 img{max-width:100%} 等全局规则，会把瓦片拉变形 → 路网「断裂/混乱」 */
+#meo-mapalign-leaflet-host img.leaflet-tile,
+#meo-mapalign-leaflet-host .leaflet-tile {
+  max-width: none !important;
+  max-height: none !important;
+  width: 256px !important;
+  height: 256px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  box-sizing: border-box !important;
+}
+
+/* Earth：禁止 height:auto（会缩成上半屏）；JS 再用像素强制覆盖 */
+#meo-mapalign-leaflet-host.meo-ma-earth {
+  inset: auto !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 100vw !important;
+  min-height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+#meo-mapalign-leaflet-host.meo-ma-earth #meo-mapalign-leaflet-shift,
+#meo-mapalign-leaflet-host.meo-ma-earth #meo-mapalign-leaflet,
+#meo-mapalign-leaflet-host.meo-ma-earth .leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 100% !important;
+  min-height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/* Earth：瓦片用 left/top 邻接（createLeafletOverlay 已关 L.Browser.any3d） */
+#meo-mapalign-leaflet-host.meo-ma-earth .leaflet-tile-container {
+  position: absolute !important;
+}
+#meo-mapalign-leaflet-host.meo-ma-earth .leaflet-tile,
+#meo-mapalign-leaflet-host.meo-ma-earth img.leaflet-tile {
+  position: absolute !important;
+  max-width: none !important;
+  max-height: none !important;
+  width: 256px !important;
+  height: 256px !important;
+  object-fit: fill !important;
+  image-rendering: auto;
+}
+
+#meo-mapalign-root .meo-ma-earth-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+#meo-mapalign-root .meo-ma-earth-zoom[hidden] {
+  display: none !important;
+}
+
 #meo-mapalign-root {
   position: fixed !important;
-  inset: 0 !important;
-  width: auto !important;
-  height: auto !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
@@ -150,6 +221,14 @@
 }
 
 #meo-mapalign-root .meo-ma-status { margin-bottom: 8px; font-size: 11px; }
+#meo-mapalign-root .meo-ma-banner {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 204, 0, 0.18);
+  font-size: 11px;
+  line-height: 1.35;
+}
 #meo-mapalign-root .meo-ma-muted { color: #6e6e73; }
 #meo-mapalign-root .meo-ma-warn { color: #9a6700; }
 #meo-mapalign-root .meo-ma-error { color: #d70015; }

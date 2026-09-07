@@ -81,6 +81,7 @@
 #import "PhoneNotificationPresenter.h"
 #import "BrowserUserAgent.h"
 #import "BrowserGeolocationBridge.h"
+#import "MeoMapAlignTileBridge.h"
 #import <Security/Security.h>
 #import <dlfcn.h>
 
@@ -510,6 +511,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
     [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
     [BrowserGeolocationBridge installOnConfiguration:configuration];
+    [MeoMapAlignTileBridge installOnConfiguration:configuration];
     [self.loginAssistController configureWebViewConfiguration:configuration];
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];

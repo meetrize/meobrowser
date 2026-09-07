@@ -2,7 +2,12 @@
 #import "PagePackModels.h"
 #import "PagePackStore.h"
 
-static NSString * const kMapsOverlaySeedName = @"maps-overlay-calibration";
+static NSArray<NSString *> *MeoBundledSeedFolderNames(void) {
+    return @[
+        @"maps-overlay-calibration",
+        @"earth-overlay-calibration",
+    ];
+}
 
 @implementation PagePackSeedInstaller
 
@@ -33,10 +38,12 @@ static NSString * const kMapsOverlaySeedName = @"maps-overlay-calibration";
 }
 
 + (void)installBundledSeedsIfNeeded {
-    NSError *error = nil;
-    if (![self installSeedNamed:kMapsOverlaySeedName force:NO error:&error]) {
-        if (error) {
-            NSLog(@"[PagePackSeed] install %@ failed: %@", kMapsOverlaySeedName, error);
+    for (NSString *name in MeoBundledSeedFolderNames()) {
+        NSError *error = nil;
+        if (![self installSeedNamed:name force:NO error:&error]) {
+            if (error) {
+                NSLog(@"[PagePackSeed] install %@ failed: %@", name, error);
+            }
         }
     }
 }

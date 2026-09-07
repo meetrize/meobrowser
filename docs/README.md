@@ -74,7 +74,8 @@
 | [minimal-browser/page-pack-design.md](minimal-browser/page-pack-design.md) | 页面插件（Page Pack）— Stylish + User JS 合一方案 |
 | [minimal-browser/page-pack-development-plan.md](minimal-browser/page-pack-development-plan.md) | 页面插件 — 分阶段开发计划（PP-0～PP-MVP） |
 | [minimal-browser/maps-overlay-calibration-design.md](minimal-browser/maps-overlay-calibration-design.md) | 地图叠加校准 — Google Maps 路网/POI 相对卫星图手动对齐 |
-| [minimal-browser/maps-overlay-calibration-development-plan.md](minimal-browser/maps-overlay-calibration-development-plan.md) | 地图叠加校准 — 分阶段开发计划（MOC-0～MOC-4） |
+| [minimal-browser/maps-overlay-calibration-development-plan.md](minimal-browser/maps-overlay-calibration-development-plan.md) | 地图叠加校准 — 分阶段开发计划（MOC-0～MOC-5） |
+| [minimal-browser/maps-overlay-calibration-earth-design.md](minimal-browser/maps-overlay-calibration-earth-design.md) | 地图叠加校准 — Google Earth Web 扩展方案与 MOC-E 开发计划 |
 | [sbkit/text-input.md](sbkit/text-input.md) | SBKit 文本输入与编辑快捷键架构 |
 
 ## 构建命令
