@@ -86,6 +86,7 @@
 #import <dlfcn.h>
 
 static void *kBrowserEstimatedProgressContext = &kBrowserEstimatedProgressContext;
+static void *kBrowserWebViewURLContext = &kBrowserWebViewURLContext;
 static void *kBrowserFullscreenStateContext = &kBrowserFullscreenStateContext;
 
 /// WebKit 跨站导航 process-swap 可能导致 popup 的 window.opener 变 null（Google OAuth 常见）。
@@ -3651,6 +3652,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                         context:kBrowserEstimatedProgressContext];
     } @catch (__unused NSException *exception) {
     }
+    @try {
+        [webView removeObserver:self
+                     forKeyPath:@"URL"
+                        context:kBrowserWebViewURLContext];
+    } @catch (__unused NSException *exception) {
+    }
     self.observedProgressWebView = nil;
 }
 
@@ -3820,6 +3827,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
               forKeyPath:@"estimatedProgress"
                  options:NSKeyValueObservingOptionNew | NSKeyValueObservingOptionInitial
                  context:kBrowserEstimatedProgressContext];
+    // FastAdmin / SPA：ref=addtabs 会先落到 index/index，再 pushState 回 ThinkPHP PATHINFO；
+    // didCommit/didFinish 不会再次触发，须听 URL KVO 才能把地址栏同步回原格式。
+    [webView addObserver:self
+              forKeyPath:@"URL"
+                 options:NSKeyValueObservingOptionNew
+                 context:kBrowserWebViewURLContext];
 }
 
 - (void)syncLoadingProgressUI {
@@ -3848,6 +3861,37 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.loadingProgressView resetHidden];
 }
 
+- (void)noteWebViewURLDidChange:(WKWebView *)webView {
+    if (webView == nil) {
+        return;
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (!tab || tab.isNewTabPage) {
+        return;
+    }
+
+    NSURL *publicURL = [BrowserFeedReader publicURLForInternalURL:webView.URL];
+    publicURL = [BrowserWebView publicURLFromInternalURL:publicURL] ?: publicURL;
+    if (tab.addressBarDraft == nil && [BrowsingPreferences isPersistableURL:publicURL]) {
+        // 与 live URL 一致时跳过，避免 commit 路径与 KVO 重复写 restorable。
+        if (![tab.restorableURL.absoluteString isEqualToString:publicURL.absoluteString]) {
+            tab.restorableURL = publicURL;
+            [self schedulePersistTabSession];
+        }
+    }
+
+    if (webView != self.webView) {
+        return;
+    }
+    if (tab.addressBarDraft == nil && !self.addressFieldIsEditing) {
+        [self applyAddressBarStringForTab:tab];
+    }
+    self.backButton.enabled = webView.canGoBack;
+    self.forwardButton.enabled = webView.canGoForward;
+    [self updateBookmarkButtonState];
+    [self.loginAssistController updateForURL:webView.URL];
+}
+
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
@@ -3855,6 +3899,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (context == kBrowserFullscreenStateContext) {
         if ([keyPath isEqualToString:@"fullscreenState"] && [object isKindOfClass:[WKWebView class]]) {
             [self handleWebViewFullscreenStateChange:(WKWebView *)object];
+        }
+        return;
+    }
+    if (context == kBrowserWebViewURLContext) {
+        if ([keyPath isEqualToString:@"URL"] && [object isKindOfClass:[WKWebView class]]) {
+            [self noteWebViewURLDidChange:(WKWebView *)object];
         }
         return;
     }
