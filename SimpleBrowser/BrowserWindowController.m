@@ -26,7 +26,7 @@
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
-#import "BrowserBackgroundMediaController.h"
+#import "BrowserTabAudioController.h"
 #import "BrowserLaunchpadView.h"
 #import "BrowserShortcutStore.h"
 #import "BrowserShortcutItem.h"
@@ -235,6 +235,8 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
 @property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
 @property (nonatomic, strong) BrowserFindBarController *findBarController;
 @property (nonatomic, strong) BrowserTabOverviewController *tabOverviewController;
+@property (nonatomic, strong) BrowserTabAudioController *tabAudioController;
+@property (nonatomic, strong, nullable) dispatch_block_t pendingAudibleStripUpdateBlock;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingPersistBlock;
 @property (nonatomic, assign) NSInteger trafficLightScheduleGeneration;
 /// 全屏顶栏可见时持续校正红绿灯（窗口模式不用）。
@@ -436,6 +438,11 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
+        _tabAudioController = [[BrowserTabAudioController alloc] init];
+        __weak typeof(self) weakSelfForAudio = self;
+        _tabAudioController.audibleStateDidChangeHandler = ^{
+            [weakSelfForAudio scheduleAudibleTabStripUpdate];
+        };
         _transparentModeController = [[BrowserTransparentModeController alloc] init];
         _transparentModeController.windowController = self;
         _transparentChromeAutoHideController = [[BrowserTransparentChromeAutoHideController alloc] init];
@@ -487,6 +494,7 @@ static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
         _webViewsWithHTTPAuthPrompt = [NSHashTable weakObjectsHashTable];
         [self setupUI];
         [self installReloadKeyMonitor];
+        [self startTabAudioMonitoring];
         if (loadTabs) {
             [self applySessionDictionary:session];
         }
@@ -855,6 +863,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (notification.object != self.window) {
         return;
     }
+    [self.tabAudioController stopMonitoring];
+    if (self.pendingAudibleStripUpdateBlock) {
+        dispatch_block_cancel(self.pendingAudibleStripUpdateBlock);
+        self.pendingAudibleStripUpdateBlock = nil;
+    }
     [self.afkModeController forceDisableAndReveal];
     [self.transparentChromeAutoHideController forceDisableAndReveal];
     self.autoScrollController.enabled = NO;
@@ -891,6 +904,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)dealloc {
+    [self.tabAudioController stopMonitoring];
+    if (self.pendingAudibleStripUpdateBlock) {
+        dispatch_block_cancel(self.pendingAudibleStripUpdateBlock);
+        self.pendingAudibleStripUpdateBlock = nil;
+    }
     [self uninstallReloadKeyMonitor];
     [self cancelAllPendingSSLAuthWithDisposition:NSURLSessionAuthChallengeCancelAuthenticationChallenge];
     if (self.pendingPersistBlock) {
@@ -3369,6 +3387,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     };
     // 挂上时立刻拉一次，避免错过 Initial KVO 之前的 title。
     [tab pullDocumentTitleFromWebView];
+    [self.tabAudioController applyMuteStateForTab:tab];
 
     // Element Fullscreen 时 WebKit 已把 WKWebView 挪到自有全屏窗口。
     // 若此处再 addSubview 回 contentContainer，会拆掉全屏层级 → 全屏区黑屏
@@ -3465,7 +3484,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSUUID *selectedIDAtStart = selectedTab.tabID;
 
     // 仅挂载当前标签的 WebView；其余离屏但仍可常驻（休眠由 TabController 销毁）。
-    // 重页：先 pause 媒体；确认无媒体后再异步 takeSnapshot（不堵切页关键路径）。
+    // 策略 A：失活不再 pause；出声/媒体标签标 mediaHeavy 并跳过昂贵快照。
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
@@ -3473,37 +3492,36 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         WKWebView *wv = tab.webView;
         BOOL wasAttached = (wv != nil && wv.superview == self.contentContainer && !tab.isNewTabPage);
         if (wasAttached && wv != nil) {
-            __weak typeof(self) weakSelf = self;
-            __weak BrowserTab *weakTab = tab;
-            __weak WKWebView *weakWebView = wv;
-            NSUUID *tabID = tab.tabID;
-            BOOL alreadyHeavy = tab.mediaHeavy;
-            [BrowserBackgroundMediaController pauseMediaInWebView:wv
-                                                       completion:^(BOOL foundMedia) {
-                                                           typeof(self) strongSelf = weakSelf;
-                                                           BrowserTab *strongTab = weakTab;
-                                                           WKWebView *strongWebView = weakWebView;
-                                                           if (!strongSelf || !strongTab) {
-                                                               return;
-                                                           }
-                                                           if (foundMedia) {
-                                                               strongTab.mediaHeavy = YES;
-                                                               return;
-                                                           }
-                                                           if (alreadyHeavy || strongTab.mediaHeavy) {
-                                                               return;
-                                                           }
-                                                           if (strongTab == strongSelf.tabController.selectedTab) {
-                                                               return;
-                                                           }
-                                                           if (strongWebView == nil || strongWebView != strongTab.webView) {
-                                                               return;
-                                                           }
-                                                           [strongSelf.tabOverviewController.thumbnailCache
-                                                               captureFromWebView:strongWebView
-                                                                          forTabID:tabID
-                                                                        completion:nil];
-                                                       }];
+            if (tab.isAudible) {
+                tab.mediaHeavy = YES;
+            }
+            if (!(tab.mediaHeavy || tab.isAudible)) {
+                __weak typeof(self) weakSelf = self;
+                __weak BrowserTab *weakTab = tab;
+                __weak WKWebView *weakWebView = wv;
+                NSUUID *tabID = tab.tabID;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    typeof(self) strongSelf = weakSelf;
+                    BrowserTab *strongTab = weakTab;
+                    WKWebView *strongWebView = weakWebView;
+                    if (!strongSelf || !strongTab || !strongWebView) {
+                        return;
+                    }
+                    if (strongTab == strongSelf.tabController.selectedTab) {
+                        return;
+                    }
+                    if (strongWebView != strongTab.webView) {
+                        return;
+                    }
+                    if (strongTab.mediaHeavy || strongTab.isAudible) {
+                        return;
+                    }
+                    [strongSelf.tabOverviewController.thumbnailCache
+                        captureFromWebView:strongWebView
+                                   forTabID:tabID
+                                 completion:nil];
+                });
+            }
         }
         [self detachWebViewIfNeeded:wv];
     }
@@ -3940,6 +3958,36 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                       selectedTabID:self.tabController.selectedTab.tabID];
 }
 
+- (void)startTabAudioMonitoring {
+    __weak typeof(self) weakSelf = self;
+    [self.tabAudioController startMonitoringWithTabProvider:^NSArray<BrowserTab *> * {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return @[];
+        }
+        return strongSelf.tabController.tabs ?: @[];
+    }];
+}
+
+- (void)scheduleAudibleTabStripUpdate {
+    if (self.pendingAudibleStripUpdateBlock) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.pendingAudibleStripUpdateBlock = nil;
+        [strongSelf updateTabStripDisplay];
+    });
+    self.pendingAudibleStripUpdateBlock = block;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   block);
+}
+
 - (void)persistTabSession {
     if (self.pendingPersistBlock) {
         dispatch_block_cancel(self.pendingPersistBlock);
@@ -4114,6 +4162,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     (void)stripView;
     BrowserTab *tab = [self tabForID:tabID];
     return tab.isPinned;
+}
+
+- (void)tabStripView:(id)stripView didToggleMuteForTabID:(NSUUID *)tabID {
+    (void)stripView;
+    BrowserTab *tab = [self tabForID:tabID];
+    if (tab == nil) {
+        return;
+    }
+    [self.tabAudioController toggleMuteForTab:tab];
+    [self updateTabStripDisplay];
 }
 
 - (void)tabStripView:(id)stripView
@@ -6358,6 +6416,7 @@ didBecomeDownload:(WKDownload *)download {
     }
     [self cancelPreCommitNavigationWatchdogForWebView:webView];
     [tab markNavigationSessionCommitted];
+    [self.tabAudioController clearUserMuteForTabAfterNavigation:tab];
 
     BrowserNavigationSession *session = tab.navigationSession;
     if (session) {

@@ -1078,6 +1078,8 @@ NSColor *BrowserTabStripFillColor(void) {
         row.titleText = title;
         row.pageURLString = itemView.pageURLString;
         row.checked = [tabID isEqual:self.selectedTabID];
+        row.showsAudioIndicator = itemView.showsAudioIndicator;
+        row.audioMuted = itemView.audioMuted;
 
         __weak typeof(self) weakSelf = self;
         NSUUID *capturedID = tabID;
@@ -1664,6 +1666,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     item.tabPinned = tab.isPinned;
     item.tabSelected = selected;
     item.tabToolTip = BrowserTabToolTipString(tab);
+    item.showsAudioIndicator = tab.isAudible || tab.isPageMutedByUser;
+    item.audioMuted = tab.isPageMutedByUser;
 
     __weak typeof(self) weakSelf = self;
     __weak BrowserTabItemView *weakItem = item;
@@ -1684,6 +1688,12 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
         if ([delegate respondsToSelector:@selector(tabStripView:didCloseTabsToTheRightOfTabID:)]) {
             [delegate tabStripView:weakSelf didCloseTabsToTheRightOfTabID:tabID];
+        }
+    };
+    item.onToggleMute = ^{
+        id<BrowserTabStripViewDelegate> delegate = weakSelf.delegate;
+        if ([delegate respondsToSelector:@selector(tabStripView:didToggleMuteForTabID:)]) {
+            [delegate tabStripView:weakSelf didToggleMuteForTabID:tabID];
         }
     };
     item.contextMenuProvider = ^{
@@ -1804,6 +1814,18 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     pinItem.target = self;
     pinItem.representedObject = tabID;
 
+    BrowserTabItemView *itemView = [self.tabItemsByID objectForKey:tabID];
+    BOOL muted = itemView.audioMuted;
+    BOOL showMute = itemView.showsAudioIndicator || muted;
+    if (showMute) {
+        NSString *muteTitle = muted ? @"取消静音" : @"静音标签页";
+        NSMenuItem *muteItem = [menu addItemWithTitle:muteTitle
+                                               action:@selector(contextToggleMuteTab:)
+                                        keyEquivalent:@""];
+        muteItem.target = self;
+        muteItem.representedObject = tabID;
+    }
+
     NSMenuItem *moveToWindow = [menu addItemWithTitle:@"将标签移到新窗口"
                                                action:@selector(contextMoveTabToNewWindow:)
                                         keyEquivalent:@""];
@@ -1857,6 +1879,17 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
     if ([delegate respondsToSelector:@selector(tabStripView:didSetPinned:forTabID:)]) {
         [delegate tabStripView:self didSetPinned:!pinned forTabID:tabID];
+    }
+}
+
+- (void)contextToggleMuteTab:(NSMenuItem *)sender {
+    NSUUID *tabID = sender.representedObject;
+    if (![tabID isKindOfClass:[NSUUID class]]) {
+        return;
+    }
+    id<BrowserTabStripViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabStripView:didToggleMuteForTabID:)]) {
+        [delegate tabStripView:self didToggleMuteForTabID:tabID];
     }
 }
 
@@ -2010,6 +2043,14 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         BOOL selected = [tab.tabID isEqual:selectedTabID];
         if (item.tabSelected != selected) {
             item.tabSelected = selected;
+        }
+
+        BOOL showAudio = tab.isAudible || tab.isPageMutedByUser;
+        if (item.showsAudioIndicator != showAudio) {
+            item.showsAudioIndicator = showAudio;
+        }
+        if (item.audioMuted != tab.isPageMutedByUser) {
+            item.audioMuted = tab.isPageMutedByUser;
         }
     }
 

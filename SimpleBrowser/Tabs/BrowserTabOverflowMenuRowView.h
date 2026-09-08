@@ -8,6 +8,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL checked;
 @property (nonatomic, copy) NSString *titleText;
 @property (nonatomic, copy, nullable) NSString *pageURLString;
+@property (nonatomic, assign) BOOL showsAudioIndicator;
+@property (nonatomic, assign) BOOL audioMuted;
 
 @property (nonatomic, copy, nullable) void (^onSelect)(void);
 

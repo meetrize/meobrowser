@@ -43,10 +43,19 @@ static const NSTimeInterval kReorderDragTeleportResetMaxHeld = 0.06;
 /// 超阈值即 commit（1 = 无需额外确认帧）。
 static const NSInteger kReorderDragConfirmSamples = 1;
 static const CGFloat kPinIconSize = 12.0;
+static const CGFloat kAudioButtonSize = 14.0;
+static const CGFloat kAudioBadgeSize = 10.0;
+static const CGFloat kAudioAfterFaviconGap = 2.0;
 static const NSTimeInterval kTabHoverTipDelay = 0.65;
 
 static const CGFloat kDefaultTabHeight = 31.0;
 static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
+
+@interface BrowserTabAudioButton : NSButton
+@end
+
+@implementation BrowserTabAudioButton
+@end
 
 /// 标题不参与命中，全部由标签本身接收拖拽
 @interface BrowserTabTitleLabel : NSTextField
@@ -313,6 +322,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 @interface BrowserTabItemView ()
 @property (nonatomic, strong) NSImageView *faviconImageView;
 @property (nonatomic, strong) BrowserTabFaviconLetterBadgeView *faviconLetterBadge;
+@property (nonatomic, strong) NSButton *audioButton;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSImageView *pinIconView;
 @property (nonatomic, strong) NSButton *closeButton;
@@ -321,7 +331,15 @@ NSColor *BrowserTabActiveFillColor(void) {
 @property (nonatomic, strong) NSLayoutConstraint *titleTrailingToEdge;
 @property (nonatomic, strong) NSLayoutConstraint *titleLeadingToFavicon;
 @property (nonatomic, strong) NSLayoutConstraint *titleLeadingToPin;
+@property (nonatomic, strong) NSLayoutConstraint *titleLeadingToAudio;
 @property (nonatomic, strong) NSLayoutConstraint *pinLeadingToFavicon;
+@property (nonatomic, strong) NSLayoutConstraint *pinLeadingToAudio;
+@property (nonatomic, strong) NSLayoutConstraint *audioLeadingToFavicon;
+@property (nonatomic, strong) NSLayoutConstraint *audioCenterY;
+@property (nonatomic, strong) NSLayoutConstraint *audioTrailingToFavicon;
+@property (nonatomic, strong) NSLayoutConstraint *audioBottomToFavicon;
+@property (nonatomic, strong) NSLayoutConstraint *audioWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *audioHeightConstraint;
 @property (nonatomic, copy, nullable) NSString *boundHost;
 @property (nonatomic, assign) NSUInteger faviconLoadToken;
 @property (nonatomic, assign) CGFloat appliedWidth;
@@ -371,6 +389,19 @@ NSColor *BrowserTabActiveFillColor(void) {
         _faviconLetterBadge.hidden = YES;
         [self addSubview:_faviconLetterBadge];
 
+        _audioButton = [[BrowserTabAudioButton alloc] initWithFrame:NSZeroRect];
+        _audioButton.translatesAutoresizingMaskIntoConstraints = NO;
+        _audioButton.bezelStyle = NSBezelStyleInline;
+        _audioButton.bordered = NO;
+        _audioButton.hidden = YES;
+        _audioButton.target = self;
+        _audioButton.action = @selector(onToggleMute:);
+        [_audioButton setContentHuggingPriority:NSLayoutPriorityRequired
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [_audioButton setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self addSubview:_audioButton];
+
         _titleLabel = [BrowserTabTitleLabel labelWithString:@"新标签页"];
         _titleLabel.font = [NSFont systemFontOfSize:12];
         _titleLabel.editable = NO;
@@ -416,12 +447,25 @@ NSColor *BrowserTabActiveFillColor(void) {
                                                                                      constant:-kCloseTitleGap];
         _titleTrailingToEdge = [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor
                                                                                     constant:-kTitleTrailingPad];
+        _audioLeadingToFavicon = [_audioButton.leadingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
+                                                                            constant:kAudioAfterFaviconGap];
+        _audioCenterY = [_audioButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
+        _audioTrailingToFavicon = [_audioButton.trailingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
+                                                                              constant:2.0];
+        _audioBottomToFavicon = [_audioButton.bottomAnchor constraintEqualToAnchor:_faviconImageView.bottomAnchor
+                                                                          constant:2.0];
+        _audioWidthConstraint = [_audioButton.widthAnchor constraintEqualToConstant:kAudioButtonSize];
+        _audioHeightConstraint = [_audioButton.heightAnchor constraintEqualToConstant:kAudioButtonSize];
         _pinLeadingToFavicon = [_pinIconView.leadingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
                                                                           constant:kPinAfterFaviconGap];
+        _pinLeadingToAudio = [_pinIconView.leadingAnchor constraintEqualToAnchor:_audioButton.trailingAnchor
+                                                                        constant:kPinAfterFaviconGap];
         _titleLeadingToFavicon = [_titleLabel.leadingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor
                                                                            constant:BrowserTabFaviconTitleGap];
         _titleLeadingToPin = [_titleLabel.leadingAnchor constraintEqualToAnchor:_pinIconView.trailingAnchor
                                                                        constant:kPinAfterFaviconGap];
+        _titleLeadingToAudio = [_titleLabel.leadingAnchor constraintEqualToAnchor:_audioButton.trailingAnchor
+                                                                         constant:BrowserTabFaviconTitleGap];
 
         [NSLayoutConstraint activateConstraints:@[
             [_closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kCloseTrailingPad],
@@ -440,6 +484,11 @@ NSColor *BrowserTabActiveFillColor(void) {
             [_faviconLetterBadge.topAnchor constraintEqualToAnchor:_faviconImageView.topAnchor],
             [_faviconLetterBadge.bottomAnchor constraintEqualToAnchor:_faviconImageView.bottomAnchor],
 
+            _audioWidthConstraint,
+            _audioHeightConstraint,
+            _audioLeadingToFavicon,
+            _audioCenterY,
+
             _pinLeadingToFavicon,
             [_pinIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
             [_pinIconView.widthAnchor constraintEqualToConstant:kPinIconSize],
@@ -450,6 +499,10 @@ NSColor *BrowserTabActiveFillColor(void) {
             _titleTrailingToClose,
         ]];
         _titleLeadingToPin.active = NO;
+        _titleLeadingToAudio.active = NO;
+        _pinLeadingToAudio.active = NO;
+        _audioTrailingToFavicon.active = NO;
+        _audioBottomToFavicon.active = NO;
 
         [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
                           forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -458,6 +511,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 
         [self updateChromeAppearance];
         [self updateFaviconAppearance];
+        [self updateAudioButtonAppearance];
         [self updateDisplayModeLayout];
         [self updateCloseButtonVisibility];
 
@@ -571,6 +625,53 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
 }
 
+- (void)setShowsAudioIndicator:(BOOL)showsAudioIndicator {
+    if (_showsAudioIndicator == showsAudioIndicator) {
+        return;
+    }
+    _showsAudioIndicator = showsAudioIndicator;
+    [self updateAudioButtonAppearance];
+    [self updateDisplayModeLayout];
+}
+
+- (void)setAudioMuted:(BOOL)audioMuted {
+    if (_audioMuted == audioMuted) {
+        return;
+    }
+    _audioMuted = audioMuted;
+    [self updateAudioButtonAppearance];
+}
+
+- (void)updateAudioButtonAppearance {
+    BOOL visible = self.showsAudioIndicator;
+    self.audioButton.hidden = !visible;
+    if (!visible) {
+        return;
+    }
+
+    if (@available(macOS 11.0, *)) {
+        CGFloat pointSize = (self.tabDisplayMode == BrowserTabDisplayModeMinimal) ? 9.0 : 11.0;
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:pointSize
+                                                            weight:NSFontWeightMedium
+                                                             scale:NSImageSymbolScaleMedium];
+        NSString *symbolName = self.audioMuted ? @"speaker.slash.fill" : @"speaker.wave.2.fill";
+        NSString *a11y = self.audioMuted ? @"取消静音" : @"静音此标签";
+        NSImage *symbol = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:a11y];
+        self.audioButton.image = symbol ? [symbol imageWithSymbolConfiguration:config] : nil;
+        self.audioButton.title = @"";
+        if (@available(macOS 10.14, *)) {
+            self.audioButton.contentTintColor = self.tabSelected ? [NSColor labelColor]
+                                                                : [NSColor secondaryLabelColor];
+        }
+    } else {
+        self.audioButton.image = nil;
+        self.audioButton.title = self.audioMuted ? @"🔇" : @"🔊";
+        self.audioButton.font = [NSFont systemFontOfSize:10];
+    }
+    self.audioButton.toolTip = self.audioMuted ? @"取消静音" : @"静音此标签";
+}
+
 - (void)applyAvailableWidth:(CGFloat)width {
     BrowserTabDisplayMode mode = BrowserTabDisplayModeForWidth(width, self.tabSelected);
     if (fabs(self.appliedWidth - width) < 0.5 && self.tabDisplayMode == mode) {
@@ -578,6 +679,7 @@ NSColor *BrowserTabActiveFillColor(void) {
     }
     self.appliedWidth = width;
     self.tabDisplayMode = mode;
+    [self updateAudioButtonAppearance];
     [self updateDisplayModeLayout];
     [self updateCloseButtonVisibility];
 }
@@ -588,14 +690,27 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (void)updateDisplayModeLayout {
     BOOL showTitle = self.tabDisplayMode != BrowserTabDisplayModeMinimal;
+    BOOL showAudio = self.showsAudioIndicator;
     BOOL showPin = [self showsPinIcon] && showTitle;
+    BOOL minimalBadge = showAudio && !showTitle;
 
     self.titleLabel.hidden = !showTitle;
     self.pinIconView.hidden = !showPin;
-    self.pinLeadingToFavicon.active = showPin;
 
-    self.titleLeadingToPin.active = showPin;
-    self.titleLeadingToFavicon.active = showTitle && !showPin;
+    self.audioWidthConstraint.constant = minimalBadge ? kAudioBadgeSize : kAudioButtonSize;
+    self.audioHeightConstraint.constant = minimalBadge ? kAudioBadgeSize : kAudioButtonSize;
+
+    self.audioLeadingToFavicon.active = showAudio && !minimalBadge;
+    self.audioCenterY.active = showAudio && !minimalBadge;
+    self.audioTrailingToFavicon.active = minimalBadge;
+    self.audioBottomToFavicon.active = minimalBadge;
+
+    self.pinLeadingToAudio.active = showPin && showAudio && !minimalBadge;
+    self.pinLeadingToFavicon.active = showPin && !(showAudio && !minimalBadge);
+
+    self.titleLeadingToPin.active = showTitle && showPin;
+    self.titleLeadingToAudio.active = showTitle && !showPin && showAudio && !minimalBadge;
+    self.titleLeadingToFavicon.active = showTitle && !showPin && !(showAudio && !minimalBadge);
 }
 
 - (void)updateFaviconAppearance {
@@ -675,6 +790,8 @@ NSColor *BrowserTabActiveFillColor(void) {
     if (@available(macOS 10.14, *)) {
         self.pinIconView.contentTintColor = self.tabSelected ? [NSColor labelColor]
                                                              : [NSColor secondaryLabelColor];
+        self.audioButton.contentTintColor = self.tabSelected ? [NSColor labelColor]
+                                                             : [NSColor secondaryLabelColor];
     }
 }
 
@@ -713,6 +830,12 @@ NSColor *BrowserTabActiveFillColor(void) {
     NSPoint local = [self convertPoint:windowPoint fromView:nil];
     if (![self mouse:local inRect:self.bounds]) {
         return nil;
+    }
+    if (!self.audioButton.hidden) {
+        NSPoint inAudio = [self.audioButton convertPoint:local fromView:self];
+        if ([self.audioButton mouse:inAudio inRect:self.audioButton.bounds]) {
+            return self.audioMuted ? @"取消静音" : @"静音此标签";
+        }
     }
     if (!self.closeButton.hidden) {
         NSPoint inClose = [self.closeButton convertPoint:local fromView:self];
@@ -773,6 +896,12 @@ NSColor *BrowserTabActiveFillColor(void) {
     NSPoint local = [self convertPoint:point fromView:self.superview];
     if (![self mouse:local inRect:self.bounds]) {
         return nil;
+    }
+    if (!self.audioButton.hidden) {
+        NSPoint inAudio = [self.audioButton convertPoint:local fromView:self];
+        if ([self.audioButton mouse:inAudio inRect:self.audioButton.bounds]) {
+            return self.audioButton;
+        }
     }
     if (!self.closeButton.hidden) {
         NSPoint inClose = [self.closeButton convertPoint:local fromView:self];
@@ -881,6 +1010,14 @@ NSColor *BrowserTabActiveFillColor(void) {
             self.onSelect();
         }
         break;
+    }
+}
+
+- (void)onToggleMute:(id)sender {
+    (void)sender;
+    [[BrowserTabHoverTipWindow shared] cancelForView:self];
+    if (self.onToggleMute) {
+        self.onToggleMute();
     }
 }
 

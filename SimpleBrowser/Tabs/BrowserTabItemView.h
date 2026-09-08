@@ -60,6 +60,12 @@ FOUNDATION_EXPORT const CGFloat BrowserTabFaviconTitleGap;
 - (void)setPageURLString:(nullable NSString *)pageURLString;
 - (void)setTabHeight:(CGFloat)height;
 
+/// 是否显示出声/静音控件（isAudible || isPageMutedByUser）。
+@property (nonatomic, assign) BOOL showsAudioIndicator;
+/// 用户已页级静音（划线喇叭）。
+@property (nonatomic, assign) BOOL audioMuted;
+@property (nonatomic, copy, nullable) void (^onToggleMute)(void);
+
 /// 由标签条布局写入当前分配宽度，用于关闭按钮显隐策略
 - (void)applyAvailableWidth:(CGFloat)width;
 

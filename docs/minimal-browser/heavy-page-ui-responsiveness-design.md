@@ -23,13 +23,13 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 
 | 类型 | 含义 | 本方案重点 |
 |------|------|------------|
-| **R1. 后台重页仍全速跑** | 切标签只 detach，媒体/JS 继续 | **失活 pause/mute；媒体标签加速休眠** |
+| **R1. 后台重页仍全速跑** | 切标签只 detach，媒体/JS 继续 | **出声标签标 mediaHeavy + 加速休眠**；用户可页级静音（见 [tab-audio-indicator-design.md](tab-audio-indicator-design.md)） |
 | **R2. 切页同步过重** | `mouseDown` → 同步完整 `refreshTabsUI` | **关键路径瘦身；非关键延后** |
 | **R3. 手势阈值过低** | 4pt + 模态 tracking，主线程一卡易误拖 | **提高阈值 + 时间门控** |
 | **R4. UI 回调风暴** | progress/title/script 打主线程 | **合并/节流** |
 | **R5. 进程粘连（次要）** | 默认 pool + ProcessSwap 关闭 | **本迭代不做默认拆 pool**（见「明确不做」） |
 
-> **产品承诺**：前台允许重页吃资源；**非前台标签不得持续播流抢 CPU/GPU**；标签栏单击在负载下仍应稳定选中而非拖拽。
+> **产品承诺**：前台允许重页吃资源；**非前台重页不得无限期霸占 CPU/GPU**（`mediaHeavy` 约 90s 休眠）；标签栏单击在负载下仍应稳定选中而非拖拽。后台音频可继续出声，由用户静音或休眠终止（见 tab-audio-indicator）。
 
 ### 1.3 明确不做
 
@@ -63,9 +63,8 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 ```text
 失活标签
   ├─ closeAllMediaPresentations（已有全屏）
-  ├─ JS pause + mute video/audio     ← HP-1
-  ├─ 标记 mediaHeavy（若发现媒体）   ← HP-1
-  └─ 跳过昂贵 takeSnapshot           ← HP-1
+  ├─ 若 isAudible → mediaHeavy     ← 与 tab-audio 对齐（不再默认 pause）
+  └─ 跳过昂贵 takeSnapshot（mediaHeavy / audible）← HP-1
 
 选中切换（refreshTabsUI）
   ├─ 同步：detach / wake / attach / 最小 chrome
@@ -86,18 +85,21 @@ MeoBrowser = **AppKit UI 进程 + 系统 WebKit（Network / WebContent / GPU）*
 
 ## 4. 详细设计
 
-### 4.1 失活媒体策略（HP-1）
+### 4.1 失活媒体策略（HP-1，已由 tab-audio 修订）
 
-**触发点**：`detachWebViewIfNeeded:` 之前或之内，对即将离屏的存活 WebView。
+**原行为**：失活时 JS `pause` + DOM `muted`。
 
-**行为**：
+**现行（策略 A）**：
 
 1. 已有：全屏态 `closeAllMediaPresentations`
-2. 新增：`evaluateJavaScript` 暂停并静音所有 `video`/`audio`（含影子树尽力而为；失败忽略）
-3. 若暂停到至少一个元素（或脚本返回 count>0）→ `tab.mediaHeavy = YES`
-4. **不**在重新选中时自动 `play()`
+2. **不再**默认 pause/mute（允许后台继续出声）
+3. 若标签 `isAudible` → `mediaHeavy = YES`
+4. 用户静音走 `BrowserTabAudioController` 页级 mute
+5. **不**在重新选中时自动 `play()`
 
-**实现归属**：`BrowserBackgroundMediaController`（或等价小工具类）+ `BrowserTab.mediaHeavy`。
+`BrowserBackgroundMediaController` 仍保留，供调试或后续可选「仅暂停视频」开关。
+
+详见 [tab-audio-indicator-design.md](tab-audio-indicator-design.md)。
 
 ### 4.2 切走跳过昂贵快照（HP-1）
 

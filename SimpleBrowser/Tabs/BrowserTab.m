@@ -233,6 +233,8 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     self.webView = nil;
     self.isLoading = NO;
     self.mediaHeavy = NO;
+    self.isAudible = NO;
+    // isPageMutedByUser 保留：休眠唤醒后由 AudioController 重应用。
     self.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
     [self clearNavigationSession];
     [self.mainFrameNavigations removeAllObjects];

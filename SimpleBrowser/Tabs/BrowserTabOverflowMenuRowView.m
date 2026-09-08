@@ -10,6 +10,8 @@ static const CGFloat kCheckWidth = 14.0;
 static const CGFloat kFaviconSize = 16.0;
 static const CGFloat kGapAfterCheck = 4.0;
 static const CGFloat kGapAfterFavicon = 6.0;
+static const CGFloat kAudioSize = 12.0;
+static const CGFloat kGapBeforeAudio = 6.0;
 
 @interface BrowserTabOverflowMenuRowView ()
 @property (nonatomic, strong) NSImageView *checkmarkView;
@@ -17,6 +19,7 @@ static const CGFloat kGapAfterFavicon = 6.0;
 @property (nonatomic, strong) NSView *faviconLetterBadge;
 @property (nonatomic, strong) NSTextField *faviconLetterLabel;
 @property (nonatomic, strong) NSButton *titleButton;
+@property (nonatomic, strong) NSImageView *audioIconView;
 @property (nonatomic, copy, nullable) NSString *boundHost;
 @property (nonatomic, assign) NSUInteger faviconLoadToken;
 @end
@@ -82,6 +85,12 @@ static const CGFloat kGapAfterFavicon = 6.0;
         }
         [self addSubview:_titleButton];
 
+        _audioIconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _audioIconView.translatesAutoresizingMaskIntoConstraints = NO;
+        _audioIconView.imageScaling = NSImageScaleProportionallyDown;
+        _audioIconView.hidden = YES;
+        [self addSubview:_audioIconView];
+
         [NSLayoutConstraint activateConstraints:@[
             [_checkmarkView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:kLeadingPad],
             [_checkmarkView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -101,8 +110,13 @@ static const CGFloat kGapAfterFavicon = 6.0;
             [_faviconLetterLabel.centerXAnchor constraintEqualToAnchor:_faviconLetterBadge.centerXAnchor],
             [_faviconLetterLabel.centerYAnchor constraintEqualToAnchor:_faviconLetterBadge.centerYAnchor constant:0.5],
 
+            [_audioIconView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kLeadingPad],
+            [_audioIconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_audioIconView.widthAnchor constraintEqualToConstant:kAudioSize],
+            [_audioIconView.heightAnchor constraintEqualToConstant:kAudioSize],
+
             [_titleButton.leadingAnchor constraintEqualToAnchor:_faviconView.trailingAnchor constant:kGapAfterFavicon],
-            [_titleButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-kLeadingPad],
+            [_titleButton.trailingAnchor constraintEqualToAnchor:_audioIconView.leadingAnchor constant:-kGapBeforeAudio],
             [_titleButton.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
 
             [self.widthAnchor constraintEqualToConstant:kRowWidth],
@@ -149,10 +163,41 @@ static const CGFloat kGapAfterFavicon = 6.0;
     [self requestFaviconIfNeeded];
 }
 
+- (void)setShowsAudioIndicator:(BOOL)showsAudioIndicator {
+    if (_showsAudioIndicator == showsAudioIndicator) {
+        return;
+    }
+    _showsAudioIndicator = showsAudioIndicator;
+    [self reloadAppearance];
+}
+
+- (void)setAudioMuted:(BOOL)audioMuted {
+    if (_audioMuted == audioMuted) {
+        return;
+    }
+    _audioMuted = audioMuted;
+    [self reloadAppearance];
+}
+
 - (void)reloadAppearance {
     self.checkmarkView.hidden = !self.checked;
     self.titleButton.title = self.titleText.length > 0 ? self.titleText : @"新标签页";
     self.titleButton.enabled = YES;
+
+    BOOL showAudio = self.showsAudioIndicator;
+    self.audioIconView.hidden = !showAudio;
+    if (showAudio) {
+        if (@available(macOS 11.0, *)) {
+            NSImageSymbolConfiguration *cfg =
+                [NSImageSymbolConfiguration configurationWithPointSize:10 weight:NSFontWeightMedium];
+            NSString *name = self.audioMuted ? @"speaker.slash.fill" : @"speaker.wave.2.fill";
+            NSImage *symbol = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
+            self.audioIconView.image = symbol ? [symbol imageWithSymbolConfiguration:cfg] : nil;
+            if (@available(macOS 10.14, *)) {
+                self.audioIconView.contentTintColor = [NSColor secondaryLabelColor];
+            }
+        }
+    }
 }
 
 - (void)applyLoadedFaviconImage:(NSImage *)image {

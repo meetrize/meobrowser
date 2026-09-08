@@ -11,7 +11,7 @@
 
 | 项 | 定稿 |
 |----|------|
-| 失活媒体 | pause + mute；**不**自动 play |
+| 失活媒体 | **不再默认 pause**（tab-audio 策略 A）；`mediaHeavy` + 90s 休眠；用户页级静音 |
 | 快照 | pause 发现媒体 / mediaHeavy → 跳过 `takeSnapshot`；无媒体则异步 capture |
 | 切页 | 同步关键路径；非关键 `dispatch_async` |
 | 拖拽 | 6 pt + ≥60 ms；大位移直开拖；先影子后选中 |

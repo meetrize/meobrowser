@@ -35,8 +35,12 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, assign) NSTimeInterval lastActiveTimestamp;
 /// 最近一次失去选中的时间（用于休眠宽限期，避免刚切走的标签立刻被预算回收）。
 @property (nonatomic, assign) NSTimeInterval lastDeactivatedTimestamp;
-/// 失活时检测到活跃媒体（或曾 pause 到元素）；用于跳过昂贵快照与加速休眠。
+/// 失活时检测到活跃媒体（或曾出声）；用于跳过昂贵快照与加速休眠。与 UI 喇叭解耦。
 @property (nonatomic, assign) BOOL mediaHeavy;
+/// 引擎认为该标签正在出声（驱动标签条喇叭显隐）。
+@property (nonatomic, assign) BOOL isAudible;
+/// 用户通过标签喇叭静音了该页（页级 mute；不等于 pause）。
+@property (nonatomic, assign) BOOL isPageMutedByUser;
 /// 当前主文档连接安全态（用于地址栏「连接不安全」指示）。
 @property (nonatomic, assign) BrowserConnectionSecurityState connectionSecurityState;
 /// 页面内查找会话（查询词 / 模式 / 计数）；高亮在 WebView 文档侧。
