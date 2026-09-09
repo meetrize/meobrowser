@@ -6,6 +6,9 @@
 #import "BrowserLocalFileSupport.h"
 #import "BrowserWebInspector.h"
 #import "BrowserNavigationSession.h"
+#import "BrowserTabUIDiagnostics.h"
+#import "BrowserTabController.h"
+#import <QuartzCore/QuartzCore.h>
 
 static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 
@@ -111,10 +114,14 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     if (self.webView != nil) {
         return self.webView;
     }
+    [BrowserTabController reclaimBeforeCreatingWebViewIfNeeded];
+    CFTimeInterval t0 = CACurrentMediaTime();
     self.webView = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:self.configuration];
     self.webView.customUserAgent = [BrowserUserAgent safariAlignedUserAgent];
     [BrowserWebInspector applyInspectableToWebView:self.webView];
     [self startObservingWebViewTitle];
+    NSTimeInterval ms = (CACurrentMediaTime() - t0) * 1000.0;
+    BrowserTabUILog(@"ensureWebView %.1fms title=%@", ms, self.title.length > 0 ? self.title : @"(empty)");
     return self.webView;
 }
 
@@ -251,15 +258,20 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 
 - (void)hibernate {
     if (self.resistsHibernation) {
+        BrowserTabUILog(@"hibernate skipped resistsHibernation title=%@", self.title ?: @"?");
         return;
     }
     if (self.isNewTabPage || self.webView == nil) {
         return;
     }
+    CFTimeInterval t0 = CACurrentMediaTime();
+    NSURL *beforeURL = self.webView.URL ?: self.restorableURL;
+    BOOL wasMediaHeavy = self.mediaHeavy;
     // 源代码等内存 HTML 页：保留 pendingHTMLString，丢弃 WebView。
     if (self.pendingHTMLString.length > 0) {
         self.restorableURL = nil;
         [self discardWebView];
+        BrowserTabUILog(@"hibernate html %.1fms", (CACurrentMediaTime() - t0) * 1000.0);
         return;
     }
     NSURL *url = [BrowserFeedReader publicURLForInternalURL:self.webView.URL];
@@ -280,9 +292,16 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
     } else if (![BrowsingPreferences isPersistableURL:self.restorableURL]) {
         // 无可恢复 URL 时退回 NTP，避免留下无内容僵尸标签。
         [self loadNewTabPage];
+        BrowserTabUILog(@"hibernate→ntp %.1fms host=%@",
+                        (CACurrentMediaTime() - t0) * 1000.0,
+                        beforeURL.host ?: @"?");
         return;
     }
     [self discardWebView];
+    BrowserTabUILog(@"hibernate %.1fms host=%@ mediaHeavy=%d",
+                    (CACurrentMediaTime() - t0) * 1000.0,
+                    beforeURL.host ?: @"?",
+                    wasMediaHeavy ? 1 : 0);
 }
 
 - (void)forceDiscardWebViewForHardRecover {

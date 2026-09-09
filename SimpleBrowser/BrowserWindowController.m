@@ -64,6 +64,7 @@
 #import "BrowserReachabilityProbe.h"
 #import "BrowserTabLoadIsolator.h"
 #import "BrowserNavigationDiagnostics.h"
+#import "BrowserTabUIDiagnostics.h"
 #import "CompanionChannel.h"
 #import "CompanionLinkUI.h"
 #import "BrowserTransientToast.h"
@@ -3479,6 +3480,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 }
 
 - (void)refreshTabsUI {
+    CFTimeInterval tAll = CACurrentMediaTime();
     BrowserTab *selectedTab = self.tabController.selectedTab;
     self.refreshTabsUIGeneration += 1;
     NSInteger generation = self.refreshTabsUIGeneration;
@@ -3486,6 +3488,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
     // 仅挂载当前标签的 WebView；其余离屏但仍可常驻（休眠由 TabController 销毁）。
     // 策略 A：失活不再 pause；出声/媒体标签标 mediaHeavy 并跳过昂贵快照。
+    CFTimeInterval tDetach = CACurrentMediaTime();
+    NSUInteger detachedCount = 0;
+    BOOL scheduledSnapshot = NO;
+    NSUInteger liveCount = 0;
+    for (BrowserTab *t in self.tabController.tabs) {
+        if (t.webView != nil) {
+            liveCount++;
+        }
+    }
+    BOOL skipSnapshotForPressure = (liveCount >= 8);
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
@@ -3496,7 +3508,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             if (tab.isAudible) {
                 tab.mediaHeavy = YES;
             }
-            if (!(tab.mediaHeavy || tab.isAudible)) {
+            // 活 WebView 已接近/超过预算时跳过快照：takeSnapshot 会与重页抢 GPU，易造成数秒主线程 HANG。
+            if (!(tab.mediaHeavy || tab.isAudible) && !skipSnapshotForPressure) {
+                scheduledSnapshot = YES;
                 __weak typeof(self) weakSelf = self;
                 __weak BrowserTab *weakTab = tab;
                 __weak WKWebView *weakWebView = wv;
@@ -3517,16 +3531,28 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                     if (strongTab.mediaHeavy || strongTab.isAudible) {
                         return;
                     }
+                    CFTimeInterval tSnap = CACurrentMediaTime();
                     [strongSelf.tabOverviewController.thumbnailCache
                         captureFromWebView:strongWebView
                                    forTabID:tabID
                                  completion:nil];
+                    BrowserTabUILog(@"thumbnailCapture scheduled host=%@ kickoff=%.1fms",
+                                    (strongWebView.URL.host ?: @"?"),
+                                    (CACurrentMediaTime() - tSnap) * 1000.0);
                 });
+            } else if (skipSnapshotForPressure && !(tab.mediaHeavy || tab.isAudible)) {
+                BrowserTabUILog(@"thumbnailCapture skipped (live=%lu pressure)",
+                                (unsigned long)liveCount);
             }
+        }
+        if (wv != nil && wv.superview != nil) {
+            detachedCount++;
         }
         [self detachWebViewIfNeeded:wv];
     }
+    NSTimeInterval detachMs = (CACurrentMediaTime() - tDetach) * 1000.0;
 
+    CFTimeInterval tAttach = CACurrentMediaTime();
     BOOL deferredColdWake = NO;
     if (selectedTab != nil && !selectedTab.isNewTabPage) {
         WKWebView *selectedWebView = selectedTab.webView;
@@ -3554,7 +3580,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     } else if (selectedTab != nil) {
         [self detachWebViewIfNeeded:selectedTab.webView];
     }
+    NSTimeInterval attachMs = (CACurrentMediaTime() - tAttach) * 1000.0;
 
+    CFTimeInterval tChrome = CACurrentMediaTime();
     BOOL showLaunchpad = selectedTab.isNewTabPage;
     self.launchpadView.hidden = !showLaunchpad || self.transparentModeEnabled;
 
@@ -3585,6 +3613,23 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (selectionChanged && selectedTab.isNewTabPage) {
         [self focusAddressBarForNewTabPage];
     }
+    NSTimeInterval chromeMs = (CACurrentMediaTime() - tChrome) * 1000.0;
+    NSTimeInterval totalMs = (CACurrentMediaTime() - tAll) * 1000.0;
+    NSTimeInterval slow = BrowserTabUISlowThresholdMs();
+    if (BrowserTabUIDiagnosticsEnabled()) {
+        NSString *tag = (totalMs >= slow) ? @"SLOW refreshTabsUI" : @"refreshTabsUI";
+        BrowserTabUILog(@"%@ total=%.1fms detach=%.1fms(n=%lu) attach=%.1fms chrome=%.1fms coldWake=%d snap=%d ntp=%d tabs=%lu",
+                        tag,
+                        totalMs,
+                        detachMs,
+                        (unsigned long)detachedCount,
+                        attachMs,
+                        chromeMs,
+                        deferredColdWake ? 1 : 0,
+                        scheduledSnapshot ? 1 : 0,
+                        showLaunchpad ? 1 : 0,
+                        (unsigned long)self.tabController.tabs.count);
+    }
 
     // 非关键 chrome + 冷唤醒：下一 runloop，避免占满选中关键路径。
     __weak typeof(self) weakSelf = self;
@@ -3601,6 +3646,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if (selectedIDAtStart != nil && ![stillSelected.tabID isEqual:selectedIDAtStart]) {
             return;
         }
+        CFTimeInterval tDeferred = CACurrentMediaTime();
         if (shouldDeferredColdWake && stillSelected != nil && !stillSelected.isNewTabPage) {
             WKWebView *wv = stillSelected.webView;
             if ([strongSelf webViewIsInElementFullscreen:wv]) {
@@ -3635,6 +3681,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         if (strongSelf.transparentModeEnabled) {
             [strongSelf syncTransparentPageStyleForSelection];
         }
+        BrowserTabUILog(@"refreshTabsUI deferred=%.1fms coldWake=%d launchpad=%d",
+                        (CACurrentMediaTime() - tDeferred) * 1000.0,
+                        shouldDeferredColdWake ? 1 : 0,
+                        showLP ? 1 : 0);
     });
 }
 

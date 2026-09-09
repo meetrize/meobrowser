@@ -8,6 +8,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)hostIsHibernationProtected:(nullable NSString *)host;
 + (BOOL)URLIsHibernationProtected:(nullable NSURL *)url;
 
+/// GPU/地图/视频等后台仍极吃资源的站点：预算回收时应优先休眠（即使落在 google.com 保护后缀下）。
++ (BOOL)hostPrefersEarlyHibernation:(nullable NSString *)host;
++ (BOOL)URLPrefersEarlyHibernation:(nullable NSURL *)url;
+
 + (BOOL)hostShouldSuppressLoginAssist:(nullable NSString *)host;
 + (BOOL)URLShouldSuppressLoginAssist:(nullable NSURL *)url;
 

@@ -51,12 +51,69 @@
     return NO;
 }
 
++ (NSArray<NSString *> *)earlyHibernationHostSuffixes {
+    static NSArray<NSString *> *list = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // 地图 / 地球 / 短视频：切走后仍占 GPU，必须能被预算杀掉。
+        list = @[
+            @"earth.google.com",
+            @"maps.google.com",
+            @"google.com/maps", // host 匹配用不到 path；保留无害
+            @"amap.com",
+            @"gaode.com",
+            @"map.baidu.com",
+            @"youtube.com",
+            @"youtu.be",
+            @"douyin.com",
+            @"tiktok.com",
+            @"bilibili.com",
+        ];
+    });
+    return list;
+}
+
++ (BOOL)hostPrefersEarlyHibernation:(NSString *)host {
+    if (host.length == 0) {
+        return NO;
+    }
+    NSString *normalized = host.lowercaseString;
+    // google.com/maps 是 path，这里用 host 前缀覆盖 maps/earth。
+    if ([normalized hasPrefix:@"earth."] || [normalized hasPrefix:@"maps."]) {
+        return YES;
+    }
+    return [self host:normalized matchesSuffixes:[self earlyHibernationHostSuffixes]];
+}
+
++ (BOOL)URLPrefersEarlyHibernation:(NSURL *)url {
+    if (!url) {
+        return NO;
+    }
+    if ([self hostPrefersEarlyHibernation:url.host]) {
+        return YES;
+    }
+    // maps.google.com 以外的 www.google.com/maps …
+    NSString *host = url.host.lowercaseString ?: @"";
+    NSString *path = url.path.lowercaseString ?: @"";
+    if ([host hasSuffix:@"google.com"] && [path hasPrefix:@"/maps"]) {
+        return YES;
+    }
+    return NO;
+}
+
 + (BOOL)hostIsHibernationProtected:(NSString *)host {
+    // 地球/地图等不能靠 google.com 整站保护「永不休眠」。
+    if ([self hostPrefersEarlyHibernation:host]) {
+        return NO;
+    }
     return [self host:host matchesSuffixes:[self hibernationProtectedHostSuffixes]];
 }
 
 + (BOOL)URLIsHibernationProtected:(NSURL *)url {
     if (!url) {
+        return NO;
+    }
+    if ([self URLPrefersEarlyHibernation:url]) {
         return NO;
     }
     return [self hostIsHibernationProtected:url.host];

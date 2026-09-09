@@ -1,4 +1,5 @@
 #import "MeoApplication.h"
+#import "BrowserUserActivityMonitor.h"
 #import <ApplicationServices/ApplicationServices.h>
 
 @implementation MeoApplication
@@ -35,6 +36,23 @@
 
 - (void)sendEvent:(NSEvent *)event {
     NSEventType type = event.type;
+    // 用户真实输入 → 延长「活跃期」，期间不做预算休眠。
+    switch (type) {
+        case NSEventTypeLeftMouseDown:
+        case NSEventTypeRightMouseDown:
+        case NSEventTypeOtherMouseDown:
+        case NSEventTypeKeyDown:
+        case NSEventTypeScrollWheel:
+        case NSEventTypeMagnify:
+        case NSEventTypeSmartMagnify:
+        case NSEventTypeSwipe:
+        case NSEventTypePressure:
+            [[BrowserUserActivityMonitor sharedMonitor] noteUserInput];
+            break;
+        default:
+            break;
+    }
+
     if (!self.active &&
         (type == NSEventTypeLeftMouseDown ||
          type == NSEventTypeRightMouseDown ||

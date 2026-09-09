@@ -22,6 +22,8 @@
 #import "BrowserFaviconUtil.h"
 #import "PagePackSeedInstaller.h"
 #import "MeoApplication.h"
+#import "BrowserTabUIDiagnostics.h"
+#import "BrowserUserActivityMonitor.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -74,6 +76,8 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+    (void)[BrowserUserActivityMonitor sharedMonitor];
+    BrowserTabUIDiagnosticsStartHangWatchdogIfNeeded();
     [PagePackSeedInstaller installBundledSeedsIfNeeded];
     [BrowserUserAgent scheduleMainQueueSampleIfNeeded];
     [[CompanionChannel sharedChannel] start];

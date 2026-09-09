@@ -36,6 +36,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabAudioController.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserWebView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabController.m \
+                   $(BROWSER_SRC_DIR)/Tabs/BrowserTabUIDiagnostics.m \
+                   $(BROWSER_SRC_DIR)/Tabs/BrowserUserActivityMonitor.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabStripView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabItemView.m \
                    $(BROWSER_SRC_DIR)/Tabs/BrowserTabOverflowMenuRowView.m \

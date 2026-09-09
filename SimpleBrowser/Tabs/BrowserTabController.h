@@ -47,6 +47,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSInteger)indexOfSelectedTab;
 - (nullable BrowserTab *)tabForWebView:(WKWebView *)webView;
 
+/// 即将创建 WKWebView 前调用：必要时硬休眠后台重页，避免 live 顶满时主线程卡死。
++ (void)reclaimBeforeCreatingWebViewIfNeeded;
+
 @end
 
 NS_ASSUME_NONNULL_END
