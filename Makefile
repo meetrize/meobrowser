@@ -123,6 +123,18 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/PagePack/PagePackSidebarController.m \
                    $(BROWSER_SRC_DIR)/PagePack/PagePackSeedInstaller.m \
                    $(BROWSER_SRC_DIR)/PagePack/MeoMapAlignTileBridge.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperModels.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperSettings.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperRecipeStore.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperElementPicker.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMessageHub.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperDetector.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperPaginationDriver.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperExcelWriter.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMySQLWriter.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperEngine.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperScheduleManager.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperSidebarController.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarView.m \
@@ -233,7 +245,7 @@ BROWSER_INJECT_CFLAGS := -DMEO_ENABLE_INJECTION=1
 BROWSER_INJECT_LDFLAGS := -Xlinker -interposable
 endif
 
-BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/Scraper -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation $(BROWSER_INJECT_LDFLAGS)
 
@@ -392,6 +404,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 $(BROWSER_BINARY): $(BROWSER_OBJECTS) $(BROWSER_RES_STAMP) $(BROWSER_ENTITLEMENTS) Makefile
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
 	$(CC) $(BROWSER_OBJECTS) $(BROWSER_LDFLAGS) -o $(BROWSER_BINARY)
+	@$(MAKE) meo-scrape-runner
 	@if [ -n "$(CODESIGN_IDENTITY)" ]; then \
 		echo "Signing $(BROWSER_BUNDLE) with identity: $(CODESIGN_IDENTITY)"; \
 		codesign --force --sign "$(CODESIGN_IDENTITY)" --entitlements "$(BROWSER_ENTITLEMENTS)" --timestamp "$(BROWSER_BUNDLE)"; \
@@ -399,6 +412,26 @@ $(BROWSER_BINARY): $(BROWSER_OBJECTS) $(BROWSER_RES_STAMP) $(BROWSER_ENTITLEMENT
 		echo "Ad-hoc signing $(BROWSER_BUNDLE) without restricted entitlements (local dev)"; \
 		codesign --force --sign - "$(BROWSER_BUNDLE)"; \
 	fi
+
+# 定时爬虫 helper：复用 Scraper 运行时对象，独立入口
+SCRAPE_RUNNER_OBJECTS := \
+	$(BROWSER_OBJ_DIR)/tools/MeoScrapeRunner/main.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperModels.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperSettings.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperRecipeStore.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperDetector.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperPaginationDriver.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperExcelWriter.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperMySQLWriter.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperEngine.o
+
+meo-scrape-runner: $(SCRAPE_RUNNER_OBJECTS)
+	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS
+	$(CC) $(SCRAPE_RUNNER_OBJECTS) $(BROWSER_LDFLAGS) -o $(BROWSER_BUNDLE)/Contents/MacOS/MeoScrapeRunner
+
+$(BROWSER_OBJ_DIR)/tools/MeoScrapeRunner/main.o: tools/MeoScrapeRunner/main.m
+	@mkdir -p $(dir $@)
+	$(CC) $(BROWSER_CFLAGS) -MMD -MP -MF $(@:.o=.d) -isysroot $(SDK_PATH) -c $< -o $@
 
 -include $(BROWSER_DEPFILES)
 

@@ -25,6 +25,7 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionRSSFeedID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionShareID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionScreenshotID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionExtensionID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionPageScraperID;
 
 FOUNDATION_EXPORT NSString * const BrowserChromeActionMoreMenuID;
 

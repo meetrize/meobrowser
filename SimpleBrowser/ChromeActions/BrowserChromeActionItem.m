@@ -22,6 +22,7 @@ NSString * const BrowserChromeActionRSSFeedID = @"rssFeed";
 NSString * const BrowserChromeActionShareID = @"share";
 NSString * const BrowserChromeActionScreenshotID = @"screenshot";
 NSString * const BrowserChromeActionExtensionID = @"extension";
+NSString * const BrowserChromeActionPageScraperID = @"pageScraper";
 
 NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
 
@@ -190,6 +191,12 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                     toolTip:@"页面插件"
                                   onToolTip:nil
                                     toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionPageScraperID
+                                 symbolName:@"doc.text.magnifyingglass"
+                               onSymbolName:nil
+                                    toolTip:@"页面爬虫"
+                                  onToolTip:nil
+                                    toggles:YES],
     ];
 }
 

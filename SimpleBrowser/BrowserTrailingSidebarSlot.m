@@ -3,6 +3,7 @@
 #import "AssistSidebarController.h"
 #import "BrowserHistorySidebarController.h"
 #import "PagePackSidebarController.h"
+#import "BrowserScraperSidebarController.h"
 
 @implementation BrowserTrailingSidebarSlot
 
@@ -19,6 +20,9 @@
     if (self.pagePackSidebar.visible) {
         return BrowserTrailingSidebarKindPagePack;
     }
+    if (self.scraperSidebar.visible) {
+        return BrowserTrailingSidebarKindScraper;
+    }
     return BrowserTrailingSidebarKindNone;
 }
 
@@ -34,6 +38,9 @@
     }
     if (kind != BrowserTrailingSidebarKindPagePack && self.pagePackSidebar.visible) {
         [self.pagePackSidebar setVisible:NO animated:animated];
+    }
+    if (kind != BrowserTrailingSidebarKindScraper && self.scraperSidebar.visible) {
+        [self.scraperSidebar setVisible:NO animated:animated];
     }
 }
 
@@ -73,6 +80,15 @@
     }
 }
 
+- (void)setScraperVisible:(BOOL)visible animated:(BOOL)animated {
+    if (visible) {
+        [self hideOthersExcept:BrowserTrailingSidebarKindScraper animated:animated];
+        [self.scraperSidebar setVisible:YES animated:animated];
+    } else {
+        [self.scraperSidebar setVisible:NO animated:animated];
+    }
+}
+
 - (void)hideAllAnimated:(BOOL)animated {
     if (self.notificationSidebar.visible) {
         [self.notificationSidebar setVisible:NO animated:animated];
@@ -85,6 +101,9 @@
     }
     if (self.pagePackSidebar.visible) {
         [self.pagePackSidebar setVisible:NO animated:animated];
+    }
+    if (self.scraperSidebar.visible) {
+        [self.scraperSidebar setVisible:NO animated:animated];
     }
 }
 

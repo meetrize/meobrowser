@@ -1,0 +1,612 @@
+#import "BrowserScraperDetector.h"
+
+@implementation BrowserScraperDetector
+
++ (NSString *)jsonStringLiteral:(NSString *)string {
+    NSString *safe = [string isKindOfClass:[NSString class]] ? string : @"";
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:safe
+                                                   options:NSJSONWritingFragmentsAllowed
+                                                     error:&error];
+    if (!data) {
+        return @"\"\"";
+    }
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"\"\"";
+}
+
+/// 页面结构分析公共 JS（表格行 / ul·li / 同构卡片）。
++ (NSString *)structureHelpersJavaScript {
+    return @
+    "function meoEsc(v){ if(window.CSS&&CSS.escape) return CSS.escape(v); return String(v).replace(/[^a-zA-Z0-9_-]/g,'\\\\$&'); }\n"
+    "function meoCssPath(el){\n"
+    "  if(!el||el.nodeType!==1) return '';\n"
+    "  if(el.id){ var s='#'+meoEsc(el.id); try{ if(document.querySelectorAll(s).length===1) return s; }catch(e){} }\n"
+    "  var parts=[], node=el;\n"
+    "  while(node&&node.nodeType===1&&node!==document.documentElement&&parts.length<7){\n"
+    "    var part=node.tagName.toLowerCase();\n"
+    "    var cls=Array.from(node.classList||[]).filter(function(c){return c&&!/^(active|hover|selected|open|show|is-|js-)/i.test(c);}).slice(0,2);\n"
+    "    if(cls.length) part+='.'+cls.map(meoEsc).join('.');\n"
+    "    var p=node.parentElement;\n"
+    "    if(p){\n"
+    "      var sib=Array.from(p.children).filter(function(c){return c.tagName===node.tagName;});\n"
+    "      if(sib.length>1) part+=':nth-of-type('+(sib.indexOf(node)+1)+')';\n"
+    "    }\n"
+    "    parts.unshift(part); node=p;\n"
+    "  }\n"
+    "  return parts.join(' > ');\n"
+    "}\n"
+    "function meoFp(el){\n"
+    "  if(!el||el.nodeType!==1) return '';\n"
+    "  var tag=el.tagName.toLowerCase();\n"
+    "  if(['script','style','svg','path','noscript','br','hr','meta','link'].indexOf(tag)>=0) return '';\n"
+    "  var cls=Array.from(el.classList||[]).filter(function(c){return c&&!/^(active|hover|selected|open|show|is-|js-|swiper|slick)/i.test(c);}).slice(0,4).sort().join('.');\n"
+    "  var kids=Array.from(el.children||[]).slice(0,10).map(function(c){\n"
+    "    var t=c.tagName.toLowerCase();\n"
+    "    var k=Array.from(c.classList||[]).slice(0,1).join('');\n"
+    "    return t+(k?('.'+k):'');\n"
+    "  }).join(',');\n"
+    "  return tag+'|'+cls+'|'+kids;\n"
+    "}\n"
+    "function meoRelPath(root, el){\n"
+    "  if(!root||!el||!root.contains(el)) return '';\n"
+    "  if(root===el) return '';\n"
+    "  var tag=el.tagName.toLowerCase();\n"
+    "  var cls=Array.from(el.classList||[]).filter(function(c){return c&&!/^(active|hover|selected)/i.test(c);}).slice(0,2);\n"
+    "  if(cls.length){\n"
+    "    var sel=tag+'.'+cls.map(meoEsc).join('.');\n"
+    "    try{ if(root.querySelectorAll(sel).length===1) return sel; }catch(e){}\n"
+    "  }\n"
+    "  if(tag==='a' && root.querySelectorAll('a').length===1) return 'a';\n"
+    "  if(tag==='img' && root.querySelectorAll('img').length===1) return 'img';\n"
+    "  var parts=[], node=el;\n"
+    "  while(node&&node!==root&&parts.length<5){\n"
+    "    var part=node.tagName.toLowerCase();\n"
+    "    var p=node.parentElement;\n"
+    "    if(p){\n"
+    "      var sib=Array.from(p.children).filter(function(c){return c.tagName===node.tagName;});\n"
+    "      if(sib.length>1) part+=':nth-of-type('+(sib.indexOf(node)+1)+')';\n"
+    "    }\n"
+    "    parts.unshift(part); node=node.parentElement;\n"
+    "  }\n"
+    "  return parts.join(' > ');\n"
+    "}\n"
+    "function meoItemScore(el){\n"
+    "  if(!el) return 0;\n"
+    "  var t=String(el.textContent||'').replace(/\\s+/g,' ').trim();\n"
+    "  var score=0;\n"
+    "  if(t.length>8) score+=2;\n"
+    "  if(t.length>40) score+=2;\n"
+    "  if(el.querySelector && el.querySelector('a[href]')) score+=3;\n"
+    "  if(el.querySelector && el.querySelector('img[src]')) score+=1;\n"
+    "  if(el.querySelector && el.querySelector('h1,h2,h3,h4,h5,h6')) score+=2;\n"
+    "  if(el.children && el.children.length>=2) score+=1;\n"
+    "  return score;\n"
+    "}\n"
+    "function meoInferFields(item){\n"
+    "  var fields=[];\n"
+    "  if(!item) return fields;\n"
+    "  function push(name, kind, path, attr){\n"
+    "    if(path==null) return;\n"
+    "    var f={name:name, kind:kind||'text', path:path||''};\n"
+    "    if(attr) f.attribute=attr;\n"
+    "    for(var i=0;i<fields.length;i++){ if(fields[i].path===f.path&&fields[i].kind===f.kind) return; }\n"
+    "    fields.push(f);\n"
+    "  }\n"
+    "  // 卡片本身常为 <a href>：querySelector 只查后代，需单独识别自身\n"
+    "  var selfLink=null;\n"
+    "  try{ if(item.matches && item.matches('a[href]')) selfLink=item; }catch(e){}\n"
+    "  if(!selfLink && item.tagName && item.tagName.toLowerCase()==='a' && item.getAttribute('href')) selfLink=item;\n"
+    "  var title=item.querySelector('h1,h2,h3,h4,h5,h6,[class*=\"title\"],[class*=\"Title\"],[class*=\"NAME\"]');\n"
+    "  var link=selfLink || item.querySelector('a[href]');\n"
+    "  var img=item.querySelector('img[src]');\n"
+    "  var time=item.querySelector('time,[datetime],[class*=\"time\"],[class*=\"date\"],[class*=\"Date\"],[class*=\"Time\"],[class*=\"gray-400\"]');\n"
+    "  var desc=null;\n"
+    "  var descNodes=item.querySelectorAll('p,[class*=\"desc\"],[class*=\"summary\"],[class*=\"excerpt\"],[class*=\"intro\"],[class*=\"line-clamp\"]');\n"
+    "  for(var di=0;di<descNodes.length;di++){\n"
+    "    var d=descNodes[di];\n"
+    "    if(/^H[1-6]$/.test(d.tagName)) continue;\n"
+    "    if(title && (d===title || (title.contains&&title.contains(d)) || (d.contains&&d.contains(title)))) continue;\n"
+    "    desc=d; break;\n"
+    "  }\n"
+    "  if(title) push('标题','text', meoRelPath(item,title));\n"
+    "  else if(link && link!==item) push('标题','text', meoRelPath(item,link));\n"
+    "  else push('文本','text','');\n"
+    "  if(link){\n"
+    "    var linkPath=(link===item) ? '' : meoRelPath(item,link);\n"
+    "    push('链接','href', linkPath, 'href');\n"
+    "  }\n"
+    "  if(img) push('图片','src', meoRelPath(item,img), 'src');\n"
+    "  if(time) push('时间','text', meoRelPath(item,time));\n"
+    "  if(desc) push('摘要','text', meoRelPath(item,desc));\n"
+    "  if(item.tagName && item.tagName.toLowerCase()==='tr'){\n"
+    "    fields=[];\n"
+    "    var cells=item.querySelectorAll('td,th');\n"
+    "    Array.from(cells).slice(0,12).forEach(function(td,i){\n"
+    "      var a=td.querySelector('a[href]');\n"
+    "      var name=(td.textContent||'').trim().slice(0,20) || ('列'+(i+1));\n"
+    "      if(a){ push(name,'href', 'td:nth-child('+(i+1)+') a','href'); }\n"
+    "      else push(name,'text', 'td:nth-child('+(i+1)+')');\n"
+    "    });\n"
+    "  }\n"
+    "  return fields.slice(0,8);\n"
+    "}\n"
+    "function meoRowSelector(container, sample){\n"
+    "  if(!container||!sample) return '';\n"
+    "  var tag=sample.tagName.toLowerCase();\n"
+    "  var cls=Array.from(sample.classList||[]).filter(function(c){return c&&!/^(active|hover|selected)/i.test(c);}).slice(0,3);\n"
+    "  if(cls.length){\n"
+    "    var sel=tag+'.'+cls.map(meoEsc).join('.');\n"
+    "    try{ var n=container.querySelectorAll(sel).length; if(n>=3) return sel; }catch(e){}\n"
+    "  }\n"
+    "  if(sample.parentElement===container){\n"
+    "    try{ if(container.querySelectorAll(':scope > '+tag).length>=3) return ':scope > '+tag; }catch(e){}\n"
+    "    return tag;\n"
+    "  }\n"
+    "  var parent=sample.parentElement;\n"
+    "  if(parent && container.contains(parent)){\n"
+    "    var pCls=Array.from(parent.classList||[]).slice(0,2);\n"
+    "    var pSel=parent.tagName.toLowerCase()+(pCls.length?('.'+pCls.map(meoEsc).join('.')):'');\n"
+    "    var childSel=tag+(cls.length?('.'+cls.map(meoEsc).join('.')):'');\n"
+    "    var full=pSel+' > '+childSel;\n"
+    "    try{ if(container.querySelectorAll(full).length>=3) return full; }catch(e){}\n"
+    "  }\n"
+    "  return meoRelPath(container, sample) || tag;\n"
+    "}\n"
+    "function meoAnalyzeTable(table){\n"
+    "  var rows=table.querySelectorAll('tbody tr');\n"
+    "  if(!rows.length) rows=table.querySelectorAll('tr');\n"
+    "  var dataRows=Array.from(rows).filter(function(r){ return !r.querySelector('th') || r.querySelector('td'); });\n"
+    "  if(dataRows.length && dataRows[0].querySelector('th') && !dataRows[0].querySelector('td')) dataRows=dataRows.slice(1);\n"
+    "  var sample=dataRows[0]||rows[0];\n"
+    "  var fields=meoInferFields(sample);\n"
+    "  var heads=Array.from(table.querySelectorAll('thead th')).map(function(th){return (th.textContent||'').trim();}).filter(Boolean);\n"
+    "  if(heads.length){\n"
+    "    fields=heads.slice(0,12).map(function(name,i){\n"
+    "      var tdSel='td:nth-child('+(i+1)+')';\n"
+    "      var hasLink=sample && sample.querySelector(tdSel+' a[href]');\n"
+    "      return hasLink?{name:name||('列'+(i+1)),kind:'href',path:tdSel+' a',attribute:'href'}:{name:name||('列'+(i+1)),kind:'text',path:tdSel};\n"
+    "    });\n"
+    "  }\n"
+    "  var c={\n"
+    "    type:'table', title:'表格', structureType:'table',\n"
+    "    containerPath:meoCssPath(table),\n"
+    "    rowPath: table.querySelector('tbody tr') ? 'tbody tr' : 'tr',\n"
+    "    estimatedRows:dataRows.length||rows.length,\n"
+    "    fields:fields,\n"
+    "    columns:fields.map(function(f){return f.name;}),\n"
+    "    sampleText: sample?String(sample.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80):''\n"
+    "  };\n"
+    "  return meoScoreCandidate(c, table, dataRows);\n"
+    "}\n"
+    "function meoAnalyzeList(list){\n"
+    "  var items=Array.from(list.children).filter(function(c){return c.tagName&&c.tagName.toLowerCase()==='li';});\n"
+    "  if(items.length<2) return null;\n"
+    "  var fields=meoInferFields(items[0]);\n"
+    "  var c={\n"
+    "    type:'list', title:'列表', structureType:'list',\n"
+    "    containerPath:meoCssPath(list), rowPath:':scope > li',\n"
+    "    estimatedRows:items.length, fields:fields,\n"
+    "    columns:fields.map(function(f){return f.name;}),\n"
+    "    sampleText:String(items[0].textContent||'').replace(/\\s+/g,' ').trim().slice(0,80)\n"
+    "  };\n"
+    "  return meoScoreCandidate(c, list, items);\n"
+    "}\n"
+    "function meoFindCardGroups(root){\n"
+    "  var best=[];\n"
+    "  var nodes=root.querySelectorAll('*');\n"
+    "  var limit=Math.min(nodes.length, 1200);\n"
+    "  for(var i=0;i<limit;i++){\n"
+    "    var parent=nodes[i];\n"
+    "    if(!parent||!parent.children||parent.children.length<3) continue;\n"
+    "    var tag=parent.tagName.toLowerCase();\n"
+    "    if(['table','thead','tbody','tr','select','svg','script','style'].indexOf(tag)>=0) continue;\n"
+    "    var groups={};\n"
+    "    Array.from(parent.children).forEach(function(ch){\n"
+    "      var fp=meoFp(ch);\n"
+    "      if(!fp) return;\n"
+    "      if(meoItemScore(ch)<2) return;\n"
+    "      if(!groups[fp]) groups[fp]=[];\n"
+    "      groups[fp].push(ch);\n"
+    "    });\n"
+    "    Object.keys(groups).forEach(function(fp){\n"
+    "      var items=groups[fp];\n"
+    "      if(items.length<3) return;\n"
+    "      var score=items.length*2 + meoItemScore(items[0])*3;\n"
+    "      if(parent.querySelector('a[href]')) score+=5;\n"
+    "      best.push({parent:parent, items:items, fp:fp, score:score});\n"
+    "    });\n"
+    "  }\n"
+    "  best.sort(function(a,b){ return b.score-a.score; });\n"
+    "  return best;\n"
+    "}\n"
+    "function meoAnalyzeCards(parent, items){\n"
+    "  var sample=items[0];\n"
+    "  var fields=meoInferFields(sample);\n"
+    "  var rowPath=meoRowSelector(parent, sample);\n"
+    "  var c={\n"
+    "    type:'cards', title:'卡片列表', structureType:'cards',\n"
+    "    containerPath:meoCssPath(parent),\n"
+    "    rowPath:rowPath,\n"
+    "    estimatedRows:items.length,\n"
+    "    fields:fields,\n"
+    "    columns:fields.map(function(f){return f.name;}),\n"
+    "    sampleText:String(sample.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80)\n"
+    "  };\n"
+    "  return meoScoreCandidate(c, parent, items);\n"
+    "}\n"
+    "function meoNavPenalty(el){\n"
+    "  if(!el||el.nodeType!==1) return 0;\n"
+    "  var penalty=0;\n"
+    "  try{\n"
+    "    if(el.closest('nav,header,footer,aside,[role=\"navigation\"],[role=\"banner\"],[role=\"contentinfo\"]')) penalty-=42;\n"
+    "  }catch(e){}\n"
+    "  function blob(node){\n"
+    "    if(!node) return '';\n"
+    "    return String(node.id||'')+' '+Array.from(node.classList||[]).join(' ')+' '+String(node.getAttribute&&node.getAttribute('role')||'');\n"
+    "  }\n"
+    "  var s=blob(el).toLowerCase();\n"
+    "  if(/\\b(nav|menu|navbar|sidebar|footer|breadcrumb|tabbar|toolbar|pagination|pager|related|recommend|hot[-_]?rank|tag[-_]?cloud)\\b/.test(s)) penalty-=28;\n"
+    "  var p=el.parentElement;\n"
+    "  for(var i=0;i<5&&p;i++){\n"
+    "    var ps=blob(p).toLowerCase();\n"
+    "    if(/\\b(nav|menu|navbar|sidebar|footer|breadcrumb|toolbar)\\b/.test(ps)){ penalty-=16; break; }\n"
+    "    p=p.parentElement;\n"
+    "  }\n"
+    "  return penalty;\n"
+    "}\n"
+    "function meoMainBonus(el){\n"
+    "  if(!el||el.nodeType!==1) return 0;\n"
+    "  try{\n"
+    "    if(el.closest('main,article,[role=\"main\"],#content,#main,#app-content,.content,.main,.post-list,.news-list,.article-list')) return 20;\n"
+    "  }catch(e){}\n"
+    "  var rect=el.getBoundingClientRect();\n"
+    "  var docH=Math.max(document.body?document.body.scrollHeight:0, document.documentElement.scrollHeight, 1);\n"
+    "  var midY=(rect.top+(window.scrollY||0)+rect.height/2)/docH;\n"
+    "  if(midY>0.12 && midY<0.78) return 10;\n"
+    "  if(midY<0.07 || midY>0.92) return -12;\n"
+    "  return 0;\n"
+    "}\n"
+    "function meoItemContentSignals(items){\n"
+    "  var out={avgLen:0, shortRatio:0, uniqueHrefs:0, withTitle:0, withTime:0, withImg:0, withDesc:0, selfLink:0};\n"
+    "  if(!items||!items.length) return out;\n"
+    "  var sample=items.slice(0, Math.min(10, items.length));\n"
+    "  var hrefSet={}; var short=0; var totalLen=0;\n"
+    "  sample.forEach(function(it){\n"
+    "    var t=String(it.textContent||'').replace(/\\s+/g,' ').trim();\n"
+    "    totalLen+=t.length;\n"
+    "    if(t.length>0 && t.length<18) short++;\n"
+    "    var selfA=null;\n"
+    "    try{ if(it.matches && it.matches('a[href]')) selfA=it; }catch(e){}\n"
+    "    if(!selfA && it.tagName && it.tagName.toLowerCase()==='a' && it.getAttribute('href')) selfA=it;\n"
+    "    var a=selfA || (it.querySelector && it.querySelector('a[href]'));\n"
+    "    if(a){\n"
+    "      var href='';\n"
+    "      try{ href=new URL(a.getAttribute('href'), location.href).pathname; }catch(e){ href=a.getAttribute('href')||''; }\n"
+    "      if(href) hrefSet[href]=1;\n"
+    "      if(selfA) out.selfLink++;\n"
+    "    }\n"
+    "    if(it.querySelector && it.querySelector('h1,h2,h3,h4,h5,h6,[class*=\"title\"]')) out.withTitle++;\n"
+    "    if(it.querySelector && it.querySelector('time,[datetime],[class*=\"time\"],[class*=\"date\"],[class*=\"gray-400\"]')) out.withTime++;\n"
+    "    if(it.querySelector && it.querySelector('img[src]')) out.withImg++;\n"
+    "    if(it.querySelector && it.querySelector('p,[class*=\"desc\"],[class*=\"summary\"],[class*=\"line-clamp\"]')) out.withDesc++;\n"
+    "  });\n"
+    "  out.avgLen=totalLen/sample.length;\n"
+    "  out.shortRatio=short/sample.length;\n"
+    "  out.uniqueHrefs=Object.keys(hrefSet).length;\n"
+    "  return out;\n"
+    "}\n"
+    "function meoScoreCandidate(c, container, items){\n"
+    "  if(!c) return c;\n"
+    "  var score=0;\n"
+    "  var n=c.estimatedRows||0;\n"
+    "  if(n>=5 && n<=50) score+=18;\n"
+    "  else if(n>=3 && n<=80) score+=10;\n"
+    "  else if(n>120) score-=10;\n"
+    "  else if(n<3) score-=12;\n"
+    "  score+=meoNavPenalty(container);\n"
+    "  score+=meoMainBonus(container);\n"
+    "  var fields=c.fields||[];\n"
+    "  score+=Math.min(fields.length,6)*4;\n"
+    "  var hasHref=fields.some(function(f){return f && (f.kind==='href' || f.name==='链接');});\n"
+    "  var hasTitle=fields.some(function(f){return f && f.name==='标题';});\n"
+    "  var hasTime=fields.some(function(f){return f && f.name==='时间';});\n"
+    "  var hasDesc=fields.some(function(f){return f && f.name==='摘要';});\n"
+    "  var hasImg=fields.some(function(f){return f && (f.kind==='src' || f.name==='图片');});\n"
+    "  if(hasHref) score+=12;\n"
+    "  if(hasTitle) score+=10;\n"
+    "  if(hasTime) score+=8;\n"
+    "  if(hasDesc) score+=8;\n"
+    "  if(hasImg) score+=5;\n"
+    "  var sig=meoItemContentSignals(items);\n"
+    "  if(sig.avgLen>=24 && sig.avgLen<=420) score+=12;\n"
+    "  else if(sig.avgLen>=12 && sig.avgLen<24) score+=4;\n"
+    "  else if(sig.avgLen>0 && sig.avgLen<12) score-=14;\n"
+    "  if(sig.shortRatio>0.7) score-=18;\n"
+    "  if(sig.uniqueHrefs>=Math.min(3, Math.max(1, Math.floor((items&&items.length)||0)*0.5))) score+=14;\n"
+    "  else if(sig.uniqueHrefs<=1 && n>=4) score-=12;\n"
+    "  if(sig.withTitle>=Math.ceil(Math.min(items.length||0,10)*0.5)) score+=8;\n"
+    "  if(sig.withTime>=2) score+=6;\n"
+    "  if(sig.withDesc>=2) score+=6;\n"
+    "  if(sig.selfLink>=Math.ceil(Math.min(items.length||0,10)*0.6)) score+=6;\n"
+    "  if(c.type==='table'){\n"
+    "    if(container && container.querySelector && container.querySelector('thead th')) score+=12;\n"
+    "    var cols=(c.columns&&c.columns.length)||0;\n"
+    "    if(cols>=3) score+=8;\n"
+    "    else if(cols===1) score-=6;\n"
+    "  }\n"
+    "  if(c.type==='cards') score+=3;\n"
+    "  if(c.type==='list' && sig.avgLen<20 && !hasDesc && !hasTime) score-=8;\n"
+    "  // 过宽的整页壳：子节点很多但 item 文本像导航\n"
+    "  if(container && container.children && container.children.length>40 && sig.avgLen<30) score-=10;\n"
+    "  c.score=Math.round(score);\n"
+    "  c.scoreSignals={avgLen:Math.round(sig.avgLen), uniqueHrefs:sig.uniqueHrefs, shortRatio:Math.round(sig.shortRatio*100)/100};\n"
+    "  return c;\n"
+    "}\n"
+    "function meoRankCandidates(list){\n"
+    "  var out=(list||[]).slice();\n"
+    "  out.sort(function(a,b){\n"
+    "    var ds=(b.score||0)-(a.score||0);\n"
+    "    if(ds) return ds;\n"
+    "    return (b.estimatedRows||0)-(a.estimatedRows||0);\n"
+    "  });\n"
+    "  if(!out.length) return out;\n"
+    "  var best=out[0];\n"
+    "  var second=out.length>1?out[1]:null;\n"
+    "  var bestScore=best.score||0;\n"
+    "  var margin=second? (bestScore-(second.score||0)) : 999;\n"
+    "  best.recommended=true;\n"
+    "  // 置信度：分数够高，且显著优于第二名（或仅有一个）\n"
+    "  best.confident = bestScore>=36 && margin>=8;\n"
+    "  if(bestScore>=48 && margin>=5) best.confident=true;\n"
+    "  if(out.length===1 && bestScore>=28) best.confident=true;\n"
+    "  out.forEach(function(c,i){\n"
+    "    if(!c) return;\n"
+    "    if(c.type==='cards') c.title='卡片列表 '+(i+1)+'（'+(c.estimatedRows||0)+'项）';\n"
+    "    else if(c.type==='list') c.title='列表 '+(i+1)+'（'+(c.estimatedRows||0)+'项）';\n"
+    "    else if(c.type==='table') c.title='表格 '+(i+1)+'（'+(c.estimatedRows||0)+'行）';\n"
+    "    if(c.recommended) c.title='推荐 · '+c.title;\n"
+    "  });\n"
+    "  return out;\n"
+    "}\n"
+    "function meoAnalyzeFromNode(node){\n"
+    "  if(!node||node.nodeType!==1) return null;\n"
+    "  var tag=node.tagName.toLowerCase();\n"
+    "  if(tag==='table') return meoAnalyzeTable(node);\n"
+    "  var table=node.closest ? node.closest('table') : null;\n"
+    "  if(table) return meoAnalyzeTable(table);\n"
+    "  if(tag==='ul'||tag==='ol') return meoAnalyzeList(node);\n"
+    "  var list=node.closest ? node.closest('ul,ol') : null;\n"
+    "  if(list) return meoAnalyzeList(list);\n"
+    "  var cur=node;\n"
+    "  for(var up=0; up<6 && cur && cur.parentElement; up++){\n"
+    "    var parent=cur.parentElement;\n"
+    "    var fp=meoFp(cur);\n"
+    "    if(fp){\n"
+    "      var sibs=Array.from(parent.children).filter(function(c){ return meoFp(c)===fp && meoItemScore(c)>=2; });\n"
+    "      if(sibs.length>=3) return meoAnalyzeCards(parent, sibs);\n"
+    "    }\n"
+    "    cur=parent;\n"
+    "  }\n"
+    "  var groups=meoFindCardGroups(node);\n"
+    "  if(groups.length) return meoAnalyzeCards(groups[0].parent, groups[0].items);\n"
+    "  var fields=meoInferFields(node);\n"
+    "  var scalar={\n"
+    "    type:'scalar', title:'单一区域', structureType:'scalar',\n"
+    "    containerPath:meoCssPath(node), rowPath:'',\n"
+    "    estimatedRows:1, fields:fields,\n"
+    "    columns:fields.map(function(f){return f.name;}),\n"
+    "    sampleText:String(node.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80)\n"
+    "  };\n"
+    "  return meoScoreCandidate(scalar, node, [node]);\n"
+    "}\n"
+    "function meoDetectPageCandidates(){\n"
+    "  var out=[], seen={};\n"
+    "  function add(c){\n"
+    "    if(!c||!c.containerPath) return;\n"
+    "    var key=c.containerPath+'|'+c.rowPath;\n"
+    "    if(seen[key]) return; seen[key]=1;\n"
+    "    out.push(c);\n"
+    "  }\n"
+    "  Array.from(document.querySelectorAll('table')).slice(0,8).forEach(function(t){ add(meoAnalyzeTable(t)); });\n"
+    "  Array.from(document.querySelectorAll('ul,ol')).slice(0,10).forEach(function(l){\n"
+    "    var a=meoAnalyzeList(l); if(a&&a.estimatedRows>=3) add(a);\n"
+    "  });\n"
+    "  meoFindCardGroups(document.body).slice(0,12).forEach(function(g){\n"
+    "    add(meoAnalyzeCards(g.parent, g.items));\n"
+    "  });\n"
+    "  return meoRankCandidates(out).slice(0,16);\n"
+    "}\n";
+}
+
++ (void)detectCandidatesInWebView:(WKWebView *)webView
+                       completion:(void (^)(NSArray<NSDictionary *> *candidates))completion {
+    if (!webView) {
+        if (completion) completion(@[]);
+        return;
+    }
+    NSString *js = [NSString stringWithFormat:@"(function(){\n%@\nreturn meoDetectPageCandidates();\n})();",
+                    [self structureHelpersJavaScript]];
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        (void)error;
+        NSArray *arr = [result isKindOfClass:[NSArray class]] ? result : @[];
+        if (completion) completion(arr);
+    }];
+}
+
++ (void)analyzeContainerInWebView:(WKWebView *)webView
+                    containerPath:(NSString *)containerPath
+                       completion:(void (^)(NSDictionary * _Nullable analysis, NSError * _Nullable error))completion {
+    if (!webView) {
+        if (completion) {
+            completion(nil, [NSError errorWithDomain:@"BrowserScraper" code:20
+                                           userInfo:@{NSLocalizedDescriptionKey:@"无 WebView"}]);
+        }
+        return;
+    }
+    NSString *pathJSON = [self jsonStringLiteral:containerPath];
+    NSString *js = [NSString stringWithFormat:
+                    @"(function(){\n%@\n"
+                     "  var path=%@;\n"
+                     "  var node=path?document.querySelector(path):null;\n"
+                     "  if(!node) return { error:'找不到选中节点' };\n"
+                     "  return meoAnalyzeFromNode(node);\n"
+                     "})();",
+                    [self structureHelpersJavaScript], pathJSON];
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (error) {
+            if (completion) completion(nil, error);
+            return;
+        }
+        if (![result isKindOfClass:[NSDictionary class]]) {
+            if (completion) {
+                completion(nil, [NSError errorWithDomain:@"BrowserScraper" code:21
+                                               userInfo:@{NSLocalizedDescriptionKey:@"分析结果无效"}]);
+            }
+            return;
+        }
+        NSDictionary *dict = (NSDictionary *)result;
+        if ([dict[@"error"] isKindOfClass:[NSString class]]) {
+            if (completion) {
+                completion(nil, [NSError errorWithDomain:@"BrowserScraper" code:22
+                                               userInfo:@{NSLocalizedDescriptionKey: dict[@"error"]}]);
+            }
+            return;
+        }
+        if (completion) completion(dict, nil);
+    }];
+}
+
++ (void)extractRowsInWebView:(WKWebView *)webView
+                        mode:(NSString *)mode
+               containerPath:(NSString *)containerPath
+                     rowPath:(NSString *)rowPath
+                      fields:(NSArray<NSDictionary *> *)fields
+               absoluteURLs:(BOOL)absoluteURLs
+                     maxRows:(NSInteger)maxRows
+                  completion:(void (^)(NSArray<NSDictionary *> *rows, NSError * _Nullable error))completion {
+    if (!webView) {
+        if (completion) {
+            completion(@[], [NSError errorWithDomain:@"BrowserScraper" code:10 userInfo:@{NSLocalizedDescriptionKey:@"无 WebView"}]);
+        }
+        return;
+    }
+    NSError *jsonError = nil;
+    id fieldsJSONObject = fields ?: @[];
+    if (![NSJSONSerialization isValidJSONObject:fieldsJSONObject]) {
+        NSMutableArray *cleaned = [NSMutableArray array];
+        for (id item in [fields isKindOfClass:[NSArray class]] ? fields : @[]) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSMutableDictionary *d = [NSMutableDictionary dictionary];
+            [(NSDictionary *)item enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+                (void)stop;
+                if ([obj isKindOfClass:[NSNull class]]) return;
+                if ([obj isKindOfClass:[NSString class]] || [obj isKindOfClass:[NSNumber class]] ||
+                    [obj isKindOfClass:[NSArray class]] || [obj isKindOfClass:[NSDictionary class]]) {
+                    d[key] = obj;
+                }
+            }];
+            [cleaned addObject:d];
+        }
+        fieldsJSONObject = cleaned;
+    }
+    NSData *fieldsData = [NSJSONSerialization dataWithJSONObject:fieldsJSONObject options:0 error:&jsonError];
+    if (!fieldsData) {
+        if (completion) completion(@[], jsonError);
+        return;
+    }
+    NSString *fieldsJSON = [[NSString alloc] initWithData:fieldsData encoding:NSUTF8StringEncoding];
+    NSString *containerJSON = [self jsonStringLiteral:containerPath];
+    NSString *rowJSON = [self jsonStringLiteral:rowPath];
+    NSString *modeJSON = [self jsonStringLiteral:mode ?: @"table"];
+
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){\n"
+         "  var mode=%@, containerPath=%@, rowPath=%@, fields=%@, absoluteURLs=%@, maxRows=%ld;\n"
+         "  function q(root, sel){ try { return sel ? root.querySelector(sel) : root; } catch(e){ return null; } }\n"
+         "  function qa(root, sel){\n"
+         "    try {\n"
+         "      if(!sel) return [];\n"
+         "      if(sel.indexOf(':scope')===0){\n"
+         "        var rest=sel.replace(/^:scope\\s*>\\s*/,'').trim();\n"
+         "        return Array.from(root.children).filter(function(c){\n"
+         "          try { return c.matches(rest); } catch(e){ return c.tagName && c.tagName.toLowerCase()===rest; }\n"
+         "        });\n"
+         "      }\n"
+         "      return Array.from(root.querySelectorAll(sel));\n"
+         "    } catch(e){ return []; }\n"
+         "  }\n"
+         "  function abs(u){ try { return absoluteURLs ? new URL(u, location.href).href : u; } catch(e){ return u; } }\n"
+         "  function val(el, field){\n"
+         "    if(!el) return '';\n"
+         "    var target = field.path ? q(el, field.path) : el;\n"
+         "    if(!target) return '';\n"
+         "    var kind = field.kind || 'text';\n"
+         "    if(kind==='href'){ var a = target.closest ? (target.closest('a')||target) : target; var h=a.getAttribute && a.getAttribute('href'); return h?abs(h):''; }\n"
+         "    if(kind==='src'){ var s=target.getAttribute && target.getAttribute('src'); return s?abs(s):''; }\n"
+         "    if(kind==='attribute'){ return (target.getAttribute && target.getAttribute(field.attribute||'')) || ''; }\n"
+         "    if(kind==='html'){ return String(target.innerHTML||'').slice(0,8000); }\n"
+         "    return String(target.textContent||'').trim();\n"
+         "  }\n"
+         "  var container = containerPath ? document.querySelector(containerPath) : document.body;\n"
+         "  if(!container) return { error: '找不到容器' };\n"
+         "  var rows=[];\n"
+         "  if(mode==='scalar'){\n"
+         "    var obj={};\n"
+         "    fields.forEach(function(f){ if(f.enabled===false) return; obj[f.name||f.id]=val(container,f); });\n"
+         "    rows.push(obj);\n"
+         "    return { rows: rows };\n"
+         "  }\n"
+         "  var nodes = rowPath ? qa(container, rowPath) : [container];\n"
+         "  if(rowPath==='tr' || rowPath==='tbody tr'){\n"
+         "    if(nodes[0] && nodes[0].querySelector && nodes[0].querySelector('th') && !nodes[0].querySelector('td')) nodes=nodes.slice(1);\n"
+         "  }\n"
+         "  nodes.slice(0, maxRows).forEach(function(node){\n"
+         "    var obj={};\n"
+         "    var empty=true;\n"
+         "    fields.forEach(function(f){\n"
+         "      if(f.enabled===false) return;\n"
+         "      var v=val(node,f);\n"
+         "      obj[f.name||f.id]=v;\n"
+         "      if(String(v).trim()) empty=false;\n"
+         "    });\n"
+         "    if(!empty) rows.push(obj);\n"
+         "  });\n"
+         "  return { rows: rows };\n"
+         "})();",
+        modeJSON, containerJSON, rowJSON, fieldsJSON, absoluteURLs ? @"true" : @"false", (long)MAX(1, maxRows)];
+
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (error) {
+            if (completion) completion(@[], error);
+            return;
+        }
+        if (![result isKindOfClass:[NSDictionary class]]) {
+            if (completion) completion(@[], [NSError errorWithDomain:@"BrowserScraper" code:11 userInfo:@{NSLocalizedDescriptionKey:@"抽取结果无效"}]);
+            return;
+        }
+        NSDictionary *dict = (NSDictionary *)result;
+        if ([dict[@"error"] isKindOfClass:[NSString class]]) {
+            if (completion) {
+                completion(@[], [NSError errorWithDomain:@"BrowserScraper" code:12 userInfo:@{NSLocalizedDescriptionKey: dict[@"error"]}]);
+            }
+            return;
+        }
+        NSArray *rows = [dict[@"rows"] isKindOfClass:[NSArray class]] ? dict[@"rows"] : @[];
+        if (completion) completion(rows, nil);
+    }];
+}
+
++ (NSString *)waitForSelectorJavaScript:(NSString *)selector timeoutMs:(NSInteger)timeoutMs {
+    NSString *selJSON = [self jsonStringLiteral:selector];
+    return [NSString stringWithFormat:
+            @"(function(){ return new Promise(function(resolve){\n"
+             "  var sel=%@, timeout=%ld, start=Date.now();\n"
+             "  if(!sel){ resolve(true); return; }\n"
+             "  function check(){ if(document.querySelector(sel)){ resolve(true); return; }\n"
+             "    if(Date.now()-start>=timeout){ resolve(false); return; }\n"
+             "    setTimeout(check, 120); }\n"
+             "  check();\n"
+             "}); })()", selJSON, (long)MAX(0, timeoutMs)];
+}
+
+@end

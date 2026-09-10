@@ -42,6 +42,8 @@
 #import "BrowserHistorySidebarController.h"
 #import "PagePackSidebarController.h"
 #import "PagePackInjector.h"
+#import "BrowserScraperSidebarController.h"
+#import "BrowserScraperMessageHub.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
 #import "BrowserTabOverviewController.h"
@@ -170,7 +172,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @implementation BrowserPendingNavigationError
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, PagePackSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, PagePackSidebarControllerDelegate, BrowserScraperSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -205,6 +207,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) AssistSidebarController *assistSidebarController;
 @property (nonatomic, strong) BrowserHistorySidebarController *historySidebarController;
 @property (nonatomic, strong) PagePackSidebarController *pagePackSidebarController;
+@property (nonatomic, strong) BrowserScraperSidebarController *scraperSidebarController;
 @property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
@@ -528,6 +531,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
     [self.findBarController configureWebViewConfiguration:configuration];
+    [BrowserScraperMessageHub installOnConfiguration:configuration];
     [BrowserTransparentModeController installPageStyleUserScriptOnConfiguration:configuration];
 }
 
@@ -1096,18 +1100,28 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.pagePackSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.scraperSidebarController = [[BrowserScraperSidebarController alloc] init];
+    self.scraperSidebarController.delegate = self;
+    self.scraperSidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.scraperSidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.scraperSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.trailingSidebarSlot = [[BrowserTrailingSidebarSlot alloc] init];
     self.trailingSidebarSlot.notificationSidebar = self.notificationSidebarController;
     self.trailingSidebarSlot.assistSidebar = self.assistSidebarController;
     self.trailingSidebarSlot.historySidebar = self.historySidebarController;
     self.trailingSidebarSlot.pagePackSidebar = self.pagePackSidebarController;
+    self.trailingSidebarSlot.scraperSidebar = self.scraperSidebarController;
 
     self.contentRowStack = [NSStackView stackViewWithViews:@[
         self.contentContainer,
         self.notificationSidebarController.view,
         self.assistSidebarController.view,
         self.historySidebarController.view,
-        self.pagePackSidebarController.view
+        self.pagePackSidebarController.view,
+        self.scraperSidebarController.view
     ]];
     self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.contentRowStack.spacing = 0;
@@ -1321,6 +1335,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionShareID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(togglePagePackSidebar:)];
+    [self wireChromeButton:BrowserChromeActionPageScraperID action:@selector(togglePageScraperSidebar:)];
 }
 
 - (void)wireChromeButton:(NSString *)itemID action:(SEL)action {
@@ -1460,6 +1475,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if ([itemID isEqualToString:BrowserChromeActionWindowLayoutID]) {
         return self.windowLayoutMode == BrowserWindowLayoutModeSmall;
     }
+    if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
+        return self.scraperSidebarController.visible;
+    }
     return NO;
 }
 
@@ -1563,6 +1581,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if ([itemID isEqualToString:BrowserChromeActionExtensionID]) {
         [self togglePagePackSidebar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
+        [self togglePageScraperSidebar:nil];
         return;
     }
 }
@@ -2759,8 +2781,80 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL open = !self.pagePackSidebarController.visible;
     [self.trailingSidebarSlot setPagePackVisible:open animated:YES];
     [self updatePagePackButtonAppearance];
+    [self updatePageScraperButtonAppearance];
     [self updateHistoryButtonAppearance];
     [self updateNotificationInboxButtonAppearance];
+}
+
+#pragma mark - Page Scraper Sidebar
+
+- (void)togglePageScraperSidebar:(id)sender {
+    (void)sender;
+    BOOL open = !self.scraperSidebarController.visible;
+    [self.trailingSidebarSlot setScraperVisible:open animated:YES];
+    [BrowserScraperMessageHub sharedHub].activeSidebar = open ? self.scraperSidebarController : nil;
+    if (open) {
+        [self.scraperSidebarController reloadForCurrentURL];
+    }
+    [self updatePageScraperButtonAppearance];
+    [self updatePagePackButtonAppearance];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+    [self.chromeActionsView setOn:open forItemID:BrowserChromeActionPageScraperID];
+}
+
+- (void)scraperSidebarDidRequestClose:(BrowserScraperSidebarController *)controller {
+    (void)controller;
+    [self.trailingSidebarSlot setScraperVisible:NO animated:YES];
+    [BrowserScraperMessageHub sharedHub].activeSidebar = nil;
+    [self updatePageScraperButtonAppearance];
+    [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionPageScraperID];
+}
+
+- (void)scraperSidebar:(BrowserScraperSidebarController *)controller didChangeWidth:(CGFloat)width {
+    (void)controller;
+    (void)width;
+}
+
+- (NSURL *)scraperSidebarCurrentURL:(BrowserScraperSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return [BrowserWebView publicURLFromInternalURL:self.webView.URL] ?: self.webView.URL;
+}
+
+- (WKWebView *)scraperSidebarCurrentWebView:(BrowserScraperSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return self.webView;
+}
+
+- (void)scraperSidebar:(BrowserScraperSidebarController *)controller didReceivePickMessage:(id)body {
+    (void)controller;
+    [self.scraperSidebarController handlePickMessageBody:body];
+}
+
+- (void)reloadPageScraperSidebarIfVisible {
+    if (self.scraperSidebarController.visible) {
+        [self.scraperSidebarController reloadForCurrentURL];
+    }
+}
+
+- (void)updatePageScraperButtonAppearance {
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionPageScraperID];
+    if (!button) {
+        return;
+    }
+    BOOL visible = self.scraperSidebarController.visible;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+    [self.chromeActionsView setOn:visible forItemID:BrowserChromeActionPageScraperID];
 }
 
 - (void)pagePackSidebarDidRequestClose:(PagePackSidebarController *)controller {
@@ -5176,6 +5270,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(togglePagePackSidebar:)) {
         return YES;
     }
+    if (action == @selector(togglePageScraperSidebar:)) {
+        return YES;
+    }
     return YES;
 }
 
@@ -5347,6 +5444,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         [self.loginAssistController updateForURL:nil];
         [self reloadAssistSidebarIfVisible];
         [self reloadPagePackSidebarIfVisible];
+        [self reloadPageScraperSidebarIfVisible];
         [self.captchaAssistController updateForURL:nil];
         [self.feedAssistController updateForURL:nil];
         return;
@@ -5368,6 +5466,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     [self.loginAssistController updateForURL:webView.URL];
     [self reloadAssistSidebarIfVisible];
     [self reloadPagePackSidebarIfVisible];
+    [self reloadPageScraperSidebarIfVisible];
     [self.captchaAssistController updateForURL:webView.URL];
     [self.feedAssistController updateForURL:webView.URL];
 }
@@ -6642,6 +6741,7 @@ didBecomeDownload:(WKDownload *)download {
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
         [self updateReloadStopButtonAppearance];
         [self reloadPagePackSidebarIfVisible];
+        [self reloadPageScraperSidebarIfVisible];
         [self reloadAssistSidebarIfVisible];
         if (self.transparentModeEnabled) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
