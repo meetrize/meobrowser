@@ -10,6 +10,7 @@
 @interface BrowserScraperEngine ()
 @property (nonatomic, assign, readwrite) BOOL running;
 @property (nonatomic, assign, readwrite) BOOL paused;
+@property (nonatomic, assign, readwrite) BOOL trialMode;
 @property (nonatomic, copy, readwrite, nullable) NSString *currentRunDirectory;
 @property (nonatomic, strong) BrowserScraperRecipe *recipe;
 @property (nonatomic, weak) WKWebView *webView;
@@ -63,10 +64,25 @@ static NSString *MeoScraperStringify(id value) {
 }
 
 - (void)startWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView {
+    [self startWithRecipe:recipe webView:webView trialMode:NO];
+}
+
+- (void)startTrialWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView {
+    [self startWithRecipe:recipe webView:webView trialMode:YES];
+}
+
+- (void)startWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView trialMode:(BOOL)trialMode {
     if (self.running) {
         [self cancel];
     }
-    self.recipe = [recipe copy];
+    BrowserScraperRecipe *runRecipe = [recipe copy];
+    self.trialMode = trialMode;
+    if (trialMode) {
+        NSInteger pages = runRecipe.pagination.maxPages;
+        if (pages < 1) pages = 10;
+        runRecipe.pagination.maxPages = MIN(10, pages);
+    }
+    self.recipe = runRecipe;
     self.webView = webView;
     self.cancelRequested = NO;
     self.paused = NO;
@@ -90,11 +106,17 @@ static NSString *MeoScraperStringify(id value) {
         @"recipeId": recipe.recipeID ?: @"",
         @"startedAt": @([NSDate date].timeIntervalSince1970),
         @"status": @"running",
+        @"trial": @(trialMode),
     };
     NSData *metaData = [NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingPrettyPrinted error:nil];
     [metaData writeToFile:[runDir stringByAppendingPathComponent:@"meta.json"] atomically:YES];
 
-    [self log:@"开始爬取"];
+    if (trialMode) {
+        [self log:[NSString stringWithFormat:@"试运行开始（最多 %ld 页，结果追加到预览）",
+                   (long)runRecipe.pagination.maxPages]];
+    } else {
+        [self log:@"开始爬取"];
+    }
     [self runPageLoop];
 }
 
@@ -213,7 +235,8 @@ static NSString *MeoScraperStringify(id value) {
                 [self.seenKeys addObject:key];
             }
             [accepted addObject:norm];
-            if (self.mutablePreview.count < 100) {
+            // 正式运行不缓存预览行，节约内存；试运行由侧栏自行追加
+            if (self.trialMode && self.mutablePreview.count < 500) {
                 [self.mutablePreview addObject:norm];
             }
             if (self.totalRows + (NSInteger)accepted.count >= recipe.pagination.maxRows) break;
@@ -289,9 +312,9 @@ static NSString *MeoScraperStringify(id value) {
     };
     NSData *metaData = [NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingPrettyPrinted error:nil];
     [metaData writeToFile:[self.currentRunDirectory stringByAppendingPathComponent:@"meta.json"] atomically:YES];
-    [self log:error ? (error.localizedDescription ?: @"失败") : @"完成"];
+    [self log:error ? (error.localizedDescription ?: @"失败") : (self.trialMode ? @"试运行完成" : @"完成")];
 
-    if (!error || error.code == 20) {
+    if (!self.trialMode && (!error || error.code == 20)) {
         [self writeSink];
     }
 
@@ -301,6 +324,7 @@ static NSString *MeoScraperStringify(id value) {
     if ([self.delegate respondsToSelector:@selector(scraperEngine:didFinishWithRunDirectory:error:)]) {
         [self.delegate scraperEngine:self didFinishWithRunDirectory:runDir error:(error.code == 20 ? nil : error)];
     }
+    self.trialMode = NO;
 }
 
 - (void)writeSink {

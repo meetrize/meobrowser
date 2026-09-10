@@ -8,6 +8,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)detectCandidatesInWebView:(WKWebView *)webView
                        completion:(void (^)(NSArray<NSDictionary *> *candidates))completion;
 
+/// 在容器附近（或整页）启发式识别翻页方式：下一页 / 页码 / Load More / 无限滚动。
+/// 返回字典：type、selector、score、reason，以及可选 pageDelayMs / scrollStepPx / scrollSettleMs / maxPages。
++ (void)detectPaginationInWebView:(WKWebView *)webView
+                   nearContainerPath:(nullable NSString *)containerPath
+                          completion:(void (^)(NSDictionary *pagination))completion;
+
 /// 针对已选容器（或其中某节点）分析循环行：表格行 / 列表项 / 同构 div 卡片，并推断字段。
 + (void)analyzeContainerInWebView:(WKWebView *)webView
                     containerPath:(NSString *)containerPath

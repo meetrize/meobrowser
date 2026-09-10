@@ -67,14 +67,57 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (BOOL)isFlipped { return YES; }
 @end
 
-/// 预览表头：双击列头时回调列索引，便于选中上方字段行。
+/// 预览表头：右侧显示删除叉；单击叉删除列，双击列头选中上方字段。
 @interface BrowserScraperPreviewHeaderView : NSTableHeaderView
 @property (nonatomic, copy, nullable) void (^doubleClickColumnHandler)(NSInteger columnIndex);
+@property (nonatomic, copy, nullable) void (^deleteColumnHandler)(NSInteger columnIndex);
 @end
 @implementation BrowserScraperPreviewHeaderView
+
+- (NSRect)closeRectForColumn:(NSInteger)column {
+    if (column < 0) return NSZeroRect;
+    NSRect header = [self headerRectOfColumn:column];
+    CGFloat size = 12.0;
+    CGFloat pad = 4.0;
+    return NSMakeRect(NSMaxX(header) - size - pad,
+                      NSMidY(header) - size * 0.5,
+                      size,
+                      size);
+}
+
+- (NSInteger)closeColumnAtPoint:(NSPoint)point {
+    NSInteger col = [self columnAtPoint:point];
+    if (col < 0) return -1;
+    if (NSPointInRect(point, [self closeRectForColumn:col])) return col;
+    return -1;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    NSInteger count = (NSInteger)self.tableView.tableColumns.count;
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: [NSColor secondaryLabelColor],
+    };
+    for (NSInteger i = 0; i < count; i++) {
+        NSRect close = [self closeRectForColumn:i];
+        if (!NSIntersectsRect(close, dirtyRect)) continue;
+        NSString *mark = @"×";
+        NSSize sz = [mark sizeWithAttributes:attrs];
+        NSPoint p = NSMakePoint(NSMidX(close) - sz.width * 0.5,
+                                NSMidY(close) - sz.height * 0.5);
+        [mark drawAtPoint:p withAttributes:attrs];
+    }
+}
+
 - (void)mouseDown:(NSEvent *)event {
+    NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+    NSInteger closeCol = [self closeColumnAtPoint:loc];
+    if (closeCol >= 0 && self.deleteColumnHandler) {
+        self.deleteColumnHandler(closeCol);
+        return;
+    }
     if (event.clickCount >= 2) {
-        NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
         NSInteger col = [self columnAtPoint:loc];
         if (col >= 0 && self.doubleClickColumnHandler) {
             self.doubleClickColumnHandler(col);
@@ -83,9 +126,18 @@ static const CGFloat kResizeHandleWidth = 8.0;
     }
     [super mouseDown:event];
 }
+
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    NSInteger count = (NSInteger)self.tableView.tableColumns.count;
+    for (NSInteger i = 0; i < count; i++) {
+        [self addCursorRect:[self closeRectForColumn:i] cursor:[NSCursor pointingHandCursor]];
+    }
+}
+
 @end
 
-@interface BrowserScraperSidebarController () <BrowserScraperEngineDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@interface BrowserScraperSidebarController () <BrowserScraperEngineDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate>
 @property (nonatomic, strong) NSView *rootView;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
 @property (nonatomic, assign, readwrite) BOOL visible;
@@ -285,15 +337,23 @@ static const CGFloat kResizeHandleWidth = 8.0;
     logScroll.borderType = NSBezelBorder;
     self.logView = [SBTextView standardTextView];
     self.logView.editable = NO;
+    self.logView.selectable = YES;
+    self.logView.delegate = self;
     self.logView.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
+    self.logView.linkTextAttributes = @{
+        NSForegroundColorAttributeName: [NSColor linkColor],
+        NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle),
+        NSCursorAttributeName: [NSCursor pointingHandCursor],
+    };
     logScroll.documentView = self.logView;
     [logScroll.heightAnchor constraintEqualToConstant:72].active = YES;
 
+    NSButton *trialBtn = [NSButton buttonWithTitle:@"试运行" target:self action:@selector(trialRunClicked:)];
     NSButton *runBtn = [NSButton buttonWithTitle:@"立即运行" target:self action:@selector(runClicked:)];
     NSButton *pauseBtn = [NSButton buttonWithTitle:@"暂停" target:self action:@selector(pauseClicked:)];
     NSButton *stopBtn = [NSButton buttonWithTitle:@"停止" target:self action:@selector(stopClicked:)];
     NSButton *saveBtn = [NSButton buttonWithTitle:@"保存配方" target:self action:@selector(saveRecipeClicked:)];
-    NSStackView *actions = [NSStackView stackViewWithViews:@[runBtn, pauseBtn, stopBtn, saveBtn]];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[trialBtn, runBtn, pauseBtn, stopBtn, saveBtn]];
     actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     actions.spacing = 6;
     actions.translatesAutoresizingMaskIntoConstraints = NO;
@@ -555,6 +615,9 @@ static const CGFloat kResizeHandleWidth = 8.0;
         __weak typeof(self) weakSelf = self;
         header.doubleClickColumnHandler = ^(NSInteger columnIndex) {
             [weakSelf selectFieldForPreviewColumn:columnIndex];
+        };
+        header.deleteColumnHandler = ^(NSInteger columnIndex) {
+            [weakSelf deleteFieldForPreviewColumn:columnIndex];
         };
         self.previewTable.headerView = header;
     }
@@ -885,18 +948,86 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [self appendLog:[NSString stringWithFormat:@"智能识别：%@ · 循环 %@ · 约 %ld 行 · %lu 字段",
                      title, rowPath.length ? rowPath : @"(无)", (long)rows, (unsigned long)fields.count]];
     [self syncUIFromDraft];
+    [self detectAndApplyPaginationNearPath:container];
     [self previewClicked:nil];
+}
+
+- (void)detectAndApplyPaginationNearPath:(NSString *)containerPath {
+    WKWebView *wv = [self currentWebView];
+    [BrowserScraperDetector detectPaginationInWebView:wv
+                                     nearContainerPath:containerPath
+                                            completion:^(NSDictionary *pagination) {
+        [self applyPaginationDetection:pagination];
+    }];
+}
+
+- (void)applyPaginationDetection:(NSDictionary *)pagination {
+    if (![pagination isKindOfClass:[NSDictionary class]]) return;
+    NSString *typeStr = [pagination[@"type"] isKindOfClass:[NSString class]] ? pagination[@"type"] : @"none";
+    BrowserScraperPaginationType type = [BrowserScraperPagination typeFromString:typeStr];
+    NSString *selector = [pagination[@"selector"] isKindOfClass:[NSString class]] ? pagination[@"selector"] : @"";
+    NSString *reason = [pagination[@"reason"] isKindOfClass:[NSString class]] ? pagination[@"reason"] : @"";
+    NSInteger score = [pagination[@"score"] respondsToSelector:@selector(integerValue)]
+        ? [pagination[@"score"] integerValue] : 0;
+
+    self.draft.pagination.type = type;
+    self.draft.pagination.selector = selector ?: @"";
+    if (pagination[@"pageDelayMs"]) {
+        self.draft.pagination.pageDelayMs = MAX(0, [pagination[@"pageDelayMs"] integerValue]);
+    }
+    if (pagination[@"scrollStepPx"]) {
+        self.draft.pagination.scrollStepPx = MAX(1, [pagination[@"scrollStepPx"] integerValue]);
+    }
+    if (pagination[@"scrollSettleMs"]) {
+        self.draft.pagination.scrollSettleMs = MAX(0, [pagination[@"scrollSettleMs"] integerValue]);
+    }
+    if (pagination[@"maxPages"]) {
+        self.draft.pagination.maxPages = MAX(1, [pagination[@"maxPages"] integerValue]);
+    }
+
+    // 刷新翻页页 UI（不整表 sync，避免冲掉用户正在编辑的其它字段）
+    if (self.paginationPopup) {
+        [self.paginationPopup selectItemAtIndex:(NSInteger)type];
+    }
+    if (self.paginationSelectorField) {
+        self.paginationSelectorField.stringValue = self.draft.pagination.selector ?: @"";
+    }
+    if (self.maxPagesField) {
+        self.maxPagesField.stringValue = [NSString stringWithFormat:@"%ld", (long)self.draft.pagination.maxPages];
+    }
+    if (self.delayField) {
+        self.delayField.stringValue = [NSString stringWithFormat:@"%ld", (long)self.draft.pagination.pageDelayMs];
+    }
+
+    NSString *typeLabel = @"无";
+    switch (type) {
+        case BrowserScraperPaginationTypeNextButton: typeLabel = @"下一页按钮"; break;
+        case BrowserScraperPaginationTypePageNumbers: typeLabel = @"页码"; break;
+        case BrowserScraperPaginationTypeLoadMore: typeLabel = @"Load More"; break;
+        case BrowserScraperPaginationTypeInfiniteScroll: typeLabel = @"无限滚动"; break;
+        default: typeLabel = @"无"; break;
+    }
+    if (type == BrowserScraperPaginationTypeNone) {
+        [self appendLog:[NSString stringWithFormat:@"翻页检测：未发现可用翻页（%@）", reason.length ? reason : @"none"]];
+    } else if (selector.length > 0) {
+        [self appendLog:[NSString stringWithFormat:@"翻页检测：%@ · %@（分 %ld）· %@",
+                         typeLabel, reason, (long)score, selector]];
+    } else {
+        [self appendLog:[NSString stringWithFormat:@"翻页检测：%@ · %@（分 %ld）",
+                         typeLabel, reason, (long)score]];
+    }
 }
 
 - (void)detectClicked:(id)sender {
     (void)sender;
     WKWebView *wv = [self currentWebView];
-    [self appendLog:@"正在智能检测表格 / 列表 / 卡片…"];
+    [self appendLog:@"正在智能检测表格 / 列表 / 卡片与翻页方式…"];
     [BrowserScraperDetector detectCandidatesInWebView:wv completion:^(NSArray<NSDictionary *> *candidates) {
         self.candidates = candidates;
         [self.candidatesTable reloadData];
         if (candidates.count == 0) {
-            [self appendLog:@"未检测到可用候选"];
+            [self appendLog:@"未检测到可用候选，仍尝试识别整页翻页…"];
+            [self detectAndApplyPaginationNearPath:@""];
             return;
         }
         [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
@@ -906,6 +1037,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
             ? [best[@"score"] integerValue] : 0;
         BOOL confident = [best[@"confident"] boolValue];
         NSString *title = [best[@"title"] isKindOfClass:[NSString class]] ? best[@"title"] : @"候选";
+        NSString *near = [best[@"containerPath"] isKindOfClass:[NSString class]] ? best[@"containerPath"] : @"";
         if (confident) {
             [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，智能采用：%@（分 %ld）",
                              (unsigned long)candidates.count, title, (long)score]];
@@ -913,6 +1045,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
         } else {
             [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已选中推荐项（分 %ld），置信不足请确认后点「采用选中候选」",
                              (unsigned long)candidates.count, (long)score]];
+            [self detectAndApplyPaginationNearPath:near];
         }
     }];
 }
@@ -1106,13 +1239,102 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
 - (void)removeFieldClicked:(id)sender {
     (void)sender;
-    NSInteger row = self.fieldsTable.selectedRow;
+    [self removeFieldAtIndex:self.fieldsTable.selectedRow];
+}
+
+- (void)removeFieldAtIndex:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
+    BrowserScraperField *removed = self.draft.fields[row];
+    NSString *colKey = removed.name.length ? removed.name : (removed.fieldID ?: @"");
+
     NSMutableArray *fields = [self.draft.fields mutableCopy];
     [fields removeObjectAtIndex:row];
     self.draft.fields = fields;
     [self.fieldsTable reloadData];
-    [self refreshPreviewAfterFieldOrderChange];
+    if (row < (NSInteger)self.draft.fields.count) {
+        [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    } else if (self.draft.fields.count > 0) {
+        [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:self.draft.fields.count - 1] byExtendingSelection:NO];
+    } else {
+        [self.fieldsTable deselectAll:nil];
+    }
+
+    // 只摘掉对应预览列，避免整表重建导致表头/内容错位与滚动跳动
+    [self removePreviewColumnNamed:colKey];
+    if (self.previewRawRows.count > 0) {
+        BrowserScraperTransformContext *txCtx = [BrowserScraperTransformContext defaultContext];
+        WKWebView *wv = [self currentWebView];
+        if (wv.URL.absoluteString.length > 0) txCtx.baseURL = wv.URL.absoluteString;
+        self.previewRows = [BrowserScraperValueTransform normalizeRows:self.previewRawRows
+                                                                fields:self.draft.fields
+                                                               context:txCtx];
+        [self.previewTable reloadData];
+        [self.previewTable tile];
+        [self syncPreviewHeaderScrollWithContent];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self syncPreviewHeaderScrollWithContent];
+        });
+    }
+}
+
+- (void)syncPreviewHeaderScrollWithContent {
+    NSScrollView *scroll = self.previewTable.enclosingScrollView;
+    NSClipView *clip = scroll.contentView;
+    if (!clip) return;
+    CGFloat x = clip.bounds.origin.x;
+    NSView *headerSuper = self.previewTable.headerView.superview;
+    if (![headerSuper isKindOfClass:[NSClipView class]]) return;
+    NSClipView *headerClip = (NSClipView *)headerSuper;
+    NSPoint hp = headerClip.bounds.origin;
+    if (fabs(hp.x - x) < 0.5) return;
+    hp.x = x;
+    hp.y = 0;
+    [headerClip setBoundsOrigin:hp];
+    [headerClip setNeedsDisplay:YES];
+    [self.previewTable.headerView setNeedsDisplay:YES];
+}
+
+- (void)removePreviewColumnNamed:(NSString *)name {
+    if (name.length == 0) return;
+    NSTableColumn *match = nil;
+    for (NSTableColumn *col in self.previewTable.tableColumns) {
+        if ([col.identifier isEqualToString:name]) {
+            match = col;
+            break;
+        }
+    }
+    if (!match) return;
+
+    NSScrollView *scroll = self.previewTable.enclosingScrollView;
+    NSClipView *clip = scroll.contentView;
+    CGFloat savedX = clip ? clip.bounds.origin.x : 0;
+    CGFloat savedY = clip ? clip.bounds.origin.y : 0;
+
+    [self.previewTable removeTableColumn:match];
+    [self.previewTable tile];
+    [scroll layoutSubtreeIfNeeded];
+
+    if (clip) {
+        NSRect doc = [scroll.documentView frame];
+        NSSize visible = clip.bounds.size;
+        CGFloat maxX = MAX(0, NSWidth(doc) - visible.width);
+        CGFloat maxY = MAX(0, NSHeight(doc) - visible.height);
+        CGFloat x = MIN(MAX(0, savedX), maxX);
+        CGFloat y = MIN(MAX(0, savedY), maxY);
+        [clip scrollToPoint:NSMakePoint(x, y)];
+        [scroll reflectScrolledClipView:clip];
+        [self syncPreviewHeaderScrollWithContent];
+    }
+
+    NSTableHeaderView *header = self.previewTable.headerView;
+    if (header.window) {
+        [header.window invalidateCursorRectsForView:header];
+    }
+    [header setNeedsDisplay:YES];
+    // 下一帧再对齐一次，避免 tile/reload 异步布局后又偏一点
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self syncPreviewHeaderScrollWithContent];
+    });
 }
 
 - (void)moveFieldUpClicked:(id)sender {
@@ -1363,6 +1585,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
 }
 
 - (void)rebuildPreviewColumns {
+    NSScrollView *scroll = self.previewTable.enclosingScrollView;
+    NSClipView *clip = scroll.contentView;
+    CGFloat savedX = clip ? clip.bounds.origin.x : 0;
+    CGFloat savedY = clip ? clip.bounds.origin.y : 0;
+
     while (self.previewTable.tableColumns.count) {
         [self.previewTable removeTableColumn:self.previewTable.tableColumns.firstObject];
     }
@@ -1385,28 +1612,65 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [self.previewTable addTableColumn:col];
     }
     [self.previewTable reloadData];
+    [self.previewTable tile];
+    [scroll layoutSubtreeIfNeeded];
+
+    void (^restoreScroll)(void) = ^{
+        if (!clip || !scroll) return;
+        NSRect doc = [scroll.documentView frame];
+        NSSize visible = clip.bounds.size;
+        CGFloat maxX = MAX(0, NSWidth(doc) - visible.width);
+        CGFloat maxY = MAX(0, NSHeight(doc) - visible.height);
+        CGFloat x = MIN(MAX(0, savedX), maxX);
+        CGFloat y = MIN(MAX(0, savedY), maxY);
+        [clip scrollToPoint:NSMakePoint(x, y)];
+        [scroll reflectScrolledClipView:clip];
+        [self syncPreviewHeaderScrollWithContent];
+    };
+    restoreScroll();
+    dispatch_async(dispatch_get_main_queue(), restoreScroll);
+
+    if (self.previewTable.headerView.window) {
+        [self.previewTable.headerView.window invalidateCursorRectsForView:self.previewTable.headerView];
+    }
 }
 
 - (void)selectFieldForPreviewColumn:(NSInteger)columnIndex {
-    if (columnIndex < 0 || columnIndex >= (NSInteger)self.previewTable.tableColumns.count) return;
-    NSString *name = self.previewTable.tableColumns[columnIndex].identifier ?: @"";
-    if (name.length == 0) return;
-    NSInteger fieldRow = -1;
-    for (NSInteger i = 0; i < (NSInteger)self.draft.fields.count; i++) {
-        BrowserScraperField *f = self.draft.fields[i];
-        NSString *key = f.name.length ? f.name : (f.fieldID ?: @"");
-        if ([key isEqualToString:name]) {
-            fieldRow = i;
-            break;
-        }
-    }
+    NSInteger fieldRow = [self fieldIndexForPreviewColumn:columnIndex];
     if (fieldRow < 0) {
-        [self appendLog:[NSString stringWithFormat:@"预览列「%@」未匹配到字段列表", name]];
+        if (columnIndex >= 0 && columnIndex < (NSInteger)self.previewTable.tableColumns.count) {
+            NSString *name = self.previewTable.tableColumns[columnIndex].identifier ?: @"";
+            [self appendLog:[NSString stringWithFormat:@"预览列「%@」未匹配到字段列表", name]];
+        }
         return;
     }
     [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:fieldRow] byExtendingSelection:NO];
     [self.fieldsTable scrollRowToVisible:fieldRow];
     [[self.fieldsTable window] makeFirstResponder:self.fieldsTable];
+}
+
+- (void)deleteFieldForPreviewColumn:(NSInteger)columnIndex {
+    NSInteger fieldRow = [self fieldIndexForPreviewColumn:columnIndex];
+    if (fieldRow < 0) {
+        if (columnIndex >= 0 && columnIndex < (NSInteger)self.previewTable.tableColumns.count) {
+            NSString *name = self.previewTable.tableColumns[columnIndex].identifier ?: @"";
+            [self appendLog:[NSString stringWithFormat:@"预览列「%@」未匹配到字段列表，无法删除", name]];
+        }
+        return;
+    }
+    [self removeFieldAtIndex:fieldRow];
+}
+
+- (NSInteger)fieldIndexForPreviewColumn:(NSInteger)columnIndex {
+    if (columnIndex < 0 || columnIndex >= (NSInteger)self.previewTable.tableColumns.count) return -1;
+    NSString *name = self.previewTable.tableColumns[columnIndex].identifier ?: @"";
+    if (name.length == 0) return -1;
+    for (NSInteger i = 0; i < (NSInteger)self.draft.fields.count; i++) {
+        BrowserScraperField *f = self.draft.fields[i];
+        NSString *key = f.name.length ? f.name : (f.fieldID ?: @"");
+        if ([key isEqualToString:name]) return i;
+    }
+    return -1;
 }
 
 - (void)copyPreviewClicked:(id)sender {
@@ -1440,6 +1704,31 @@ static const CGFloat kResizeHandleWidth = 8.0;
     if (schedErr) [self appendLog:schedErr.localizedDescription];
     [self refreshRecipePopup];
     [self appendLog:@"配方已保存"];
+}
+
+- (void)trialRunClicked:(id)sender {
+    (void)sender;
+    [self applyUIToDraft];
+    WKWebView *wv = [self currentWebView];
+    if (!wv) {
+        [self appendLog:@"无当前页面"];
+        return;
+    }
+    if (self.draft.fields.count == 0) {
+        [self appendLog:@"请先配置字段"];
+        return;
+    }
+    if (self.engine.running) {
+        [self appendLog:@"已有任务在运行，请先停止"];
+        return;
+    }
+    // 切到「字段」页以便看到预览追加
+    if (self.segment.segmentCount > 1) {
+        self.segment.selectedSegment = 1;
+        [self segmentChanged:self.segment];
+    }
+    [self appendLog:@"试运行：按当前翻页设置，最多 10 页，结果追加到预览"];
+    [self.engine startTrialWithRecipe:self.draft webView:wv];
 }
 
 - (void)runClicked:(id)sender {
@@ -1486,19 +1775,89 @@ static const CGFloat kResizeHandleWidth = 8.0;
 }
 
 - (void)appendLog:(NSString *)line {
-    NSString *existing = self.logView.string ?: @"";
-    self.logView.string = [[existing stringByAppendingString:line ?: @""] stringByAppendingString:@"\n"];
-    self.runStatusLabel.stringValue = line ?: @"";
+    NSString *text = line ?: @"";
+    self.runStatusLabel.stringValue = text;
+
+    NSFont *font = self.logView.font ?: [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
+    NSColor *fg = [NSColor labelColor];
+    NSDictionary *plainAttrs = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: fg,
+    };
+
+    NSMutableAttributedString *chunk = [[NSMutableAttributedString alloc] init];
+    static NSString *const kExportPrefix = @"已导出 ";
+    if ([text hasPrefix:kExportPrefix]) {
+        NSString *path = [text substringFromIndex:kExportPrefix.length];
+        [chunk appendAttributedString:[[NSAttributedString alloc] initWithString:kExportPrefix attributes:plainAttrs]];
+        if (path.length > 0) {
+            NSURL *fileURL = [NSURL fileURLWithPath:path isDirectory:NO];
+            NSDictionary *linkAttrs = @{
+                NSFontAttributeName: font,
+                NSForegroundColorAttributeName: [NSColor linkColor],
+                NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle),
+                NSLinkAttributeName: fileURL,
+                NSToolTipAttributeName: @"用默认应用打开",
+            };
+            [chunk appendAttributedString:[[NSAttributedString alloc] initWithString:path attributes:linkAttrs]];
+        }
+    } else {
+        [chunk appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:plainAttrs]];
+    }
+    [chunk appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:plainAttrs]];
+
+    NSTextStorage *storage = self.logView.textStorage;
+    [storage beginEditing];
+    [storage appendAttributedString:chunk];
+    [storage endEditing];
+    NSRange end = NSMakeRange(storage.length, 0);
+    [self.logView scrollRangeToVisible:end];
+}
+
+- (BOOL)textView:(NSTextView *)textView clickedOnLink:(id)link atIndex:(NSUInteger)charIndex {
+    (void)textView;
+    (void)charIndex;
+    NSURL *url = nil;
+    if ([link isKindOfClass:[NSURL class]]) {
+        url = (NSURL *)link;
+    } else if ([link isKindOfClass:[NSString class]]) {
+        url = [NSURL URLWithString:(NSString *)link];
+        if (!url.scheme.length) {
+            url = [NSURL fileURLWithPath:(NSString *)link];
+        }
+    }
+    if (!url) return NO;
+    BOOL ok = [[NSWorkspace sharedWorkspace] openURL:url];
+    if (!ok) {
+        [self appendLog:[NSString stringWithFormat:@"无法打开 %@", url.isFileURL ? url.path : url.absoluteString]];
+    }
+    return YES;
 }
 
 #pragma mark - Engine delegate
 
 - (void)scraperEngine:(BrowserScraperEngine *)engine didAppendRows:(NSArray<NSDictionary *> *)rows totalRows:(NSInteger)totalRows page:(NSInteger)page {
-    (void)engine; (void)rows; (void)page;
-    if (engine.previewRows.count > 0) {
-        self.previewRows = engine.previewRows;
-        [self rebuildPreviewColumns];
+    (void)page;
+    if (engine.trialMode) {
+        if (rows.count > 0) {
+            NSMutableArray *preview = [(self.previewRows ?: @[]) mutableCopy];
+            NSMutableArray *raw = [(self.previewRawRows ?: @[]) mutableCopy];
+            [preview addObjectsFromArray:rows];
+            [raw addObjectsFromArray:rows];
+            self.previewRows = preview;
+            self.previewRawRows = raw;
+            [self rebuildPreviewColumns];
+            // 滚到预览底部，方便看到追加结果
+            NSInteger last = (NSInteger)MIN(200, self.previewRows.count) - 1;
+            if (last >= 0) {
+                [self.previewTable scrollRowToVisible:last];
+            }
+        }
+        self.runStatusLabel.stringValue = [NSString stringWithFormat:@"试运行 已追加，预览 %lu 行（本轮合计 %ld）",
+                                           (unsigned long)self.previewRows.count, (long)totalRows];
+        return;
     }
+    // 立即运行：不写入预览表，只更新状态
     self.runStatusLabel.stringValue = [NSString stringWithFormat:@"已采集 %ld 行", (long)totalRows];
 }
 
@@ -1508,15 +1867,20 @@ static const CGFloat kResizeHandleWidth = 8.0;
 }
 
 - (void)scraperEngine:(BrowserScraperEngine *)engine didFinishWithRunDirectory:(NSString *)runDirectory error:(NSError *)error {
+    BOOL trial = engine.trialMode;
     (void)engine;
     if (error) {
         [self appendLog:error.localizedDescription];
-    } else {
-        [self appendLog:[NSString stringWithFormat:@"完成 %@", runDirectory.lastPathComponent]];
-        NSString *path = self.draft.sink.filePath;
-        if (path.length > 0) {
-            [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
-        }
+        return;
+    }
+    if (trial) {
+        [self appendLog:[NSString stringWithFormat:@"试运行完成，预览共 %lu 行", (unsigned long)self.previewRows.count]];
+        return;
+    }
+    [self appendLog:[NSString stringWithFormat:@"完成 %@", runDirectory.lastPathComponent]];
+    NSString *path = self.draft.sink.filePath;
+    if (path.length > 0) {
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
     }
 }
 
@@ -1525,7 +1889,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     if (tableView == self.candidatesTable) return (NSInteger)self.candidates.count;
     if (tableView == self.fieldsTable) return (NSInteger)self.draft.fields.count;
-    if (tableView == self.previewTable) return (NSInteger)MIN(20, self.previewRows.count);
+    if (tableView == self.previewTable) return (NSInteger)MIN(200, self.previewRows.count);
     return 0;
 }
 
