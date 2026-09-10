@@ -89,6 +89,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserSitePermissionStore.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserLocationService.m \
                    $(BROWSER_SRC_DIR)/Privacy/BrowserGeolocationBridge.m \
+                   $(BROWSER_SRC_DIR)/Privacy/BrowserPageNotificationPresenter.m \
+                   $(BROWSER_SRC_DIR)/Privacy/BrowserPageNotificationBridge.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserDeveloperPreferences.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserWebInspector.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserPageSource.m \

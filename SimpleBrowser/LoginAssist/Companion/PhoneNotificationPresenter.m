@@ -240,16 +240,26 @@ API_AVAILABLE(macos(10.14)) {
     (void)center;
     [MeoApplication activateFrontWindowOnlyPreferring:NSApp.keyWindow];
 
+    // 仅处理手机镜像 / OTP；网页通知（MEO_PAGE_NOTIFICATION）只激活 App，不打开收件箱。
+    NSString *category = response.notification.request.content.categoryIdentifier ?: @"";
+    NSString *reqID = response.notification.request.identifier ?: @"";
+    BOOL isPhoneMirror = [category isEqualToString:kPhoneNotifCategory] ||
+                         [reqID hasPrefix:@"phone-notif-"] ||
+                         [reqID hasPrefix:@"otp-banner-"];
+    if (!isPhoneMirror) {
+        if (completionHandler) {
+            completionHandler();
+        }
+        return;
+    }
+
     NSString *itemID = nil;
     NSDictionary *userInfo = response.notification.request.content.userInfo;
     id raw = userInfo[kPhoneNotifUserInfoItemID];
     if ([raw isKindOfClass:[NSString class]] && [(NSString *)raw length] > 0) {
         itemID = (NSString *)raw;
-    } else {
-        NSString *reqID = response.notification.request.identifier;
-        if ([reqID hasPrefix:@"phone-notif-"]) {
-            itemID = [reqID substringFromIndex:@"phone-notif-".length];
-        }
+    } else if ([reqID hasPrefix:@"phone-notif-"]) {
+        itemID = [reqID substringFromIndex:@"phone-notif-".length];
     }
 
     NSMutableDictionary *info = [NSMutableDictionary dictionary];
