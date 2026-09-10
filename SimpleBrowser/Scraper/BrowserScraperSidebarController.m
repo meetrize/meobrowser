@@ -67,6 +67,24 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (BOOL)isFlipped { return YES; }
 @end
 
+/// 预览表头：双击列头时回调列索引，便于选中上方字段行。
+@interface BrowserScraperPreviewHeaderView : NSTableHeaderView
+@property (nonatomic, copy, nullable) void (^doubleClickColumnHandler)(NSInteger columnIndex);
+@end
+@implementation BrowserScraperPreviewHeaderView
+- (void)mouseDown:(NSEvent *)event {
+    if (event.clickCount >= 2) {
+        NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+        NSInteger col = [self columnAtPoint:loc];
+        if (col >= 0 && self.doubleClickColumnHandler) {
+            self.doubleClickColumnHandler(col);
+            return;
+        }
+    }
+    [super mouseDown:event];
+}
+@end
+
 @interface BrowserScraperSidebarController () <BrowserScraperEngineDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property (nonatomic, strong) NSView *rootView;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
@@ -526,6 +544,14 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSTextField *previewLabel = [self makeLabel:@"预览"];
 
     self.previewTable = [self makeTable];
+    {
+        BrowserScraperPreviewHeaderView *header = [[BrowserScraperPreviewHeaderView alloc] init];
+        __weak typeof(self) weakSelf = self;
+        header.doubleClickColumnHandler = ^(NSInteger columnIndex) {
+            [weakSelf selectFieldForPreviewColumn:columnIndex];
+        };
+        self.previewTable.headerView = header;
+    }
     NSScrollView *previewScroll = [self boxedTableScroll:self.previewTable height:0];
     [previewScroll setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
     [previewScroll setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
@@ -1080,6 +1106,15 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [fields removeObjectAtIndex:row];
     self.draft.fields = fields;
     [self.fieldsTable reloadData];
+    if (self.previewRawRows.count > 0) {
+        BrowserScraperTransformContext *txCtx = [BrowserScraperTransformContext defaultContext];
+        WKWebView *wv = [self currentWebView];
+        if (wv.URL.absoluteString.length > 0) txCtx.baseURL = wv.URL.absoluteString;
+        self.previewRows = [BrowserScraperValueTransform normalizeRows:self.previewRawRows
+                                                                fields:self.draft.fields
+                                                               context:txCtx];
+    }
+    [self rebuildPreviewColumns];
 }
 
 - (void)editTransformClicked:(id)sender {
@@ -1308,6 +1343,28 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [self.previewTable addTableColumn:col];
     }
     [self.previewTable reloadData];
+}
+
+- (void)selectFieldForPreviewColumn:(NSInteger)columnIndex {
+    if (columnIndex < 0 || columnIndex >= (NSInteger)self.previewTable.tableColumns.count) return;
+    NSString *name = self.previewTable.tableColumns[columnIndex].identifier ?: @"";
+    if (name.length == 0) return;
+    NSInteger fieldRow = -1;
+    for (NSInteger i = 0; i < (NSInteger)self.draft.fields.count; i++) {
+        BrowserScraperField *f = self.draft.fields[i];
+        NSString *key = f.name.length ? f.name : (f.fieldID ?: @"");
+        if ([key isEqualToString:name]) {
+            fieldRow = i;
+            break;
+        }
+    }
+    if (fieldRow < 0) {
+        [self appendLog:[NSString stringWithFormat:@"预览列「%@」未匹配到字段列表", name]];
+        return;
+    }
+    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:fieldRow] byExtendingSelection:NO];
+    [self.fieldsTable scrollRowToVisible:fieldRow];
+    [[self.fieldsTable window] makeFirstResponder:self.fieldsTable];
 }
 
 - (void)copyPreviewClicked:(id)sender {
