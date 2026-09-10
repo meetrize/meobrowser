@@ -54,6 +54,18 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
     return [self javaScriptSettingFillTargets:targets hasMemo:(targets.count > 0)];
 }
 
++ (NSString *)javaScriptSettingInlineSaveEnabled:(BOOL)enabled {
+    NSString *flag = enabled ? @"true" : @"false";
+    return [NSString stringWithFormat:
+            @"(function(){"
+            " window.__meoFormMemoInlineEnabled=%@;"
+            " if (typeof window.__meoFormMemoSetInlineSaveEnabled==='function') {"
+            "   window.__meoFormMemoSetInlineSaveEnabled(%@);"
+            " }"
+            "})();",
+            flag, flag];
+}
+
 + (NSArray<NSDictionary *> *)fillTargetDictionariesFromMemo:(FormMemo *)memo {
     if (!memo) {
         return @[];
@@ -347,6 +359,10 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 "  }\n"
 "  function repositionFillButtons() {\n"
 "    clearFillButtons();\n"
+"    if (!saveEnabled()) {\n"
+"      if (activeEl) hideSaveButton();\n"
+"      return;\n"
+"    }\n"
 "    let placed = 0;\n"
 "    if (fillTargets && fillTargets.length) {\n"
 "      fillTargets.forEach(function(t, idx) {\n"
@@ -364,6 +380,11 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 "  window.__meoFormMemoSetFillTargets = function(targets, meta) {\n"
 "    fillTargets = Array.isArray(targets) ? targets : [];\n"
 "    hasMemoFlag = !!(meta && meta.hasMemo) || fillTargets.length > 0;\n"
+"    if (!saveEnabled()) {\n"
+"      clearFillButtons();\n"
+"      hideSaveButton();\n"
+"      return;\n"
+"    }\n"
 "    repositionFillButtons();\n"
 "    if (!fillBound) {\n"
 "      fillBound = true;\n"
@@ -378,6 +399,17 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 "        mo.observe(document.documentElement, { childList: true, subtree: true });\n"
 "      } catch (e) {}\n"
 "    }\n"
+"  };\n"
+"  window.__meoFormMemoSetInlineSaveEnabled = function(enabled) {\n"
+"    window.__meoFormMemoInlineEnabled = !!enabled;\n"
+"    if (!enabled) {\n"
+"      clearFillButtons();\n"
+"      hideSaveButton();\n"
+"      return;\n"
+"    }\n"
+"    repositionFillButtons();\n"
+"    const ae = document.activeElement;\n"
+"    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) placeSaveButton(ae);\n"
 "  };\n"
 "  function onFocusIn(e) {\n"
 "    const el = e.target;\n"

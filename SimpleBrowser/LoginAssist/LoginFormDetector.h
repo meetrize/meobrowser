@@ -17,6 +17,9 @@ FOUNDATION_EXPORT NSString * const LoginFormInlineHandlerName;
 /// 将字段级「＋ / 填入」状态注入页面（perField 模式）。
 + (NSString *)javaScriptSettingFieldAssistTargets:(NSArray<NSDictionary *> *)targets;
 
+/// 立即打开/关闭登录内联图标（不依赖新标签）。
++ (NSString *)javaScriptSettingInlineEnabled:(BOOL)enabled;
+
 /// 根据匹配 Recipe + 凭证 + 页面检测到的 slots 生成 targets。
 + (NSArray<NSDictionary *> *)fieldAssistTargetDictionariesForRecipe:(nullable LoginRecipe *)recipe
                                                        credentials:(nullable LoginCredentials *)credentials

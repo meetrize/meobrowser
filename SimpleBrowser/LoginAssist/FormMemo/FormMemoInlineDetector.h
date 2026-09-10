@@ -18,6 +18,9 @@ FOUNDATION_EXPORT NSString * const FormMemoInlineHandlerName;
 + (NSString *)javaScriptSettingFillTargets:(NSArray<NSDictionary *> *)targets hasMemo:(BOOL)hasMemo;
 + (NSArray<NSDictionary *> *)fillTargetDictionariesFromMemo:(nullable FormMemo *)memo;
 
+/// 立即打开/关闭站点备忘内联图标（不依赖新标签）。
++ (NSString *)javaScriptSettingInlineSaveEnabled:(BOOL)enabled;
+
 @end
 
 NS_ASSUME_NONNULL_END

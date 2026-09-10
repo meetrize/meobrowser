@@ -161,12 +161,24 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
     return out;
 }
 
++ (NSString *)javaScriptSettingInlineEnabled:(BOOL)enabled {
+    NSString *flag = enabled ? @"true" : @"false";
+    return [NSString stringWithFormat:
+            @"(function(){"
+            " window.__meoLoginInlineEnabled=%@;"
+            " if (typeof window.__meoLoginAssistSetInlineEnabled==='function') {"
+            "   window.__meoLoginAssistSetInlineEnabled(%@);"
+            " }"
+            "})();",
+            flag, flag];
+}
+
 + (NSString *)userScriptSource {
     NSString *suppressFn = [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSuppressLoginAssist"];
+    // 即使初始为关也安装脚本，以便侧栏开关可立即启用（不再要求新标签）。
     NSString *prefix = [NSString stringWithFormat:
         @"(function() {\n"
         "  if (window.__meoLoginFormInlineInstalled) { return; }\n"
-        "  if (window.__meoLoginInlineEnabled === false) { return; }\n"
         "%@"
         "  if (meoShouldSuppressLoginAssist()) { return; }\n"
         "  window.__meoLoginFormInlineInstalled = true;\n",
@@ -1067,10 +1079,32 @@ NSString * const LoginFormInlineHandlerName = @"loginFormInline";
 "    }\n"
 "  }\n"
 "  function schedule() {\n"
+"    if (window.__meoLoginInlineEnabled === false) { return; }\n"
 "    if (meoShouldSuppressLoginAssist()) { try { mo.disconnect(); } catch (e) {} return; }\n"
 "    if (debounceTimer) clearTimeout(debounceTimer);\n"
 "    debounceTimer = setTimeout(scan, 250);\n"
 "  }\n"
+"  window.__meoLoginAssistSetInlineEnabled = function(enabled) {\n"
+"    window.__meoLoginInlineEnabled = !!enabled;\n"
+"    if (!enabled) {\n"
+"      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }\n"
+"      if (layoutTimer) { clearTimeout(layoutTimer); layoutTimer = null; }\n"
+"      if (focusHideTimer) { clearTimeout(focusHideTimer); focusHideTimer = null; }\n"
+"      clearLegacyButtons();\n"
+"      clearFieldButtons();\n"
+"      clearCrossFrameButtons();\n"
+"      bindScroll(false);\n"
+"      bindLayoutSync(false);\n"
+"      lastContexts = [];\n"
+"      if (activeFormId) {\n"
+"        activeFormId = null;\n"
+"        lastDetectSig = '';\n"
+"        post({ type: 'formCleared' });\n"
+"      }\n"
+"      return;\n"
+"    }\n"
+"    rearm();\n"
+"  };\n"
 "  function setValueOnEl(el, value) {\n"
 "    if (!el) return;\n"
 "    el.focus();\n"

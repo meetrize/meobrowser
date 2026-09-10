@@ -4,8 +4,10 @@
 #import "AssistSidebarRecipeEditor.h"
 #import "LoginRecipe.h"
 #import "LoginRecipeStore.h"
+#import "LoginAssistPreferences.h"
 #import "FormMemo.h"
 #import "FormMemoStore.h"
+#import "FormMemoPreferences.h"
 #import "MeoSiteMatch.h"
 #import "SBTextField.h"
 #import <QuartzCore/QuartzCore.h>
@@ -246,6 +248,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 @property (nonatomic, strong) NSLayoutConstraint *detailResizeHandleHeightConstraint;
 @property (nonatomic, strong) AssistSidebarMemoEditor *memoEditor;
 @property (nonatomic, strong) AssistSidebarRecipeEditor *recipeEditor;
+@property (nonatomic, strong) NSButton *formButtonsCheck;
 @property (nonatomic, strong) NSButton *advancedSettingsButton;
 @property (nonatomic, strong) AssistSidebarResizeView *resizeHandle;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
@@ -286,6 +289,15 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
                                                  selector:@selector(storeDidChange:)
                                                      name:FormMemoStoreDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(inlinePreferencesDidChange:)
+                                                     name:LoginAssistPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(inlinePreferencesDidChange:)
+                                                     name:FormMemoPreferencesDidChangeNotification
+                                                   object:nil];
+        [self reloadFormButtonsCheckbox];
     }
     return self;
 }
@@ -300,6 +312,11 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     if (self.visible) {
         [self reloadList];
     }
+}
+
+- (void)inlinePreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self reloadFormButtonsCheckbox];
 }
 
 - (NSString *)urlKeyForURL:(NSURL *)url {
@@ -481,14 +498,22 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
     [empty addSubview:self.emptyDetailLabel];
     [empty addSubview:emptyButtons];
 
+    self.formButtonsCheck = [NSButton checkboxWithTitle:@"显示表单按钮"
+                                                 target:self
+                                                 action:@selector(formButtonsCheckChanged:)];
+    self.formButtonsCheck.toolTip = @"关闭后，网页输入框右侧不再显示登录助手与站点备忘图标；侧栏与快捷键仍可用。";
+    self.formButtonsCheck.controlSize = NSControlSizeSmall;
+    self.formButtonsCheck.font = [NSFont systemFontOfSize:12];
+
     self.advancedSettingsButton = [NSButton buttonWithTitle:@"高级设置…"
                                                      target:self
                                                      action:@selector(advancedSettingsClicked:)];
     self.advancedSettingsButton.bezelStyle = NSBezelStyleRounded;
     self.advancedSettingsButton.controlSize = NSControlSizeSmall;
-    NSStackView *footer = [NSStackView stackViewWithViews:@[self.advancedSettingsButton]];
-    footer.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    footer.spacing = 8;
+    NSStackView *footer = [NSStackView stackViewWithViews:@[self.formButtonsCheck, self.advancedSettingsButton]];
+    footer.orientation = NSUserInterfaceLayoutOrientationVertical;
+    footer.alignment = NSLayoutAttributeLeading;
+    footer.spacing = 6;
     footer.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.detailContainer = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -677,6 +702,7 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
         self.currentWidth = [AssistSidebarSettings sharedSettings].sidebarWidth;
         self.view.hidden = NO;
         [self applyChromeColors];
+        [self reloadFormButtonsCheckbox];
         [self installKeyMonitor];
     } else {
         [self uninstallKeyMonitor];
@@ -1514,6 +1540,18 @@ typedef NS_ENUM(NSInteger, AssistSidebarRowKind) {
 - (void)editInSettingsClicked:(id)sender {
     (void)sender;
     [self advancedSettingsClicked:sender];
+}
+
+- (void)reloadFormButtonsCheckbox {
+    BOOL on = [LoginAssistPreferences inlineAssistEnabled] || [FormMemoPreferences inlineSaveEnabled];
+    self.formButtonsCheck.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (void)formButtonsCheckChanged:(id)sender {
+    (void)sender;
+    BOOL on = (self.formButtonsCheck.state == NSControlStateValueOn);
+    [LoginAssistPreferences setInlineAssistEnabled:on];
+    [FormMemoPreferences setInlineSaveEnabled:on];
 }
 
 - (void)advancedSettingsClicked:(id)sender {

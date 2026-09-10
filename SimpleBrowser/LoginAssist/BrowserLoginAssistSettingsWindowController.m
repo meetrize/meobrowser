@@ -152,6 +152,14 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
                                                  selector:@selector(settingsWindowWillClose:)
                                                      name:NSWindowWillCloseNotification
                                                    object:window];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(inlinePreferencesDidChange:)
+                                                     name:LoginAssistPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(inlinePreferencesDidChange:)
+                                                     name:FormMemoPreferencesDidChangeNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -291,7 +299,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
                                              target:nil
                                              action:nil];
 
-    self.inlineAssistCheck = [NSButton checkboxWithTitle:@"检测到登录表单时显示内联图标（新标签生效）"
+    self.inlineAssistCheck = [NSButton checkboxWithTitle:@"检测到登录表单时显示内联图标（立即生效）"
                                                   target:self
                                                   action:@selector(prefsChanged:)];
     self.promptSaveCheck = [NSButton checkboxWithTitle:@"登录成功后询问是否保存为配置"
@@ -303,7 +311,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.extraFieldInlineCheck = [NSButton checkboxWithTitle:@"登录表额外文本框也显示图标（默认关）"
                                                       target:self
                                                       action:@selector(prefsChanged:)];
-    self.focusInlineCheck = [NSButton checkboxWithTitle:@"聚焦输入框时显示助手图标（手机/卡号/短信登录等，新标签生效）"
+    self.focusInlineCheck = [NSButton checkboxWithTitle:@"聚焦输入框时显示助手图标（手机/卡号/短信登录等，立即生效）"
                                                  target:self
                                                  action:@selector(prefsChanged:)];
     self.inlineAssistCheck.state = [LoginAssistPreferences inlineAssistEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
@@ -975,13 +983,36 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
      : LoginFieldInlineModeLegacySingleKey];
     [LoginAssistPreferences setLoginExtraFieldInlineEnabled:(self.extraFieldInlineCheck.state == NSControlStateValueOn)];
     [LoginAssistPreferences setLoginFocusInlineEnabled:(self.focusInlineCheck.state == NSControlStateValueOn)];
-    self.statusLabel.stringValue = @"偏好已保存。内联图标开关对新建标签 / 新导航后的页面生效。";
+    self.statusLabel.stringValue = @"偏好已保存。内联图标开关立即生效。";
 }
 
 - (void)memoInlinePrefsChanged:(id)sender {
     (void)sender;
     [FormMemoPreferences setInlineSaveEnabled:(self.memoInlineSaveCheck.state == NSControlStateValueOn)];
-    self.memoStatusLabel.stringValue = @"偏好已保存。「保存到站点备忘」图标对新建标签 / 新导航后的页面生效。";
+    self.memoStatusLabel.stringValue = @"偏好已保存。「保存到站点备忘」图标立即生效。";
+}
+
+- (void)reloadInlinePreferenceCheckboxes {
+    if (!self.inlineAssistCheck) {
+        return;
+    }
+    self.inlineAssistCheck.state = [LoginAssistPreferences inlineAssistEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.promptSaveCheck.state = [LoginAssistPreferences promptSaveOnSuccess] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.perFieldInlineCheck.state = [[LoginAssistPreferences loginFieldInlineMode] isEqualToString:LoginFieldInlineModePerField]
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.extraFieldInlineCheck.state = [LoginAssistPreferences loginExtraFieldInlineEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.focusInlineCheck.state = [LoginAssistPreferences loginFocusInlineEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    if (self.memoInlineSaveCheck) {
+        self.memoInlineSaveCheck.state = [FormMemoPreferences inlineSaveEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    }
+}
+
+- (void)inlinePreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    if (!self.window.isVisible) {
+        return;
+    }
+    [self reloadInlinePreferenceCheckboxes];
 }
 
 - (void)addRecipe:(id)sender {
@@ -1150,6 +1181,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
 - (void)showWindow:(id)sender {
     [self reloadRecipes];
     [self reloadMemos];
+    [self reloadInlinePreferenceCheckboxes];
     [self refreshCompanionUI];
     [super showWindow:sender];
     [self startCompanionStatusPollingIfNeeded];
@@ -1609,7 +1641,7 @@ typedef NS_ENUM(NSInteger, BrowserLoginAssistSettingsMode) {
     self.memoDefaultCheck = [NSButton checkboxWithTitle:@"设为该站点默认备忘"
                                                  target:nil
                                                  action:nil];
-    self.memoInlineSaveCheck = [NSButton checkboxWithTitle:@"输入时显示「保存到站点备忘」（新标签生效）"
+    self.memoInlineSaveCheck = [NSButton checkboxWithTitle:@"输入时显示「保存到站点备忘」（立即生效）"
                                                     target:self
                                                     action:@selector(memoInlinePrefsChanged:)];
     self.memoInlineSaveCheck.state = [FormMemoPreferences inlineSaveEnabled] ? NSControlStateValueOn : NSControlStateValueOff;

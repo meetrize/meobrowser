@@ -1,5 +1,7 @@
 #import "LoginAssistController.h"
 #import "BrowserWindowController.h"
+#import "BrowserTab.h"
+#import "BrowserTabController.h"
 #import "BrowserRiskHostPolicy.h"
 #import "LoginRecipe.h"
 #import "LoginRecipeStore.h"
@@ -126,12 +128,42 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
 - (void)formMemoPreferencesDidChange:(NSNotification *)notification {
     (void)notification;
-    // 开关变更对新建标签 / 新导航后的页面生效（与登录内联一致）。
+    [self applyInlineChromeVisibilityToWindowWebViews];
 }
 
 - (void)loginAssistPreferencesDidChange:(NSNotification *)notification {
     (void)notification;
-    [self pushFieldAssistTargetsToActiveWebView];
+    [self applyInlineChromeVisibilityToWindowWebViews];
+}
+
+/// 将登录 / 备忘内联图标显隐立即推送到本窗口全部已创建的 WebView。
+- (void)applyInlineChromeVisibilityToWindowWebViews {
+    BOOL loginOn = [LoginAssistPreferences inlineAssistEnabled];
+    BOOL memoOn = [FormMemoPreferences inlineSaveEnabled];
+    NSString *loginJS = [LoginFormDetector javaScriptSettingInlineEnabled:loginOn];
+    NSString *memoJS = [FormMemoInlineDetector javaScriptSettingInlineSaveEnabled:memoOn];
+
+    NSArray<BrowserTab *> *tabs = self.windowController.tabController.tabs;
+    for (BrowserTab *tab in tabs) {
+        WKWebView *webView = tab.webView;
+        if (!webView) {
+            continue;
+        }
+        [webView evaluateJavaScript:loginJS completionHandler:nil];
+        [webView evaluateJavaScript:memoJS completionHandler:nil];
+    }
+
+    if (loginOn) {
+        [self pushFieldAssistTargetsToActiveWebView];
+        [self scheduleFieldAssistTargetRetries];
+    } else {
+        self.hasDetectedLoginForm = NO;
+        [self refreshButtonAppearance];
+    }
+    if (memoOn) {
+        [self pushMemoFillTargetsToActiveWebView];
+        [self scheduleMemoFillTargetRetries];
+    }
 }
 
 - (void)wireLoginButton:(NSButton *)button {
@@ -662,6 +694,11 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 - (void)pushMemoFillTargetsToActiveWebView {
     WKWebView *webView = self.windowController.webView;
     if (!webView) {
+        return;
+    }
+    if (![FormMemoPreferences inlineSaveEnabled]) {
+        NSString *clearJS = [FormMemoInlineDetector javaScriptSettingFillTargets:@[] hasMemo:NO];
+        [webView evaluateJavaScript:clearJS completionHandler:nil];
         return;
     }
     FormMemo *memo = nil;
