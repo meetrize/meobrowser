@@ -136,12 +136,22 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     [self applyInlineChromeVisibilityToWindowWebViews];
 }
 
-/// 将登录 / 备忘内联图标显隐立即推送到本窗口全部已创建的 WebView。
+/// 将登录 / 备忘内联图标显隐立即推送到指定 WebView（或本窗口全部已创建的 WebView）。
+- (void)applyInlineChromeVisibilityToWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    BOOL loginOn = [LoginAssistPreferences inlineAssistEnabled];
+    BOOL memoOn = [FormMemoPreferences inlineSaveEnabled];
+    [webView evaluateJavaScript:[LoginFormDetector javaScriptSettingInlineEnabled:loginOn]
+              completionHandler:nil];
+    [webView evaluateJavaScript:[FormMemoInlineDetector javaScriptSettingInlineSaveEnabled:memoOn]
+              completionHandler:nil];
+}
+
 - (void)applyInlineChromeVisibilityToWindowWebViews {
     BOOL loginOn = [LoginAssistPreferences inlineAssistEnabled];
     BOOL memoOn = [FormMemoPreferences inlineSaveEnabled];
-    NSString *loginJS = [LoginFormDetector javaScriptSettingInlineEnabled:loginOn];
-    NSString *memoJS = [FormMemoInlineDetector javaScriptSettingInlineSaveEnabled:memoOn];
 
     NSArray<BrowserTab *> *tabs = self.windowController.tabController.tabs;
     for (BrowserTab *tab in tabs) {
@@ -149,8 +159,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         if (!webView) {
             continue;
         }
-        [webView evaluateJavaScript:loginJS completionHandler:nil];
-        [webView evaluateJavaScript:memoJS completionHandler:nil];
+        [self applyInlineChromeVisibilityToWebView:webView];
     }
 
     if (loginOn) {
@@ -765,12 +774,18 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 }
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(NSURL *)url {
+    // 必须先按当前偏好推送主开关：UserScript 每次导航都会重置为关闭，开了才由这里打开。
+    [self applyInlineChromeVisibilityToWebView:webView];
     [self updateForURL:url];
     [self scheduleAutoLoginIfNeededForURL:url];
     [self.savePromptCoordinator noteNavigationFinishedInWebView:webView URL:url];
-    // SPA / 晚渲染：多次重试推送填入图标
-    [self scheduleMemoFillTargetRetries];
-    [self scheduleFieldAssistTargetRetries];
+    // SPA / 晚渲染：多次重试推送填入图标（内部已尊重 inline 开关）
+    if ([FormMemoPreferences inlineSaveEnabled]) {
+        [self scheduleMemoFillTargetRetries];
+    }
+    if ([LoginAssistPreferences inlineAssistEnabled]) {
+        [self scheduleFieldAssistTargetRetries];
+    }
 }
 
 - (void)clearPendingAutoLoginRequest {

@@ -25,9 +25,8 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
     proxy.target = handler;
     [ucc addScriptMessageHandler:proxy name:FormMemoInlineHandlerName];
 
-    BOOL saveEnabled = [FormMemoPreferences inlineSaveEnabled];
-    NSString *source = [NSString stringWithFormat:@"window.__meoFormMemoInlineEnabled=%@;\n%@",
-                        saveEnabled ? @"true" : @"false",
+    // 与登录内联相同：不在配置期固化开关，避免刷新覆盖用户关闭。
+    NSString *source = [NSString stringWithFormat:@"window.__meoFormMemoInlineEnabled=false;\n%@",
                         [self userScriptSource]];
     WKUserScript *script = [[WKUserScript alloc] initWithSource:source
                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
@@ -258,7 +257,7 @@ NSString * const FormMemoInlineHandlerName = @"formMemoInline";
 "    if (btn) btn.style.display = 'none';\n"
 "    activeEl = null;\n"
 "  }\n"
-"  function saveEnabled() { return window.__meoFormMemoInlineEnabled !== false; }\n"
+"  function saveEnabled() { return window.__meoFormMemoInlineEnabled === true; }\n"
 "  function queryBySelector(sel) {\n"
 "    if (!sel) return null;\n"
 "    try { return document.querySelector(sel); } catch (e) { return null; }\n"
