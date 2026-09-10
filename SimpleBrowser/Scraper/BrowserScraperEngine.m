@@ -306,9 +306,11 @@ static NSString *MeoScraperStringify(id value) {
 - (void)writeSink {
     BrowserScraperSink *sink = self.recipe.sink;
     NSError *err = nil;
+    NSArray<NSString *> *columnNames = [BrowserScraperField orderedColumnNamesFromFields:self.recipe.fields];
     if (sink.type == BrowserScraperSinkTypeMySQL) {
         BOOL ok = [BrowserScraperMySQLWriter writeNDJSONAtPath:self.ndjsonPath
                                                         config:sink.mysql
+                                                   columnNames:columnNames
                                                          error:&err];
         [self log:ok ? @"MySQL 写入完成" : (err.localizedDescription ?: @"MySQL 失败")];
         return;
@@ -335,6 +337,7 @@ static NSString *MeoScraperStringify(id value) {
     BOOL ok = [BrowserScraperExcelWriter writeNDJSONAtPath:self.ndjsonPath
                                               outputPath:path
                                                 sinkType:sink.type
+                                             columnNames:columnNames
                                                    error:&err];
     [self log:ok ? [NSString stringWithFormat:@"已导出 %@", path] : (err.localizedDescription ?: @"导出失败")];
 }

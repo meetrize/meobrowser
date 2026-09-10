@@ -54,6 +54,8 @@ typedef NS_ENUM(NSInteger, BrowserScraperMySQLWriteMode) {
 - (NSDictionary *)dictionaryRepresentation;
 + (NSString *)stringFromKind:(BrowserScraperFieldKind)kind;
 + (BrowserScraperFieldKind)kindFromString:(NSString *)string;
+/// 启用字段的列名（name 优先，否则 fieldID），保持数组顺序。
++ (NSArray<NSString *> *)orderedColumnNamesFromFields:(NSArray *)fields;
 @end
 
 @interface BrowserScraperPagination : NSObject <NSCopying>

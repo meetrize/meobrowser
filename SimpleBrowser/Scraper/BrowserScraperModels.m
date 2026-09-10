@@ -78,6 +78,25 @@ static NSString *MeoNonNullString(id value) {
     return BrowserScraperFieldKindText;
 }
 
++ (NSArray<NSString *> *)orderedColumnNamesFromFields:(NSArray *)fields {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+    for (id item in fields ?: @[]) {
+        BrowserScraperField *f = nil;
+        if ([item isKindOfClass:[BrowserScraperField class]]) {
+            f = (BrowserScraperField *)item;
+        } else if ([item isKindOfClass:[NSDictionary class]]) {
+            f = [BrowserScraperField fieldWithDictionary:(NSDictionary *)item];
+        }
+        if (!f || !f.enabled) continue;
+        NSString *name = f.name.length > 0 ? f.name : (f.fieldID ?: @"");
+        if (name.length == 0 || [seen containsObject:name]) continue;
+        [seen addObject:name];
+        [out addObject:name];
+    }
+    return out;
+}
+
 @end
 
 @implementation BrowserScraperPagination

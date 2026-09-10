@@ -16,6 +16,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (BOOL)writeNDJSONAtPath:(NSString *)ndjsonPath
                    config:(BrowserScraperMySQLConfig *)config
+              columnNames:(nullable NSArray<NSString *> *)columnNames
+                    error:(NSError **)error;
+
++ (BOOL)writeNDJSONAtPath:(NSString *)ndjsonPath
+                   config:(BrowserScraperMySQLConfig *)config
                     error:(NSError **)error;
 
 @end

@@ -518,10 +518,14 @@ static const CGFloat kResizeHandleWidth = 8.0;
     while (self.fieldsTable.tableColumns.count) {
         [self.fieldsTable removeTableColumn:self.fieldsTable.tableColumns.firstObject];
     }
-    for (NSArray *pair in @[ @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"], @[@"transforms", @"处理"] ]) {
+    for (NSArray *pair in @[ @[@"index", @"#"], @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"], @[@"transforms", @"处理"] ]) {
         NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:pair[0]];
         col.title = pair[1];
-        if ([pair[0] isEqualToString:@"enabled"]) col.width = 28;
+        if ([pair[0] isEqualToString:@"index"]) {
+            col.width = 28;
+            col.minWidth = 24;
+            col.maxWidth = 36;
+        } else if ([pair[0] isEqualToString:@"enabled"]) col.width = 28;
         else if ([pair[0] isEqualToString:@"transforms"]) col.width = 72;
         else col.width = 90;
         [self.fieldsTable addTableColumn:col];
@@ -530,10 +534,12 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
     NSButton *addField = [NSButton buttonWithTitle:@"点选添加字段" target:self action:@selector(pickFieldClicked:)];
     NSButton *removeField = [NSButton buttonWithTitle:@"删除选中" target:self action:@selector(removeFieldClicked:)];
+    NSButton *moveUp = [NSButton buttonWithTitle:@"上移" target:self action:@selector(moveFieldUpClicked:)];
+    NSButton *moveDown = [NSButton buttonWithTitle:@"下移" target:self action:@selector(moveFieldDownClicked:)];
     NSButton *editTransform = [NSButton buttonWithTitle:@"编辑处理" target:self action:@selector(editTransformClicked:)];
     NSButton *preview = [NSButton buttonWithTitle:@"刷新预览" target:self action:@selector(previewClicked:)];
     NSButton *copyPreview = [NSButton buttonWithTitle:@"复制预览" target:self action:@selector(copyPreviewClicked:)];
-    NSStackView *actions = [NSStackView stackViewWithViews:@[addField, removeField, editTransform, preview, copyPreview]];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[addField, removeField, moveUp, moveDown, editTransform, preview, copyPreview]];
     actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     actions.alignment = NSLayoutAttributeCenterY;
     actions.spacing = 6;
@@ -1106,6 +1112,37 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [fields removeObjectAtIndex:row];
     self.draft.fields = fields;
     [self.fieldsTable reloadData];
+    [self refreshPreviewAfterFieldOrderChange];
+}
+
+- (void)moveFieldUpClicked:(id)sender {
+    (void)sender;
+    [self moveSelectedFieldByOffset:-1];
+}
+
+- (void)moveFieldDownClicked:(id)sender {
+    (void)sender;
+    [self moveSelectedFieldByOffset:1];
+}
+
+- (void)moveSelectedFieldByOffset:(NSInteger)offset {
+    NSInteger row = self.fieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) {
+        [self appendLog:@"请先选中要调整顺序的字段"];
+        return;
+    }
+    NSInteger target = row + offset;
+    if (target < 0 || target >= (NSInteger)self.draft.fields.count) return;
+    NSMutableArray *fields = [self.draft.fields mutableCopy];
+    [fields exchangeObjectAtIndex:row withObjectAtIndex:target];
+    self.draft.fields = fields;
+    [self.fieldsTable reloadData];
+    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:target] byExtendingSelection:NO];
+    [self.fieldsTable scrollRowToVisible:target];
+    [self refreshPreviewAfterFieldOrderChange];
+}
+
+- (void)refreshPreviewAfterFieldOrderChange {
     if (self.previewRawRows.count > 0) {
         BrowserScraperTransformContext *txCtx = [BrowserScraperTransformContext defaultContext];
         WKWebView *wv = [self currentWebView];
@@ -1329,12 +1366,17 @@ static const CGFloat kResizeHandleWidth = 8.0;
     while (self.previewTable.tableColumns.count) {
         [self.previewTable removeTableColumn:self.previewTable.tableColumns.firstObject];
     }
-    NSMutableArray *cols = [NSMutableArray array];
-    for (BrowserScraperField *f in self.draft.fields) {
-        if (f.enabled) [cols addObject:f.name ?: f.fieldID];
-    }
+    NSArray<NSString *> *cols = [BrowserScraperField orderedColumnNamesFromFields:self.draft.fields];
     if (cols.count == 0 && self.previewRows.count > 0) {
-        [cols addObjectsFromArray:self.previewRows.firstObject.allKeys];
+        // 无启用字段时：按首行 key 排序兜底，避免 allKeys 乱序
+        NSDictionary *first = self.previewRows.firstObject;
+        if ([first isKindOfClass:[NSDictionary class]]) {
+            cols = [[first.allKeys filteredArrayUsingPredicate:
+                     [NSPredicate predicateWithBlock:^BOOL(id key, NSDictionary *bindings) {
+                (void)bindings;
+                return [key isKindOfClass:[NSString class]];
+            }]] sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+        }
     }
     for (NSString *name in cols) {
         NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:name];
@@ -1513,6 +1555,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     }
     if (tableView == self.fieldsTable) {
         BrowserScraperField *f = self.draft.fields[row];
+        if ([ident isEqualToString:@"index"]) return @(row + 1);
         if ([ident isEqualToString:@"enabled"]) return @(f.enabled);
         if ([ident isEqualToString:@"name"]) return f.name;
         if ([ident isEqualToString:@"kind"]) return [BrowserScraperField stringFromKind:f.kind];
@@ -1535,9 +1578,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
     if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
     BrowserScraperField *f = self.draft.fields[row];
     NSString *ident = tableColumn.identifier;
-    if ([ident isEqualToString:@"enabled"]) f.enabled = [object boolValue];
-    else if ([ident isEqualToString:@"name"]) f.name = [object description] ?: @"";
-    else if ([ident isEqualToString:@"kind"]) f.kind = [BrowserScraperField kindFromString:[object description]];
+    if ([ident isEqualToString:@"enabled"]) {
+        f.enabled = [object boolValue];
+        [self refreshPreviewAfterFieldOrderChange];
+    } else if ([ident isEqualToString:@"name"]) {
+        f.name = [object description] ?: @"";
+        [self refreshPreviewAfterFieldOrderChange];
+    } else if ([ident isEqualToString:@"kind"]) f.kind = [BrowserScraperField kindFromString:[object description]];
     else if ([ident isEqualToString:@"path"]) f.path = [object description] ?: @"";
 }
 

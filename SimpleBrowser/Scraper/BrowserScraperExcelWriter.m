@@ -33,6 +33,37 @@
     return cols;
 }
 
+/// 优先 preferred 顺序，再追加行中未声明键（首次出现顺序）。
++ (NSArray<NSString *> *)resolveColumns:(nullable NSArray<NSString *> *)preferred
+                                   rows:(NSArray<NSDictionary *> *)rows {
+    NSMutableArray *cols = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+    for (NSString *c in preferred ?: @[]) {
+        if (![c isKindOfClass:[NSString class]] || c.length == 0) continue;
+        if ([seen containsObject:c]) continue;
+        [seen addObject:c];
+        [cols addObject:c];
+    }
+    for (NSDictionary *row in rows) {
+        if (![row isKindOfClass:[NSDictionary class]]) continue;
+        for (NSString *key in row.allKeys) {
+            if (![key isKindOfClass:[NSString class]] || key.length == 0) continue;
+            if ([seen containsObject:key]) continue;
+            [seen addObject:key];
+            [cols addObject:key];
+        }
+    }
+    if (cols.count == 0) return [self columnsFromRows:rows];
+    return cols;
+}
+
++ (NSString *)stringValue:(id)v {
+    if ([v isKindOfClass:[NSString class]]) return (NSString *)v;
+    if ([v isKindOfClass:[NSNumber class]]) return [(NSNumber *)v stringValue];
+    if (v == nil || v == [NSNull null]) return @"";
+    return [v description] ?: @"";
+}
+
 + (NSString *)csvEscape:(NSString *)value {
     NSString *s = value ?: @"";
     if ([s rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@",\"\n\r"]].location != NSNotFound) {
@@ -42,12 +73,12 @@
     return s;
 }
 
-+ (BOOL)writeCSVRows:(NSArray<NSDictionary *> *)rows path:(NSString *)path error:(NSError **)error {
-    NSArray *cols = [self columnsFromRows:rows];
++ (BOOL)writeCSVRows:(NSArray<NSDictionary *> *)rows
+                path:(NSString *)path
+         columnNames:(nullable NSArray<NSString *> *)columnNames
+               error:(NSError **)error {
+    NSArray *cols = [self resolveColumns:columnNames rows:rows];
     NSMutableString *out = [NSMutableString stringWithString:@"\uFEFF"];
-    [out appendString:[[cols valueForKey:@"description"] componentsJoinedByString:@","]];
-    // valueForKey description on NSString returns self - better join manually
-    out = [NSMutableString stringWithString:@"\uFEFF"];
     NSMutableArray *header = [NSMutableArray array];
     for (NSString *c in cols) {
         [header addObject:[self csvEscape:c]];
@@ -57,9 +88,7 @@
     for (NSDictionary *row in rows) {
         NSMutableArray *cells = [NSMutableArray array];
         for (NSString *c in cols) {
-            id v = row[c];
-            NSString *s = [v isKindOfClass:[NSString class]] ? v : ([v isKindOfClass:[NSNumber class]] ? [v stringValue] : @"");
-            [cells addObject:[self csvEscape:s]];
+            [cells addObject:[self csvEscape:[self stringValue:row[c]]]];
         }
         [out appendString:[cells componentsJoinedByString:@","]];
         [out appendString:@"\n"];
@@ -67,10 +96,33 @@
     return [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:error];
 }
 
-+ (BOOL)writeJSONRows:(NSArray<NSDictionary *> *)rows path:(NSString *)path error:(NSError **)error {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:rows options:NSJSONWritingPrettyPrinted error:error];
-    if (!data) return NO;
-    return [data writeToFile:path options:NSDataWritingAtomic error:error];
++ (NSString *)jsonEscape:(NSString *)value {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:value ?: @"" options:0 error:nil];
+    if (!data) return @"\"\"";
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"\"\"";
+}
+
++ (BOOL)writeJSONRows:(NSArray<NSDictionary *> *)rows
+                 path:(NSString *)path
+          columnNames:(nullable NSArray<NSString *> *)columnNames
+                error:(NSError **)error {
+    NSArray *cols = [self resolveColumns:columnNames rows:rows];
+    // 手动按列序写 JSON，避免 NSDictionary 序列化打乱 key 顺序
+    NSMutableString *out = [NSMutableString stringWithString:@"[\n"];
+    for (NSInteger i = 0; i < (NSInteger)rows.count; i++) {
+        NSDictionary *row = rows[i];
+        [out appendString:@"  {"];
+        for (NSInteger c = 0; c < (NSInteger)cols.count; c++) {
+            NSString *key = cols[c];
+            if (c > 0) [out appendString:@", "];
+            [out appendFormat:@"%@: %@", [self jsonEscape:key], [self jsonEscape:[self stringValue:row[key]]]];
+        }
+        [out appendString:@"}"];
+        if (i + 1 < (NSInteger)rows.count) [out appendString:@","];
+        [out appendString:@"\n"];
+    }
+    [out appendString:@"]\n"];
+    return [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:error];
 }
 
 + (NSString *)xmlEscape:(NSString *)value {
@@ -82,11 +134,11 @@
     return s;
 }
 
-+ (BOOL)writeXLSXRows:(NSArray<NSDictionary *> *)rows path:(NSString *)path error:(NSError **)error {
-    // 简易 SpreadsheetML，Excel / Numbers 可打开；扩展名用 .xlsx 时部分版本仍可读 XML——同时写真正 zip xlsx 成本高。
-    // 这里写 SpreadsheetML 到 .xlsx 旁路：若后缀 xlsx，先写同名 .xml 再复制为 csv 备用？
-    // 定稿：写 XML Spreadsheet 到临时文件，再用 ditto/zip 打包最小 OOXML。
-    NSArray *cols = [self columnsFromRows:rows];
++ (BOOL)writeXLSXRows:(NSArray<NSDictionary *> *)rows
+                 path:(NSString *)path
+          columnNames:(nullable NSArray<NSString *> *)columnNames
+                error:(NSError **)error {
+    NSArray *cols = [self resolveColumns:columnNames rows:rows];
     NSMutableString *sheet = [NSMutableString string];
     [sheet appendString:@"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"];
     [sheet appendString:@"<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>\n"];
@@ -101,8 +153,7 @@
     for (NSDictionary *row in rows) {
         [sheet appendFormat:@"<row r=\"%ld\">", (long)r];
         for (NSInteger c = 0; c < (NSInteger)cols.count; c++) {
-            id v = row[cols[c]];
-            NSString *s = [v isKindOfClass:[NSString class]] ? v : ([v isKindOfClass:[NSNumber class]] ? [v stringValue] : @"");
+            NSString *s = [self stringValue:row[cols[c]]];
             NSString *ref = [self cellRefColumn:c + 1 row:r];
             [sheet appendFormat:@"<c r=\"%@\" t=\"inlineStr\"><is><t>%@</t></is></c>", ref, [self xmlEscape:s]];
         }
@@ -159,9 +210,8 @@
     task.standardError = pipe;
     BOOL launched = [task launchAndReturnError:error];
     if (!launched) {
-        // fallback CSV
         NSString *csvPath = [[path stringByDeletingPathExtension] stringByAppendingPathExtension:@"csv"];
-        BOOL ok = [self writeCSVRows:rows path:csvPath error:error];
+        BOOL ok = [self writeCSVRows:rows path:csvPath columnNames:columnNames error:error];
         [fm removeItemAtPath:tempRoot error:nil];
         return ok;
     }
@@ -169,7 +219,7 @@
     [fm removeItemAtPath:tempRoot error:nil];
     if (task.terminationStatus != 0) {
         NSString *csvPath = [[path stringByDeletingPathExtension] stringByAppendingPathExtension:@"csv"];
-        return [self writeCSVRows:rows path:csvPath error:error];
+        return [self writeCSVRows:rows path:csvPath columnNames:columnNames error:error];
     }
     return YES;
 }
@@ -189,6 +239,18 @@
                outputPath:(NSString *)outputPath
                  sinkType:(BrowserScraperSinkType)sinkType
                     error:(NSError **)error {
+    return [self writeNDJSONAtPath:ndjsonPath
+                        outputPath:outputPath
+                          sinkType:sinkType
+                       columnNames:nil
+                             error:error];
+}
+
++ (BOOL)writeNDJSONAtPath:(NSString *)ndjsonPath
+               outputPath:(NSString *)outputPath
+                 sinkType:(BrowserScraperSinkType)sinkType
+              columnNames:(nullable NSArray<NSString *> *)columnNames
+                    error:(NSError **)error {
     NSArray *rows = [self loadRowsFromNDJSON:ndjsonPath error:error];
     if (!rows) return NO;
     [[NSFileManager defaultManager] createDirectoryAtPath:[outputPath stringByDeletingLastPathComponent]
@@ -197,12 +259,12 @@
                                                     error:nil];
     switch (sinkType) {
         case BrowserScraperSinkTypeCSV:
-            return [self writeCSVRows:rows path:outputPath error:error];
+            return [self writeCSVRows:rows path:outputPath columnNames:columnNames error:error];
         case BrowserScraperSinkTypeJSON:
-            return [self writeJSONRows:rows path:outputPath error:error];
+            return [self writeJSONRows:rows path:outputPath columnNames:columnNames error:error];
         case BrowserScraperSinkTypeXLSX:
         default:
-            return [self writeXLSXRows:rows path:outputPath error:error];
+            return [self writeXLSXRows:rows path:outputPath columnNames:columnNames error:error];
     }
 }
 

@@ -128,6 +128,13 @@ static NSString * const kMySQLKeychainService = @"com.example.MeoBrowser.scraper
 + (BOOL)writeNDJSONAtPath:(NSString *)ndjsonPath
                    config:(BrowserScraperMySQLConfig *)config
                     error:(NSError **)error {
+    return [self writeNDJSONAtPath:ndjsonPath config:config columnNames:nil error:error];
+}
+
++ (BOOL)writeNDJSONAtPath:(NSString *)ndjsonPath
+                   config:(BrowserScraperMySQLConfig *)config
+              columnNames:(nullable NSArray<NSString *> *)columnNames
+                    error:(NSError **)error {
     if (!config || config.table.length == 0) {
         if (error) *error = [NSError errorWithDomain:@"BrowserScraper" code:33 userInfo:@{NSLocalizedDescriptionKey:@"MySQL 表名未设置"}];
         return NO;
@@ -136,21 +143,30 @@ static NSString * const kMySQLKeychainService = @"com.example.MeoBrowser.scraper
     NSString *text = [NSString stringWithContentsOfFile:ndjsonPath encoding:NSUTF8StringEncoding error:error];
     if (!text) return NO;
     NSMutableArray *rows = [NSMutableArray array];
-    NSMutableArray *cols = [NSMutableArray array];
-    NSMutableSet *seen = [NSMutableSet set];
     [text enumerateLinesUsingBlock:^(NSString *line, BOOL *stop) {
         (void)stop;
         if (line.length == 0) return;
         id obj = [NSJSONSerialization JSONObjectWithData:[line dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
         if (![obj isKindOfClass:[NSDictionary class]]) return;
         [rows addObject:obj];
-        for (NSString *key in [obj allKeys]) {
-            if ([key isKindOfClass:[NSString class]] && ![seen containsObject:key]) {
-                [seen addObject:key];
-                [cols addObject:key];
-            }
-        }
     }];
+
+    NSMutableArray *cols = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+    for (NSString *c in columnNames ?: @[]) {
+        if (![c isKindOfClass:[NSString class]] || c.length == 0) continue;
+        if ([seen containsObject:c]) continue;
+        [seen addObject:c];
+        [cols addObject:c];
+    }
+    for (NSDictionary *row in rows) {
+        for (NSString *key in row.allKeys) {
+            if (![key isKindOfClass:[NSString class]] || key.length == 0) continue;
+            if ([seen containsObject:key]) continue;
+            [seen addObject:key];
+            [cols addObject:key];
+        }
+    }
     if (cols.count == 0) {
         if (error) *error = [NSError errorWithDomain:@"BrowserScraper" code:34 userInfo:@{NSLocalizedDescriptionKey:@"没有可写入的行"}];
         return NO;
