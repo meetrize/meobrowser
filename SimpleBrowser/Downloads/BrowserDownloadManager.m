@@ -1422,15 +1422,22 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredentia
     }
 
     SecTrustRef trust = challenge.protectionSpace.serverTrust;
-    NSString *host = challenge.protectionSpace.host ?: @"";
-    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:challenge.protectionSpace.port];
-    if (trust && [[BrowserSSLExceptionStore sharedStore] allowsHostKey:hostKey]) {
-        NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
-        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+    if (!trust) {
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
         return;
     }
-
-    completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+    if (SecTrustEvaluateWithError(trust, NULL)) {
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+        return;
+    }
+    // 与页面导航一致（方案 A）：无效证书自动放行。
+    NSString *host = challenge.protectionSpace.host ?: @"";
+    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:challenge.protectionSpace.port];
+    if (hostKey.length > 0) {
+        [[BrowserSSLExceptionStore sharedStore] allowHostKey:hostKey];
+    }
+    NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
+    completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
 }
 
 #pragma mark - Progress KVO

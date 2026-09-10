@@ -3,6 +3,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /// 进程内会话的 HTTPS 证书例外（host:port）。不持久化。
+/// 方案 A 下由导航/下载在证书不受信任时自动写入。
 @interface BrowserSSLExceptionStore : NSObject
 
 + (instancetype)sharedStore;

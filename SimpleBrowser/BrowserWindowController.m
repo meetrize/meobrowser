@@ -107,25 +107,25 @@ static void MeoDisableProcessSwapOnNavigationIfAvailable(WKPreferences *preferen
     }
 }
 
-static NSString * const kBrowserSecurityBadgeTitle = @"连接不安全";
-
-static NSFont *BrowserSecurityBadgeFont(void) {
-    return [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
-}
+static NSString * const kBrowserSecurityBadgeToolTip =
+    @"此站点证书不受信任。攻击者可能正在试图窃取你的信息（例如密码、消息或信用卡）。";
 
 static CGFloat BrowserSecurityBadgeContentWidth(void) {
-    NSSize size = [kBrowserSecurityBadgeTitle sizeWithAttributes:@{
-        NSFontAttributeName: BrowserSecurityBadgeFont()
-    }];
-    return ceil(size.width);
+    return 16.0;
 }
 
-static NSAttributedString *BrowserSecurityBadgeAttributedTitle(void) {
-    return [[NSAttributedString alloc] initWithString:kBrowserSecurityBadgeTitle
-                                           attributes:@{
-        NSFontAttributeName: BrowserSecurityBadgeFont(),
-        NSForegroundColorAttributeName: [NSColor systemOrangeColor],
-    }];
+static NSImage *BrowserSecurityBadgeWarningImage(void) {
+    NSImage *symbol = [NSImage imageWithSystemSymbolName:@"exclamationmark.triangle.fill"
+                                accessibilityDescription:@"连接不安全"];
+    if (!symbol) {
+        return nil;
+    }
+    NSImageSymbolConfiguration *config =
+        [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightSemibold];
+    NSImage *sized = [symbol imageWithSymbolConfiguration:config] ?: symbol;
+    NSImage *tinted = [sized copy];
+    tinted.template = YES;
+    return tinted;
 }
 
 @interface BrowserPendingSSLAuth : NSObject
@@ -997,10 +997,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.securityBadgeButton.bordered = NO;
     self.securityBadgeButton.bezelStyle = NSBezelStyleShadowlessSquare;
     [self.securityBadgeButton setButtonType:NSButtonTypeMomentaryChange];
-    self.securityBadgeButton.attributedTitle = BrowserSecurityBadgeAttributedTitle();
-    self.securityBadgeButton.imagePosition = NSNoImage;
+    self.securityBadgeButton.title = @"";
+    self.securityBadgeButton.image = BrowserSecurityBadgeWarningImage();
+    self.securityBadgeButton.imagePosition = NSImageOnly;
+    self.securityBadgeButton.contentTintColor = [NSColor systemOrangeColor];
     self.securityBadgeButton.hidden = YES;
-    self.securityBadgeButton.toolTip = @"此站点证书不受信任";
+    self.securityBadgeButton.toolTip = kBrowserSecurityBadgeToolTip;
     self.securityBadgeButton.target = self;
     self.securityBadgeButton.action = @selector(showInsecureConnectionDetails:);
     // 禁止按压高亮铺开背景。
@@ -5960,30 +5962,62 @@ doCommandBySelector:(SEL)commandSelector {
     return fallback.length > 0 ? fallback : @"发生未知错误。";
 }
 
+/// 方案 A：证书不受信任时自动写入会话例外并继续，仅靠地址栏警示。
+- (void)autoAcceptUntrustedCertificateForWebView:(WKWebView *)webView
+                                         hostKey:(NSString *)hostKey
+                                           trust:(SecTrustRef)trust
+                               completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler {
+    if (hostKey.length > 0) {
+        [[BrowserSSLExceptionStore sharedStore] allowHostKey:hostKey];
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (tab) {
+        tab.connectionSecurityState = BrowserConnectionSecurityStateInsecureException;
+    }
+    [self hideCertificateWarningOverlay];
+    if (trust && completionHandler) {
+        NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
+        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+    } else if (completionHandler) {
+        completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+    }
+    if (webView == self.webView) {
+        [self updateSecurityBadgeVisibility];
+    }
+}
+
 - (void)presentCertificateWarningForWebView:(WKWebView *)webView
                                     hostKey:(NSString *)hostKey
                                 hostDisplay:(NSString *)hostDisplay
                                   challenge:(NSURLAuthenticationChallenge *)challenge
                           completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler
                           fallbackReloadURL:(NSURL *)fallbackReloadURL {
+    (void)hostDisplay;
+    // 方案 A：不再展示整页警告；有 challenge 则直接放行，否则写入例外后重载。
     [self cancelPendingSSLAuthForWebView:webView];
-
-    BrowserPendingSSLAuth *pending = [[BrowserPendingSSLAuth alloc] init];
-    pending.webView = webView;
-    pending.hostKey = hostKey;
-    pending.hostDisplay = hostDisplay.length > 0 ? hostDisplay : hostKey;
-    pending.challenge = challenge;
-    pending.completionHandler = completionHandler;
-    pending.fallbackReloadURL = fallbackReloadURL;
-    [self.pendingSSLAuthByWebView setObject:pending forKey:webView];
-
+    SecTrustRef trust = challenge.protectionSpace.serverTrust;
+    if (challenge && completionHandler && trust) {
+        [self autoAcceptUntrustedCertificateForWebView:webView
+                                               hostKey:hostKey
+                                                 trust:trust
+                                     completionHandler:completionHandler];
+        return;
+    }
+    if (completionHandler) {
+        completionHandler(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+    }
+    if (hostKey.length > 0) {
+        [[BrowserSSLExceptionStore sharedStore] allowHostKey:hostKey];
+    }
+    BrowserTab *tab = [self.tabController tabForWebView:webView];
+    if (tab) {
+        tab.connectionSecurityState = BrowserConnectionSecurityStateInsecureException;
+    }
+    [self hideCertificateWarningOverlay];
+    if (fallbackReloadURL) {
+        [webView loadRequest:[NSURLRequest requestWithURL:fallbackReloadURL]];
+    }
     if (webView == self.webView) {
-        [self showCertificateWarningForPending:pending];
-        self.addressField.stringValue = fallbackReloadURL.absoluteString.length > 0
-            ? fallbackReloadURL.absoluteString
-            : [NSString stringWithFormat:@"https://%@", hostDisplay];
-        BrowserTab *tab = [self.tabController tabForWebView:webView];
-        tab.addressBarDraft = nil;
         [self updateSecurityBadgeVisibility];
     }
 }
@@ -6049,35 +6083,18 @@ doCommandBySelector:(SEL)commandSelector {
 
 - (void)showInsecureConnectionDetails:(id)sender {
     (void)sender;
-    BrowserTab *tab = self.tabController.selectedTab;
     WKWebView *webView = self.webView;
     NSURL *url = webView.URL;
-    NSString *hostKey = [BrowserSSLExceptionStore hostKeyForURL:url];
     NSString *host = url.host.length > 0 ? url.host : @"此站点";
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"连接不安全";
     alert.informativeText =
         [NSString stringWithFormat:
-         @"「%@」使用了无效或不受信任的证书。流量仍可能被加密，但无法验证你访问的是否为真正的服务器。",
+         @"「%@」使用了无效或不受信任的证书。流量仍可能被加密，但无法验证你访问的是否为真正的服务器。\n\n本浏览器会自动继续打开此类站点，并在地址栏显示警告图标。",
          host];
     [alert addButtonWithTitle:@"知道了"];
-    if (hostKey.length > 0) {
-        [alert addButtonWithTitle:@"停止信任此主机"];
-    }
-    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
-        if (returnCode != NSAlertSecondButtonReturn || hostKey.length == 0) {
-            return;
-        }
-        [[BrowserSSLExceptionStore sharedStore] revokeHostKey:hostKey];
-        if (tab) {
-            tab.connectionSecurityState = BrowserConnectionSecurityStateUnknown;
-        }
-        [self updateSecurityBadgeVisibility];
-        if (url) {
-            [webView loadRequest:[NSURLRequest requestWithURL:url]];
-        }
-    }];
+    [alert beginSheetModalForWindow:self.window completionHandler:nil];
 }
 
 - (void)certificateWarningViewDidChooseGoBack:(BrowserCertificateWarningView *)view {
@@ -6261,31 +6278,16 @@ completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NS
     NSInteger port = challenge.protectionSpace.port;
     NSString *hostKey = [BrowserSSLExceptionStore hostKeyForHost:host port:port];
 
-    if ([[BrowserSSLExceptionStore sharedStore] allowsHostKey:hostKey] && trust) {
-        NSURLCredential *credential = [NSURLCredential credentialForTrust:trust];
-        completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
-        return;
-    }
-
     if ([self serverTrustIsTrusted:trust]) {
         completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
         return;
     }
 
-    NSURL *fallbackURL = nil;
-    if (host.length > 0) {
-        NSString *urlString = (port > 0 && port != 443)
-            ? [NSString stringWithFormat:@"https://%@:%ld/", host, (long)port]
-            : [NSString stringWithFormat:@"https://%@/", host];
-        fallbackURL = [NSURL URLWithString:urlString];
-    }
-
-    [self presentCertificateWarningForWebView:webView
-                                      hostKey:hostKey
-                                  hostDisplay:host
-                                    challenge:challenge
-                            completionHandler:completionHandler
-                            fallbackReloadURL:fallbackURL];
+    // 方案 A：无效证书直接放行，地址栏显示警告图标。
+    [self autoAcceptUntrustedCertificateForWebView:webView
+                                           hostKey:hostKey
+                                             trust:trust
+                                 completionHandler:completionHandler];
 }
 
 /// 同文档 #锚点：页面已 replaceState，但取消导航不会走 didCommit，须手写地址栏（含 #）。
@@ -6827,16 +6829,21 @@ didFailNavigation:(WKNavigation *)navigation
             [self.loadingProgressView resetHidden];
         }
         [self clearNavigationErrorForWebView:webView];
-        [self presentCertificateWarningForWebView:webView
-                                          hostKey:hostKey
-                                      hostDisplay:host
-                                        challenge:nil
-                                completionHandler:nil
-                                fallbackReloadURL:failingURL];
-        if (webView == self.webView) {
-            [self updateNavigationState];
+        // 已在例外中仍失败：避免重载死循环，走通用错误页。
+        if (hostKey.length > 0 && [[BrowserSSLExceptionStore sharedStore] allowsHostKey:hostKey]) {
+            // fall through to generic navigation error below
+        } else {
+            [self presentCertificateWarningForWebView:webView
+                                              hostKey:hostKey
+                                          hostDisplay:host
+                                            challenge:nil
+                                    completionHandler:nil
+                                    fallbackReloadURL:failingURL];
+            if (webView == self.webView) {
+                [self updateNavigationState];
+            }
+            return;
         }
-        return;
     }
 
     if (![failingURL isKindOfClass:[NSURL class]]) {
