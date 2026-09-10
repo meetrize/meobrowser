@@ -129,6 +129,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperElementPicker.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMessageHub.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperDetector.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperValueTransform.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperPaginationDriver.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperExcelWriter.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMySQLWriter.m \
@@ -420,6 +421,7 @@ SCRAPE_RUNNER_OBJECTS := \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperSettings.o \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperRecipeStore.o \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperDetector.o \
+	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperValueTransform.o \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperPaginationDriver.o \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperExcelWriter.o \
 	$(BROWSER_OBJ_DIR)/$(BROWSER_SRC_DIR)/Scraper/BrowserScraperMySQLWriter.o \

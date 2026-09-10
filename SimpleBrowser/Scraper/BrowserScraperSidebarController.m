@@ -3,6 +3,7 @@
 #import "BrowserScraperRecipeStore.h"
 #import "BrowserScraperElementPicker.h"
 #import "BrowserScraperDetector.h"
+#import "BrowserScraperValueTransform.h"
 #import "BrowserScraperEngine.h"
 #import "BrowserScraperMySQLWriter.h"
 #import "BrowserScraperScheduleManager.h"
@@ -76,6 +77,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, strong) BrowserScraperEngine *engine;
 @property (nonatomic, copy) NSArray<NSDictionary *> *candidates;
 @property (nonatomic, copy) NSArray<NSDictionary *> *previewRows;
+@property (nonatomic, copy) NSArray<NSDictionary *> *previewRawRows;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSSegmentedControl *segment;
@@ -107,6 +109,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, strong) NSTableView *candidatesTable;
 @property (nonatomic, strong) SBTextView *logView;
 @property (nonatomic, strong) NSTextField *runStatusLabel;
+@property (nonatomic, strong) NSWindow *transformHelpWindow;
 @end
 
 @implementation BrowserScraperSidebarController
@@ -118,6 +121,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
         _currentWidth = [BrowserScraperSettings sharedSettings].sidebarWidth;
         _candidates = @[];
         _previewRows = @[];
+        _previewRawRows = @[];
         _engine = [[BrowserScraperEngine alloc] init];
         _engine.delegate = self;
         _draft = [BrowserScraperRecipe blankRecipeNamed:@"新配方"];
@@ -488,19 +492,22 @@ static const CGFloat kResizeHandleWidth = 8.0;
     while (self.fieldsTable.tableColumns.count) {
         [self.fieldsTable removeTableColumn:self.fieldsTable.tableColumns.firstObject];
     }
-    for (NSArray *pair in @[ @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"] ]) {
+    for (NSArray *pair in @[ @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"], @[@"transforms", @"处理"] ]) {
         NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:pair[0]];
         col.title = pair[1];
-        col.width = [pair[0] isEqualToString:@"enabled"] ? 28 : 100;
+        if ([pair[0] isEqualToString:@"enabled"]) col.width = 28;
+        else if ([pair[0] isEqualToString:@"transforms"]) col.width = 72;
+        else col.width = 90;
         [self.fieldsTable addTableColumn:col];
     }
     NSScrollView *fieldsScroll = [self boxedTableScroll:self.fieldsTable height:140];
 
     NSButton *addField = [NSButton buttonWithTitle:@"点选添加字段" target:self action:@selector(pickFieldClicked:)];
     NSButton *removeField = [NSButton buttonWithTitle:@"删除选中" target:self action:@selector(removeFieldClicked:)];
+    NSButton *editTransform = [NSButton buttonWithTitle:@"编辑处理" target:self action:@selector(editTransformClicked:)];
     NSButton *preview = [NSButton buttonWithTitle:@"刷新预览" target:self action:@selector(previewClicked:)];
     NSButton *copyPreview = [NSButton buttonWithTitle:@"复制预览" target:self action:@selector(copyPreviewClicked:)];
-    NSStackView *actions = [NSStackView stackViewWithViews:@[addField, removeField, preview, copyPreview]];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[addField, removeField, editTransform, preview, copyPreview]];
     actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     actions.alignment = NSLayoutAttributeCenterY;
     actions.spacing = 6;
@@ -1055,6 +1062,183 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [self.fieldsTable reloadData];
 }
 
+- (void)editTransformClicked:(id)sender {
+    (void)sender;
+    NSInteger row = self.fieldsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) {
+        [self appendLog:@"请先选中要编辑处理步骤的字段"];
+        return;
+    }
+    BrowserScraperField *field = self.draft.fields[row];
+    NSString *sample = @"";
+    NSDictionary *rawRow = self.previewRawRows.firstObject;
+    if ([rawRow isKindOfClass:[NSDictionary class]]) {
+        id v = rawRow[field.name];
+        if ([v isKindOfClass:[NSString class]]) sample = (NSString *)v;
+        else if ([v isKindOfClass:[NSNumber class]]) sample = [(NSNumber *)v stringValue];
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"字段处理 · %@", field.name ?: @"未命名"];
+    alert.informativeText = @"选择预设，或直接编辑下方 JSON 步骤数组。\n常用：digits / number / regex / relTime / remove / trim";
+    [alert addButtonWithTitle:@"应用"];
+    [alert addButtonWithTitle:@"清除处理"];
+    [alert addButtonWithTitle:@"取消"];
+
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 236)];
+    NSPopUpButton *preset = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 206, 300, 24) pullsDown:NO];
+    [preset addItemWithTitle:@"（可选）套用预设到下方"];
+    NSDictionary *presets = [BrowserScraperValueTransform presetTemplates];
+    NSArray *keys = [[presets allKeys] sortedArrayUsingSelector:@selector(localizedCompare:)];
+    for (NSString *k in keys) {
+        [preset addItemWithTitle:k];
+    }
+    NSButton *helpBtn = [NSButton buttonWithTitle:@"函数说明…" target:self action:@selector(showTransformHelpClicked:)];
+    helpBtn.bezelStyle = NSBezelStyleRounded;
+    helpBtn.frame = NSMakeRect(308, 204, 112, 28);
+
+    NSTextField *sampleLabel = [NSTextField labelWithString:
+        [NSString stringWithFormat:@"样例原文：%@", sample.length ? sample : @"(刷新预览后可带入)"]];
+    sampleLabel.frame = NSMakeRect(0, 178, 420, 20);
+    sampleLabel.font = [NSFont systemFontOfSize:11];
+    sampleLabel.textColor = NSColor.secondaryLabelColor;
+    sampleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+
+    NSTextField *hint = [NSTextField labelWithString:@"点击「函数说明…」查看全部 op 的参数与示例"];
+    hint.frame = NSMakeRect(0, 158, 420, 16);
+    hint.font = [NSFont systemFontOfSize:10];
+    hint.textColor = NSColor.tertiaryLabelColor;
+
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 420, 150)];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    SBTextView *tv = [SBTextView standardTextView];
+    tv.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    if (field.transforms.count > 0) {
+        NSData *data = [NSJSONSerialization dataWithJSONObject:field.transforms
+                                                       options:NSJSONWritingPrettyPrinted
+                                                         error:nil];
+        tv.string = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"[]";
+    } else {
+        tv.string = @"[]";
+    }
+    scroll.documentView = tv;
+    [accessory addSubview:preset];
+    [accessory addSubview:helpBtn];
+    [accessory addSubview:sampleLabel];
+    [accessory addSubview:hint];
+    [accessory addSubview:scroll];
+    alert.accessoryView = accessory;
+
+    NSModalResponse resp = [alert runModal];
+    if (resp == NSAlertThirdButtonReturn) return;
+    if (resp == NSAlertSecondButtonReturn) {
+        field.transforms = @[];
+        [self.fieldsTable reloadData];
+        [self appendLog:[NSString stringWithFormat:@"已清除字段「%@」的处理步骤", field.name]];
+        [self previewClicked:nil];
+        return;
+    }
+
+    NSArray *clean = nil;
+    NSInteger presetIdx = preset.indexOfSelectedItem;
+    if (presetIdx > 0) {
+        NSString *title = preset.titleOfSelectedItem;
+        NSArray *steps = presets[title];
+        if ([steps isKindOfClass:[NSArray class]]) clean = steps;
+    }
+    if (!clean) {
+        NSString *json = tv.string ?: @"[]";
+        NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+        id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (![obj isKindOfClass:[NSArray class]]) {
+            [self appendLog:@"处理步骤 JSON 无效，需为数组"];
+            return;
+        }
+        NSMutableArray *arr = [NSMutableArray array];
+        for (id step in (NSArray *)obj) {
+            if ([step isKindOfClass:[NSDictionary class]] && [step[@"op"] isKindOfClass:[NSString class]]) {
+                [arr addObject:step];
+            }
+        }
+        clean = arr;
+    }
+    field.transforms = clean ?: @[];
+    [self.fieldsTable reloadData];
+    NSString *out = [BrowserScraperValueTransform applyTransforms:field.transforms
+                                                         rawValue:sample
+                                                              row:@{}
+                                                          context:nil];
+    [self appendLog:[NSString stringWithFormat:@"字段「%@」处理试跑：%@ → %@（%@）",
+                     field.name,
+                     sample.length ? sample : @"(空)",
+                     out,
+                     [BrowserScraperValueTransform summaryForTransforms:field.transforms] ?: @"无"]];
+    [self previewClicked:nil];
+}
+
+- (void)showTransformHelpClicked:(id)sender {
+    (void)sender;
+    if (self.transformHelpWindow && self.transformHelpWindow.isVisible) {
+        [self.transformHelpWindow makeKeyAndOrderFront:nil];
+        return;
+    }
+
+    NSRect rect = NSMakeRect(0, 0, 560, 520);
+    NSWindow *win = [[NSWindow alloc] initWithContentRect:rect
+                                                styleMask:(NSWindowStyleMaskTitled |
+                                                           NSWindowStyleMaskClosable |
+                                                           NSWindowStyleMaskResizable |
+                                                           NSWindowStyleMaskMiniaturizable)
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    win.title = @"字段处理 · 函数说明";
+    win.minSize = NSMakeSize(420, 320);
+    win.releasedWhenClosed = NO;
+
+    NSView *content = win.contentView;
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = NO;
+    scroll.borderType = NSNoBorder;
+    scroll.autohidesScrollers = YES;
+
+    SBTextView *tv = [SBTextView standardTextView];
+    tv.editable = NO;
+    tv.drawsBackground = YES;
+    tv.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    tv.string = [BrowserScraperValueTransform helpDocumentText];
+    scroll.documentView = tv;
+
+    NSButton *close = [NSButton buttonWithTitle:@"关闭" target:self action:@selector(closeTransformHelpClicked:)];
+    close.bezelStyle = NSBezelStyleRounded;
+    close.translatesAutoresizingMaskIntoConstraints = NO;
+    close.keyEquivalent = @"\r";
+
+    [content addSubview:scroll];
+    [content addSubview:close];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:12],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-12],
+        [scroll.topAnchor constraintEqualToAnchor:content.topAnchor constant:12],
+        [scroll.bottomAnchor constraintEqualToAnchor:close.topAnchor constant:-10],
+        [close.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-12],
+        [close.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-12],
+    ]];
+
+    self.transformHelpWindow = win;
+    [win center];
+    [win makeKeyAndOrderFront:nil];
+    // 把光标滚到开头
+    [tv scrollRangeToVisible:NSMakeRange(0, 0)];
+}
+
+- (void)closeTransformHelpClicked:(id)sender {
+    (void)sender;
+    [self.transformHelpWindow close];
+}
+
 - (void)previewClicked:(id)sender {
     (void)sender;
     [self applyUIToDraft];
@@ -1075,7 +1259,12 @@ static const CGFloat kResizeHandleWidth = 8.0;
             [self appendLog:error.localizedDescription ?: @"预览失败"];
             return;
         }
-        self.previewRows = rows;
+        BrowserScraperTransformContext *txCtx = [BrowserScraperTransformContext defaultContext];
+        if (wv.URL.absoluteString.length > 0) txCtx.baseURL = wv.URL.absoluteString;
+        self.previewRawRows = rows;
+        self.previewRows = [BrowserScraperValueTransform normalizeRows:rows
+                                                                fields:self.draft.fields
+                                                               context:txCtx];
         [self rebuildPreviewColumns];
         [self appendLog:[NSString stringWithFormat:@"预览 %lu 行", (unsigned long)rows.count]];
     }];
@@ -1250,6 +1439,10 @@ static const CGFloat kResizeHandleWidth = 8.0;
         if ([ident isEqualToString:@"name"]) return f.name;
         if ([ident isEqualToString:@"kind"]) return [BrowserScraperField stringFromKind:f.kind];
         if ([ident isEqualToString:@"path"]) return f.path;
+        if ([ident isEqualToString:@"transforms"]) {
+            NSString *sum = [BrowserScraperValueTransform summaryForTransforms:f.transforms];
+            return sum.length ? sum : @"—";
+        }
         return @"";
     }
     if (tableView == self.previewTable) {

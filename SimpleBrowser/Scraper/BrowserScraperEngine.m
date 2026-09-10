@@ -1,5 +1,6 @@
 #import "BrowserScraperEngine.h"
 #import "BrowserScraperDetector.h"
+#import "BrowserScraperValueTransform.h"
 #import "BrowserScraperPaginationDriver.h"
 #import "BrowserScraperRecipeStore.h"
 #import "BrowserScraperSettings.h"
@@ -188,11 +189,17 @@ static NSString *MeoScraperStringify(id value) {
             return;
         }
         NSMutableArray *accepted = [NSMutableArray array];
+        BrowserScraperTransformContext *txCtx = [BrowserScraperTransformContext defaultContext];
+        NSURL *pageURL = self.webView.URL;
+        if (pageURL.absoluteString.length > 0) txCtx.baseURL = pageURL.absoluteString;
         for (NSDictionary *row in rows) {
             if (![row isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *norm = [BrowserScraperValueTransform normalizeRow:row
+                                                                    fields:recipe.fields
+                                                                   context:txCtx];
             if (recipe.dropEmptyRows) {
                 BOOL empty = YES;
-                for (id v in row.allValues) {
+                for (id v in norm.allValues) {
                     if ([MeoScraperStringify(v) stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0) {
                         empty = NO;
                         break;
@@ -200,14 +207,14 @@ static NSString *MeoScraperStringify(id value) {
                 }
                 if (empty) continue;
             }
-            NSString *key = [self dedupeKeyForRow:row];
+            NSString *key = [self dedupeKeyForRow:norm];
             if (key.length > 0) {
                 if ([self.seenKeys containsObject:key]) continue;
                 [self.seenKeys addObject:key];
             }
-            [accepted addObject:row];
+            [accepted addObject:norm];
             if (self.mutablePreview.count < 100) {
-                [self.mutablePreview addObject:row];
+                [self.mutablePreview addObject:norm];
             }
             if (self.totalRows + (NSInteger)accepted.count >= recipe.pagination.maxRows) break;
         }

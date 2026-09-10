@@ -24,6 +24,18 @@ static NSString *MeoNonNullString(id value) {
     field.path = MeoNonNullString(dict[@"path"]);
     NSString *attr = MeoNonNullString(dict[@"attribute"]);
     field.attribute = attr.length > 0 ? attr : nil;
+    NSArray *transforms = dict[@"transforms"];
+    if ([transforms isKindOfClass:[NSArray class]]) {
+        NSMutableArray *clean = [NSMutableArray array];
+        for (id step in transforms) {
+            if ([step isKindOfClass:[NSDictionary class]]) {
+                [clean addObject:step];
+            }
+        }
+        field.transforms = clean;
+    } else {
+        field.transforms = @[];
+    }
     return field;
 }
 
@@ -37,6 +49,9 @@ static NSString *MeoNonNullString(id value) {
     } mutableCopy];
     if (self.attribute.length > 0) {
         dict[@"attribute"] = self.attribute;
+    }
+    if (self.transforms.count > 0) {
+        dict[@"transforms"] = self.transforms;
     }
     return dict;
 }

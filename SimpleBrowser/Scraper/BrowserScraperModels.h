@@ -48,6 +48,8 @@ typedef NS_ENUM(NSInteger, BrowserScraperMySQLWriteMode) {
 @property (nonatomic, assign) BrowserScraperFieldKind kind;
 @property (nonatomic, copy) NSString *path;
 @property (nonatomic, copy, nullable) NSString *attribute;
+/// 值规范化步骤（JSON 字典数组）；空表示不做变换。
+@property (nonatomic, copy) NSArray<NSDictionary *> *transforms;
 + (instancetype)fieldWithDictionary:(NSDictionary *)dict;
 - (NSDictionary *)dictionaryRepresentation;
 + (NSString *)stringFromKind:(BrowserScraperFieldKind)kind;
