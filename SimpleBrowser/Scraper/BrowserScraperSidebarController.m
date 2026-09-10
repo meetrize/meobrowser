@@ -945,7 +945,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSString *title = [analysis[@"title"] isKindOfClass:[NSString class]] ? analysis[@"title"] : type;
     NSInteger rows = [analysis[@"estimatedRows"] respondsToSelector:@selector(integerValue)]
         ? [analysis[@"estimatedRows"] integerValue] : 0;
-    [self appendLog:[NSString stringWithFormat:@"智能识别：%@ · 循环 %@ · 约 %ld 行 · %lu 字段",
+    [self appendLog:[NSString stringWithFormat:@"智能识别：%@ · 循环 %@ · 约 %ld 行 · %lu 字段（叶子拆分）",
                      title, rowPath.length ? rowPath : @"(无)", (long)rows, (unsigned long)fields.count]];
     [self syncUIFromDraft];
     [self detectAndApplyPaginationNearPath:container];
