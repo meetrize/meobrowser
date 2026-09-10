@@ -436,6 +436,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
     while (self.candidatesTable.tableColumns.count) {
         [self.candidatesTable removeTableColumn:self.candidatesTable.tableColumns.firstObject];
     }
+    NSTableColumn *cApply = [[NSTableColumn alloc] initWithIdentifier:@"apply"];
+    cApply.title = @" ";
+    cApply.width = 28;
+    cApply.minWidth = 24;
+    cApply.maxWidth = 36;
     NSTableColumn *c0 = [[NSTableColumn alloc] initWithIdentifier:@"type"];
     c0.title = @"类型";
     c0.width = 56;
@@ -448,10 +453,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSTableColumn *c2 = [[NSTableColumn alloc] initWithIdentifier:@"rows"];
     c2.title = @"行";
     c2.width = 40;
+    [self.candidatesTable addTableColumn:cApply];
     [self.candidatesTable addTableColumn:c0];
     [self.candidatesTable addTableColumn:c1];
     [self.candidatesTable addTableColumn:cScore];
     [self.candidatesTable addTableColumn:c2];
+    self.candidatesTable.target = self;
+    self.candidatesTable.doubleAction = @selector(candidatesTableDoubleClicked:);
     NSScrollView *candScroll = [self boxedTableScroll:self.candidatesTable height:0];
     [candScroll setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
     [candScroll setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
@@ -882,6 +890,18 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSInteger row = self.candidatesTable.selectedRow;
     if (row < 0 || row >= (NSInteger)self.candidates.count) return;
     [self applyAnalysisDictionary:self.candidates[row]];
+}
+
+- (void)candidatesTableDoubleClicked:(id)sender {
+    (void)sender;
+    NSInteger row = self.candidatesTable.clickedRow;
+    NSInteger col = self.candidatesTable.clickedColumn;
+    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
+    if (col < 0 || col >= (NSInteger)self.candidatesTable.tableColumns.count) return;
+    NSTableColumn *column = self.candidatesTable.tableColumns[col];
+    if (![column.identifier isEqualToString:@"apply"]) return;
+    [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    [self useCandidateClicked:nil];
 }
 
 - (void)reanalyzeContainerClicked:(id)sender {
@@ -1414,6 +1434,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSString *ident = tableColumn.identifier;
     if (tableView == self.candidatesTable) {
         NSDictionary *c = self.candidates[row];
+        if ([ident isEqualToString:@"apply"]) return @"";
         if ([ident isEqualToString:@"type"]) {
             NSString *t = [c[@"type"] isKindOfClass:[NSString class]] ? c[@"type"] : @"";
             if ([t isEqualToString:@"table"]) return @"表格";
