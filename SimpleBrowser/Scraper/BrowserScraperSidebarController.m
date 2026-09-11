@@ -16,12 +16,26 @@
 static const CGFloat kSidebarMinWidth = 320;
 static const CGFloat kSidebarAbsoluteMaxWidth = 2400;
 static const CGFloat kResizeHandleWidth = 8.0;
+static const CGFloat kContentInset = 16.0;
+static const CGFloat kLogSplitHandleHeight = 6.0;
+static const CGFloat kLogPaneMinHeight = 48.0;
+static const CGFloat kLogPaneMaxHeight = 280.0;
+static const CGFloat kFormLabelWidth = 48.0;
+static const CGFloat kStandardFieldHeight = 22.0;
+
+typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
+    BrowserScraperButtonToneSecondary = 0,
+    BrowserScraperButtonTonePrimary,
+    BrowserScraperButtonToneDestructive,
+    BrowserScraperButtonToneQuiet,
+};
 
 @interface BrowserScraperSidebarResizeView : NSView
 @property (nonatomic, copy, nullable) void (^onDragBegan)(void);
-@property (nonatomic, copy, nullable) void (^onDragToOffset)(CGFloat mouseDeltaXFromStart);
+@property (nonatomic, copy, nullable) void (^onDragToOffset)(CGFloat mouseDeltaFromStart);
 @property (nonatomic, copy, nullable) void (^onDragEnded)(void);
-@property (nonatomic, assign) CGFloat dragStartScreenX;
+@property (nonatomic, assign) BOOL vertical; // YES = 上下拖（日志分隔）
+@property (nonatomic, assign) CGFloat dragStartScreen;
 @property (nonatomic, assign) BOOL dragging;
 @end
 
@@ -29,22 +43,25 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 - (void)resetCursorRects {
-    [self addCursorRect:self.bounds cursor:[NSCursor resizeLeftRightCursor]];
+    NSCursor *cursor = self.vertical ? [NSCursor resizeUpDownCursor] : [NSCursor resizeLeftRightCursor];
+    [self addCursorRect:self.bounds cursor:cursor];
 }
-- (CGFloat)screenXFromEvent:(NSEvent *)event {
+- (CGFloat)screenCoordFromEvent:(NSEvent *)event {
     NSPoint inWindow = event.locationInWindow;
     if (self.window) {
-        return [self.window convertPointToScreen:inWindow].x;
+        NSPoint screen = [self.window convertPointToScreen:inWindow];
+        return self.vertical ? screen.y : screen.x;
     }
-    return inWindow.x;
+    return self.vertical ? inWindow.y : inWindow.x;
 }
 - (void)mouseDown:(NSEvent *)event {
     NSWindow *window = self.window;
     if (!window) return;
     self.dragging = YES;
-    self.dragStartScreenX = [self screenXFromEvent:event];
+    self.dragStartScreen = [self screenCoordFromEvent:event];
     if (self.onDragBegan) self.onDragBegan();
-    [[NSCursor resizeLeftRightCursor] push];
+    NSCursor *cursor = self.vertical ? [NSCursor resizeUpDownCursor] : [NSCursor resizeLeftRightCursor];
+    [cursor push];
     while (self.dragging) {
         NSEvent *next = [window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
                                             untilDate:[NSDate distantFuture]
@@ -52,7 +69,10 @@ static const CGFloat kResizeHandleWidth = 8.0;
                                               dequeue:YES];
         if (!next || next.type == NSEventTypeLeftMouseUp) break;
         if (next.type == NSEventTypeLeftMouseDragged && self.onDragToOffset) {
-            self.onDragToOffset([self screenXFromEvent:next] - self.dragStartScreenX);
+            CGFloat delta = [self screenCoordFromEvent:next] - self.dragStartScreen;
+            // 日志在分隔条下方且底边固定：增高会把分隔条顶上去。
+            // 因此 delta 与屏幕 Y（上为正）同号时，分隔条才跟手（下拖→变矮→条下移）。
+            self.onDragToOffset(delta);
         }
     }
     self.dragging = NO;
@@ -157,12 +177,15 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, assign, readwrite) BOOL visible;
 @property (nonatomic, assign) CGFloat currentWidth;
 @property (nonatomic, assign) CGFloat dragStartWidth;
+@property (nonatomic, assign) CGFloat dragStartLogHeight;
+@property (nonatomic, strong) NSLayoutConstraint *logHeightConstraint;
 @property (nonatomic, strong) BrowserScraperRecipe *draft;
 @property (nonatomic, strong) BrowserScraperEngine *engine;
 @property (nonatomic, copy) NSArray<NSDictionary *> *candidates;
 @property (nonatomic, copy) NSArray<NSDictionary *> *previewRows;
 @property (nonatomic, copy) NSArray<NSDictionary *> *previewRawRows;
 @property (nonatomic, strong) NSTextField *titleLabel;
+@property (nonatomic, strong) NSImageView *titleIconView;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSSegmentedControl *segment;
 @property (nonatomic, strong) NSView *pagesHost;
@@ -188,12 +211,20 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, strong) SBTextField *mysqlUserField;
 @property (nonatomic, strong) SBSecureTextField *mysqlPasswordField;
 @property (nonatomic, strong) SBTextField *mysqlTableField;
+@property (nonatomic, strong) NSStackView *mysqlFieldsStack;
 @property (nonatomic, strong) NSTableView *fieldsTable;
 @property (nonatomic, strong) NSTableView *previewTable;
 @property (nonatomic, strong) NSTableView *candidatesTable;
+@property (nonatomic, strong) NSTextField *candidatesEmptyLabel;
+@property (nonatomic, strong) NSTextField *previewEmptyLabel;
 @property (nonatomic, strong) NSButton *showCandidateOverlayCheck;
 @property (nonatomic, strong) NSButton *onlySelectedOverlayCheck;
 @property (nonatomic, strong) NSButton *clearCandidateOverlayButton;
+@property (nonatomic, strong) NSButton *trialRunButton;
+@property (nonatomic, strong) NSButton *runButton;
+@property (nonatomic, strong) NSButton *pauseButton;
+@property (nonatomic, strong) NSButton *stopButton;
+@property (nonatomic, strong) NSButton *saveStrategyButton;
 @property (nonatomic, assign) BOOL candidateOverlayVisible;
 @property (nonatomic, assign) BOOL candidateOverlayOnlySelected;
 @property (nonatomic, assign) NSInteger adoptedCandidateIndex;
@@ -221,7 +252,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
         _previewRawRows = @[];
         _engine = [[BrowserScraperEngine alloc] init];
         _engine.delegate = self;
-        _draft = [BrowserScraperRecipe blankRecipeNamed:@"新配方"];
+        _draft = [BrowserScraperRecipe blankRecipeNamed:@"新策略"];
         [self buildUI];
     }
     return self;
@@ -236,7 +267,84 @@ static const CGFloat kResizeHandleWidth = 8.0;
     label.font = [NSFont systemFontOfSize:11];
     label.textColor = [NSColor secondaryLabelColor];
     label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.maximumNumberOfLines = 1;
+    label.lineBreakMode = NSLineBreakByClipping;
+    [label setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationVertical];
     return label;
+}
+
+- (NSTextField *)makeSectionTitle:(NSString *)text {
+    NSTextField *label = [NSTextField labelWithString:text];
+    label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    label.textColor = [NSColor secondaryLabelColor];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    return label;
+}
+
+- (nullable NSImage *)symbolNamed:(NSString *)name {
+    if (name.length == 0) return nil;
+    if (@available(macOS 11.0, *)) {
+        NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
+        if (!image) return nil;
+        NSImageSymbolConfiguration *config =
+            [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightMedium];
+        return [image imageWithSymbolConfiguration:config] ?: image;
+    }
+    return nil;
+}
+
+- (NSButton *)scraperButton:(NSString *)title
+                     symbol:(nullable NSString *)symbolName
+                       tone:(BrowserScraperButtonTone)tone
+                     target:(id)target
+                     action:(SEL)action {
+    NSButton *btn = [NSButton buttonWithTitle:title ?: @"" target:target action:action];
+    btn.bezelStyle = NSBezelStyleRounded;
+    btn.font = [NSFont systemFontOfSize:11];
+    NSImage *image = [self symbolNamed:symbolName];
+    if (image) {
+        btn.image = image;
+        btn.imagePosition = NSImageLeft;
+        btn.imageHugsTitle = YES;
+    }
+    if (@available(macOS 11.0, *)) {
+        if (tone == BrowserScraperButtonTonePrimary) {
+            btn.contentTintColor = [NSColor controlAccentColor];
+            btn.hasDestructiveAction = NO;
+        } else if (tone == BrowserScraperButtonToneDestructive) {
+            btn.contentTintColor = [NSColor systemRedColor];
+            btn.hasDestructiveAction = YES;
+        } else if (tone == BrowserScraperButtonToneQuiet) {
+            btn.contentTintColor = [NSColor secondaryLabelColor];
+        }
+    }
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    return btn;
+}
+
+- (NSStackView *)hrowViews:(NSArray<NSView *> *)views spacing:(CGFloat)spacing {
+    for (NSView *v in views) {
+        [self prepareFormControl:v];
+    }
+    NSStackView *row = [NSStackView stackViewWithViews:views];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = spacing;
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    [row setHuggingPriority:NSLayoutPriorityDefaultHigh
+             forOrientation:NSLayoutConstraintOrientationVertical];
+    return row;
+}
+
+- (NSStackView *)hrowLabel:(NSString *)text field:(NSView *)field {
+    NSTextField *label = [self makeLabel:text];
+    [label.widthAnchor constraintEqualToConstant:kFormLabelWidth].active = YES;
+    [label setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [field setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                      forOrientation:NSLayoutConstraintOrientationHorizontal];
+    return [self hrowViews:@[label, field] spacing:6];
 }
 
 - (void)prepareFormControl:(NSView *)view {
@@ -254,16 +362,51 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSStackView *stack = [NSStackView stackViewWithViews:views];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 8;
-    stack.edgeInsets = NSEdgeInsetsMake(8, 10, 12, 10);
+    stack.spacing = 6;
+    stack.edgeInsets = NSEdgeInsetsMake(8, kContentInset, 12, kContentInset);
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     [stack setHuggingPriority:NSLayoutPriorityDefaultLow
                forOrientation:NSLayoutConstraintOrientationVertical];
-    // 子视图横向撑满（纵向 stack 的 alignment 不能用 Width）
     for (NSView *v in stack.arrangedSubviews) {
-        [v.widthAnchor constraintEqualToAnchor:stack.widthAnchor constant:-20].active = YES;
+        [v.widthAnchor constraintEqualToAnchor:stack.widthAnchor constant:-(kContentInset * 2)].active = YES;
     }
     return stack;
+}
+
+- (void)setRunStatus:(NSString *)text tone:(BrowserScraperButtonTone)tone {
+    self.runStatusLabel.stringValue = text ?: @"";
+    if (tone == BrowserScraperButtonTonePrimary) {
+        self.runStatusLabel.textColor = [NSColor controlAccentColor];
+    } else if (tone == BrowserScraperButtonToneDestructive) {
+        self.runStatusLabel.textColor = [NSColor systemRedColor];
+    } else if (tone == BrowserScraperButtonToneQuiet) {
+        self.runStatusLabel.textColor = [NSColor systemGreenColor];
+    } else {
+        self.runStatusLabel.textColor = [NSColor secondaryLabelColor];
+    }
+}
+
+- (void)updateMySQLFieldsVisibility {
+    BOOL show = (self.sinkPopup.indexOfSelectedItem == (NSInteger)BrowserScraperSinkTypeMySQL);
+    self.mysqlFieldsStack.hidden = !show;
+}
+
+- (void)sinkPopupChanged:(id)sender {
+    (void)sender;
+    [self updateMySQLFieldsVisibility];
+}
+
+- (void)applyLogPaneHeight:(CGFloat)height {
+    CGFloat next = height;
+    if (next < kLogPaneMinHeight) next = kLogPaneMinHeight;
+    CGFloat maxH = kLogPaneMaxHeight;
+    NSWindow *window = self.view.window;
+    if (window) {
+        CGFloat budget = NSHeight(window.contentView.bounds) * 0.4;
+        if (budget > kLogPaneMinHeight) maxH = MIN(kLogPaneMaxHeight, budget);
+    }
+    if (next > maxH) next = maxH;
+    self.logHeightConstraint.constant = next;
 }
 
 - (void)buildUI {
@@ -294,8 +437,21 @@ static const CGFloat kResizeHandleWidth = 8.0;
         }
     };
 
-    NSButton *close = [NSButton buttonWithTitle:@"关闭" target:self action:@selector(closeClicked:)];
-    close.bezelStyle = NSBezelStyleRounded;
+    NSButton *close = [self scraperButton:@""
+                                   symbol:@"xmark"
+                                     tone:BrowserScraperButtonToneQuiet
+                                   target:self
+                                   action:@selector(closeClicked:)];
+    close.toolTip = @"关闭";
+    close.bezelStyle = NSBezelStyleToolbar;
+
+    self.titleIconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.titleIconView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.titleIconView.image = [self symbolNamed:@"ladybug"];
+    self.titleIconView.imageScaling = NSImageScaleProportionallyDown;
+    [self.titleIconView.widthAnchor constraintEqualToConstant:16].active = YES;
+    [self.titleIconView.heightAnchor constraintEqualToConstant:16].active = YES;
+
     self.titleLabel = [NSTextField labelWithString:@"页面爬虫"];
     self.titleLabel.font = [NSFont boldSystemFontOfSize:13];
     self.statusLabel = [NSTextField labelWithString:@""];
@@ -309,19 +465,19 @@ static const CGFloat kResizeHandleWidth = 8.0;
     headerSpacer.translatesAutoresizingMaskIntoConstraints = NO;
     [headerSpacer setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     [headerSpacer setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
-    NSStackView *header = [NSStackView stackViewWithViews:@[self.titleLabel, self.statusLabel, headerSpacer, close]];
+    NSStackView *header = [NSStackView stackViewWithViews:@[
+        self.titleIconView, self.titleLabel, self.statusLabel, headerSpacer, close
+    ]];
     header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     header.alignment = NSLayoutAttributeCenterY;
     header.spacing = 8;
     header.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.segment = [[NSSegmentedControl alloc] initWithFrame:NSZeroRect];
-    self.segment.segmentCount = 5;
-    [self.segment setLabel:@"本页" forSegment:0];
-    [self.segment setLabel:@"字段" forSegment:1];
-    [self.segment setLabel:@"翻页" forSegment:2];
-    [self.segment setLabel:@"任务" forSegment:3];
-    [self.segment setLabel:@"保存" forSegment:4];
+    self.segment.segmentCount = 3;
+    [self.segment setLabel:@"探测" forSegment:0];
+    [self.segment setLabel:@"预览" forSegment:1];
+    [self.segment setLabel:@"配置" forSegment:2];
     self.segment.selectedSegment = 0;
     self.segment.segmentStyle = NSSegmentStyleRounded;
     self.segment.target = self;
@@ -336,9 +492,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSArray<NSView *> *pages = @[
         [self buildPageFormPage],
         [self buildFieldsPage],
-        [self wrapScroll:[self buildPaginationFormStack]],
-        [self wrapScroll:[self buildTaskFormStack]],
-        [self wrapScroll:[self buildSaveFormStack]],
+        [self wrapScroll:[self buildConfigFormStack]],
     ];
     self.pageViews = pages;
     for (NSUInteger i = 0; i < pages.count; i++) {
@@ -354,8 +508,24 @@ static const CGFloat kResizeHandleWidth = 8.0;
         ]];
     }
 
+    BrowserScraperSidebarResizeView *logSplit = [[BrowserScraperSidebarResizeView alloc] initWithFrame:NSZeroRect];
+    logSplit.vertical = YES;
+    logSplit.translatesAutoresizingMaskIntoConstraints = NO;
+    logSplit.wantsLayer = YES;
+    logSplit.layer.backgroundColor = NSColor.separatorColor.CGColor;
+    logSplit.onDragBegan = ^{
+        weakSelf.dragStartLogHeight = weakSelf.logHeightConstraint.constant;
+    };
+    logSplit.onDragToOffset = ^(CGFloat delta) {
+        [weakSelf applyLogPaneHeight:weakSelf.dragStartLogHeight + delta];
+    };
+    logSplit.onDragEnded = ^{
+        [BrowserScraperSettings sharedSettings].logPaneHeight = weakSelf.logHeightConstraint.constant;
+    };
+
     self.runStatusLabel = [NSTextField labelWithString:@"就绪"];
     self.runStatusLabel.font = [NSFont systemFontOfSize:11];
+    self.runStatusLabel.textColor = [NSColor secondaryLabelColor];
     self.runStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSScrollView *logScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -373,14 +543,28 @@ static const CGFloat kResizeHandleWidth = 8.0;
         NSCursorAttributeName: [NSCursor pointingHandCursor],
     };
     logScroll.documentView = self.logView;
-    [logScroll.heightAnchor constraintEqualToConstant:72].active = YES;
+    CGFloat logH = [BrowserScraperSettings sharedSettings].logPaneHeight;
+    self.logHeightConstraint = [logScroll.heightAnchor constraintEqualToConstant:logH];
+    self.logHeightConstraint.active = YES;
 
-    NSButton *trialBtn = [NSButton buttonWithTitle:@"试运行" target:self action:@selector(trialRunClicked:)];
-    NSButton *runBtn = [NSButton buttonWithTitle:@"立即运行" target:self action:@selector(runClicked:)];
-    NSButton *pauseBtn = [NSButton buttonWithTitle:@"暂停" target:self action:@selector(pauseClicked:)];
-    NSButton *stopBtn = [NSButton buttonWithTitle:@"停止" target:self action:@selector(stopClicked:)];
-    NSButton *saveBtn = [NSButton buttonWithTitle:@"保存配方" target:self action:@selector(saveRecipeClicked:)];
-    NSStackView *actions = [NSStackView stackViewWithViews:@[trialBtn, runBtn, pauseBtn, stopBtn, saveBtn]];
+    self.trialRunButton = [self scraperButton:@"试运行" symbol:@"play.circle"
+                                         tone:BrowserScraperButtonToneSecondary
+                                       target:self action:@selector(trialRunClicked:)];
+    self.runButton = [self scraperButton:@"立即运行" symbol:@"play.fill"
+                                    tone:BrowserScraperButtonTonePrimary
+                                  target:self action:@selector(runClicked:)];
+    self.pauseButton = [self scraperButton:@"暂停" symbol:@"pause.fill"
+                                      tone:BrowserScraperButtonToneSecondary
+                                    target:self action:@selector(pauseClicked:)];
+    self.stopButton = [self scraperButton:@"停止" symbol:@"stop.fill"
+                                     tone:BrowserScraperButtonToneDestructive
+                                   target:self action:@selector(stopClicked:)];
+    self.saveStrategyButton = [self scraperButton:@"保存策略" symbol:@"square.and.arrow.down"
+                                             tone:BrowserScraperButtonToneSecondary
+                                           target:self action:@selector(saveRecipeClicked:)];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[
+        self.trialRunButton, self.runButton, self.pauseButton, self.stopButton, self.saveStrategyButton
+    ]];
     actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     actions.spacing = 6;
     actions.translatesAutoresizingMaskIntoConstraints = NO;
@@ -390,6 +574,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [body addSubview:header];
     [body addSubview:self.segment];
     [body addSubview:self.pagesHost];
+    [body addSubview:logSplit];
     [body addSubview:self.runStatusLabel];
     [body addSubview:logScroll];
     [body addSubview:actions];
@@ -408,29 +593,34 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [body.topAnchor constraintEqualToAnchor:root.topAnchor],
         [body.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
 
-        [header.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:10],
-        [header.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-10],
+        [header.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [header.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-kContentInset],
         [header.topAnchor constraintEqualToAnchor:body.topAnchor constant:10],
 
-        [self.segment.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:10],
-        [self.segment.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-10],
+        [self.segment.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [self.segment.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-kContentInset],
         [self.segment.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:8],
 
         [self.pagesHost.leadingAnchor constraintEqualToAnchor:body.leadingAnchor],
         [self.pagesHost.trailingAnchor constraintEqualToAnchor:body.trailingAnchor],
         [self.pagesHost.topAnchor constraintEqualToAnchor:self.segment.bottomAnchor constant:6],
-        [self.pagesHost.bottomAnchor constraintEqualToAnchor:self.runStatusLabel.topAnchor constant:-6],
+        [self.pagesHost.bottomAnchor constraintEqualToAnchor:logSplit.topAnchor],
 
-        [self.runStatusLabel.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:10],
-        [self.runStatusLabel.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-10],
+        [logSplit.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [logSplit.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-kContentInset],
+        [logSplit.heightAnchor constraintEqualToConstant:kLogSplitHandleHeight],
+        [logSplit.bottomAnchor constraintEqualToAnchor:self.runStatusLabel.topAnchor constant:-4],
+
+        [self.runStatusLabel.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [self.runStatusLabel.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-kContentInset],
         [self.runStatusLabel.bottomAnchor constraintEqualToAnchor:logScroll.topAnchor constant:-4],
 
-        [logScroll.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:10],
-        [logScroll.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-10],
+        [logScroll.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [logScroll.trailingAnchor constraintEqualToAnchor:body.trailingAnchor constant:-kContentInset],
         [logScroll.bottomAnchor constraintEqualToAnchor:actions.topAnchor constant:-8],
 
-        [actions.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:10],
-        [actions.trailingAnchor constraintLessThanOrEqualToAnchor:body.trailingAnchor constant:-10],
+        [actions.leadingAnchor constraintEqualToAnchor:body.leadingAnchor constant:kContentInset],
+        [actions.trailingAnchor constraintLessThanOrEqualToAnchor:body.trailingAnchor constant:-kContentInset],
         [actions.bottomAnchor constraintEqualToAnchor:body.bottomAnchor constant:-10],
     ]];
 }
@@ -477,6 +667,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     table.translatesAutoresizingMaskIntoConstraints = YES;
     table.headerView = [[NSTableHeaderView alloc] initWithFrame:NSMakeRect(0, 0, 100, 28)];
     table.rowSizeStyle = NSTableViewRowSizeStyleSmall;
+    table.usesAlternatingRowBackgroundColors = YES;
     table.delegate = self;
     table.dataSource = self;
     return table;
@@ -496,7 +687,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     return scroll;
 }
 
-/// 「本页」：上方表单固定，检测候选表纵向撑满贴到日志上方。
+/// 「探测」：紧凑多栏表单 + 候选表弹性高度。
 - (NSView *)buildPageFormPage {
     NSView *page = [[NSView alloc] initWithFrame:NSZeroRect];
     page.translatesAutoresizingMaskIntoConstraints = NO;
@@ -505,38 +696,66 @@ static const CGFloat kResizeHandleWidth = 8.0;
     self.recipePopup.target = self;
     self.recipePopup.action = @selector(recipePopupChanged:);
     self.nameField = [SBTextField standardField];
+    [self.nameField.heightAnchor constraintEqualToConstant:kStandardFieldHeight].active = YES;
+    [self.nameField setContentHuggingPriority:NSLayoutPriorityRequired
+                               forOrientation:NSLayoutConstraintOrientationVertical];
+    [self.nameField setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                             forOrientation:NSLayoutConstraintOrientationVertical];
     self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.modePopup addItemsWithTitles:@[ @"表格 / 列表", @"单一数据" ]];
     self.containerField = [SBTextField standardField];
     self.rowPathField = [SBTextField standardField];
 
-    NSButton *detect = [NSButton buttonWithTitle:@"智能检测整页" target:self action:@selector(detectClicked:)];
-    NSButton *pickContainer = [NSButton buttonWithTitle:@"选择数据区" target:self action:@selector(pickContainerClicked:)];
-    NSButton *reanalyze = [NSButton buttonWithTitle:@"识别循环节点" target:self action:@selector(reanalyzeContainerClicked:)];
-    NSButton *newRecipe = [NSButton buttonWithTitle:@"新建配方" target:self action:@selector(newRecipeClicked:)];
-    NSStackView *actionRow = [NSStackView stackViewWithViews:@[detect, pickContainer, reanalyze]];
-    actionRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    actionRow.alignment = NSLayoutAttributeCenterY;
-    actionRow.spacing = 6;
-    actionRow.translatesAutoresizingMaskIntoConstraints = NO;
+    NSButton *newRecipe = [self scraperButton:@"新建" symbol:@"plus"
+                                         tone:BrowserScraperButtonToneSecondary
+                                       target:self action:@selector(newRecipeClicked:)];
+    NSButton *detect = [self scraperButton:@"智能检测" symbol:@"wand.and.stars"
+                                      tone:BrowserScraperButtonTonePrimary
+                                    target:self action:@selector(detectClicked:)];
+    NSButton *pickContainer = [self scraperButton:@"选择数据区" symbol:@"hand.tap"
+                                             tone:BrowserScraperButtonToneSecondary
+                                           target:self action:@selector(pickContainerClicked:)];
+    NSButton *reanalyze = [self scraperButton:@"识别循环" symbol:@"arrow.triangle.2.circlepath"
+                                         tone:BrowserScraperButtonToneSecondary
+                                       target:self action:@selector(reanalyzeContainerClicked:)];
 
-    NSStackView *topStack = [self vstack:@[
-        [self makeLabel:@"配方"], self.recipePopup, newRecipe,
-        [self makeLabel:@"名称"], self.nameField,
-        [self makeLabel:@"模式"], self.modePopup,
-        actionRow,
-        [self makeLabel:@"容器 path"], self.containerField,
-        [self makeLabel:@"行 path（循环节点）"], self.rowPathField,
-        [self makeLabel:@"检测候选（表格 / 列表 / 卡片）"],
+    NSTextField *strategyL = [self makeLabel:@"策略"];
+    [strategyL.widthAnchor constraintEqualToConstant:kFormLabelWidth].active = YES;
+    NSStackView *strategyRow = [self hrowViews:@[strategyL, self.recipePopup, newRecipe] spacing:6];
+    [self.recipePopup setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSTextField *nameL = [self makeLabel:@"名称"];
+    [nameL.widthAnchor constraintEqualToConstant:kFormLabelWidth].active = YES;
+    NSTextField *modeL = [self makeLabel:@"模式"];
+    [modeL setContentHuggingPriority:NSLayoutPriorityRequired
+                      forOrientation:NSLayoutConstraintOrientationVertical];
+    [modeL setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                    forOrientation:NSLayoutConstraintOrientationVertical];
+    // 与 popup 显式居中，避免 label 基线导致视觉偏上/偏下
+    NSStackView *nameRow = [self hrowViews:@[nameL, self.nameField, modeL, self.modePopup] spacing:6];
+    nameRow.alignment = NSLayoutAttributeCenterY;
+    [modeL.centerYAnchor constraintEqualToAnchor:self.modePopup.centerYAnchor].active = YES;
+    [nameL.centerYAnchor constraintEqualToAnchor:self.nameField.centerYAnchor].active = YES;
+
+    NSStackView *actionRow = [self hrowViews:@[detect, pickContainer, reanalyze] spacing:6];
+    NSStackView *containerRow = [self hrowLabel:@"容器" field:self.containerField];
+    NSStackView *rowPathRow = [self hrowLabel:@"行path" field:self.rowPathField];
+
+    NSStackView *topStack = [NSStackView stackViewWithViews:@[
+        strategyRow, nameRow, actionRow, containerRow, rowPathRow,
+        [self makeSectionTitle:@"检测候选"]
     ]];
-    // vstack 已带 edgeInsets；此处作为顶部块，去掉底部多余空白感
-    topStack.edgeInsets = NSEdgeInsetsMake(8, 10, 0, 10);
+    topStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    topStack.alignment = NSLayoutAttributeLeading;
+    topStack.spacing = 5;
+    topStack.edgeInsets = NSEdgeInsetsMake(8, kContentInset, 0, kContentInset);
+    topStack.translatesAutoresizingMaskIntoConstraints = NO;
     [topStack setHuggingPriority:NSLayoutPriorityDefaultHigh
                   forOrientation:NSLayoutConstraintOrientationVertical];
-    [topStack setContentHuggingPriority:NSLayoutPriorityDefaultHigh
-                         forOrientation:NSLayoutConstraintOrientationVertical];
-    [topStack setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
-                                       forOrientation:NSLayoutConstraintOrientationVertical];
+    for (NSView *v in topStack.arrangedSubviews) {
+        [v.widthAnchor constraintEqualToAnchor:topStack.widthAnchor constant:-(kContentInset * 2)].active = YES;
+    }
 
     self.showCandidateOverlayCheck = [NSButton checkboxWithTitle:@"显示标注"
                                                           target:self
@@ -550,21 +769,15 @@ static const CGFloat kResizeHandleWidth = 8.0;
     self.onlySelectedOverlayCheck.state = self.candidateOverlayOnlySelected
         ? NSControlStateValueOn : NSControlStateValueOff;
     self.onlySelectedOverlayCheck.font = [NSFont systemFontOfSize:11];
-    self.clearCandidateOverlayButton = [NSButton buttonWithTitle:@"清除标注"
-                                                          target:self
-                                                          action:@selector(clearCandidateOverlayClicked:)];
-    self.clearCandidateOverlayButton.font = [NSFont systemFontOfSize:11];
-    NSStackView *overlayRow = [NSStackView stackViewWithViews:@[
+    self.clearCandidateOverlayButton = [self scraperButton:@"清除" symbol:@"eye.slash"
+                                                      tone:BrowserScraperButtonToneQuiet
+                                                    target:self
+                                                    action:@selector(clearCandidateOverlayClicked:)];
+    NSStackView *overlayRow = [self hrowViews:@[
         self.showCandidateOverlayCheck,
         self.onlySelectedOverlayCheck,
         self.clearCandidateOverlayButton
-    ]];
-    overlayRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    overlayRow.alignment = NSLayoutAttributeCenterY;
-    overlayRow.spacing = 10;
-    overlayRow.translatesAutoresizingMaskIntoConstraints = NO;
-    [overlayRow setHuggingPriority:NSLayoutPriorityDefaultHigh
-                    forOrientation:NSLayoutConstraintOrientationVertical];
+    ] spacing:10];
 
     self.candidatesTable = [self makeTable];
     while (self.candidatesTable.tableColumns.count) {
@@ -575,11 +788,6 @@ static const CGFloat kResizeHandleWidth = 8.0;
     cIndex.width = 28;
     cIndex.minWidth = 24;
     cIndex.maxWidth = 36;
-    NSTableColumn *cApply = [[NSTableColumn alloc] initWithIdentifier:@"apply"];
-    cApply.title = @" ";
-    cApply.width = 28;
-    cApply.minWidth = 24;
-    cApply.maxWidth = 36;
     NSTableColumn *c0 = [[NSTableColumn alloc] initWithIdentifier:@"type"];
     c0.title = @"类型";
     c0.width = 48;
@@ -592,51 +800,69 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSTableColumn *c2 = [[NSTableColumn alloc] initWithIdentifier:@"rows"];
     c2.title = @"行";
     c2.width = 36;
+    NSTableColumn *cPreview = [[NSTableColumn alloc] initWithIdentifier:@"preview"];
+    cPreview.title = @"预览";
+    cPreview.width = 44;
+    cPreview.minWidth = 40;
+    cPreview.maxWidth = 56;
+    {
+        NSButtonCell *btnCell = [[NSButtonCell alloc] init];
+        btnCell.bezelStyle = NSBezelStyleInline;
+        btnCell.title = @"";
+        btnCell.imagePosition = NSImageOnly;
+        btnCell.image = [self symbolNamed:@"eye"];
+        if (!btnCell.image) {
+            btnCell.title = @"◎";
+            btnCell.imagePosition = NSNoImage;
+        }
+        cPreview.dataCell = btnCell;
+    }
     [self.candidatesTable addTableColumn:cIndex];
-    [self.candidatesTable addTableColumn:cApply];
     [self.candidatesTable addTableColumn:c0];
     [self.candidatesTable addTableColumn:c1];
     [self.candidatesTable addTableColumn:cScore];
     [self.candidatesTable addTableColumn:c2];
+    [self.candidatesTable addTableColumn:cPreview];
     self.candidatesTable.target = self;
+    self.candidatesTable.action = @selector(candidatesTableClicked:);
     self.candidatesTable.doubleAction = @selector(candidatesTableDoubleClicked:);
     NSScrollView *candScroll = [self boxedTableScroll:self.candidatesTable height:0];
     [candScroll setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
     [candScroll setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
 
-    NSButton *useCandidate = [NSButton buttonWithTitle:@"采用选中候选" target:self action:@selector(useCandidateClicked:)];
-    useCandidate.translatesAutoresizingMaskIntoConstraints = NO;
-    [useCandidate setContentHuggingPriority:NSLayoutPriorityDefaultHigh
-                             forOrientation:NSLayoutConstraintOrientationVertical];
+    self.candidatesEmptyLabel = [self makeLabel:@"点击「智能检测」开始识别当前页数据区"];
+    self.candidatesEmptyLabel.alignment = NSTextAlignmentCenter;
+    self.candidatesEmptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     [page addSubview:topStack];
     [page addSubview:overlayRow];
     [page addSubview:candScroll];
-    [page addSubview:useCandidate];
+    [page addSubview:self.candidatesEmptyLabel];
 
     [NSLayoutConstraint activateConstraints:@[
         [topStack.leadingAnchor constraintEqualToAnchor:page.leadingAnchor],
         [topStack.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
         [topStack.topAnchor constraintEqualToAnchor:page.topAnchor],
 
-        [overlayRow.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [overlayRow.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-10],
-        [overlayRow.topAnchor constraintEqualToAnchor:topStack.bottomAnchor constant:2],
+        [overlayRow.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [overlayRow.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-kContentInset],
+        [overlayRow.topAnchor constraintEqualToAnchor:topStack.bottomAnchor constant:4],
 
-        [candScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [candScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-10],
+        [candScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [candScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
         [candScroll.topAnchor constraintEqualToAnchor:overlayRow.bottomAnchor constant:4],
-        [candScroll.bottomAnchor constraintEqualToAnchor:useCandidate.topAnchor constant:-8],
+        [candScroll.bottomAnchor constraintEqualToAnchor:page.bottomAnchor constant:-4],
         [candScroll.heightAnchor constraintGreaterThanOrEqualToConstant:80],
 
-        [useCandidate.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [useCandidate.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-10],
-        [useCandidate.bottomAnchor constraintEqualToAnchor:page.bottomAnchor constant:-4],
+        [self.candidatesEmptyLabel.centerXAnchor constraintEqualToAnchor:candScroll.centerXAnchor],
+        [self.candidatesEmptyLabel.centerYAnchor constraintEqualToAnchor:candScroll.centerYAnchor],
+        [self.candidatesEmptyLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:candScroll.leadingAnchor constant:8],
+        [self.candidatesEmptyLabel.trailingAnchor constraintLessThanOrEqualToAnchor:candScroll.trailingAnchor constant:-8],
     ]];
     return page;
 }
 
-/// 字段页：预览表纵向撑满至日志上方，随 pagesHost / 窗口高度自动伸缩。
+/// 预览页：字段表 + 样本预览，纵向撑满至日志上方。
 - (NSView *)buildFieldsPage {
     NSView *page = [[NSView alloc] initWithFrame:NSZeroRect];
     page.translatesAutoresizingMaskIntoConstraints = NO;
@@ -659,22 +885,31 @@ static const CGFloat kResizeHandleWidth = 8.0;
     }
     NSScrollView *fieldsScroll = [self boxedTableScroll:self.fieldsTable height:140];
 
-    NSButton *addField = [NSButton buttonWithTitle:@"点选添加字段" target:self action:@selector(pickFieldClicked:)];
-    NSButton *removeField = [NSButton buttonWithTitle:@"删除选中" target:self action:@selector(removeFieldClicked:)];
-    NSButton *moveUp = [NSButton buttonWithTitle:@"上移" target:self action:@selector(moveFieldUpClicked:)];
-    NSButton *moveDown = [NSButton buttonWithTitle:@"下移" target:self action:@selector(moveFieldDownClicked:)];
-    NSButton *editTransform = [NSButton buttonWithTitle:@"编辑处理" target:self action:@selector(editTransformClicked:)];
-    NSButton *preview = [NSButton buttonWithTitle:@"刷新预览" target:self action:@selector(previewClicked:)];
-    NSButton *copyPreview = [NSButton buttonWithTitle:@"复制预览" target:self action:@selector(copyPreviewClicked:)];
-    NSStackView *actions = [NSStackView stackViewWithViews:@[addField, removeField, moveUp, moveDown, editTransform, preview, copyPreview]];
-    actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    actions.alignment = NSLayoutAttributeCenterY;
-    actions.spacing = 6;
-    actions.translatesAutoresizingMaskIntoConstraints = NO;
-    [actions setHuggingPriority:NSLayoutPriorityDefaultHigh
-                 forOrientation:NSLayoutConstraintOrientationVertical];
+    NSButton *addField = [self scraperButton:@"点选添加" symbol:@"plus.square.on.square"
+                                        tone:BrowserScraperButtonToneSecondary
+                                      target:self action:@selector(pickFieldClicked:)];
+    NSButton *removeField = [self scraperButton:@"删除" symbol:@"trash"
+                                           tone:BrowserScraperButtonToneDestructive
+                                         target:self action:@selector(removeFieldClicked:)];
+    NSButton *preview = [self scraperButton:@"刷新预览" symbol:@"arrow.clockwise"
+                                       tone:BrowserScraperButtonToneSecondary
+                                     target:self action:@selector(previewClicked:)];
+    NSButton *moveUp = [self scraperButton:@"上移" symbol:@"arrow.up"
+                                      tone:BrowserScraperButtonToneQuiet
+                                    target:self action:@selector(moveFieldUpClicked:)];
+    NSButton *moveDown = [self scraperButton:@"下移" symbol:@"arrow.down"
+                                        tone:BrowserScraperButtonToneQuiet
+                                      target:self action:@selector(moveFieldDownClicked:)];
+    NSButton *editTransform = [self scraperButton:@"处理" symbol:@"slider.horizontal.3"
+                                             tone:BrowserScraperButtonToneQuiet
+                                           target:self action:@selector(editTransformClicked:)];
+    NSButton *copyPreview = [self scraperButton:@"复制" symbol:@"doc.on.doc"
+                                           tone:BrowserScraperButtonToneQuiet
+                                         target:self action:@selector(copyPreviewClicked:)];
+    NSStackView *actionsPrimary = [self hrowViews:@[addField, removeField, preview] spacing:6];
+    NSStackView *actionsSecondary = [self hrowViews:@[moveUp, moveDown, editTransform, copyPreview] spacing:6];
 
-    NSTextField *previewLabel = [self makeLabel:@"预览"];
+    NSTextField *previewLabel = [self makeSectionTitle:@"预览"];
 
     self.previewTable = [self makeTable];
     {
@@ -692,70 +927,115 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [previewScroll setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
     [previewScroll setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationVertical];
 
+    self.previewEmptyLabel = [self makeLabel:@"配置字段后点「刷新预览」查看样本行"];
+    self.previewEmptyLabel.alignment = NSTextAlignmentCenter;
+    self.previewEmptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+
     [page addSubview:fieldsScroll];
-    [page addSubview:actions];
+    [page addSubview:actionsPrimary];
+    [page addSubview:actionsSecondary];
     [page addSubview:previewLabel];
     [page addSubview:previewScroll];
+    [page addSubview:self.previewEmptyLabel];
 
     [NSLayoutConstraint activateConstraints:@[
-        [fieldsScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [fieldsScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-10],
+        [fieldsScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [fieldsScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
         [fieldsScroll.topAnchor constraintEqualToAnchor:page.topAnchor constant:8],
 
-        [actions.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [actions.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-10],
-        [actions.topAnchor constraintEqualToAnchor:fieldsScroll.bottomAnchor constant:8],
+        [actionsPrimary.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [actionsPrimary.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-kContentInset],
+        [actionsPrimary.topAnchor constraintEqualToAnchor:fieldsScroll.bottomAnchor constant:6],
 
-        [previewLabel.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [previewLabel.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-10],
-        [previewLabel.topAnchor constraintEqualToAnchor:actions.bottomAnchor constant:8],
+        [actionsSecondary.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [actionsSecondary.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-kContentInset],
+        [actionsSecondary.topAnchor constraintEqualToAnchor:actionsPrimary.bottomAnchor constant:4],
 
-        [previewScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
-        [previewScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-10],
+        [previewLabel.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [previewLabel.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
+        [previewLabel.topAnchor constraintEqualToAnchor:actionsSecondary.bottomAnchor constant:6],
+
+        [previewScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
+        [previewScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
         [previewScroll.topAnchor constraintEqualToAnchor:previewLabel.bottomAnchor constant:4],
         [previewScroll.bottomAnchor constraintEqualToAnchor:page.bottomAnchor constant:-4],
         [previewScroll.heightAnchor constraintGreaterThanOrEqualToConstant:80],
+
+        [self.previewEmptyLabel.centerXAnchor constraintEqualToAnchor:previewScroll.centerXAnchor],
+        [self.previewEmptyLabel.centerYAnchor constraintEqualToAnchor:previewScroll.centerYAnchor],
+        [self.previewEmptyLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:previewScroll.leadingAnchor constant:8],
+        [self.previewEmptyLabel.trailingAnchor constraintLessThanOrEqualToAnchor:previewScroll.trailingAnchor constant:-8],
     ]];
     return page;
 }
 
-- (NSStackView *)buildPaginationFormStack {
+- (NSStackView *)buildConfigFormStack {
     self.paginationPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.paginationPopup addItemsWithTitles:@[ @"无", @"下一页按钮", @"页码", @"Load More", @"无限滚动" ]];
     self.paginationSelectorField = [SBTextField standardField];
     self.maxPagesField = [SBTextField standardField];
     self.maxRowsField = [SBTextField standardField];
     self.delayField = [SBTextField standardField];
-    NSButton *pickPag = [NSButton buttonWithTitle:@"点选翻页控件" target:self action:@selector(pickPaginationClicked:)];
-    return [self vstack:@[
-        [self makeLabel:@"类型"], self.paginationPopup, pickPag,
-        [self makeLabel:@"选择器"], self.paginationSelectorField,
-        [self makeLabel:@"最大页数"], self.maxPagesField,
-        [self makeLabel:@"最大行数"], self.maxRowsField,
-        [self makeLabel:@"页间延迟(ms)"], self.delayField
-    ]];
-}
+    NSButton *pickPag = [self scraperButton:@"点选翻页" symbol:@"hand.point.up.left"
+                                       tone:BrowserScraperButtonToneSecondary
+                                     target:self action:@selector(pickPaginationClicked:)];
+    NSTextField *pagTypeL = [self makeLabel:@"类型"];
+    [pagTypeL.widthAnchor constraintEqualToConstant:kFormLabelWidth].active = YES;
+    NSStackView *pagTypeRow = [self hrowViews:@[pagTypeL, self.paginationPopup, pickPag] spacing:6];
+    NSStackView *pagSelRow = [self hrowLabel:@"选择器" field:self.paginationSelectorField];
 
-- (NSStackView *)buildTaskFormStack {
+    // 页数 / 行数 / 延迟：标准高度输入框 + 上标签下控件三列，避免挤扁裁字
+    static const CGFloat kPagNumFieldWidth = 88.0;
+    NSStackView *(^pagNumColumn)(NSString *, SBTextField *) = ^NSStackView *(NSString *title, SBTextField *field) {
+        NSTextField *lab = [self makeLabel:title];
+        field.translatesAutoresizingMaskIntoConstraints = NO;
+        [field.widthAnchor constraintEqualToConstant:kPagNumFieldWidth].active = YES;
+        [field.heightAnchor constraintEqualToConstant:kStandardFieldHeight].active = YES;
+        [field setContentHuggingPriority:NSLayoutPriorityRequired
+                          forOrientation:NSLayoutConstraintOrientationVertical];
+        [field setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                        forOrientation:NSLayoutConstraintOrientationVertical];
+        [field setContentHuggingPriority:NSLayoutPriorityRequired
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [field setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+        NSStackView *col = [NSStackView stackViewWithViews:@[lab, field]];
+        col.orientation = NSUserInterfaceLayoutOrientationVertical;
+        col.alignment = NSLayoutAttributeLeading;
+        col.spacing = 3;
+        col.translatesAutoresizingMaskIntoConstraints = NO;
+        [col setHuggingPriority:NSLayoutPriorityRequired
+                 forOrientation:NSLayoutConstraintOrientationVertical];
+        return col;
+    };
+    NSStackView *pagNumsRow = [self hrowViews:@[
+        pagNumColumn(@"页数", self.maxPagesField),
+        pagNumColumn(@"行数", self.maxRowsField),
+        pagNumColumn(@"延迟(ms)", self.delayField),
+    ] spacing:12];
+    // 行本身不要为了竖直 hugging 把子控件压矮
+    [pagNumsRow setHuggingPriority:NSLayoutPriorityDefaultLow
+                    forOrientation:NSLayoutConstraintOrientationVertical];
+    [pagNumsRow setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                         forOrientation:NSLayoutConstraintOrientationVertical];
+
     self.sessionPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.sessionPopup addItemsWithTitles:@[ @"共用浏览器 Cookie", @"独立会话" ]];
     self.scheduleCheck = [[NSButton alloc] initWithFrame:NSZeroRect];
     self.scheduleCheck.buttonType = NSButtonTypeSwitch;
     self.scheduleCheck.title = @"启用定时爬取";
     self.intervalField = [SBTextField standardField];
-    NSTextField *hint = [self makeLabel:@"定时由独立 MeoScrapeRunner / LaunchAgent 执行，不占用主窗口 WebView。"];
-    hint.maximumNumberOfLines = 3;
-    return [self vstack:@[
-        [self makeLabel:@"会话"], self.sessionPopup,
-        self.scheduleCheck,
-        [self makeLabel:@"间隔(分钟)"], self.intervalField,
-        hint
-    ]];
-}
+    NSStackView *sessionRow = [self hrowLabel:@"会话" field:self.sessionPopup];
+    NSStackView *schedRow = [self hrowViews:@[
+        self.scheduleCheck, [self makeLabel:@"间隔(分)"], self.intervalField
+    ] spacing:6];
+    NSTextField *taskHint = [self makeLabel:@"定时由 MeoScrapeRunner / LaunchAgent 执行，不占用主窗口。"];
+    taskHint.maximumNumberOfLines = 2;
 
-- (NSStackView *)buildSaveFormStack {
     self.sinkPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.sinkPopup addItemsWithTitles:@[ @"Excel (xlsx)", @"CSV", @"JSON", @"MySQL" ]];
+    self.sinkPopup.target = self;
+    self.sinkPopup.action = @selector(sinkPopupChanged:);
     self.filePathField = [SBTextField standardField];
     self.filePathField.placeholderString = @"空则写入下载文件夹";
     self.mysqlHostField = [SBTextField standardField];
@@ -764,21 +1044,54 @@ static const CGFloat kResizeHandleWidth = 8.0;
     self.mysqlUserField = [SBTextField standardField];
     self.mysqlPasswordField = [SBSecureTextField standardField];
     self.mysqlTableField = [SBTextField standardField];
-    NSButton *testMySQL = [NSButton buttonWithTitle:@"测试 MySQL 连接" target:self action:@selector(testMySQLClicked:)];
-    return [self vstack:@[
-        [self makeLabel:@"导出目标"], self.sinkPopup,
-        [self makeLabel:@"文件路径"], self.filePathField,
-        [self makeLabel:@"MySQL Host"], self.mysqlHostField,
-        [self makeLabel:@"Port"], self.mysqlPortField,
-        [self makeLabel:@"Database"], self.mysqlDBField,
+    NSButton *testMySQL = [self scraperButton:@"测试连接" symbol:@"cylinder.split.1x2"
+                                         tone:BrowserScraperButtonToneSecondary
+                                       target:self action:@selector(testMySQLClicked:)];
+    NSStackView *sinkRow = [self hrowLabel:@"目标" field:self.sinkPopup];
+    NSStackView *pathRow = [self hrowLabel:@"路径" field:self.filePathField];
+    NSStackView *mysqlHostRow = [self hrowViews:@[
+        [self makeLabel:@"Host"], self.mysqlHostField,
+        [self makeLabel:@"Port"], self.mysqlPortField
+    ] spacing:6];
+    NSStackView *mysqlDBRow = [self hrowViews:@[
+        [self makeLabel:@"DB"], self.mysqlDBField,
+        [self makeLabel:@"表"], self.mysqlTableField
+    ] spacing:6];
+    NSStackView *mysqlUserRow = [self hrowViews:@[
         [self makeLabel:@"User"], self.mysqlUserField,
-        [self makeLabel:@"Password"], self.mysqlPasswordField,
-        [self makeLabel:@"Table"], self.mysqlTableField,
-        testMySQL
-    ]];
-}
+        [self makeLabel:@"密码"], self.mysqlPasswordField
+    ] spacing:6];
+    self.mysqlFieldsStack = [NSStackView stackViewWithViews:@[mysqlHostRow, mysqlDBRow, mysqlUserRow, testMySQL]];
+    self.mysqlFieldsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.mysqlFieldsStack.alignment = NSLayoutAttributeLeading;
+    self.mysqlFieldsStack.spacing = 5;
+    self.mysqlFieldsStack.translatesAutoresizingMaskIntoConstraints = NO;
+    for (NSView *v in self.mysqlFieldsStack.arrangedSubviews) {
+        [v.widthAnchor constraintEqualToAnchor:self.mysqlFieldsStack.widthAnchor].active = YES;
+    }
 
-#pragma mark - Visibility
+    NSBox *sep1 = [[NSBox alloc] initWithFrame:NSZeroRect];
+    sep1.boxType = NSBoxSeparator;
+    sep1.translatesAutoresizingMaskIntoConstraints = NO;
+    NSBox *sep2 = [[NSBox alloc] initWithFrame:NSZeroRect];
+    sep2.boxType = NSBoxSeparator;
+    sep2.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSStackView *stack = [self vstack:@[
+        [self makeSectionTitle:@"翻页"],
+        pagTypeRow, pagSelRow, pagNumsRow,
+        sep1,
+        [self makeSectionTitle:@"任务"],
+        sessionRow, schedRow, taskHint,
+        sep2,
+        [self makeSectionTitle:@"导出"],
+        sinkRow, pathRow, self.mysqlFieldsStack,
+    ]];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateMySQLFieldsVisibility];
+    });
+    return stack;
+}
 
 - (CGFloat)maxAllowedSidebarWidth {
     NSWindow *window = self.view.window;
@@ -854,13 +1167,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
     }
     [self.pagesHost setNeedsLayout:YES];
     [self.pagesHost layoutSubtreeIfNeeded];
-    // 字段页：从隐藏切到可见时重排预览表，避免首行被表头挡住
+    // 预览页：从隐藏切到可见时重排预览表，避免首行被表头挡住
     if (idx == 1) {
         [self repairPreviewTableLayoutAfterBecomingVisible];
     }
 }
 
-/// 字段页刚显示时，强制 NSScrollView 为表头让出空间并把首行滚入可视区。
+/// 预览页刚显示时，强制 NSScrollView 为表头让出空间并把首行滚入可视区。
 - (void)repairPreviewTableLayoutAfterBecomingVisible {
     NSScrollView *scroll = self.previewTable.enclosingScrollView;
     if (!scroll || !self.previewTable) return;
@@ -905,7 +1218,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSArray *matched = url ? [[BrowserScraperRecipeStore sharedStore] recipesMatchingURL:url] : @[];
     if (matched.count > 0) {
         self.draft = [matched.firstObject copy];
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"本页配方 %lu", (unsigned long)matched.count];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"本页策略 %lu", (unsigned long)matched.count];
     } else if (url.host.length > 0) {
         self.statusLabel.stringValue = url.host;
         if (self.draft.match.hosts.count == 0) {
@@ -954,6 +1267,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     self.mysqlPasswordField.stringValue = @"";
     [self.fieldsTable reloadData];
     [self rebuildPreviewColumns];
+    [self updateMySQLFieldsVisibility];
 }
 
 - (void)applyUIToDraft {
@@ -995,14 +1309,14 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
 - (void)newRecipeClicked:(id)sender {
     (void)sender;
-    self.draft = [BrowserScraperRecipe blankRecipeNamed:@"新配方"];
+    self.draft = [BrowserScraperRecipe blankRecipeNamed:@"新策略"];
     NSURL *url = [self.delegate scraperSidebarCurrentURL:self];
     if (url.host.length > 0) {
         self.draft.match.hosts = @[ url.host.lowercaseString ];
         self.draft.startURL = url.absoluteString;
     }
     [self syncUIFromDraft];
-    [self appendLog:@"已新建配方草稿"];
+    [self appendLog:@"已新建策略草稿"];
 }
 
 - (void)recipePopupChanged:(id)sender {
@@ -1155,6 +1469,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [BrowserScraperDetector detectCandidatesInWebView:wv completion:^(NSArray<NSDictionary *> *candidates) {
         self.candidates = candidates;
         [self.candidatesTable reloadData];
+        self.candidatesEmptyLabel.hidden = (candidates.count > 0);
         if (candidates.count == 0) {
             [self appendLog:@"未检测到可用候选，仍尝试识别整页翻页…"];
             [self detectAndApplyPaginationNearPath:@""];
@@ -1176,18 +1491,63 @@ static const CGFloat kResizeHandleWidth = 8.0;
                              (unsigned long)candidates.count, title, (long)score]];
             [self applyAnalysisDictionary:best];
         } else {
-            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已在页面标注并选中推荐项（分 %ld）。点击侧栏行可对照；确认后点「采用选中候选」",
+            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已在页面标注并选中推荐项（分 %ld）。单击行采用；点预览或双击行查看字段预览",
                              (unsigned long)candidates.count, (long)score]];
             [self detectAndApplyPaginationNearPath:near];
         }
     }];
 }
 
-- (void)useCandidateClicked:(id)sender {
-    (void)sender;
-    NSInteger row = self.candidatesTable.selectedRow;
+- (void)adoptCandidateAtRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.candidates.count) return;
     [self applyAnalysisDictionary:self.candidates[row]];
+}
+
+- (void)openCandidatePreviewAtRow:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
+    self.suppressCandidateSelectionSync = YES;
+    [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    self.suppressCandidateSelectionSync = NO;
+    [self adoptCandidateAtRow:row];
+    if (self.candidateOverlayVisible) {
+        [BrowserScraperCandidateOverlay setSelectedIndex:row inWebView:[self currentWebView]];
+    }
+    if (self.segment.segmentCount > 1) {
+        self.segment.selectedSegment = 1;
+        [self segmentChanged:self.segment];
+    }
+    [self previewClicked:nil];
+}
+
+- (void)useCandidateClicked:(id)sender {
+    (void)sender;
+    [self adoptCandidateAtRow:self.candidatesTable.selectedRow];
+}
+
+- (void)candidatesTableClicked:(id)sender {
+    (void)sender;
+    NSInteger row = self.candidatesTable.clickedRow;
+    NSInteger col = self.candidatesTable.clickedColumn;
+    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
+    if (col >= 0 && col < (NSInteger)self.candidatesTable.tableColumns.count) {
+        NSTableColumn *column = self.candidatesTable.tableColumns[col];
+        if ([column.identifier isEqualToString:@"preview"]) {
+            [self openCandidatePreviewAtRow:row];
+            return;
+        }
+    }
+    // 单击非预览列：采用该候选（已选中行再点一次也会走这里）
+    [self adoptCandidateAtRow:row];
+    if (self.candidateOverlayVisible) {
+        [self refreshCandidateOverlaySelectingIndex:row];
+    }
+}
+
+- (void)candidatesTableDoubleClicked:(id)sender {
+    (void)sender;
+    NSInteger row = self.candidatesTable.clickedRow;
+    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
+    [self openCandidatePreviewAtRow:row];
 }
 
 - (void)refreshCandidateOverlaySelectingIndex:(NSInteger)index {
@@ -1272,22 +1632,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
     [self.candidatesTable scrollRowToVisible:index];
     self.suppressCandidateSelectionSync = NO;
-    // 页内已自行切换选中样式；若标注被隐藏则仍更新 index 供再次显示
+    // 页内点选候选：等同侧栏单击采用
+    [self adoptCandidateAtRow:index];
     if (self.candidateOverlayVisible) {
         [BrowserScraperCandidateOverlay setSelectedIndex:index inWebView:[self currentWebView]];
     }
-}
-
-- (void)candidatesTableDoubleClicked:(id)sender {
-    (void)sender;
-    NSInteger row = self.candidatesTable.clickedRow;
-    NSInteger col = self.candidatesTable.clickedColumn;
-    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
-    if (col < 0 || col >= (NSInteger)self.candidatesTable.tableColumns.count) return;
-    NSTableColumn *column = self.candidatesTable.tableColumns[col];
-    if (![column.identifier isEqualToString:@"apply"]) return;
-    [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
-    [self useCandidateClicked:nil];
 }
 
 - (void)reanalyzeContainerClicked:(id)sender {
@@ -1853,6 +2202,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [self.previewTable reloadData];
     [self.previewTable tile];
     [scroll layoutSubtreeIfNeeded];
+    self.previewEmptyLabel.hidden = (self.previewRows.count > 0);
 
     void (^restoreScroll)(void) = ^{
         if (!clip || !scroll) return;
@@ -1947,7 +2297,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [[BrowserScraperScheduleManager sharedManager] applyScheduleForRecipe:self.draft error:&schedErr];
     if (schedErr) [self appendLog:schedErr.localizedDescription];
     [self refreshRecipePopup];
-    [self appendLog:@"配方已保存"];
+    [self appendLog:@"策略已保存"];
+}
+
+- (void)setRunningControlsEnabled:(BOOL)enabled {
+    self.trialRunButton.enabled = enabled;
+    self.runButton.enabled = enabled;
+    self.saveStrategyButton.enabled = enabled;
 }
 
 - (void)trialRunClicked:(id)sender {
@@ -1966,11 +2322,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [self appendLog:@"已有任务在运行，请先停止"];
         return;
     }
-    // 切到「字段」页以便看到预览追加
+    // 切到「预览」页以便看到预览追加
     if (self.segment.segmentCount > 1) {
         self.segment.selectedSegment = 1;
         [self segmentChanged:self.segment];
     }
+    [self setRunningControlsEnabled:NO];
+    [self setRunStatus:@"试运行中…" tone:BrowserScraperButtonTonePrimary];
     [self appendLog:@"试运行：按当前翻页设置，最多 10 页，结果追加到预览"];
     [self.engine startTrialWithRecipe:self.draft webView:wv];
 }
@@ -1988,6 +2346,8 @@ static const CGFloat kResizeHandleWidth = 8.0;
         return;
     }
     self.logView.string = @"";
+    [self setRunningControlsEnabled:NO];
+    [self setRunStatus:@"运行中…" tone:BrowserScraperButtonTonePrimary];
     [self.engine startWithRecipe:self.draft webView:wv];
 }
 
@@ -2020,7 +2380,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
 - (void)appendLog:(NSString *)line {
     NSString *text = line ?: @"";
-    self.runStatusLabel.stringValue = text;
+    // 不覆盖运行中的着色状态文案时仍同步一行摘要
+    if (!self.engine.running) {
+        self.runStatusLabel.stringValue = text;
+        self.runStatusLabel.textColor = [NSColor secondaryLabelColor];
+    }
 
     NSFont *font = self.logView.font ?: [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
     NSColor *fg = [NSColor labelColor];
@@ -2099,10 +2463,12 @@ static const CGFloat kResizeHandleWidth = 8.0;
         }
         self.runStatusLabel.stringValue = [NSString stringWithFormat:@"试运行 已追加，预览 %lu 行（本轮合计 %ld）",
                                            (unsigned long)self.previewRows.count, (long)totalRows];
+        self.runStatusLabel.textColor = [NSColor controlAccentColor];
         return;
     }
     // 立即运行：不写入预览表，只更新状态
-    self.runStatusLabel.stringValue = [NSString stringWithFormat:@"已采集 %ld 行", (long)totalRows];
+    [self setRunStatus:[NSString stringWithFormat:@"已采集 %ld 行", (long)totalRows]
+                  tone:BrowserScraperButtonTonePrimary];
 }
 
 - (void)scraperEngine:(BrowserScraperEngine *)engine didLog:(NSString *)line {
@@ -2113,14 +2479,19 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (void)scraperEngine:(BrowserScraperEngine *)engine didFinishWithRunDirectory:(NSString *)runDirectory error:(NSError *)error {
     BOOL trial = engine.trialMode;
     (void)engine;
+    [self setRunningControlsEnabled:YES];
     if (error) {
+        [self setRunStatus:error.localizedDescription ?: @"失败" tone:BrowserScraperButtonToneDestructive];
         [self appendLog:error.localizedDescription];
         return;
     }
     if (trial) {
+        [self setRunStatus:[NSString stringWithFormat:@"试运行完成 · %lu 行", (unsigned long)self.previewRows.count]
+                      tone:BrowserScraperButtonToneQuiet];
         [self appendLog:[NSString stringWithFormat:@"试运行完成，预览共 %lu 行", (unsigned long)self.previewRows.count]];
         return;
     }
+    [self setRunStatus:@"完成" tone:BrowserScraperButtonToneQuiet];
     [self appendLog:[NSString stringWithFormat:@"完成 %@", runDirectory.lastPathComponent]];
     NSString *path = self.draft.sink.filePath;
     if (path.length > 0) {
@@ -2143,9 +2514,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
         NSDictionary *c = self.candidates[row];
         BOOL missing = [self.missingCandidateIndexes containsObject:@(row)];
         if ([ident isEqualToString:@"index"]) return @(row + 1);
-        if ([ident isEqualToString:@"apply"]) {
-            return (row == self.adoptedCandidateIndex) ? @"✓" : @"";
-        }
+        if ([ident isEqualToString:@"preview"]) return @"";
         if ([ident isEqualToString:@"type"]) {
             NSString *t = [c[@"type"] isKindOfClass:[NSString class]] ? c[@"type"] : @"";
             if ([t isEqualToString:@"table"]) return @"表格";
@@ -2209,6 +2578,22 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
 - (void)tableView:(NSTableView *)tableView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
     if (tableView != self.candidatesTable) return;
+    if ([tableColumn.identifier isEqualToString:@"preview"]) {
+        if ([cell isKindOfClass:[NSButtonCell class]]) {
+            NSButtonCell *btn = (NSButtonCell *)cell;
+            NSImage *eye = [self symbolNamed:@"eye"];
+            if (eye) {
+                btn.image = eye;
+                btn.title = @"";
+                btn.imagePosition = NSImageOnly;
+            } else {
+                btn.title = @"◎";
+                btn.image = nil;
+                btn.imagePosition = NSNoImage;
+            }
+        }
+        return;
+    }
     if (![cell isKindOfClass:[NSTextFieldCell class]]) return;
     BOOL missing = [self.missingCandidateIndexes containsObject:@(row)];
     ((NSTextFieldCell *)cell).textColor = missing ? NSColor.tertiaryLabelColor : NSColor.labelColor;
@@ -2218,11 +2603,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSTableView *tableView = notification.object;
     if (tableView != self.candidatesTable) return;
     if (self.suppressCandidateSelectionSync) return;
-    if (!self.candidateOverlayVisible) return;
     NSInteger row = self.candidatesTable.selectedRow;
     if (row < 0 || row >= (NSInteger)self.candidates.count) return;
-    // 重绘更稳妥：换页/清理后仅 setSelectedIndex 会静默失败
-    [self refreshCandidateOverlaySelectingIndex:row];
+    if (self.candidateOverlayVisible) {
+        [self refreshCandidateOverlaySelectingIndex:row];
+    }
 }
 
 @end

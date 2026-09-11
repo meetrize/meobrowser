@@ -7,8 +7,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)sharedSettings;
 
-/// 侧栏宽度，默认 400；钳制 320～560。
+/// 侧栏宽度，默认 400；钳制 320～2400。
 @property (nonatomic, assign) CGFloat sidebarWidth;
+
+/// 侧栏日志区高度，默认 72；钳制 48～280。
+@property (nonatomic, assign) CGFloat logPaneHeight;
 
 /// 智能检测后是否显示页内数据区标注，默认 YES。
 @property (nonatomic, assign) BOOL candidateOverlayVisible;

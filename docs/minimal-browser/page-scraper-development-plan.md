@@ -1,6 +1,7 @@
 # 页面爬虫（Page Scraper）— 分阶段开发计划
 
 > 基于 [page-scraper-design.md](page-scraper-design.md)（**已确认定稿**）。  
+> 侧栏 UI 优化：[page-scraper-sidebar-ui-plan.md](page-scraper-sidebar-ui-plan.md)（方案已定，待实现）。  
 > 前置：trailing 侧栏槽、Chrome Actions、SBKit 文本控件、`LoginAssistScriptMessageProxy`、Keychain 用法可参考 ServerSync。  
 > 状态：方案已定；**代码已接入主工程并可编译**（侧栏 / 引擎 / 导出 / helper 初版），细项验收见各阶段勾选
 

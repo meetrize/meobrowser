@@ -3,6 +3,7 @@
 > 目标：在 MeoBrowser 内提供可视化「点选 DOM → 定义字段与翻页 → 一次性/定时爬取 → 导出 Excel / 写入 MySQL」能力；对标主流浏览器爬虫插件的必备功能，同时保持原生轻量与主进程内存可控。  
 > 状态：**设计已定**  
 > 开发计划：[page-scraper-development-plan.md](page-scraper-development-plan.md)  
+> 侧栏 UI 优化：[page-scraper-sidebar-ui-plan.md](page-scraper-sidebar-ui-plan.md)（方案已定，待实现）  
 > 关联：[professional-features-roadmap.md](professional-features-roadmap.md)（§3.9）· [assist-sidebar-design.md](assist-sidebar-design.md) · [page-pack-design.md](page-pack-design.md) · [companion-notification-inbox-sidebar-design.md](companion-notification-inbox-sidebar-design.md) · [tab-strip-chrome-actions-design.md](tab-strip-chrome-actions-design.md)
 
 ---

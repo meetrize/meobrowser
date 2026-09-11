@@ -1,6 +1,7 @@
 #import "BrowserScraperSettings.h"
 
 static NSString * const kScraperSidebarWidthKey = @"MeoBrowserScraperSidebarWidth";
+static NSString * const kScraperLogPaneHeightKey = @"MeoBrowserScraperLogPaneHeight";
 static NSString * const kScraperMaxRetainedRunsKey = @"MeoBrowserScraperMaxRetainedRuns";
 static NSString * const kScraperCandidateOverlayVisibleKey = @"MeoBrowserScraperCandidateOverlayVisible";
 static NSString * const kScraperCandidateOverlayOnlySelectedKey = @"MeoBrowserScraperCandidateOverlayOnlySelected";
@@ -32,6 +33,24 @@ static NSString * const kScraperCandidateOverlayOnlySelectedKey = @"MeoBrowserSc
     if (width < 320.0) width = 320.0;
     if (width > 2400.0) width = 2400.0;
     [NSUserDefaults.standardUserDefaults setDouble:width forKey:kScraperSidebarWidthKey];
+}
+
+- (CGFloat)logPaneHeight {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:kScraperLogPaneHeightKey] == nil) {
+        return 72.0;
+    }
+    CGFloat height = [defaults doubleForKey:kScraperLogPaneHeightKey];
+    if (height < 48.0) height = 48.0;
+    if (height > 280.0) height = 280.0;
+    return height;
+}
+
+- (void)setLogPaneHeight:(CGFloat)logPaneHeight {
+    CGFloat height = logPaneHeight;
+    if (height < 48.0) height = 48.0;
+    if (height > 280.0) height = 280.0;
+    [NSUserDefaults.standardUserDefaults setDouble:height forKey:kScraperLogPaneHeightKey];
 }
 
 - (BOOL)candidateOverlayVisible {
