@@ -2,6 +2,8 @@
 
 static NSString * const kScraperSidebarWidthKey = @"MeoBrowserScraperSidebarWidth";
 static NSString * const kScraperMaxRetainedRunsKey = @"MeoBrowserScraperMaxRetainedRuns";
+static NSString * const kScraperCandidateOverlayVisibleKey = @"MeoBrowserScraperCandidateOverlayVisible";
+static NSString * const kScraperCandidateOverlayOnlySelectedKey = @"MeoBrowserScraperCandidateOverlayOnlySelected";
 
 @implementation BrowserScraperSettings
 
@@ -30,6 +32,24 @@ static NSString * const kScraperMaxRetainedRunsKey = @"MeoBrowserScraperMaxRetai
     if (width < 320.0) width = 320.0;
     if (width > 2400.0) width = 2400.0;
     [NSUserDefaults.standardUserDefaults setDouble:width forKey:kScraperSidebarWidthKey];
+}
+
+- (BOOL)candidateOverlayVisible {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if ([defaults objectForKey:kScraperCandidateOverlayVisibleKey] == nil) return YES;
+    return [defaults boolForKey:kScraperCandidateOverlayVisibleKey];
+}
+
+- (void)setCandidateOverlayVisible:(BOOL)candidateOverlayVisible {
+    [NSUserDefaults.standardUserDefaults setBool:candidateOverlayVisible forKey:kScraperCandidateOverlayVisibleKey];
+}
+
+- (BOOL)candidateOverlayOnlySelected {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kScraperCandidateOverlayOnlySelectedKey];
+}
+
+- (void)setCandidateOverlayOnlySelected:(BOOL)candidateOverlayOnlySelected {
+    [NSUserDefaults.standardUserDefaults setBool:candidateOverlayOnlySelected forKey:kScraperCandidateOverlayOnlySelectedKey];
 }
 
 - (NSInteger)maxRetainedRuns {

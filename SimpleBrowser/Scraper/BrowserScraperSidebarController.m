@@ -2,6 +2,7 @@
 #import "BrowserScraperSettings.h"
 #import "BrowserScraperRecipeStore.h"
 #import "BrowserScraperElementPicker.h"
+#import "BrowserScraperCandidateOverlay.h"
 #import "BrowserScraperDetector.h"
 #import "BrowserScraperValueTransform.h"
 #import "BrowserScraperEngine.h"
@@ -73,6 +74,19 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, copy, nullable) void (^deleteColumnHandler)(NSInteger columnIndex);
 @end
 @implementation BrowserScraperPreviewHeaderView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    // 零尺寸表头会导致 NSScrollView 未预留列头高度，首行数据会被挡住。
+    if (NSHeight(frameRect) < 1.0) {
+        frameRect = NSMakeRect(NSMinX(frameRect), NSMinY(frameRect),
+                               MAX(NSWidth(frameRect), 1.0), 28.0);
+    }
+    return [super initWithFrame:frameRect];
+}
+
+- (instancetype)init {
+    return [self initWithFrame:NSMakeRect(0, 0, 100, 28)];
+}
 
 - (NSRect)closeRectForColumn:(NSInteger)column {
     if (column < 0) return NSZeroRect;
@@ -177,6 +191,14 @@ static const CGFloat kResizeHandleWidth = 8.0;
 @property (nonatomic, strong) NSTableView *fieldsTable;
 @property (nonatomic, strong) NSTableView *previewTable;
 @property (nonatomic, strong) NSTableView *candidatesTable;
+@property (nonatomic, strong) NSButton *showCandidateOverlayCheck;
+@property (nonatomic, strong) NSButton *onlySelectedOverlayCheck;
+@property (nonatomic, strong) NSButton *clearCandidateOverlayButton;
+@property (nonatomic, assign) BOOL candidateOverlayVisible;
+@property (nonatomic, assign) BOOL candidateOverlayOnlySelected;
+@property (nonatomic, assign) NSInteger adoptedCandidateIndex;
+@property (nonatomic, strong) NSSet<NSNumber *> *missingCandidateIndexes;
+@property (nonatomic, assign) BOOL suppressCandidateSelectionSync;
 @property (nonatomic, strong) SBTextView *logView;
 @property (nonatomic, strong) NSTextField *runStatusLabel;
 @property (nonatomic, strong) NSWindow *transformHelpWindow;
@@ -190,6 +212,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
         _visible = NO;
         _currentWidth = [BrowserScraperSettings sharedSettings].sidebarWidth;
         _candidates = @[];
+        _candidateOverlayVisible = [BrowserScraperSettings sharedSettings].candidateOverlayVisible;
+        _candidateOverlayOnlySelected = [BrowserScraperSettings sharedSettings].candidateOverlayOnlySelected;
+        _adoptedCandidateIndex = -1;
+        _missingCandidateIndexes = [NSSet set];
+        _suppressCandidateSelectionSync = NO;
         _previewRows = @[];
         _previewRawRows = @[];
         _engine = [[BrowserScraperEngine alloc] init];
@@ -446,11 +473,12 @@ static const CGFloat kResizeHandleWidth = 8.0;
 
 - (NSTableView *)makeTable {
     NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    table.headerView = [[NSTableHeaderView alloc] init];
+    // documentView 须走 frame 布局；TAMIC=NO 易导致表头与内容区重叠、首行被挡。
+    table.translatesAutoresizingMaskIntoConstraints = YES;
+    table.headerView = [[NSTableHeaderView alloc] initWithFrame:NSMakeRect(0, 0, 100, 28)];
     table.rowSizeStyle = NSTableViewRowSizeStyleSmall;
     table.delegate = self;
     table.dataSource = self;
-    table.translatesAutoresizingMaskIntoConstraints = NO;
     return table;
 }
 
@@ -510,10 +538,43 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [topStack setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
                                        forOrientation:NSLayoutConstraintOrientationVertical];
 
+    self.showCandidateOverlayCheck = [NSButton checkboxWithTitle:@"显示标注"
+                                                          target:self
+                                                          action:@selector(showCandidateOverlayToggled:)];
+    self.showCandidateOverlayCheck.state = self.candidateOverlayVisible
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.showCandidateOverlayCheck.font = [NSFont systemFontOfSize:11];
+    self.onlySelectedOverlayCheck = [NSButton checkboxWithTitle:@"仅显示选中"
+                                                          target:self
+                                                          action:@selector(onlySelectedOverlayToggled:)];
+    self.onlySelectedOverlayCheck.state = self.candidateOverlayOnlySelected
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    self.onlySelectedOverlayCheck.font = [NSFont systemFontOfSize:11];
+    self.clearCandidateOverlayButton = [NSButton buttonWithTitle:@"清除标注"
+                                                          target:self
+                                                          action:@selector(clearCandidateOverlayClicked:)];
+    self.clearCandidateOverlayButton.font = [NSFont systemFontOfSize:11];
+    NSStackView *overlayRow = [NSStackView stackViewWithViews:@[
+        self.showCandidateOverlayCheck,
+        self.onlySelectedOverlayCheck,
+        self.clearCandidateOverlayButton
+    ]];
+    overlayRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    overlayRow.alignment = NSLayoutAttributeCenterY;
+    overlayRow.spacing = 10;
+    overlayRow.translatesAutoresizingMaskIntoConstraints = NO;
+    [overlayRow setHuggingPriority:NSLayoutPriorityDefaultHigh
+                    forOrientation:NSLayoutConstraintOrientationVertical];
+
     self.candidatesTable = [self makeTable];
     while (self.candidatesTable.tableColumns.count) {
         [self.candidatesTable removeTableColumn:self.candidatesTable.tableColumns.firstObject];
     }
+    NSTableColumn *cIndex = [[NSTableColumn alloc] initWithIdentifier:@"index"];
+    cIndex.title = @"#";
+    cIndex.width = 28;
+    cIndex.minWidth = 24;
+    cIndex.maxWidth = 36;
     NSTableColumn *cApply = [[NSTableColumn alloc] initWithIdentifier:@"apply"];
     cApply.title = @" ";
     cApply.width = 28;
@@ -521,16 +582,17 @@ static const CGFloat kResizeHandleWidth = 8.0;
     cApply.maxWidth = 36;
     NSTableColumn *c0 = [[NSTableColumn alloc] initWithIdentifier:@"type"];
     c0.title = @"类型";
-    c0.width = 56;
+    c0.width = 48;
     NSTableColumn *c1 = [[NSTableColumn alloc] initWithIdentifier:@"title"];
     c1.title = @"候选";
-    c1.width = 140;
+    c1.width = 120;
     NSTableColumn *cScore = [[NSTableColumn alloc] initWithIdentifier:@"score"];
     cScore.title = @"分";
     cScore.width = 36;
     NSTableColumn *c2 = [[NSTableColumn alloc] initWithIdentifier:@"rows"];
     c2.title = @"行";
-    c2.width = 40;
+    c2.width = 36;
+    [self.candidatesTable addTableColumn:cIndex];
     [self.candidatesTable addTableColumn:cApply];
     [self.candidatesTable addTableColumn:c0];
     [self.candidatesTable addTableColumn:c1];
@@ -548,6 +610,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
                              forOrientation:NSLayoutConstraintOrientationVertical];
 
     [page addSubview:topStack];
+    [page addSubview:overlayRow];
     [page addSubview:candScroll];
     [page addSubview:useCandidate];
 
@@ -556,9 +619,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [topStack.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
         [topStack.topAnchor constraintEqualToAnchor:page.topAnchor],
 
+        [overlayRow.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
+        [overlayRow.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-10],
+        [overlayRow.topAnchor constraintEqualToAnchor:topStack.bottomAnchor constant:2],
+
         [candScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:10],
         [candScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-10],
-        [candScroll.topAnchor constraintEqualToAnchor:topStack.bottomAnchor constant:4],
+        [candScroll.topAnchor constraintEqualToAnchor:overlayRow.bottomAnchor constant:4],
         [candScroll.bottomAnchor constraintEqualToAnchor:useCandidate.topAnchor constant:-8],
         [candScroll.heightAnchor constraintGreaterThanOrEqualToConstant:80],
 
@@ -754,6 +821,7 @@ static const CGFloat kResizeHandleWidth = 8.0;
         if (!visible) {
             self.view.hidden = YES;
             [BrowserScraperElementPicker cancelActivePick];
+            [BrowserScraperCandidateOverlay clearInWebView:[self currentWebView]];
         } else {
             [self.view.window invalidateCursorRectsForView:self.view];
         }
@@ -786,11 +854,49 @@ static const CGFloat kResizeHandleWidth = 8.0;
     }
     [self.pagesHost setNeedsLayout:YES];
     [self.pagesHost layoutSubtreeIfNeeded];
+    // 字段页：从隐藏切到可见时重排预览表，避免首行被表头挡住
+    if (idx == 1) {
+        [self repairPreviewTableLayoutAfterBecomingVisible];
+    }
+}
+
+/// 字段页刚显示时，强制 NSScrollView 为表头让出空间并把首行滚入可视区。
+- (void)repairPreviewTableLayoutAfterBecomingVisible {
+    NSScrollView *scroll = self.previewTable.enclosingScrollView;
+    if (!scroll || !self.previewTable) return;
+
+    void (^fix)(void) = ^{
+        [scroll layoutSubtreeIfNeeded];
+        [self.previewTable tile];
+        NSTableHeaderView *header = self.previewTable.headerView;
+        if (header && NSHeight(header.frame) < 1.0) {
+            NSRect hf = header.frame;
+            hf.size.height = 28.0;
+            header.frame = hf;
+            [self.previewTable tile];
+        }
+        if (self.previewTable.numberOfRows > 0) {
+            [self.previewTable scrollRowToVisible:0];
+        } else {
+            NSClipView *clip = scroll.contentView;
+            if (clip) {
+                NSRect doc = [scroll.documentView frame];
+                NSSize visible = clip.bounds.size;
+                CGFloat y = MAX(0, NSHeight(doc) - visible.height);
+                [clip scrollToPoint:NSMakePoint(clip.bounds.origin.x, y)];
+                [scroll reflectScrolledClipView:clip];
+            }
+        }
+        [self syncPreviewHeaderScrollWithContent];
+    };
+    fix();
+    dispatch_async(dispatch_get_main_queue(), fix);
 }
 
 #pragma mark - Sync
 
 - (void)reloadForCurrentURL {
+    [BrowserScraperCandidateOverlay clearInWebView:[self currentWebView]];
     [self refreshRecipePopup];
     NSURL *url = nil;
     if ([self.delegate respondsToSelector:@selector(scraperSidebarCurrentURL:)]) {
@@ -947,9 +1053,30 @@ static const CGFloat kResizeHandleWidth = 8.0;
         ? [analysis[@"estimatedRows"] integerValue] : 0;
     [self appendLog:[NSString stringWithFormat:@"智能识别：%@ · 循环 %@ · 约 %ld 行 · %lu 字段（叶子拆分）",
                      title, rowPath.length ? rowPath : @"(无)", (long)rows, (unsigned long)fields.count]];
+    [self markAdoptedCandidateMatchingContainerPath:container];
     [self syncUIFromDraft];
     [self detectAndApplyPaginationNearPath:container];
     [self previewClicked:nil];
+}
+
+- (void)markAdoptedCandidateMatchingContainerPath:(NSString *)containerPath {
+    NSInteger found = -1;
+    if (containerPath.length > 0) {
+        for (NSInteger i = 0; i < (NSInteger)self.candidates.count; i++) {
+            NSDictionary *c = self.candidates[i];
+            NSString *path = [c[@"containerPath"] isKindOfClass:[NSString class]] ? c[@"containerPath"] : @"";
+            if ([path isEqualToString:containerPath]) {
+                found = i;
+                break;
+            }
+        }
+    }
+    self.adoptedCandidateIndex = found;
+    [self.candidatesTable reloadData];
+    WKWebView *wv = [self currentWebView];
+    if (wv && self.candidates.count > 0) {
+        [BrowserScraperCandidateOverlay setAdoptedIndex:found inWebView:wv];
+    }
 }
 
 - (void)detectAndApplyPaginationNearPath:(NSString *)containerPath {
@@ -1021,6 +1148,9 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (void)detectClicked:(id)sender {
     (void)sender;
     WKWebView *wv = [self currentWebView];
+    [BrowserScraperCandidateOverlay clearInWebView:wv];
+    self.adoptedCandidateIndex = -1;
+    self.missingCandidateIndexes = [NSSet set];
     [self appendLog:@"正在智能检测表格 / 列表 / 卡片与翻页方式…"];
     [BrowserScraperDetector detectCandidatesInWebView:wv completion:^(NSArray<NSDictionary *> *candidates) {
         self.candidates = candidates;
@@ -1030,8 +1160,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
             [self detectAndApplyPaginationNearPath:@""];
             return;
         }
+        self.suppressCandidateSelectionSync = YES;
         [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
         [self.candidatesTable scrollRowToVisible:0];
+        self.suppressCandidateSelectionSync = NO;
+        [self refreshCandidateOverlaySelectingIndex:0];
         NSDictionary *best = candidates.firstObject;
         NSInteger score = [best[@"score"] respondsToSelector:@selector(integerValue)]
             ? [best[@"score"] integerValue] : 0;
@@ -1039,11 +1172,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
         NSString *title = [best[@"title"] isKindOfClass:[NSString class]] ? best[@"title"] : @"候选";
         NSString *near = [best[@"containerPath"] isKindOfClass:[NSString class]] ? best[@"containerPath"] : @"";
         if (confident) {
-            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，智能采用：%@（分 %ld）",
+            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已在页面标注，智能采用：%@（分 %ld）",
                              (unsigned long)candidates.count, title, (long)score]];
             [self applyAnalysisDictionary:best];
         } else {
-            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已选中推荐项（分 %ld），置信不足请确认后点「采用选中候选」",
+            [self appendLog:[NSString stringWithFormat:@"检测到 %lu 个候选，已在页面标注并选中推荐项（分 %ld）。点击侧栏行可对照；确认后点「采用选中候选」",
                              (unsigned long)candidates.count, (long)score]];
             [self detectAndApplyPaginationNearPath:near];
         }
@@ -1055,6 +1188,94 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSInteger row = self.candidatesTable.selectedRow;
     if (row < 0 || row >= (NSInteger)self.candidates.count) return;
     [self applyAnalysisDictionary:self.candidates[row]];
+}
+
+- (void)refreshCandidateOverlaySelectingIndex:(NSInteger)index {
+    WKWebView *wv = [self currentWebView];
+    if (!wv) return;
+    if (self.candidates.count == 0) {
+        [BrowserScraperCandidateOverlay clearInWebView:wv];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [BrowserScraperCandidateOverlay showCandidates:self.candidates
+                                        inWebView:wv
+                                    selectedIndex:index
+                                     adoptedIndex:self.adoptedCandidateIndex
+                                     onlySelected:self.candidateOverlayOnlySelected
+                                       completion:^(NSArray<NSNumber *> *missingIndexes) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        NSSet<NSNumber *> *next = [NSSet setWithArray:missingIndexes ?: @[]];
+        BOOL changed = ![next isEqualToSet:self.missingCandidateIndexes];
+        self.missingCandidateIndexes = next;
+        if (changed) {
+            [self.candidatesTable reloadData];
+            if (next.count > 0) {
+                [self appendLog:[NSString stringWithFormat:@"有 %lu 个候选 path 在当前页无法定位，已在侧栏灰显",
+                                 (unsigned long)next.count]];
+            }
+        }
+    }];
+    if (!self.candidateOverlayVisible) {
+        [BrowserScraperCandidateOverlay setVisible:NO inWebView:wv];
+    }
+}
+
+- (void)showCandidateOverlayToggled:(id)sender {
+    (void)sender;
+    self.candidateOverlayVisible = (self.showCandidateOverlayCheck.state == NSControlStateValueOn);
+    [BrowserScraperSettings sharedSettings].candidateOverlayVisible = self.candidateOverlayVisible;
+    WKWebView *wv = [self currentWebView];
+    if (self.candidateOverlayVisible) {
+        if (self.candidates.count > 0) {
+            NSInteger row = self.candidatesTable.selectedRow;
+            if (row < 0) row = 0;
+            [self refreshCandidateOverlaySelectingIndex:row];
+        }
+    } else {
+        [BrowserScraperCandidateOverlay setVisible:NO inWebView:wv];
+    }
+}
+
+- (void)onlySelectedOverlayToggled:(id)sender {
+    (void)sender;
+    self.candidateOverlayOnlySelected = (self.onlySelectedOverlayCheck.state == NSControlStateValueOn);
+    [BrowserScraperSettings sharedSettings].candidateOverlayOnlySelected = self.candidateOverlayOnlySelected;
+    WKWebView *wv = [self currentWebView];
+    if (!wv || self.candidates.count == 0) return;
+    if (self.candidateOverlayVisible) {
+        [BrowserScraperCandidateOverlay setOnlySelected:self.candidateOverlayOnlySelected inWebView:wv];
+    }
+}
+
+- (void)clearCandidateOverlayClicked:(id)sender {
+    (void)sender;
+    [BrowserScraperCandidateOverlay clearInWebView:[self currentWebView]];
+    self.candidateOverlayVisible = NO;
+    self.showCandidateOverlayCheck.state = NSControlStateValueOff;
+    [BrowserScraperSettings sharedSettings].candidateOverlayVisible = NO;
+    [self appendLog:@"已清除页面数据区标注"];
+}
+
+- (void)handleCandidateOverlayMessage:(id)body {
+    if (![body isKindOfClass:[NSDictionary class]]) return;
+    NSString *action = [body[@"action"] isKindOfClass:[NSString class]] ? body[@"action"] : @"";
+    if ([action isEqualToString:@"clearCandidateOverlay"]) {
+        [self clearCandidateOverlayClicked:nil];
+        return;
+    }
+    if (![action isEqualToString:@"selectCandidate"]) return;
+    NSInteger index = [BrowserScraperCandidateOverlay indexFromSelectCandidateMessage:body];
+    if (index < 0 || index >= (NSInteger)self.candidates.count) return;
+    self.suppressCandidateSelectionSync = YES;
+    [self.candidatesTable selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
+    [self.candidatesTable scrollRowToVisible:index];
+    self.suppressCandidateSelectionSync = NO;
+    // 页内已自行切换选中样式；若标注被隐藏则仍更新 index 供再次显示
+    if (self.candidateOverlayVisible) {
+        [BrowserScraperCandidateOverlay setSelectedIndex:index inWebView:[self currentWebView]];
+    }
 }
 
 - (void)candidatesTableDoubleClicked:(id)sender {
@@ -1090,8 +1311,14 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (void)pickContainerClicked:(id)sender {
     (void)sender;
     WKWebView *wv = [self currentWebView];
+    [BrowserScraperCandidateOverlay setVisible:NO inWebView:wv];
     [self appendLog:@"请在页面上点击数据区或其中某一卡片…"];
     [BrowserScraperElementPicker startPickingInWebView:wv mode:BrowserScraperPickModeContainer completion:^(NSDictionary *result, BOOL cancelled) {
+        if (self.candidateOverlayVisible && self.candidates.count > 0) {
+            NSInteger row = self.candidatesTable.selectedRow;
+            if (row < 0) row = 0;
+            [self refreshCandidateOverlaySelectingIndex:row];
+        }
         if (cancelled || !result) return;
         id rawPath = result[@"cssPath"];
         NSString *path = [rawPath isKindOfClass:[NSString class]] ? (NSString *)rawPath : @"";
@@ -1119,11 +1346,17 @@ static const CGFloat kResizeHandleWidth = 8.0;
     [self appendLog:loop
         ? @"请点选卡片内字段（将生成相对循环行的 path）…"
         : @"请点选要添加的字段节点…"];
+    [BrowserScraperCandidateOverlay setVisible:NO inWebView:wv];
     [BrowserScraperElementPicker startPickingInWebView:wv
                                                   mode:BrowserScraperPickModeField
                                          containerPath:loop ? container : nil
                                                rowPath:loop ? rowPath : nil
                                             completion:^(NSDictionary *result, BOOL cancelled) {
+        if (self.candidateOverlayVisible && self.candidates.count > 0) {
+            NSInteger row = self.candidatesTable.selectedRow;
+            if (row < 0) row = 0;
+            [self refreshCandidateOverlaySelectingIndex:row];
+        }
         if (cancelled || !result) return;
         [self applyPickResult:result mode:BrowserScraperPickModeField];
     }];
@@ -1132,7 +1365,13 @@ static const CGFloat kResizeHandleWidth = 8.0;
 - (void)pickPaginationClicked:(id)sender {
     (void)sender;
     WKWebView *wv = [self currentWebView];
+    [BrowserScraperCandidateOverlay setVisible:NO inWebView:wv];
     [BrowserScraperElementPicker startPickingInWebView:wv mode:BrowserScraperPickModePagination completion:^(NSDictionary *result, BOOL cancelled) {
+        if (self.candidateOverlayVisible && self.candidates.count > 0) {
+            NSInteger row = self.candidatesTable.selectedRow;
+            if (row < 0) row = 0;
+            [self refreshCandidateOverlaySelectingIndex:row];
+        }
         if (cancelled || !result) return;
         [self applyPickResult:result mode:BrowserScraperPickModePagination];
     }];
@@ -1628,7 +1867,12 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [self syncPreviewHeaderScrollWithContent];
     };
     restoreScroll();
-    dispatch_async(dispatch_get_main_queue(), restoreScroll);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        restoreScroll();
+        if (self.segment.selectedSegment == 1) {
+            [self repairPreviewTableLayoutAfterBecomingVisible];
+        }
+    });
 
     if (self.previewTable.headerView.window) {
         [self.previewTable.headerView.window invalidateCursorRectsForView:self.previewTable.headerView];
@@ -1897,7 +2141,11 @@ static const CGFloat kResizeHandleWidth = 8.0;
     NSString *ident = tableColumn.identifier;
     if (tableView == self.candidatesTable) {
         NSDictionary *c = self.candidates[row];
-        if ([ident isEqualToString:@"apply"]) return @"";
+        BOOL missing = [self.missingCandidateIndexes containsObject:@(row)];
+        if ([ident isEqualToString:@"index"]) return @(row + 1);
+        if ([ident isEqualToString:@"apply"]) {
+            return (row == self.adoptedCandidateIndex) ? @"✓" : @"";
+        }
         if ([ident isEqualToString:@"type"]) {
             NSString *t = [c[@"type"] isKindOfClass:[NSString class]] ? c[@"type"] : @"";
             if ([t isEqualToString:@"table"]) return @"表格";
@@ -1908,10 +2156,17 @@ static const CGFloat kResizeHandleWidth = 8.0;
         if ([ident isEqualToString:@"title"]) {
             NSString *title = [c[@"title"] isKindOfClass:[NSString class]] ? c[@"title"] : @"";
             NSString *sample = [c[@"sampleText"] isKindOfClass:[NSString class]] ? c[@"sampleText"] : @"";
+            NSString *text;
             if (title.length && sample.length) {
-                return [NSString stringWithFormat:@"%@ · %@", title, sample];
+                text = [NSString stringWithFormat:@"%@ · %@", title, sample];
+            } else {
+                text = title.length ? title : sample;
             }
-            return title.length ? title : sample;
+            if (missing && text.length > 0) {
+                return [NSString stringWithFormat:@"%@（已失效）", text];
+            }
+            if (missing) return @"（已失效）";
+            return text;
         }
         if ([ident isEqualToString:@"score"]) return c[@"score"] ?: @0;
         if ([ident isEqualToString:@"rows"]) return c[@"estimatedRows"];
@@ -1950,6 +2205,24 @@ static const CGFloat kResizeHandleWidth = 8.0;
         [self refreshPreviewAfterFieldOrderChange];
     } else if ([ident isEqualToString:@"kind"]) f.kind = [BrowserScraperField kindFromString:[object description]];
     else if ([ident isEqualToString:@"path"]) f.path = [object description] ?: @"";
+}
+
+- (void)tableView:(NSTableView *)tableView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
+    if (tableView != self.candidatesTable) return;
+    if (![cell isKindOfClass:[NSTextFieldCell class]]) return;
+    BOOL missing = [self.missingCandidateIndexes containsObject:@(row)];
+    ((NSTextFieldCell *)cell).textColor = missing ? NSColor.tertiaryLabelColor : NSColor.labelColor;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    NSTableView *tableView = notification.object;
+    if (tableView != self.candidatesTable) return;
+    if (self.suppressCandidateSelectionSync) return;
+    if (!self.candidateOverlayVisible) return;
+    NSInteger row = self.candidatesTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.candidates.count) return;
+    // 重绘更稳妥：换页/清理后仅 setSelectedIndex 会静默失败
+    [self refreshCandidateOverlaySelectingIndex:row];
 }
 
 @end

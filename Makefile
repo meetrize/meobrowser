@@ -127,6 +127,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperSettings.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperRecipeStore.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperElementPicker.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperCandidateOverlay.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMessageHub.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperDetector.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperValueTransform.m \

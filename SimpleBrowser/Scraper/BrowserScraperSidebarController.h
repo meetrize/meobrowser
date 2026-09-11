@@ -24,6 +24,8 @@ didReceivePickMessage:(id)body;
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated;
 - (void)reloadForCurrentURL;
 - (void)handlePickMessageBody:(id)body;
+/// 页内候选标注层消息（selectCandidate / clearCandidateOverlay）。
+- (void)handleCandidateOverlayMessage:(id)body;
 
 @end
 

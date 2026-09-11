@@ -1,5 +1,6 @@
 #import "BrowserScraperMessageHub.h"
 #import "BrowserScraperElementPicker.h"
+#import "BrowserScraperCandidateOverlay.h"
 #import "BrowserScraperSidebarController.h"
 
 @implementation BrowserScraperMessageHub
@@ -22,12 +23,15 @@
       didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)userContentController;
     if (![message.name isEqualToString:@"meoScraperPick"]) return;
-    [BrowserScraperElementPicker handleScriptMessageBody:message.body];
-    BrowserScraperSidebarController *sidebar = self.activeSidebar;
-    if (sidebar) {
-        // handleScriptMessageBody 已触发 completion；此处无需重复
-        (void)sidebar;
+    // 候选标注层消息：转给侧栏，不走点选 completion
+    if ([BrowserScraperCandidateOverlay isSelectCandidateMessage:message.body]) {
+        BrowserScraperSidebarController *sidebar = self.activeSidebar;
+        if (sidebar) {
+            [sidebar handleCandidateOverlayMessage:message.body];
+        }
+        return;
     }
+    [BrowserScraperElementPicker handleScriptMessageBody:message.body];
 }
 
 @end
