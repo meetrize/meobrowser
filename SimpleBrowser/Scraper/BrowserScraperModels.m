@@ -111,7 +111,7 @@ static NSString *MeoNonNullString(id value) {
     p.waitForSelector = @"";
     p.waitTimeoutMs = 15000;
     p.scrollStepPx = 800;
-    p.scrollSettleMs = 600;
+    p.scrollSettleMs = 1600;
     return p;
 }
 

@@ -174,19 +174,30 @@ static NSString *MeoScraperStringify(id value) {
 }
 
 - (NSString *)dedupeKeyForRow:(NSDictionary *)row {
-    if (self.recipe.dedupeKeyFieldIds.count == 0) return nil;
-    NSMutableArray *parts = [NSMutableArray array];
-    NSDictionary *idToName = @{};
-    NSMutableDictionary *map = [NSMutableDictionary dictionary];
-    for (BrowserScraperField *f in self.recipe.fields) {
-        map[f.fieldID] = f.name ?: f.fieldID;
+    if (self.recipe.dedupeKeyFieldIds.count > 0) {
+        NSMutableArray *parts = [NSMutableArray array];
+        NSMutableDictionary *map = [NSMutableDictionary dictionary];
+        for (BrowserScraperField *f in self.recipe.fields) {
+            map[f.fieldID] = f.name ?: f.fieldID;
+        }
+        for (NSString *fid in self.recipe.dedupeKeyFieldIds) {
+            NSString *name = map[fid] ?: fid;
+            [parts addObject:[NSString stringWithFormat:@"%@=%@", name, row[name] ?: @""]];
+        }
+        return [parts componentsJoinedByString:@"|"];
     }
-    idToName = map;
-    for (NSString *fid in self.recipe.dedupeKeyFieldIds) {
-        NSString *name = idToName[fid] ?: fid;
-        [parts addObject:[NSString stringWithFormat:@"%@=%@", name, row[name] ?: @""]];
+    // 无限滚动会反复抽到「已加载的全部行」，无显式去重键时按行内容指纹去重
+    if (self.recipe.pagination.type == BrowserScraperPaginationTypeInfiniteScroll ||
+        self.recipe.pagination.type == BrowserScraperPaginationTypeLoadMore) {
+        NSArray *keys = [[row allKeys] sortedArrayUsingSelector:@selector(compare:)];
+        NSMutableArray *parts = [NSMutableArray array];
+        for (id k in keys) {
+            if (![k isKindOfClass:[NSString class]]) continue;
+            [parts addObject:[NSString stringWithFormat:@"%@=%@", k, MeoScraperStringify(row[k])]];
+        }
+        return [parts componentsJoinedByString:@"\n"];
     }
-    return [parts componentsJoinedByString:@"|"];
+    return nil;
 }
 
 - (void)extractCurrentPage {
@@ -258,28 +269,67 @@ static NSString *MeoScraperStringify(id value) {
         }
 
         NSInteger delay = recipe.pagination.pageDelayMs;
+        if (recipe.pagination.type == BrowserScraperPaginationTypeInfiniteScroll) {
+            delay = MAX(delay, 400);
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
             if (self.cancelRequested) {
                 [self finishWithError:[NSError errorWithDomain:@"BrowserScraper" code:20 userInfo:@{NSLocalizedDescriptionKey:@"已停止"}]];
                 return;
             }
             if (self.paused) return;
-            [BrowserScraperPaginationDriver advanceInWebView:self.webView
-                                                  pagination:recipe.pagination
-                                                  completion:^(BOOL advanced, NSError *pageError) {
-                if (pageError) {
-                    [self log:pageError.localizedDescription ?: @"翻页失败"];
-                    [self finishWithError:pageError];
-                    return;
-                }
-                if (!advanced) {
-                    [self log:@"没有更多页"];
-                    [self finishWithError:nil];
-                    return;
-                }
-                [self runPageLoop];
-            }];
+            [self advancePaginationAllowingRetry:YES];
         });
+    }];
+}
+
+- (void)advancePaginationAllowingRetry:(BOOL)allowRetry {
+    BrowserScraperRecipe *recipe = self.recipe;
+    [BrowserScraperPaginationDriver advanceInWebView:self.webView
+                                          pagination:recipe.pagination
+                                          completion:^(BOOL advanced, NSError *pageError) {
+        if (pageError) {
+            [self log:pageError.localizedDescription ?: @"翻页失败"];
+            [self finishWithError:pageError];
+            return;
+        }
+        if (advanced) {
+            [self runPageLoop];
+            return;
+        }
+        // 无限滚动偶发网络慢：首次失败再重试一次（更长 settle）
+        if (allowRetry && recipe.pagination.type == BrowserScraperPaginationTypeInfiniteScroll) {
+            [self log:@"滚动后暂无新增，再试一次…"];
+            BrowserScraperPagination *retryPag = [recipe.pagination copy];
+            retryPag.scrollSettleMs = MAX(2200, retryPag.scrollSettleMs + 800);
+            retryPag.scrollStepPx = MAX(1200, retryPag.scrollStepPx);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+                if (self.cancelRequested || self.paused) {
+                    if (self.cancelRequested) {
+                        [self finishWithError:[NSError errorWithDomain:@"BrowserScraper" code:20 userInfo:@{NSLocalizedDescriptionKey:@"已停止"}]];
+                    }
+                    return;
+                }
+                [BrowserScraperPaginationDriver advanceInWebView:self.webView
+                                                      pagination:retryPag
+                                                      completion:^(BOOL advanced2, NSError *err2) {
+                    if (err2) {
+                        [self log:err2.localizedDescription ?: @"翻页失败"];
+                        [self finishWithError:err2];
+                        return;
+                    }
+                    if (!advanced2) {
+                        [self log:@"没有更多页"];
+                        [self finishWithError:nil];
+                        return;
+                    }
+                    [self runPageLoop];
+                }];
+            });
+            return;
+        }
+        [self log:@"没有更多页"];
+        [self finishWithError:nil];
     }];
 }
 

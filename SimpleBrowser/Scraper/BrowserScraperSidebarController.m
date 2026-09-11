@@ -246,6 +246,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 - (nullable NSView *)fieldsViewForTable:(NSTableView *)tableView
                             tableColumn:(NSTableColumn *)tableColumn
                                     row:(NSInteger)row;
+- (void)ensureInfiniteScrollDefaults;
 @end
 
 @implementation BrowserScraperSidebarController
@@ -974,6 +975,8 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 - (NSStackView *)buildConfigFormStack {
     self.paginationPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.paginationPopup addItemsWithTitles:@[ @"无", @"下一页按钮", @"页码", @"Load More", @"无限滚动" ]];
+    self.paginationPopup.target = self;
+    self.paginationPopup.action = @selector(paginationTypeChanged:);
     self.paginationSelectorField = [SBTextField standardField];
     self.maxPagesField = [SBTextField standardField];
     self.maxRowsField = [SBTextField standardField];
@@ -1407,6 +1410,38 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     }
 }
 
+- (void)paginationTypeChanged:(id)sender {
+    (void)sender;
+    BrowserScraperPaginationType type = (BrowserScraperPaginationType)self.paginationPopup.indexOfSelectedItem;
+    self.draft.pagination.type = type;
+    if (type == BrowserScraperPaginationTypeInfiniteScroll) {
+        [self ensureInfiniteScrollDefaults];
+        if (self.maxPagesField) {
+            self.maxPagesField.stringValue = [NSString stringWithFormat:@"%ld", (long)self.draft.pagination.maxPages];
+        }
+        if (self.delayField) {
+            self.delayField.stringValue = [NSString stringWithFormat:@"%ld", (long)self.draft.pagination.pageDelayMs];
+        }
+        [self appendLog:@"已切换为无限滚动（自动加大滚动等待）"];
+    }
+}
+
+/// 无限滚动需要更长 settle / 合理页数，否则会误判「没有更多页」。
+- (void)ensureInfiniteScrollDefaults {
+    if (self.draft.pagination.scrollSettleMs < 1200) {
+        self.draft.pagination.scrollSettleMs = 1600;
+    }
+    if (self.draft.pagination.scrollStepPx < 800) {
+        self.draft.pagination.scrollStepPx = 1000;
+    }
+    if (self.draft.pagination.pageDelayMs < 400) {
+        self.draft.pagination.pageDelayMs = 600;
+    }
+    if (self.draft.pagination.maxPages < 5) {
+        self.draft.pagination.maxPages = 20;
+    }
+}
+
 - (void)detectAndApplyPaginationNearPath:(NSString *)containerPath {
     WKWebView *wv = [self currentWebView];
     [BrowserScraperDetector detectPaginationInWebView:wv
@@ -1438,6 +1473,9 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     }
     if (pagination[@"maxPages"]) {
         self.draft.pagination.maxPages = MAX(1, [pagination[@"maxPages"] integerValue]);
+    }
+    if (type == BrowserScraperPaginationTypeInfiniteScroll) {
+        [self ensureInfiniteScrollDefaults];
     }
 
     // 刷新翻页页 UI（不整表 sync，避免冲掉用户正在编辑的其它字段）

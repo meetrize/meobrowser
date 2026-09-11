@@ -88,33 +88,122 @@
     }];
 }
 
+/// 用于判断滚动后是否加载了更多内容（新闻卡片多为 a/article，不能只数 tr/li）。
++ (NSString *)scrollMetricsJavaScript {
+    return @
+    "(function(){\n"
+    "  function docH(){\n"
+    "    return Math.max(\n"
+    "      (document.body && document.body.scrollHeight) || 0,\n"
+    "      (document.documentElement && document.documentElement.scrollHeight) || 0,\n"
+    "      (document.scrollingElement && document.scrollingElement.scrollHeight) || 0\n"
+    "    );\n"
+    "  }\n"
+    "  function countItems(){\n"
+    "    return document.querySelectorAll(\n"
+    "      'a[href*=\"/news/\"], a[href*=\"/article\"], a[href*=\"/post\"], article, li, tr, [data-row], [role=\"listitem\"], main a[href], .grid > a, [class*=\"list\"] > a'\n"
+    "    ).length;\n"
+    "  }\n"
+    "  var se = document.scrollingElement || document.documentElement || document.body;\n"
+    "  return {\n"
+    "    height: docH(),\n"
+    "    count: countItems(),\n"
+    "    top: se ? (se.scrollTop || 0) : (window.pageYOffset || 0)\n"
+    "  };\n"
+    "})()";
+}
+
 + (void)scrollInWebView:(WKWebView *)webView
                 stepPx:(NSInteger)stepPx
              settleMs:(NSInteger)settleMs
            completion:(void (^)(BOOL advanced, NSError * _Nullable error))completion {
-    NSString *js = [NSString stringWithFormat:
-                    @"(function(){\n"
-                     "  var before = document.body.scrollHeight;\n"
-                     "  var countBefore = document.querySelectorAll('tr,li,[data-row]').length;\n"
-                     "  window.scrollBy(0, %ld);\n"
-                     "  return { before: before, countBefore: countBefore };\n"
-                     "})()", (long)MAX(1, stepPx)];
-    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-        (void)error;
+    NSInteger step = MAX(400, stepPx > 0 ? stepPx : 1000);
+    // 窗口级无限滚动常见需要更长等待（网络请求 + React 渲染）
+    NSInteger settle = MAX(1200, settleMs > 0 ? settleMs : 1600);
+    NSString *scrollJS = [NSString stringWithFormat:
+                          @"(function(){\n"
+                           "  function docH(){\n"
+                           "    return Math.max(\n"
+                           "      (document.body && document.body.scrollHeight) || 0,\n"
+                           "      (document.documentElement && document.documentElement.scrollHeight) || 0,\n"
+                           "      (document.scrollingElement && document.scrollingElement.scrollHeight) || 0\n"
+                           "    );\n"
+                           "  }\n"
+                           "  function countItems(){\n"
+                           "    return document.querySelectorAll(\n"
+                           "      'a[href*=\"/news/\"], a[href*=\"/article\"], a[href*=\"/post\"], article, li, tr, [data-row], [role=\"listitem\"], main a[href], .grid > a, [class*=\"list\"] > a'\n"
+                           "    ).length;\n"
+                           "  }\n"
+                           "  var beforeH = docH();\n"
+                           "  var beforeC = countItems();\n"
+                           "  var se = document.scrollingElement || document.documentElement || document.body;\n"
+                           "  window.scrollBy(0, %ld);\n"
+                           "  var target = Math.max(docH(), (se && se.scrollHeight) || 0);\n"
+                           "  window.scrollTo(0, Math.max(0, target));\n"
+                           "  if(se){ try{ se.scrollTop = Math.max(0, se.scrollHeight); }catch(e){} }\n"
+                           "  try{ window.dispatchEvent(new Event('scroll')); }catch(e){}\n"
+                           "  return { before: beforeH, countBefore: beforeC };\n"
+                           "})()", (long)step];
+
+    [webView evaluateJavaScript:scrollJS completionHandler:^(id result, NSError *error) {
+        if (error) {
+            if (completion) completion(NO, error);
+            return;
+        }
         NSInteger before = [result isKindOfClass:[NSDictionary class]] ? [result[@"before"] integerValue] : 0;
         NSInteger countBefore = [result isKindOfClass:[NSDictionary class]] ? [result[@"countBefore"] integerValue] : 0;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(0, settleMs) * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-            NSString *check =
-                @"(function(){ return { height: document.body.scrollHeight, count: document.querySelectorAll('tr,li,[data-row]').length }; })()";
-            [webView evaluateJavaScript:check completionHandler:^(id after, NSError *err2) {
-                (void)err2;
-                NSInteger height = [after isKindOfClass:[NSDictionary class]] ? [after[@"height"] integerValue] : before;
-                NSInteger count = [after isKindOfClass:[NSDictionary class]] ? [after[@"count"] integerValue] : countBefore;
-                BOOL advanced = (height > before) || (count > countBefore);
-                if (completion) completion(advanced, nil);
-            }];
-        });
+        NSInteger attempts = MAX(3, (NSInteger)ceil(settle / 400.0));
+        [self pollScrollGrowthInWebView:webView
+                                 before:before
+                            countBefore:countBefore
+                          attemptsLeft:attempts
+                            completion:completion];
     }];
+}
+
++ (void)pollScrollGrowthInWebView:(WKWebView *)webView
+                           before:(NSInteger)before
+                      countBefore:(NSInteger)countBefore
+                    attemptsLeft:(NSInteger)attemptsLeft
+                      completion:(void (^)(BOOL advanced, NSError * _Nullable error))completion {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        [webView evaluateJavaScript:[self scrollMetricsJavaScript] completionHandler:^(id after, NSError *err2) {
+            (void)err2;
+            NSInteger height = [after isKindOfClass:[NSDictionary class]] ? [after[@"height"] integerValue] : before;
+            NSInteger count = [after isKindOfClass:[NSDictionary class]] ? [after[@"count"] integerValue] : countBefore;
+            BOOL advanced = (height > before + 8) || (count > countBefore);
+            if (advanced) {
+                if (completion) completion(YES, nil);
+                return;
+            }
+            if (attemptsLeft <= 1) {
+                NSString *nudge =
+                    @"(function(){ var se=document.scrollingElement||document.documentElement||document.body;\n"
+                     "  var h=Math.max((document.body&&document.body.scrollHeight)||0,(document.documentElement&&document.documentElement.scrollHeight)||0);\n"
+                     "  window.scrollTo(0,h); if(se) se.scrollTop=se.scrollHeight;\n"
+                     "  try{ window.dispatchEvent(new Event('scroll')); }catch(e){}\n"
+                     "  return true; })()";
+                [webView evaluateJavaScript:nudge completionHandler:^(id r, NSError *e) {
+                    (void)r; (void)e;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(700 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+                        [webView evaluateJavaScript:[self scrollMetricsJavaScript] completionHandler:^(id after2, NSError *e2) {
+                            (void)e2;
+                            NSInteger h2 = [after2 isKindOfClass:[NSDictionary class]] ? [after2[@"height"] integerValue] : before;
+                            NSInteger c2 = [after2 isKindOfClass:[NSDictionary class]] ? [after2[@"count"] integerValue] : countBefore;
+                            BOOL ok = (h2 > before + 8) || (c2 > countBefore);
+                            if (completion) completion(ok, nil);
+                        }];
+                    });
+                }];
+                return;
+            }
+            [self pollScrollGrowthInWebView:webView
+                                     before:before
+                                countBefore:countBefore
+                              attemptsLeft:attemptsLeft - 1
+                                completion:completion];
+        }];
+    });
 }
 
 @end
