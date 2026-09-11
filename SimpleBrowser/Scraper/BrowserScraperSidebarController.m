@@ -171,6 +171,11 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 
 @end
 
+/// 仅挂在 fieldsTable 上：实现 viewForTableColumn 不会让候选表等变成 view-based 而整表空白。
+@interface BrowserScraperFieldsTableDelegate : NSObject <NSTableViewDelegate>
+@property (nonatomic, weak) BrowserScraperSidebarController *owner;
+@end
+
 @interface BrowserScraperSidebarController () <BrowserScraperEngineDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate>
 @property (nonatomic, strong) NSView *rootView;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
@@ -213,6 +218,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 @property (nonatomic, strong) SBTextField *mysqlTableField;
 @property (nonatomic, strong) NSStackView *mysqlFieldsStack;
 @property (nonatomic, strong) NSTableView *fieldsTable;
+@property (nonatomic, strong) BrowserScraperFieldsTableDelegate *fieldsTableDelegate;
 @property (nonatomic, strong) NSTableView *previewTable;
 @property (nonatomic, strong) NSTableView *candidatesTable;
 @property (nonatomic, strong) NSTextField *candidatesEmptyLabel;
@@ -233,6 +239,13 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 @property (nonatomic, strong) SBTextView *logView;
 @property (nonatomic, strong) NSTextField *runStatusLabel;
 @property (nonatomic, strong) NSWindow *transformHelpWindow;
+/// 处理弹窗打开期间：预设下拉写回 JSON 编辑器。
+@property (nonatomic, strong, nullable) SBTextView *activeTransformEditor;
+@property (nonatomic, copy, nullable) NSDictionary *activeTransformPresets;
+
+- (nullable NSView *)fieldsViewForTable:(NSTableView *)tableView
+                            tableColumn:(NSTableColumn *)tableColumn
+                                    row:(NSInteger)row;
 @end
 
 @implementation BrowserScraperSidebarController
@@ -868,10 +881,13 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     page.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.fieldsTable = [self makeTable];
+    self.fieldsTableDelegate = [[BrowserScraperFieldsTableDelegate alloc] init];
+    self.fieldsTableDelegate.owner = self;
+    self.fieldsTable.delegate = self.fieldsTableDelegate;
     while (self.fieldsTable.tableColumns.count) {
         [self.fieldsTable removeTableColumn:self.fieldsTable.tableColumns.firstObject];
     }
-    for (NSArray *pair in @[ @[@"index", @"#"], @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"], @[@"transforms", @"处理"] ]) {
+    for (NSArray *pair in @[ @[@"index", @"#"], @[@"enabled", @"开"], @[@"name", @"列名"], @[@"kind", @"类型"], @[@"path", @"path"], @[@"transforms", @"处理"], @[@"ops", @"操作"] ]) {
         NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:pair[0]];
         col.title = pair[1];
         if ([pair[0] isEqualToString:@"index"]) {
@@ -880,7 +896,11 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
             col.maxWidth = 36;
         } else if ([pair[0] isEqualToString:@"enabled"]) col.width = 28;
         else if ([pair[0] isEqualToString:@"transforms"]) col.width = 72;
-        else col.width = 90;
+        else if ([pair[0] isEqualToString:@"ops"]) {
+            col.width = 100;
+            col.minWidth = 96;
+            col.maxWidth = 120;
+        } else col.width = 90;
         [self.fieldsTable addTableColumn:col];
     }
     NSScrollView *fieldsScroll = [self boxedTableScroll:self.fieldsTable height:140];
@@ -894,20 +914,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     NSButton *preview = [self scraperButton:@"刷新预览" symbol:@"arrow.clockwise"
                                        tone:BrowserScraperButtonToneSecondary
                                      target:self action:@selector(previewClicked:)];
-    NSButton *moveUp = [self scraperButton:@"上移" symbol:@"arrow.up"
-                                      tone:BrowserScraperButtonToneQuiet
-                                    target:self action:@selector(moveFieldUpClicked:)];
-    NSButton *moveDown = [self scraperButton:@"下移" symbol:@"arrow.down"
-                                        tone:BrowserScraperButtonToneQuiet
-                                      target:self action:@selector(moveFieldDownClicked:)];
-    NSButton *editTransform = [self scraperButton:@"处理" symbol:@"slider.horizontal.3"
-                                             tone:BrowserScraperButtonToneQuiet
-                                           target:self action:@selector(editTransformClicked:)];
-    NSButton *copyPreview = [self scraperButton:@"复制" symbol:@"doc.on.doc"
-                                           tone:BrowserScraperButtonToneQuiet
-                                         target:self action:@selector(copyPreviewClicked:)];
     NSStackView *actionsPrimary = [self hrowViews:@[addField, removeField, preview] spacing:6];
-    NSStackView *actionsSecondary = [self hrowViews:@[moveUp, moveDown, editTransform, copyPreview] spacing:6];
 
     NSTextField *previewLabel = [self makeSectionTitle:@"预览"];
 
@@ -933,7 +940,6 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 
     [page addSubview:fieldsScroll];
     [page addSubview:actionsPrimary];
-    [page addSubview:actionsSecondary];
     [page addSubview:previewLabel];
     [page addSubview:previewScroll];
     [page addSubview:self.previewEmptyLabel];
@@ -947,13 +953,9 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         [actionsPrimary.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-kContentInset],
         [actionsPrimary.topAnchor constraintEqualToAnchor:fieldsScroll.bottomAnchor constant:6],
 
-        [actionsSecondary.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
-        [actionsSecondary.trailingAnchor constraintLessThanOrEqualToAnchor:page.trailingAnchor constant:-kContentInset],
-        [actionsSecondary.topAnchor constraintEqualToAnchor:actionsPrimary.bottomAnchor constant:4],
-
         [previewLabel.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
         [previewLabel.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
-        [previewLabel.topAnchor constraintEqualToAnchor:actionsSecondary.bottomAnchor constant:6],
+        [previewLabel.topAnchor constraintEqualToAnchor:actionsPrimary.bottomAnchor constant:6],
 
         [previewScroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor constant:kContentInset],
         [previewScroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor constant:-kContentInset],
@@ -1927,20 +1929,16 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 
 - (void)moveFieldUpClicked:(id)sender {
     (void)sender;
-    [self moveSelectedFieldByOffset:-1];
+    [self moveFieldAtIndex:self.fieldsTable.selectedRow byOffset:-1];
 }
 
 - (void)moveFieldDownClicked:(id)sender {
     (void)sender;
-    [self moveSelectedFieldByOffset:1];
+    [self moveFieldAtIndex:self.fieldsTable.selectedRow byOffset:1];
 }
 
-- (void)moveSelectedFieldByOffset:(NSInteger)offset {
-    NSInteger row = self.fieldsTable.selectedRow;
-    if (row < 0 || row >= (NSInteger)self.draft.fields.count) {
-        [self appendLog:@"请先选中要调整顺序的字段"];
-        return;
-    }
+- (void)moveFieldAtIndex:(NSInteger)row byOffset:(NSInteger)offset {
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
     NSInteger target = row + offset;
     if (target < 0 || target >= (NSInteger)self.draft.fields.count) return;
     NSMutableArray *fields = [self.draft.fields mutableCopy];
@@ -1964,9 +1962,121 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     [self rebuildPreviewColumns];
 }
 
+- (NSButton *)fieldOpsIconButton:(NSString *)symbolName
+                      identifier:(NSString *)identifier
+                         tooltip:(NSString *)tooltip {
+    NSButton *btn = [[NSButton alloc] initWithFrame:NSZeroRect];
+    btn.translatesAutoresizingMaskIntoConstraints = NO;
+    btn.bordered = NO;
+    btn.bezelStyle = NSBezelStyleInline;
+    btn.title = @"";
+    btn.imagePosition = NSImageOnly;
+    btn.image = [self symbolNamed:symbolName];
+    if (!btn.image) {
+        // 旧系统无 SF Symbol 时用短字符兜底
+        if ([identifier isEqualToString:@"up"]) btn.title = @"↑";
+        else if ([identifier isEqualToString:@"down"]) btn.title = @"↓";
+        else if ([identifier isEqualToString:@"transform"]) btn.title = @"处";
+        else btn.title = @"复";
+        btn.imagePosition = NSNoImage;
+        btn.font = [NSFont systemFontOfSize:11];
+    }
+    btn.identifier = identifier;
+    btn.toolTip = tooltip;
+    btn.target = self;
+    btn.action = @selector(fieldOpsClicked:);
+    [btn.widthAnchor constraintEqualToConstant:22].active = YES;
+    [btn.heightAnchor constraintEqualToConstant:20].active = YES;
+    return btn;
+}
+
+- (NSStackView *)makeFieldOpsCellView {
+    NSButton *up = [self fieldOpsIconButton:@"arrow.up" identifier:@"up" tooltip:@"上移"];
+    NSButton *down = [self fieldOpsIconButton:@"arrow.down" identifier:@"down" tooltip:@"下移"];
+    NSButton *tx = [self fieldOpsIconButton:@"slider.horizontal.3" identifier:@"transform" tooltip:@"处理"];
+    NSButton *dup = [self fieldOpsIconButton:@"doc.on.doc" identifier:@"duplicate" tooltip:@"复制为新字段"];
+    NSStackView *stack = [NSStackView stackViewWithViews:@[up, down, tx, dup]];
+    stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    stack.spacing = 1;
+    stack.alignment = NSLayoutAttributeCenterY;
+    stack.edgeInsets = NSEdgeInsetsMake(0, 2, 0, 2);
+    stack.identifier = @"fieldOps";
+    return stack;
+}
+
+- (void)configureFieldOpsCellView:(NSView *)view forRow:(NSInteger)row {
+    NSStackView *stack = [view isKindOfClass:[NSStackView class]] ? (NSStackView *)view : nil;
+    if (!stack) return;
+    NSInteger last = (NSInteger)self.draft.fields.count - 1;
+    for (NSView *sub in stack.arrangedSubviews) {
+        if (![sub isKindOfClass:[NSButton class]]) continue;
+        NSButton *btn = (NSButton *)sub;
+        btn.tag = row;
+        if ([btn.identifier isEqualToString:@"up"]) {
+            btn.enabled = row > 0;
+        } else if ([btn.identifier isEqualToString:@"down"]) {
+            btn.enabled = row >= 0 && row < last;
+        } else {
+            btn.enabled = row >= 0 && row <= last;
+        }
+    }
+}
+
+- (void)fieldOpsClicked:(id)sender {
+    if (![sender isKindOfClass:[NSButton class]]) return;
+    NSButton *btn = (NSButton *)sender;
+    NSInteger row = btn.tag;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
+    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    NSString *op = btn.identifier;
+    if ([op isEqualToString:@"up"]) {
+        [self moveFieldAtIndex:row byOffset:-1];
+    } else if ([op isEqualToString:@"down"]) {
+        [self moveFieldAtIndex:row byOffset:1];
+    } else if ([op isEqualToString:@"transform"]) {
+        [self editTransformForFieldAtIndex:row];
+    } else if ([op isEqualToString:@"duplicate"]) {
+        [self duplicateFieldAtIndex:row];
+    }
+}
+
+- (NSString *)uniqueFieldNameBasedOn:(NSString *)baseName {
+    NSString *root = baseName.length > 0 ? baseName : @"字段";
+    NSMutableSet<NSString *> *used = [NSMutableSet set];
+    for (BrowserScraperField *f in self.draft.fields) {
+        if (f.name.length > 0) [used addObject:f.name];
+    }
+    NSInteger n = 2;
+    NSString *candidate;
+    do {
+        candidate = [NSString stringWithFormat:@"%@_%ld", root, (long)n++];
+    } while ([used containsObject:candidate]);
+    return candidate;
+}
+
+- (void)duplicateFieldAtIndex:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
+    BrowserScraperField *src = self.draft.fields[row];
+    BrowserScraperField *dup = [src copy];
+    dup.fieldID = [[NSUUID UUID] UUIDString];
+    dup.name = [self uniqueFieldNameBasedOn:src.name];
+    NSMutableArray *fields = [self.draft.fields mutableCopy];
+    [fields insertObject:dup atIndex:row + 1];
+    self.draft.fields = fields;
+    [self.fieldsTable reloadData];
+    NSInteger newRow = row + 1;
+    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:newRow] byExtendingSelection:NO];
+    [self.fieldsTable scrollRowToVisible:newRow];
+    [self appendLog:[NSString stringWithFormat:@"已复制字段「%@」→「%@」", src.name ?: @"", dup.name ?: @""]];
+    [self refreshPreviewAfterFieldOrderChange];
+}
+
 - (void)editTransformClicked:(id)sender {
     (void)sender;
-    NSInteger row = self.fieldsTable.selectedRow;
+    [self editTransformForFieldAtIndex:self.fieldsTable.selectedRow];
+}
+
+- (void)editTransformForFieldAtIndex:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)self.draft.fields.count) {
         [self appendLog:@"请先选中要编辑处理步骤的字段"];
         return;
@@ -1982,7 +2092,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:@"字段处理 · %@", field.name ?: @"未命名"];
-    alert.informativeText = @"选择预设，或直接编辑下方 JSON 步骤数组。\n常用：digits / number / regex / relTime / remove / trim";
+    alert.informativeText = @"选择预设会立刻填入下方步骤；也可直接编辑 JSON。\n常用：digits / number / regex / relTime / remove / trim";
     [alert addButtonWithTitle:@"应用"];
     [alert addButtonWithTitle:@"清除处理"];
     [alert addButtonWithTitle:@"取消"];
@@ -1995,6 +2105,8 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     for (NSString *k in keys) {
         [preset addItemWithTitle:k];
     }
+    preset.target = self;
+    preset.action = @selector(transformPresetChanged:);
     NSButton *helpBtn = [NSButton buttonWithTitle:@"函数说明…" target:self action:@selector(showTransformHelpClicked:)];
     helpBtn.bezelStyle = NSBezelStyleRounded;
     helpBtn.frame = NSMakeRect(308, 204, 112, 28);
@@ -2006,7 +2118,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     sampleLabel.textColor = NSColor.secondaryLabelColor;
     sampleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 
-    NSTextField *hint = [NSTextField labelWithString:@"点击「函数说明…」查看全部 op 的参数与示例"];
+    NSTextField *hint = [NSTextField labelWithString:@"点击「函数说明…」可同时查看（不挡住本对话框）"];
     hint.frame = NSMakeRect(0, 158, 420, 16);
     hint.font = [NSFont systemFontOfSize:10];
     hint.textColor = NSColor.tertiaryLabelColor;
@@ -2032,7 +2144,13 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     [accessory addSubview:scroll];
     alert.accessoryView = accessory;
 
+    self.activeTransformEditor = tv;
+    self.activeTransformPresets = presets;
+
     NSModalResponse resp = [alert runModal];
+    self.activeTransformEditor = nil;
+    self.activeTransformPresets = nil;
+
     if (resp == NSAlertThirdButtonReturn) return;
     if (resp == NSAlertSecondButtonReturn) {
         field.transforms = @[];
@@ -2042,30 +2160,21 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         return;
     }
 
-    NSArray *clean = nil;
-    NSInteger presetIdx = preset.indexOfSelectedItem;
-    if (presetIdx > 0) {
-        NSString *title = preset.titleOfSelectedItem;
-        NSArray *steps = presets[title];
-        if ([steps isKindOfClass:[NSArray class]]) clean = steps;
+    // 预设已在选择时写入编辑器；应用时始终以编辑器 JSON 为准
+    NSString *json = tv.string ?: @"[]";
+    NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+    id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![obj isKindOfClass:[NSArray class]]) {
+        [self appendLog:@"处理步骤 JSON 无效，需为数组"];
+        return;
     }
-    if (!clean) {
-        NSString *json = tv.string ?: @"[]";
-        NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
-        id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        if (![obj isKindOfClass:[NSArray class]]) {
-            [self appendLog:@"处理步骤 JSON 无效，需为数组"];
-            return;
+    NSMutableArray *arr = [NSMutableArray array];
+    for (id step in (NSArray *)obj) {
+        if ([step isKindOfClass:[NSDictionary class]] && [step[@"op"] isKindOfClass:[NSString class]]) {
+            [arr addObject:step];
         }
-        NSMutableArray *arr = [NSMutableArray array];
-        for (id step in (NSArray *)obj) {
-            if ([step isKindOfClass:[NSDictionary class]] && [step[@"op"] isKindOfClass:[NSString class]]) {
-                [arr addObject:step];
-            }
-        }
-        clean = arr;
     }
-    field.transforms = clean ?: @[];
+    field.transforms = arr;
     [self.fieldsTable reloadData];
     NSString *out = [BrowserScraperValueTransform applyTransforms:field.transforms
                                                          rawValue:sample
@@ -2079,6 +2188,23 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     [self previewClicked:nil];
 }
 
+- (void)transformPresetChanged:(id)sender {
+    if (![sender isKindOfClass:[NSPopUpButton class]]) return;
+    NSPopUpButton *preset = (NSPopUpButton *)sender;
+    NSInteger idx = preset.indexOfSelectedItem;
+    if (idx <= 0 || !self.activeTransformEditor) return;
+    NSString *title = preset.titleOfSelectedItem;
+    NSArray *steps = self.activeTransformPresets[title];
+    if (![steps isKindOfClass:[NSArray class]]) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:steps
+                                                   options:NSJSONWritingPrettyPrinted
+                                                     error:nil];
+    if (!data) return;
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
+    self.activeTransformEditor.string = json;
+    [self.activeTransformEditor scrollRangeToVisible:NSMakeRange(0, 0)];
+}
+
 - (void)showTransformHelpClicked:(id)sender {
     (void)sender;
     if (self.transformHelpWindow && self.transformHelpWindow.isVisible) {
@@ -2087,16 +2213,21 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     }
 
     NSRect rect = NSMakeRect(0, 0, 560, 520);
-    NSWindow *win = [[NSWindow alloc] initWithContentRect:rect
-                                                styleMask:(NSWindowStyleMaskTitled |
-                                                           NSWindowStyleMaskClosable |
-                                                           NSWindowStyleMaskResizable |
-                                                           NSWindowStyleMaskMiniaturizable)
-                                                  backing:NSBackingStoreBuffered
-                                                    defer:NO];
+    // NSPanel + worksWhenModal：可在处理对话框（runModal）之上独立开关，不互相卡住
+    NSPanel *win = [[NSPanel alloc] initWithContentRect:rect
+                                              styleMask:(NSWindowStyleMaskTitled |
+                                                         NSWindowStyleMaskClosable |
+                                                         NSWindowStyleMaskResizable |
+                                                         NSWindowStyleMaskUtilityWindow)
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
     win.title = @"字段处理 · 函数说明";
     win.minSize = NSMakeSize(420, 320);
     win.releasedWhenClosed = NO;
+    win.floatingPanel = YES;
+    win.worksWhenModal = YES;
+    win.level = NSFloatingWindowLevel;
+    win.hidesOnDeactivate = NO;
 
     NSView *content = win.contentView;
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -2116,7 +2247,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     NSButton *close = [NSButton buttonWithTitle:@"关闭" target:self action:@selector(closeTransformHelpClicked:)];
     close.bezelStyle = NSBezelStyleRounded;
     close.translatesAutoresizingMaskIntoConstraints = NO;
-    close.keyEquivalent = @"\r";
+    close.keyEquivalent = @"\033"; // Esc 关闭说明，避免抢处理框的 Return
 
     [content addSubview:scroll];
     [content addSubview:close];
@@ -2132,7 +2263,6 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     self.transformHelpWindow = win;
     [win center];
     [win makeKeyAndOrderFront:nil];
-    // 把光标滚到开头
     [tv scrollRangeToVisible:NSMakeRange(0, 0)];
 }
 
@@ -2542,6 +2672,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         return @"";
     }
     if (tableView == self.fieldsTable) {
+        if ([ident isEqualToString:@"ops"]) return @"";
         BrowserScraperField *f = self.draft.fields[row];
         if ([ident isEqualToString:@"index"]) return @(row + 1);
         if ([ident isEqualToString:@"enabled"]) return @(f.enabled);
@@ -2576,6 +2707,144 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     else if ([ident isEqualToString:@"path"]) f.path = [object description] ?: @"";
 }
 
+- (NSTableCellView *)makeFieldsTextCellView:(NSString *)identifier editable:(BOOL)editable {
+    NSTableCellView *cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+    cell.identifier = identifier;
+    NSTextField *text;
+    if (editable) {
+        SBTextField *field = [SBTextField standardField];
+        field.bordered = NO;
+        field.bezeled = NO;
+        field.drawsBackground = NO;
+        field.focusRingType = NSFocusRingTypeDefault;
+        field.font = [NSFont systemFontOfSize:11];
+        field.target = self;
+        field.action = @selector(fieldCellTextEdited:);
+        text = field;
+    } else {
+        text = [NSTextField labelWithString:@""];
+        text.font = [NSFont systemFontOfSize:11];
+        text.textColor = NSColor.labelColor;
+    }
+    text.translatesAutoresizingMaskIntoConstraints = NO;
+    text.lineBreakMode = NSLineBreakByTruncatingTail;
+    text.maximumNumberOfLines = 1;
+    [cell addSubview:text];
+    cell.textField = text;
+    [NSLayoutConstraint activateConstraints:@[
+        [text.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:2],
+        [text.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-2],
+        [text.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+    ]];
+    return cell;
+}
+
+- (NSTableCellView *)makeFieldsEnabledCellView {
+    NSTableCellView *cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+    cell.identifier = @"fieldEnabled";
+    NSButton *check = [NSButton checkboxWithTitle:@"" target:self action:@selector(fieldEnabledToggled:)];
+    check.translatesAutoresizingMaskIntoConstraints = NO;
+    check.identifier = @"fieldEnabledCheck";
+    [cell addSubview:check];
+    [NSLayoutConstraint activateConstraints:@[
+        [check.centerXAnchor constraintEqualToAnchor:cell.centerXAnchor],
+        [check.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
+    ]];
+    return cell;
+}
+
+- (nullable NSButton *)fieldsEnabledCheckboxInCell:(NSTableCellView *)cell {
+    for (NSView *sub in cell.subviews) {
+        if ([sub isKindOfClass:[NSButton class]] && [sub.identifier isEqualToString:@"fieldEnabledCheck"]) {
+            return (NSButton *)sub;
+        }
+    }
+    return nil;
+}
+
+- (void)fieldEnabledToggled:(id)sender {
+    if (![sender isKindOfClass:[NSButton class]]) return;
+    NSButton *check = (NSButton *)sender;
+    NSInteger row = check.tag;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) return;
+    BrowserScraperField *f = self.draft.fields[row];
+    f.enabled = (check.state == NSControlStateValueOn);
+    [self.fieldsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    [self refreshPreviewAfterFieldOrderChange];
+}
+
+- (void)fieldCellTextEdited:(id)sender {
+    if (![sender isKindOfClass:[NSTextField class]]) return;
+    NSTextField *tf = (NSTextField *)sender;
+    NSInteger row = tf.tag;
+    NSString *ident = tf.identifier;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count || ident.length == 0) return;
+    BrowserScraperField *f = self.draft.fields[row];
+    NSString *value = tf.stringValue ?: @"";
+    if ([ident isEqualToString:@"name"]) {
+        f.name = value;
+        [self refreshPreviewAfterFieldOrderChange];
+    } else if ([ident isEqualToString:@"kind"]) {
+        f.kind = [BrowserScraperField kindFromString:value];
+    } else if ([ident isEqualToString:@"path"]) {
+        f.path = value;
+    }
+}
+
+- (nullable NSView *)fieldsViewForTable:(NSTableView *)tableView
+                            tableColumn:(NSTableColumn *)tableColumn
+                                    row:(NSInteger)row {
+    if (tableView != self.fieldsTable) return nil;
+    if (row < 0 || row >= (NSInteger)self.draft.fields.count) return nil;
+    NSString *ident = tableColumn.identifier;
+    BrowserScraperField *f = self.draft.fields[row];
+
+    if ([ident isEqualToString:@"ops"]) {
+        NSView *view = [tableView makeViewWithIdentifier:@"fieldOps" owner:self];
+        if (!view) {
+            view = [self makeFieldOpsCellView];
+        }
+        [self configureFieldOpsCellView:view forRow:row];
+        return view;
+    }
+
+    if ([ident isEqualToString:@"enabled"]) {
+        NSTableCellView *cell = [tableView makeViewWithIdentifier:@"fieldEnabled" owner:self];
+        if (!cell) cell = [self makeFieldsEnabledCellView];
+        NSButton *check = [self fieldsEnabledCheckboxInCell:cell];
+        if (check) {
+            check.tag = row;
+            check.state = f.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+        return cell;
+    }
+
+    BOOL editable = [ident isEqualToString:@"name"] || [ident isEqualToString:@"kind"] || [ident isEqualToString:@"path"];
+    NSString *reuseID = [NSString stringWithFormat:@"field.%@.%@", ident, editable ? @"edit" : @"label"];
+    NSTableCellView *cell = [tableView makeViewWithIdentifier:reuseID owner:self];
+    if (!cell) {
+        cell = [self makeFieldsTextCellView:reuseID editable:editable];
+    }
+
+    NSString *value = @"";
+    if ([ident isEqualToString:@"index"]) {
+        value = [NSString stringWithFormat:@"%ld", (long)(row + 1)];
+    } else if ([ident isEqualToString:@"name"]) {
+        value = f.name ?: @"";
+    } else if ([ident isEqualToString:@"kind"]) {
+        value = [BrowserScraperField stringFromKind:f.kind] ?: @"";
+    } else if ([ident isEqualToString:@"path"]) {
+        value = f.path ?: @"";
+    } else if ([ident isEqualToString:@"transforms"]) {
+        NSString *sum = [BrowserScraperValueTransform summaryForTransforms:f.transforms];
+        value = sum.length ? sum : @"—";
+    }
+    cell.textField.stringValue = value;
+    cell.textField.tag = row;
+    cell.textField.identifier = ident;
+    return cell;
+}
+
 - (void)tableView:(NSTableView *)tableView willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
     if (tableView != self.candidatesTable) return;
     if ([tableColumn.identifier isEqualToString:@"preview"]) {
@@ -2608,6 +2877,16 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     if (self.candidateOverlayVisible) {
         [self refreshCandidateOverlaySelectingIndex:row];
     }
+}
+
+@end
+
+@implementation BrowserScraperFieldsTableDelegate
+
+- (nullable NSView *)tableView:(NSTableView *)tableView
+            viewForTableColumn:(nullable NSTableColumn *)tableColumn
+                           row:(NSInteger)row {
+    return [self.owner fieldsViewForTable:tableView tableColumn:tableColumn row:row];
 }
 
 @end
