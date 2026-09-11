@@ -1317,6 +1317,18 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         self.draft.match.hosts = @[ url.host.lowercaseString ];
         self.draft.startURL = url.absoluteString;
     }
+
+    // 候选 / 预览回到初始空状态（含页内标注）
+    [BrowserScraperCandidateOverlay clearInWebView:[self currentWebView]];
+    self.candidates = @[];
+    self.adoptedCandidateIndex = -1;
+    self.missingCandidateIndexes = [NSSet set];
+    self.previewRows = @[];
+    self.previewRawRows = @[];
+    [self.candidatesTable deselectAll:nil];
+    [self.candidatesTable reloadData];
+    self.candidatesEmptyLabel.hidden = NO;
+
     [self syncUIFromDraft];
     [self appendLog:@"已新建策略草稿"];
 }
