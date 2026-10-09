@@ -468,6 +468,15 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
 
     [menu addItem:[NSMenuItem separatorItem]];
+
+    // 在 iframe 内点击时，提供「重新载入框架」：仅刷新此 iframe，不影响主页面。
+    NSMenuItem *reloadFrame = [[NSMenuItem alloc] initWithTitle:@"重新载入框架"
+                                                         action:@selector(meo_reloadFrame:)
+                                                  keyEquivalent:@""];
+    reloadFrame.target = self;
+    reloadFrame.hidden = YES;
+    [menu addItem:reloadFrame];
+
     NSMenuItem *viewSource = [[NSMenuItem alloc] initWithTitle:@"查看网页源代码"
                                                         action:@selector(meo_viewPageSource:)
                                                  keyEquivalent:@""];
@@ -475,6 +484,9 @@ static NSString *MeoScrollToFragmentJS(void) {
     [menu addItem:viewSource];
 
     [MeoContextMenuLocalizer localizeMenu:menu];
+
+    // 异步检查右键点是否在 iframe 内，若在则显示「重新载入框架」。
+    [self meo_probeContextMenuForFrameHitAndShowReloadItem:reloadFrame];
 }
 
 - (void)didCloseMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
@@ -825,6 +837,96 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
     (void)responder;
     [NSApp sendAction:@selector(viewPageSource:) to:nil from:self];
+}
+
+#pragma mark - 右键「重新载入框架」
+
+/// 用右键点击坐标向上查找最近的 <iframe>，若命中则让 reloadFrameItem 显示。
+- (void)meo_probeContextMenuForFrameHitAndShowReloadItem:(NSMenuItem *)reloadFrameItem {
+    if (!reloadFrameItem) {
+        return;
+    }
+    NSEvent *event = self.contextMenuEvent;
+    if (!event) {
+        return;
+    }
+    NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+    CGFloat x = locationInView.x;
+    CGFloat y = NSHeight(self.bounds) - locationInView.y;
+
+    NSString *script = [NSString stringWithFormat:
+        @"(function(x, y) {"
+         "  var el = document.elementFromPoint(x, y);"
+         "  if (!el) { return false; }"
+         "  var n = el;"
+         "  while (n && n !== document.documentElement) {"
+         "    if (n.tagName === 'IFRAME' || n.tagName === 'FRAME') { return true; }"
+         "    n = n.parentElement;"
+         "  }"
+         "  return false;"
+         "})(%f, %f)", x, y];
+
+    __weak typeof(self) weakSelf = self;
+    __weak NSMenuItem *weakItem = reloadFrameItem;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        NSMenuItem *item = weakItem;
+        if (!strongSelf || !item) {
+            return;
+        }
+        if (error) {
+            return;
+        }
+        BOOL hitFrame = [result respondsToSelector:@selector(boolValue)] && [result boolValue];
+        // 菜单已关闭（异步探测可能晚于关闭）则不再修改可见性。
+        if (item.menu == nil) {
+            return;
+        }
+        item.hidden = !hitFrame;
+    }];
+}
+
+/// 仅刷新右键点击位置所在的 iframe，不影响主页面或兄弟 iframe。
+- (void)meo_reloadFrame:(id)sender {
+    (void)sender;
+    NSEvent *event = self.contextMenuEvent;
+    if (!event) {
+        return;
+    }
+    NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+    CGFloat x = locationInView.x;
+    CGFloat y = NSHeight(self.bounds) - locationInView.y;
+
+    NSString *script = [NSString stringWithFormat:
+        @"(function(x, y) {"
+         "  var el = document.elementFromPoint(x, y);"
+         "  if (!el) { return false; }"
+         "  var n = el;"
+         "  while (n && n !== document.documentElement) {"
+         "    if (n.tagName === 'IFRAME' || n.tagName === 'FRAME') {"
+         "      try {"
+         "        if (n.contentWindow && typeof n.contentWindow.location.reload === 'function') {"
+         "          n.contentWindow.location.reload();"
+         "          return true;"
+         "        }"
+         "      } catch (e) {"
+         "        try {"
+         "          n.src = n.src;"
+         "          return true;"
+         "        } catch (e2) { return false; }"
+         "      }"
+         "    }"
+         "    n = n.parentElement;"
+         "  }"
+         "  return false;"
+         "})(%f, %f)", x, y];
+
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        (void)result;
+        (void)weakSelf;
+        (void)error;
+    }];
 }
 
 - (void)meo_openLinkAtContextMenuPointInNewWindow {
