@@ -5,7 +5,8 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-static const NSTimeInterval kBrowserTabAudioPollInterval = 0.75;
+/// 从 0.75s 增至 1.5s：减少轮询频率，同时保持音频状态更新足够及时。
+static const NSTimeInterval kBrowserTabAudioPollInterval = 1.5;
 static const NSInteger kBrowserTabAudioFalseStreakToClear = 2;
 /// _WKMediaAudioMuted
 static const NSUInteger kBrowserTabMediaAudioMuted = 1U << 0;

@@ -79,6 +79,10 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
         _recentlyClosedEntries = [[NSMutableArray alloc] init];
         [[[self class] registeredControllers] addObject:self];
         [self startHibernateTimer];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleMemoryWarning:)
+                                                     name:NSApplicationDidReceiveMemoryWarningNotification
+                                                   object:nil];
     }
     return self;
 }
@@ -89,6 +93,9 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
                                              selector:@selector(performDeferredBudgetEnforcement)
                                                object:nil];
     [[[self class] registeredControllers] removeObject:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSApplicationDidReceiveMemoryWarningNotification
+                                                  object:nil];
 }
 
 - (NSArray<BrowserTab *> *)tabs {
@@ -516,6 +523,31 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
     if (changed) {
         [self notifyChange];
     }
+}
+
+#pragma mark - Memory Warning
+
+/// 内存警告时立即强制回收所有非选中标签的 WebView，优先回收地球/视频标签。
+- (void)handleMemoryWarning:(NSNotification *)notification {
+    (void)notification;
+    BrowserTabUILog(@"memoryWarning: tabs=%lu live=%lu global=%lu",
+                    (unsigned long)self.mutableTabs.count,
+                    (unsigned long)[self liveWebViewCount],
+                    (unsigned long)[[self class] globalLiveWebViewCount]);
+
+    // 1. 强制回收本窗口所有非选中标签
+    [self hibernateLiveWebViewsDownTo:0 ignoringGrace:YES];
+
+    // 2. 强制回收全局过量标签（保留选中标签）
+    [[self class] enforceGlobalLiveWebViewBudget];
+
+    // 3. 清理最近关闭记录（减少内存占用）
+    [self.recentlyClosedEntries removeAllObjects];
+
+    BrowserTabUILog(@"memoryWarning done: tabs=%lu live=%lu global=%lu",
+                    (unsigned long)self.mutableTabs.count,
+                    (unsigned long)[self liveWebViewCount],
+                    (unsigned long)[[self class] globalLiveWebViewCount]);
 }
 
 - (void)removeTabsAtIndexes:(NSIndexSet *)indexes {

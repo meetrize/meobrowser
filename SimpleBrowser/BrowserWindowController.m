@@ -487,6 +487,10 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
             [strongSelf updateTranslateButtonState];
         };
         [self configureWebViewConfiguration:_webViewConfiguration];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleMemoryWarning:)
+                                                     name:NSApplicationDidReceiveMemoryWarningNotification
+                                                   object:nil];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
         _downloadManager = [BrowserDownloadManager sharedManager];
@@ -3575,6 +3579,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self performSelector:@selector(refreshTransparentPageStyleForSelection)
                withObject:nil
                afterDelay:0.05];
+}
+
+#pragma mark - Memory Warning
+
+- (void)handleMemoryWarning:(NSNotification *)note {
+    (void)note;
+    BrowserTabUILog(@"windowController memoryWarning: tabCount=%lu",
+                    (unsigned long)self.tabController.tabs.count);
+    // 内存警告时强制刷新 UI，清除非关键视图缓存
+    [self.tabStripView setNeedsDisplay:YES];
+    [self.tabStripView layoutSubtreeIfNeeded];
+    [self refreshTabsUI];
 }
 
 - (void)refreshTabsUI {
