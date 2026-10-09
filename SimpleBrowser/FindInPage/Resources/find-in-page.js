@@ -239,6 +239,94 @@
     }, OBSERVER_RESUME_MS);
   }
 
+  function collectAllRoots() {
+    var roots = [];
+    var pushRoot = function (doc) {
+      if (doc && doc.body || doc.documentElement) {
+        roots.push(doc.body || doc.documentElement);
+      }
+    };
+    // 主文档
+    pushRoot(document);
+    // 同源 iframe
+    try {
+      var iframes = document.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) {
+        var iframe = iframes[i];
+        // 尝试获取 contentDocument（同源才能访问）
+        var iframeDoc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+        if (iframeDoc) {
+          pushRoot(iframeDoc);
+          // 递归收集嵌套 iframe
+          try {
+            var nested = iframeDoc.querySelectorAll("iframe");
+            for (var j = 0; j < nested.length; j++) {
+              var nestedIframe = nested[j];
+              var nestedDoc = nestedIframe.contentDocument ||
+                              (nestedIframe.contentWindow && nestedIframe.contentWindow.document);
+              if (nestedDoc) {
+                pushRoot(nestedDoc);
+              }
+            }
+          } catch (e) {
+            // 嵌套 iframe 跨域，忽略
+          }
+        }
+      }
+    } catch (e) {
+      // querySelectorAll 失败，忽略
+    }
+    return roots;
+  }
+
+  function applyHighlightInRoots(roots, query) {
+    for (var r = 0; r < roots.length; r++) {
+      if (!roots[r]) {
+        continue;
+      }
+      // 确保每个 frame 都有样式
+      try {
+        var doc = roots[r].ownerDocument || (roots[r].nodeType === 9 ? roots[r] : roots[r].ownerDocument);
+        if (doc) {
+          var existingStyle = doc.getElementById(STYLE_ID);
+          if (!existingStyle) {
+            var style = doc.createElement("style");
+            style.id = STYLE_ID;
+            style.textContent =
+                "span[" + MARK_ATTR + "]{" +
+                "background-color:rgba(255,214,0,0.55)!important;" +
+                "color:inherit!important;" +
+                "border-radius:2px;" +
+                "box-decoration-break:clone;-webkit-box-decoration-break:clone;" +
+                "}" +
+                "span[" + CURRENT_ATTR + "]{" +
+                "background-color:rgba(255,140,0,0.85)!important;" +
+                "outline:1px solid rgba(200,90,0,0.9);" +
+                "}";
+            var head = doc.head || doc.documentElement;
+            if (head) {
+              head.appendChild(style);
+            }
+          }
+        }
+      } catch (e) {
+        // 跨域限制，忽略
+      }
+      var nodes = collectTextNodes(roots[r]);
+      for (var i = 0; i < nodes.length; i++) {
+        if (marks.length >= MAX_MATCHES) {
+          truncated = true;
+          break;
+        }
+        var reCopy = buildRegExp(query, lastOptions.mode || "literal", !!lastOptions.caseSensitive);
+        wrapMatchesInTextNode(nodes[i], reCopy);
+      }
+      if (marks.length >= MAX_MATCHES) {
+        break;
+      }
+    }
+  }
+
   function search(options) {
     ensureStyle();
     beginDOMEdit();
@@ -275,21 +363,9 @@
     }
 
     applying = true;
-    var roots = [document.body || document.documentElement];
-    for (var r = 0; r < roots.length; r++) {
-      if (!roots[r]) {
-        continue;
-      }
-      var nodes = collectTextNodes(roots[r]);
-      for (var i = 0; i < nodes.length; i++) {
-        if (marks.length >= MAX_MATCHES) {
-          truncated = true;
-          break;
-        }
-        var re = buildRegExp(query, lastOptions.mode || "literal", !!lastOptions.caseSensitive);
-        wrapMatchesInTextNode(nodes[i], re);
-      }
-    }
+    // 收集主文档和所有同源 iframe 的根节点
+    var roots = collectAllRoots();
+    applyHighlightInRoots(roots, query);
     applying = false;
 
     if (marks.length > 0) {
@@ -418,6 +494,30 @@
       }, MUTATION_DEBOUNCE_MS);
     });
     observer.observe(root, { childList: true, subtree: true, characterData: true });
+
+    // 同时监听 iframe 加载和内容变化
+    // 注意：跨域 iframe 会抛出异常，这里用 try-catch 忽略
+    try {
+      var iframes = document.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) {
+        var iframe = iframes[i];
+        // 监听 load 事件（新 iframe 加载完成）
+        iframe.addEventListener("load", function () {
+          if (suppressMutations || !lastOptions || !lastOptions.query) {
+            return;
+          }
+          // iframe 内容加载完成后，重新搜索以包含新内容
+          search({
+            query: lastOptions.query,
+            mode: lastOptions.mode,
+            caseSensitive: lastOptions.caseSensitive,
+            preserveIndex: true
+          });
+        }, true); // true = capture phase
+      }
+    } catch (e) {
+      // 跨域限制，忽略
+    }
   }
 
   window.__MeoFind = {
