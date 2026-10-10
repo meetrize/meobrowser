@@ -694,7 +694,6 @@ typedef void (^FaviconRaceCompletion)(NSImage * _Nullable image, NSURL * _Nullab
     __block NSString *winnerChannel = nil;
     __block NSInteger pending = (NSInteger)entries.count;
     NSObject *lock = [[NSObject alloc] init];
-    __weak typeof(self) weakSelf = self;
 
     for (NSDictionary *entry in entries) {
         NSString *urlString = entry[@"url"];
@@ -763,43 +762,6 @@ typedef void (^FaviconRaceCompletion)(NSImage * _Nullable image, NSURL * _Nullab
             });
         }
     });
-}
-
-- (NSArray<NSURL *> *)iconCandidatesFromHTMLForJob:(BrowserFaviconFetchJob *)job {
-    NSURL *pageURL = job.pageURL;
-    NSURL *origin = [self originURLFromPageURL:pageURL];
-    NSArray<NSURL *> *pagesToTry = @[ pageURL ];
-    if (origin != nil && ![origin.absoluteString isEqualToString:pageURL.absoluteString]) {
-        pagesToTry = @[ pageURL, origin ];
-    }
-
-    for (NSURL *htmlURL in pagesToTry) {
-        if (job.cancelled) {
-            break;
-        }
-        __block NSData *htmlData = nil;
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [self downloadDataFromURL:htmlURL
-                         maxBytes:kMaxHTMLBytes
-                       completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
-            (void)response;
-            (void)error;
-            htmlData = data;
-            dispatch_semaphore_signal(sem);
-        }];
-        (void)BrowserFaviconWaitSemaphore(sem, kChannelTimeout);
-        if (htmlData.length == 0) {
-            continue;
-        }
-        NSArray<NSURL *> *urls = [BrowserFaviconHTMLParser iconURLsFromHTMLData:htmlData pageURL:htmlURL];
-        if (urls.count > 0) {
-            if (urls.count > kMaxSiteCandidates) {
-                return [urls subarrayWithRange:NSMakeRange(0, kMaxSiteCandidates)];
-            }
-            return urls;
-        }
-    }
-    return @[];
 }
 
 - (void)succeedJob:(BrowserFaviconFetchJob *)job

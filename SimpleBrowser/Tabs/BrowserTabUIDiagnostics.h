@@ -1,8 +1,12 @@
 #import <Foundation/Foundation.h>
 
+NS_ASSUME_NONNULL_BEGIN
+
 @class BrowserTab;
 
-NS_ASSUME_NONNULL_BEGIN
+/// 内存压力通知：当进程内存超过阈值时由 AppDelegate 广播。
+/// 标签控制器和窗口控制器监听此通知以回收资源。
+FOUNDATION_EXPORT NSNotificationName const BrowserMemoryPressureNotification;
 
 /// 标签 / 切页 UI 诊断。默认开启；关闭：
 /// `defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool NO`

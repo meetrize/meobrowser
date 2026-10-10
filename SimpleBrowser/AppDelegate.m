@@ -85,6 +85,8 @@
     if (ServerSyncSettings.sharedSettings.enabled) {
         [[ServerSyncEngine sharedEngine] startIfNeeded];
     }
+    // 启动内存压力监控
+    [self startMemoryPressureMonitoring];
     NSArray<NSDictionary *> *sessions = [BrowsingPreferences savedWindowSessions];
     if (sessions.count == 0) {
         [self createBrowserWindowWithSession:nil];
@@ -111,6 +113,44 @@
             }
         }
     });
+}
+
+#pragma mark - Memory Pressure
+
+- (void)startMemoryPressureMonitoring {
+    // 使用 dispatch_source 监听系统内存压力
+    // macOS 上没有原生的内存警告通知，我们通过定时检查内存使用来模拟
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                    dispatch_get_main_queue());
+    dispatch_source_set_timer(timer,
+                             dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), // 30秒后开始
+                             30 * NSEC_PER_SEC, // 每30秒检查一次
+                             1 * NSEC_PER_SEC); // 1秒容差
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(timer, ^{
+        [weakSelf checkMemoryPressure];
+    });
+    dispatch_resume(timer);
+}
+
+- (void)checkMemoryPressure {
+    // 获取进程内存使用量
+    struct task_basic_info info;
+    mach_msg_type_number_t size = TASK_BASIC_INFO_COUNT;
+    kern_return_t kerr = task_info(mach_task_self(),
+                                    TASK_BASIC_INFO,
+                                    (task_info_t)&info,
+                                    &size);
+    if (kerr == KERN_SUCCESS) {
+        // 转换为 MB
+        NSUInteger memoryUsedMB = info.resident_size / (1024 * 1024);
+        // 如果使用超过 1GB，触发内存警告
+        if (memoryUsedMB > 1024) {
+            BrowserTabUILog(@"memory pressure: using %lum MB", (unsigned long)memoryUsedMB);
+            [[NSNotificationCenter defaultCenter] postNotificationName:BrowserMemoryPressureNotification
+                                                                object:nil];
+        }
+    }
 }
 
 - (BrowserWindowController *)createBrowserWindowWithSession:(NSDictionary *)session {

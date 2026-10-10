@@ -8,6 +8,8 @@
 #import <stdio.h>
 #import <sys/stat.h>
 
+NSNotificationName const BrowserMemoryPressureNotification = @"BrowserMemoryPressureNotification";
+
 static NSString * const kMeoTabUIDiagnosticsKey = @"MeoBrowserTabUIDiagnostics";
 static NSString * const kMeoTabUISlowMsKey = @"MeoBrowserTabUISlowMs";
 static NSString * const kMeoTabUIHangMsKey = @"MeoBrowserTabUIHangMs";

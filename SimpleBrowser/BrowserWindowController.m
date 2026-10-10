@@ -489,7 +489,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
         [self configureWebViewConfiguration:_webViewConfiguration];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(handleMemoryWarning:)
-                                                     name:NSApplicationDidReceiveMemoryWarningNotification
+                                                     name:BrowserMemoryPressureNotification
                                                    object:nil];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;

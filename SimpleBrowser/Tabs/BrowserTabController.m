@@ -81,7 +81,7 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
         [self startHibernateTimer];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(handleMemoryWarning:)
-                                                     name:NSApplicationDidReceiveMemoryWarningNotification
+                                                     name:BrowserMemoryPressureNotification
                                                    object:nil];
     }
     return self;
@@ -94,7 +94,7 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
                                                object:nil];
     [[[self class] registeredControllers] removeObject:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self
-                                                    name:NSApplicationDidReceiveMemoryWarningNotification
+                                                    name:BrowserMemoryPressureNotification
                                                   object:nil];
 }
 
