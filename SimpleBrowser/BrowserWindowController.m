@@ -5242,6 +5242,17 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
     SEL action = menuItem.action;
+    if (action == @selector(splitLoadPreset:)
+        || action == @selector(splitSaveCurrentAsPreset:)
+        || action == @selector(splitDeletePreset:)
+        || action == @selector(splitLayoutSingle:) || action == @selector(splitLayoutLR:)
+        || action == @selector(splitLayoutUD:) || action == @selector(splitLayoutLCR:)
+        || action == @selector(splitLayoutUMD:) || action == @selector(splitLayoutQuad:)
+        || action == @selector(splitLayoutNine:) || action == @selector(splitFocusNext:)
+        || action == @selector(splitChromeAlways:) || action == @selector(splitChromeAutohide:)
+        || action == @selector(splitChromeHidden:) || action == @selector(togglePaneSync:)) {
+        return YES;
+    }
     if (action == @selector(toggleCompactMode:)) {
         menuItem.state = self.compactModeEnabled ? NSControlStateValueOn : NSControlStateValueOff;
         return YES;
@@ -7762,15 +7773,24 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     [alert addButtonWithTitle:@"取消"];
     if ([alert runModal] != NSAlertFirstButtonReturn) return;
     NSString *name = [field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-    NSMutableDictionary *preset = [snap mutableCopy];
+    // UserDefaults 只能存 plist 类型:只保留可序列化字段,去掉 live webviews
+    NSMutableDictionary *preset = [NSMutableDictionary dictionary];
     preset[@"name"] = name.length ? name : @"未命名预设";
+    preset[@"layout"] = snap[@"layout"] ?: @1;
+    preset[@"weights"] = snap[@"weights"] ?: @[];
+    preset[@"urls"] = snap[@"urls"] ?: @[];
+    preset[@"chrome"] = snap[@"chrome"] ?: @1;
+    preset[@"createdAt"] = @([[NSDate date] timeIntervalSince1970]);
     NSString *err = nil;
     if (![BrowserSplitPresetStore savePreset:preset error:&err]) {
         NSAlert *e = [[NSAlert alloc] init];
         e.messageText = err ?: @"保存失败";
         [e runModal];
+        return;
     }
+    // 保存完立刻重建菜单(下次打开即见),并给确认提示
     [self rebuildSplitPresetMenu:nil];
+    [BrowserTransientToast showMessage:[NSString stringWithFormat:@"已保存预设“%@”", preset[@"name"]] inWindow:self.window duration:2.0];
 }
 - (void)splitDeletePreset:(id)s {
     NSArray *all = [BrowserSplitPresetStore allPresets];
@@ -7789,8 +7809,15 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 - (void)splitLoadPreset:(id)sender {
     NSDictionary *preset = nil;
     if ([sender isKindOfClass:[NSMenuItem class]]) preset = ((NSMenuItem *)sender).representedObject;
-    if (![preset isKindOfClass:[NSDictionary class]]) return;
+    if (![preset isKindOfClass:[NSDictionary class]]) {
+        NSLog(@"[SplitPreset] load: representedObject 非字典: %@", sender);
+        return;
+    }
+    NSLog(@"[SplitPreset] load: name=%@ layout=%@ urls=%@", preset[@"name"], preset[@"layout"], preset[@"urls"]);
     [self applySplitSnapshot:preset toNewTab:NO];
+    // 加载后也刷新菜单勾选
+    [self rebuildSplitPresetMenu:nil];
+    [BrowserTransientToast showMessage:[NSString stringWithFormat:@"已加载预设“%@”", preset[@"name"] ?: @""] inWindow:self.window duration:2.0];
 }
 - (void)rebuildSplitPresetMenu:(NSNotification *)note {
     NSMenu *main = [NSApp mainMenu];
@@ -7819,9 +7846,14 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     NSDictionary *cur = [self currentSplitSnapshot];
     NSInteger ci = 0;
     for (NSDictionary *e in all) {
-        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:[@"预设:" stringByAppendingString:(e[@"name"] ?: @"")] action:@selector(splitLoadPreset:) keyEquivalent:@""];
+        NSArray *u = e[@"urls"];
+        NSString *subtitle = ([u isKindOfClass:[NSArray class]] && u.count > 0)
+            ? [NSString stringWithFormat:@" (%lu页)", (unsigned long)u.count] : @"";
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:[[@"预设:" stringByAppendingString:(e[@"name"] ?: @"")] stringByAppendingString:subtitle]
+                                                    action:@selector(splitLoadPreset:) keyEquivalent:@""];
         it.target = nil;
         it.representedObject = e;
+        it.toolTip = ([u isKindOfClass:[NSArray class]] ? [u componentsJoinedByString:@"\n"] : @"");
         it.tag = 9001 + ci;
         // 当前布局打勾
         if ([e[@"layout"] integerValue] == [cur[@"layout"] integerValue]) it.state = NSControlStateValueOn;
