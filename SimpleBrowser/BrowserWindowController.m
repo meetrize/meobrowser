@@ -1244,6 +1244,30 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
     ]];
 
+    if ([[[NSProcessInfo processInfo] arguments] containsObject:@"-MeoSyncSelfTest"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self runSyncSelfTest]; });
+        // fallthrough 也进 SplitTest?不,这里 return 风格:继续走下面(下面是 SplitTest 的 if,互斥即可)
+    }
+    if ([[[NSProcessInfo processInfo] arguments] containsObject:@"-MeoLoadAIPreset"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSArray *all = [BrowserSplitPresetStore allPresets];
+            NSLog(@"[SyncTest] presets=%lu", (unsigned long)all.count);
+            for (NSDictionary *e in all) {
+                if ([e[@"name"] isEqualToString:@"ai"]) {
+                    NSLog(@"[SyncTest] loading ai preset urls=%@", e[@"urls"]);
+                    [self applySplitSnapshot:e toNewTab:NO];
+                    // 加载后6秒:自动开始同步拾取,免人工点图标
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        [self togglePaneSync:nil];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                            [self syncSelfTestProbeEditors];
+                        });
+                    });
+                    break;
+                }
+            }
+        });
+    }
     if ([[[NSProcessInfo processInfo] arguments] containsObject:@"-MeoSplitTest"]) {
         dispatch_async(dispatch_get_main_queue(), ^{
             // 走菜单同款入口,复现用户路径
@@ -7634,18 +7658,39 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
     if (co.isSyncing || co.isPicking) { [self stopPaneSync]; return; }
     [co startPickWithPaneCount:c.panes.count];
-    // 每栏注入脚本并进入拾取
+    // 每栏注入脚本并进入拾取(重试3次:页面若还没加载完,脚本对象不存在就稍后重试)
     for (BrowserPaneView *pane in c.panes) {
-        if (pane.webView) {
-            [self ensureSyncScriptForWebView:pane.webView];
-            [pane.webView evaluateJavaScript:@"window.meoSyncPickOnce().then(function(fp){ try{window.webkit.messageHandlers.meoSync.postMessage({type:'paired',fp:fp});}catch(e){} })" completionHandler:nil];
-        }
+        if (pane.webView) [self armSyncPickForWebView:pane.webView retries:3];
     }
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = @"同步拾取中:请依次点击每一栏要同步的输入框";
-    a.informativeText = @"点完所有栏后自动开始同步;Esc 或再次点击菜单可退出。密码/验证码框会被自动排除。";
-    [a addButtonWithTitle:@"知道了"];
-    [a runModal];
+    // 非模态提示,自动随状态 toast 常驻,无需用户点掉(原来 runModal 会卡死拾取点击!)
+    if (self.window) {
+        [BrowserTransientToast showPersistentMessage:@"同步拾取中:依次点击每一栏要同步的输入框(密码框自动排除,Esc 退出)"
+                                            inWindow:self.window];
+    }
+}
+// 拾取武装:带重试,JS 就绪才挂 pick
+- (void)armSyncPickForWebView:(WKWebView *)wv retries:(NSInteger)retries {
+    if (!wv) return;
+    [self ensureSyncScriptForWebView:wv];
+    __weak typeof(self) weak = self;
+    __weak WKWebView *weakWV = wv;
+    NSString *js = @"(typeof window.meoSyncPickOnce === 'function') ? 'ready' : 'notready'";
+    [wv evaluateJavaScript:js completionHandler:^(id result, NSError *err) {
+        __strong typeof(weak) strong = weak;
+        WKWebView *strongWV = weakWV;
+        if (!strong || !strongWV) return;
+        if ([result isKindOfClass:[NSString class]] && [result isEqualToString:@"ready"]) {
+            [strongWV evaluateJavaScript:@"window.meoSyncPickOnce().then(function(fp){ try{window.webkit.messageHandlers.meoSync.postMessage({type:'paired',fp:fp});}catch(e){} });'armed'" completionHandler:^(id r2, NSError *e2) {
+                if (e2) NSLog(@"[PaneSync] pick arm failed: %@", e2);
+            }];
+        } else if (retries > 0) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [strong armSyncPickForWebView:strongWV retries:retries - 1];
+            });
+        } else {
+            NSLog(@"[PaneSync] pick arm: JS 未就绪(页面可能还没加载完)");
+        }
+    }];
 }
 - (void)installSyncEscMonitor {
     if (objc_getAssociatedObject(self, @selector(installSyncEscMonitor))) return;
@@ -7668,17 +7713,139 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 - (void)updateSyncToolbarButton {
     [self syncChromeActionButtonStates];
 }
-- (void)stopPaneSync {
+ - (void)stopPaneSync {
     BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
     BrowserSplitContainerView *c = [self ensureSplitContainer];
     for (BrowserPaneView *pane in c.panes) {
-        if (pane.webView) [pane.webView evaluateJavaScript:@"window.__meoSyncMaster=false" completionHandler:nil];
+        if (pane.webView) [pane.webView evaluateJavaScript:@"window.__meoSyncMaster=false;window.__meoSyncOn=false" completionHandler:nil];
     }
     [co cancelAll];
     if (self.window) [BrowserTransientToast dismissPersistentMessageInWindow:self.window];
     BrowserSplitContainerView *cc = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
     if (cc) { for (BrowserPaneView *pane in cc.panes) [pane setSyncBadge:nil]; }
     [self updateSyncToolbarButton];
+}
+/// 探针:枚举各栏编辑器现状(数量/标签/类名),自动配对第一个可见编辑器,再模拟输入回读
+- (void)syncSelfTestProbeEditors {
+    BrowserSplitContainerView *cc = [self ensureSplitContainer];
+    BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+    NSString *enumJS = @"(function(){var out=[];var sels=['textarea','input','div[contenteditable=true]','div[contenteditable=\"true\"]','[role=textbox]','p[contenteditable]'];"
+        @"sels.forEach(function(s){try{document.querySelectorAll(s).forEach(function(e){var r=e.getBoundingClientRect();"
+        @"out.push(s+'|'+(e.tagName||'')+'|'+(e.id||'')+'|'+((e.className&&e.className.baseVal===undefined?e.className:'')||'')+'|'+Math.round(r.width)+'x'+Math.round(r.height));});}catch(err){}});"
+        @"return JSON.stringify({url:location.href.slice(0,80),count:out.length,items:out.slice(0,12)});})()";
+    for (BrowserPaneView *pane in cc.panes) {
+        if (!pane.webView) { NSLog(@"[SyncTest] pane%ld NO WEBVIEW", (long)pane.paneIndex); continue; }
+        [pane.webView evaluateJavaScript:enumJS completionHandler:^(id r, NSError *e) {
+            NSLog(@"[SyncTest] pane%ld editors=%@ err=%@", (long)pane.paneIndex, r, e);
+        }];
+    }
+    // 3秒后:用 firstVisibleEditor 逻辑自动配对(模拟人工点击的效果),再打字验证
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSString *autoFP = @"(function(){var sels=['textarea','div[contenteditable=true]','[role=textbox]','input[type=text]','input:not([type])','input[type=search]'];"
+            @"for(var i=0;i<sels.length;i++){var list=document.querySelectorAll(sels[i]);"
+            @"for(var j=0;j<list.length;j++){var e=list[j];if(e.disabled||e.readOnly)continue;"
+            @"var r=null;try{r=e.getBoundingClientRect();}catch(err){continue;}"
+            @"if(r&&r.width>40&&r.height>10&&r.bottom>0&&r.right>0){"
+            @"var all=Array.prototype.slice.call(document.querySelectorAll('input,textarea,select'));"
+            @"return {tag:(e.tagName||'').toLowerCase(),id:e.id||'',name:e.name||'',type:e.type||'',index:all.indexOf(e),xpath:''};}}}"
+            @"return null;})()";
+        for (BrowserPaneView *pane in cc.panes) {
+            [pane.webView evaluateJavaScript:autoFP completionHandler:^(id fp, NSError *e) {
+                NSLog(@"[SyncTest] pane%ld autoFP=%@ err=%@", (long)pane.paneIndex, fp, e);
+                if ([fp isKindOfClass:[NSDictionary class]]) [co setFingerprint:fp forPane:pane.paneIndex];
+                if ([co allPairedForPaneCount:cc.panes.count]) {
+                    [co beginSyncWithMaster:0];
+                    for (BrowserPaneView *p2 in cc.panes) {
+                        if (!p2.webView) continue;
+                        if (p2.paneIndex == 0) [p2.webView evaluateJavaScript:@"window.__meoSyncMaster=true" completionHandler:nil];
+                    }
+                    NSLog(@"[SyncTest] auto-paired all, typing...");
+                    [self syncSelfTestTypeText:@"hello-sync-001" step:0];
+                }
+            }];
+        }
+    });
+}
+/// 自动测试探针(-MeoSyncSelfTest):四栏各放测试页,程序化配对+输入+校验回读
+- (void)runSyncSelfTest {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    // 切四方格,各栏加载本地同构测试页
+    NSMutableArray *urls = [NSMutableArray array];
+    for (NSInteger i = 1; i <= 4; i++) {
+        NSURL *u = [NSURL fileURLWithPath:[NSString stringWithFormat:@"/tmp/sync4/p%ld.html", (long)i]];
+        [urls addObject:u];
+    }
+    [self setSplitLayout:BrowserSplitLayoutQuad weights:nil urls:urls];
+    NSLog(@"[SyncTest] quad ready, waiting pages...");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        BrowserSplitContainerView *cc = [self ensureSplitContainer];
+        NSLog(@"[SyncTest] panes=%lu", (unsigned long)cc.panes.count);
+        // 1) 检查 JS 就绪
+        for (BrowserPaneView *pane in cc.panes) {
+            [pane.webView evaluateJavaScript:@"(typeof window.meoSyncPickOnce==='function')?'ready':'MISSING'"
+                completionHandler:^(id r, NSError *e) {
+                    NSLog(@"[SyncTest] pane%ld js=%@ err=%@", (long)pane.paneIndex, r, e);
+                }];
+        }
+        // 2) 程序化配对:#q 输入框
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+            [co startPickWithPaneCount:cc.panes.count];
+            for (BrowserPaneView *pane in cc.panes) {
+                NSString *pick = @"(function(){var el=document.querySelector('#q');if(!el)return null;"
+                    @"var all=Array.prototype.slice.call(document.querySelectorAll('input,textarea,select'));"
+                    @"return {tag:el.tagName.toLowerCase(),id:el.id||'',name:el.name||'',type:el.type||'',index:all.indexOf(el),xpath:''};})()";
+                [pane.webView evaluateJavaScript:pick completionHandler:^(id fp, NSError *e) {
+                    NSLog(@"[SyncTest] pane%ld fp=%@ err=%@", (long)pane.paneIndex, fp, e);
+                    if ([fp isKindOfClass:[NSDictionary class]]) [co setFingerprint:fp forPane:pane.paneIndex];
+                    if ([co allPairedForPaneCount:cc.panes.count]) {
+                        [co beginSyncWithMaster:0];
+                        NSLog(@"[SyncTest] all paired, syncing. Simulating typing in pane0...");
+                        // 3) 模拟主栏输入:直接调上报路径——在 pane0 执行 apply 再经 ObjC 广播
+                        [self syncSelfTestTypeText:@"hello-ai-123" step:0];
+                    }
+                }];
+            }
+        });
+    });
+}
+- (void)syncSelfTestTypeText:(NSString *)text step:(NSInteger)step {
+    BrowserSplitContainerView *cc = [self ensureSplitContainer];
+    BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+    if (step >= text.length) {
+        // 4) 回读各栏值(通用:读 activeElement 或第一个可见编辑器,不依赖 #q)
+        NSString *readback = @"(function(){function txt(e){if(!e)return '';try{if(e.isContentEditable)return e.innerText;if('value' in e)return e.value;return e.innerText||'';}catch(x){return '';}}"
+            @"var t=null;try{t=document.activeElement;}catch(e){}"
+            @"var a=txt(t);if(a&&a.length)return ('AE:'+a).slice(0,120);"
+            @"var sels=['textarea','div[contenteditable=true]','[role=textbox]','input'];"
+            @"for(var i=0;i<sels.length;i++){var l=document.querySelectorAll(sels[i]);"
+            @"for(var j=0;j<l.length;j++){var q=txt(l[j]);if(q&&q.length)return ('ED:'+q).slice(0,120);}}"
+            @"return '(empty)';})()";
+        for (BrowserPaneView *pane in cc.panes) {
+            [pane.webView evaluateJavaScript:readback
+                completionHandler:^(id v, NSError *e) {
+                    NSLog(@"[SyncTest] pane%ld final value=%@ err=%@", (long)pane.paneIndex, v, e);
+                }];
+        }
+        NSLog(@"[SyncTest] DONE");
+        return;
+    }
+    NSString *sub = [text substringToIndex:step + 1];
+    // 先写主栏,再走广播写从栏(与真实 input 上报同路径)
+    BrowserPaneView *master = cc.panes[0];
+    NSString *wjs = [co applyValueJS:sub fp:co.fingerprints[@0]];
+    [master.webView evaluateJavaScript:wjs completionHandler:^(id r0, NSError *e0) {
+        if (e0 || (r0 && ![r0 isEqual:@"ok"] && ![r0 hasPrefix:@"ok"])) NSLog(@"[SyncTest] master apply sub=%@ result=%@ err=%@", sub, r0, e0);
+        // 模拟上报
+        for (BrowserPaneView *pane in cc.panes) {
+            if (pane.paneIndex == 0 || !pane.webView) continue;
+            NSString *js = [co applyValueJS:sub fp:co.fingerprints[@(pane.paneIndex)]];
+            [pane.webView evaluateJavaScript:js completionHandler:nil];
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(200 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            [self syncSelfTestTypeText:text step:step + 1];
+        });
+    }];
 }
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     // 复用:先透传给已有 handler(若有同名冲突则忽略)。仅处理 meoSync。
@@ -7688,16 +7855,25 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     }
     BrowserSplitContainerView *c = [self ensureSplitContainer];
     BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
-    // 找到发送页所在栏
+    // 找到发送页所在栏(指针比对;SPA 跳转不换实例,换了则回退按 URL host 匹配)
     NSInteger fromPane = -1;
     for (BrowserPaneView *pane in c.panes) {
         if (pane.webView == message.webView) { fromPane = pane.paneIndex; break; }
     }
-    if (fromPane < 0) return;
+    if (fromPane < 0) {
+        NSString *msgHost = message.webView.URL.host ?: @"";
+        if (msgHost.length) {
+            for (BrowserPaneView *pane in c.panes) {
+                if ([pane.webView.URL.host isEqualToString:msgHost]) { fromPane = pane.paneIndex; break; }
+            }
+        }
+    }
     NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : @{};
+    if (fromPane < 0) { NSLog(@"[PaneSync] msg from unknown pane, dropped type=%@", body[@"type"]); return; }
     NSString *type = body[@"type"];
     if ([type isEqualToString:@"paired"]) {
         NSDictionary *fp = body[@"fp"];
+        NSLog(@"[PaneSync] paired from pane%ld fp=%@", (long)fromPane, fp);
         if ([fp isKindOfClass:[NSDictionary class]]) [co setFingerprint:fp forPane:fromPane];
         if (co.statusDidChangeHandler) co.statusDidChangeHandler([co statusTextForPaneCount:c.panes.count]);
         if ([co allPairedForPaneCount:c.panes.count]) {
@@ -7705,8 +7881,9 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
             // 主栏标记,其余栏写入指纹
             for (BrowserPaneView *pane in c.panes) {
                 if (!pane.webView) continue;
+                // 所有栏都上报;发送栏即事实 master(任意栏打字都广播)
+                [pane.webView evaluateJavaScript:@"window.__meoSyncOn=true;window.__meoSyncMaster=true" completionHandler:nil];
                 if (pane.paneIndex == fromPane) {
-                    [pane.webView evaluateJavaScript:@"window.__meoSyncMaster=true" completionHandler:nil];
                 } else {
                     NSDictionary *sfp = co.fingerprints[@(pane.paneIndex)];
                     NSData *d = [NSJSONSerialization dataWithJSONObject:sfp ?: @{} options:0 error:nil];
@@ -7721,17 +7898,26 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     }
     if (!co.isSyncing) return;
     if ([type isEqualToString:@"input"]) {
-        if (fromPane != co.masterPaneIndex) return; // 仅主栏广播
+        if (0) { } // 任意栏输入都广播(原先只认 master,在别的栏打字无反应)
         NSString *value = [body[@"value"] isKindOfClass:[NSString class]] ? body[@"value"] : @"";
+        static NSInteger inputLogCount = 0;
+        if (inputLogCount < 5) {
+            inputLogCount++;
+            NSLog(@"[PaneSync] input from master%ld len=%lu slaves=%lu", (long)fromPane,
+                (unsigned long)value.length, (unsigned long)c.panes.count - 1);
+        }
         for (BrowserPaneView *pane in c.panes) {
             if (pane.paneIndex == fromPane || !pane.webView) continue;
             NSString *js = [co applyValueJS:value fp:co.fingerprints[@(pane.paneIndex)]];
-            [pane.webView evaluateJavaScript:js completionHandler:nil];
+            [pane.webView evaluateJavaScript:js completionHandler:^(id r, NSError *e) {
+                if (e) NSLog(@"[PaneSync] apply fail result=%@ err=%@", r, e);
+                else if (r && ![r isEqual:@"ok"]) NSLog(@"[PaneSync] apply result=%@", r);
+            }];
         }
         return;
     }
     if ([type isEqualToString:@"submit"]) {
-        if (fromPane != co.masterPaneIndex) return;
+        if (0) { } // 任意栏回车都广播
         for (BrowserPaneView *pane in c.panes) {
             if (pane.paneIndex == fromPane || !pane.webView) continue;
             [pane.webView evaluateJavaScript:[co submitJS:co.fingerprints[@(pane.paneIndex)]] completionHandler:nil];
