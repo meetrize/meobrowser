@@ -1289,6 +1289,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             });
         });
     }
+    [self rebuildSplitPresetMenu:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildSplitPresetMenu:) name:NSMenuDidBeginTrackingNotification object:nil];
     [self.findBarController installInContentContainer:self.contentContainer];
     [self.tabOverviewController installInContentContainer:self.contentContainer];
     [[CallAlertBannerController sharedController] installInContentContainer:self.contentContainer
@@ -4233,7 +4235,48 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self repositionTrafficLightButtonsAfterLayout];
 }
 
+- (NSMutableDictionary *)splitNameByTabID {
+    NSMutableDictionary *d = objc_getAssociatedObject(self, @selector(splitNameByTabID));
+    if (!d) { d = [NSMutableDictionary dictionary]; objc_setAssociatedObject(self, @selector(splitNameByTabID), d, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    return d;
+}
+/// 分栏标签显示名:预设名优先,否则“分栏·布局名·N页”
+- (NSString *)splitDisplayNameForTab:(BrowserTab *)tab {
+    NSString *preset = [self splitNameByTabID][tab.tabID];
+    if ([preset isKindOfClass:[NSString class]] && preset.length) return preset;
+    NSDictionary *snap = [self splitSnapshotsByTabID][tab.tabID];
+    if (!snap) {
+        // 当前容器可能就是该标签的(刚建还没切走):看容器——但新标签快捷页(NTP)不算分栏,不显示
+        if (tab.isNewTabPage) return nil;
+        BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+        if (c && !c.hidden && tab == self.tabController.selectedTab) {
+            NSInteger n = c.panes.count;
+            return [NSString stringWithFormat:@"分栏·%@·%ld页", [BrowserSplitLayout nameForLayout:c.layoutID], (long)n];
+        }
+        return nil;
+    }
+    NSInteger n = [(NSArray *)snap[@"urls"] count];
+    return [NSString stringWithFormat:@"分栏·%@·%ld页", [BrowserSplitLayout nameForLayout:(BrowserSplitLayoutID)[snap[@"layout"] integerValue]], (long)n];
+}
 - (void)updateTabStripDisplay {
+    // 分栏标签:临时覆盖 title 用于显示(页面标题变化/切单栏时恢复,见 pull 恢复与 Single 分支清理)
+    static NSMutableDictionary *savedOrigTitle = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ savedOrigTitle = [NSMutableDictionary dictionary]; });
+    for (BrowserTab *t in self.tabController.tabs) {
+        NSString *splitName = [self splitDisplayNameForTab:t];
+        if (splitName) {
+            if (!savedOrigTitle[t.tabID]) savedOrigTitle[t.tabID] = t.title ?: @"";
+            if (![t.title isEqualToString:splitName]) t.title = splitName;
+        } else if (savedOrigTitle[t.tabID]) {
+            // 曾是分栏现已单栏:恢复原页面标题(若当前还是分栏名)
+            // 原标题可能已过期(页面后来改了标题),但 pullDocumentTitle 会在下次导航时纠正
+            NSString *saved = savedOrigTitle[t.tabID];
+            if ([t.title hasPrefix:@"分栏·"] || [t.title isEqualToString:[self splitNameByTabID][t.tabID]]) t.title = saved;
+            [savedOrigTitle removeObjectForKey:t.tabID];
+            [[self splitNameByTabID] removeObjectForKey:t.tabID];
+        }
+    }
     [self.tabStripView syncWithTabs:self.tabController.tabs
                       selectedTabID:self.tabController.selectedTab.tabID];
 }
@@ -7388,7 +7431,6 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
             (void)w; [weak persistTabSession];
         };
         objc_setAssociatedObject(self, @selector(ensureSplitContainer), c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildSplitPresetMenu:) name:NSMenuDidBeginTrackingNotification object:nil];
     }
     return c;
 }
@@ -7974,7 +8016,10 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         [e runModal];
         return;
     }
-    // 保存完立刻重建菜单(下次打开即见),并给确认提示
+    // 保存完立刻重建菜单(下次打开即见),当前分栏标签挂上预设名
+    BrowserTab *sel = self.tabController.selectedTab;
+    if (sel && preset[@"name"]) [self splitNameByTabID][sel.tabID] = preset[@"name"];
+    [self updateTabStripDisplay];
     [self rebuildSplitPresetMenu:nil];
     [BrowserTransientToast showMessage:[NSString stringWithFormat:@"已保存预设“%@”", preset[@"name"]] inWindow:self.window duration:2.0];
 }
@@ -7992,18 +8037,23 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     [BrowserSplitPresetStore deletePresetNamed:pop.titleOfSelectedItem];
     [self rebuildSplitPresetMenu:nil];
 }
-- (void)splitLoadPreset:(id)sender {
+ - (void)splitLoadPreset:(id)sender {
     NSDictionary *preset = nil;
     if ([sender isKindOfClass:[NSMenuItem class]]) preset = ((NSMenuItem *)sender).representedObject;
     if (![preset isKindOfClass:[NSDictionary class]]) {
         NSLog(@"[SplitPreset] load: representedObject 非字典: %@", sender);
         return;
     }
-    NSLog(@"[SplitPreset] load: name=%@ layout=%@ urls=%@", preset[@"name"], preset[@"layout"], preset[@"urls"]);
-    [self applySplitSnapshot:preset toNewTab:NO];
-    // 加载后也刷新菜单勾选
+    // 在新标签页加载预设(不污染当前标签)
+    BrowserTab *tab = [self.tabController addNewTab];
+    [self.tabController selectTab:tab];
+    // 记预设名:标签标题显示预设名
+    if (preset[@"name"]) [self splitNameByTabID][tab.tabID] = preset[@"name"];
+    NSLog(@"[SplitPreset] load in new tab %@: name=%@ layout=%@ urls=%@", tab.tabID, preset[@"name"], preset[@"layout"], preset[@"urls"]);
+    [self applySplitSnapshot:preset toNewTab:YES];
+    [self refreshTabsUI];
     [self rebuildSplitPresetMenu:nil];
-    [BrowserTransientToast showMessage:[NSString stringWithFormat:@"已加载预设“%@”", preset[@"name"] ?: @""] inWindow:self.window duration:2.0];
+    [BrowserTransientToast showMessage:[NSString stringWithFormat:@"已在新标签页加载预设“%@”", preset[@"name"] ?: @""] inWindow:self.window duration:2.0];
 }
 - (void)rebuildSplitPresetMenu:(NSNotification *)note {
     NSMenu *main = [NSApp mainMenu];
