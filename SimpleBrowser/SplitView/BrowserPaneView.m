@@ -9,6 +9,7 @@
 @property (nonatomic, strong) NSButton *goBtn;
 @property (nonatomic, strong) NSTrackingArea *chromeTracking;
 @property (nonatomic, strong) NSTextField *syncBadge;
+@property (nonatomic, assign) BOOL mouseInside;
 @end
 
 @implementation BrowserPaneView
@@ -87,11 +88,15 @@
             [_addressFieldInner.leadingAnchor constraintEqualToAnchor:_fwdBtn.trailingAnchor constant:4],
             [_addressFieldInner.trailingAnchor constraintEqualToAnchor:_goBtn.leadingAnchor constant:-4],
             [_addressFieldInner.centerYAnchor constraintEqualToAnchor:_chromeBar.centerYAnchor],
-            [_contentHostInner.topAnchor constraintEqualToAnchor:_chromeBar.bottomAnchor],
+            // 内容区永远撑满整个 pane(自动隐藏/隐藏模式不给地址栏预留空间)
+            [_contentHostInner.topAnchor constraintEqualToAnchor:self.topAnchor],
             [_contentHostInner.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
             [_contentHostInner.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
             [_contentHostInner.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
         ]];
+        // 地址栏浮层:盖在内容区上面(z-order 最前),hover 时滑下来盖住网页顶部
+        // 注意:chromeBar 已在 contentHost 之前 addSubview,需显式顶到最前
+        [self addSubview:_chromeBar positioned:NSWindowAbove relativeTo:nil];
         [self applyChromeModeAnimated:NO];
         _syncBadge = [NSTextField labelWithString:@""];
         _syncBadge.translatesAutoresizingMaskIntoConstraints = NO;
@@ -125,9 +130,27 @@
 }
 
 - (void)applyChromeModeAnimated:(BOOL)animated {
-    BOOL show = (_chromeMode == BrowserPaneChromeAlways) || (_chromeMode == BrowserPaneChromeAutohide && self.active);
-    if (_chromeMode == BrowserPaneChromeHidden) show = NO;
-    _chromeBar.hidden = !show;
+    (void)animated;
+    if (_chromeMode == BrowserPaneChromeAlways) {
+        _chromeBar.hidden = NO;
+        [self setContentTopInset:30];
+    } else if (_chromeMode == BrowserPaneChromeAutohide) {
+        // 自动隐藏:内容撑满;显示时浮层盖住顶部(不挤压网页)
+        [self setContentTopInset:0];
+        _chromeBar.hidden = !(self.active && self.mouseInside);
+    } else {
+        [self setContentTopInset:0];
+        _chromeBar.hidden = YES;
+    }
+}
+/// 内容区顶部内边距:总是显示=30(地址栏占位),其余=0(撑满)
+- (void)setContentTopInset:(CGFloat)inset {
+    for (NSLayoutConstraint *con in self.constraints) {
+        if (con.firstItem == _contentHostInner && con.firstAttribute == NSLayoutAttributeTop) {
+            con.constant = inset;
+            return;
+        }
+    }
 }
 
 - (void)setActiveAndReveal:(BOOL)active {
@@ -145,7 +168,9 @@
 }
 
 - (void)mouseEntered:(NSEvent *)e {
-    // 自动隐藏模式:移到栏内即显示地址栏,不抢焦点(点击才聚焦)
+    (void)e;
+    _mouseInside = YES;
+    // 自动隐藏:鼠标移到栏内,地址栏从顶部滑下来盖住网页(不抢焦点,点击才聚焦)
     if (_chromeMode == BrowserPaneChromeAutohide) _chromeBar.hidden = NO;
 }
 - (void)mouseDown:(NSEvent *)e {
@@ -156,7 +181,16 @@
 }
 
 - (void)mouseExited:(NSEvent *)e {
-    if (_chromeMode == BrowserPaneChromeAutohide) _chromeBar.hidden = YES;
+    (void)e;
+    _mouseInside = NO;
+    if (_chromeMode == BrowserPaneChromeAutohide) {
+        // 焦点在地址框里(正在输入)就不藏,输完回车/切走再藏
+        if ([self.window.firstResponder isKindOfClass:[NSTextView class]]) {
+            NSText *ed = _addressFieldInner.currentEditor;
+            if (self.window.firstResponder == (id)ed) return;
+        }
+        _chromeBar.hidden = YES;
+    }
 }
 
 - (void)attachWebView:(WKWebView *)webView {
