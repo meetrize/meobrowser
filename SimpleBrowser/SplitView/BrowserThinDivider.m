@@ -32,13 +32,19 @@ static const CGFloat kDividerHitWidth = 7.0;
 - (void)mouseExited:(NSEvent *)e { if (!_dragging) { _hovered = NO; [self setNeedsDisplay:YES]; } }
 
 - (void)mouseDown:(NSEvent *)e {
-    _dragging = YES; _dragStartLoc = [self convertPoint:e.locationInWindow fromView:nil];
+    _dragging = YES;
+    // 用 superview(容器)坐标系记起点:本视图拖动时自身 frame 在变,
+    // 若用自身坐标系算增量,分界线移动会污染 delta,形成反馈导致反向/放大。
+    NSView *parent = self.superview ?: self;
+    _dragStartLoc = [parent convertPoint:e.locationInWindow fromView:nil];
     [[NSCursor resizeLeftRightCursor] set];
 }
 
 - (void)mouseDragged:(NSEvent *)e {
-    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    NSView *parent = self.superview ?: self;
+    NSPoint p = [parent convertPoint:e.locationInWindow fromView:nil];
     CGFloat d = self.vertical ? (p.x - _dragStartLoc.x) : (_dragStartLoc.y - p.y);
+    _dragStartLoc = p;
     if (self.dragDeltaHandler) self.dragDeltaHandler(d);
 }
 

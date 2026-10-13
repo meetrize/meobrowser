@@ -93,6 +93,8 @@ static const CGFloat kMinPane = 120.0;
         BOOL isVert = _dividers[tag].vertical;
         NSInteger wi = isVert ? 0 : 1;
         double dw = delta / fmax(totalPx, 1);
+        // weights[1] 即上半高占比 h0(见 frameForPane:rowH[0]=h*(1-h0) 为上半)。
+        // delta 定义往下为正,往下拖上半变大,故直接加,无需取负。
         double nv = fmin(fmax(((NSNumber *)w[wi]).doubleValue + dw, 0.15), 0.85);
         w[wi] = @(nv);
         _weights = [w copy];

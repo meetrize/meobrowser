@@ -61,8 +61,9 @@
         CGFloat w = NSWidth(bounds), h = NSHeight(bounds);
         CGFloat x0 = NSMinX(bounds), y0 = NSMinY(bounds);
         // AppKit origin bottom-left; index 0=top-left,1=top-right,2=bottom-left,3=bottom-right
+        // h0 = 上半高度占比;分界线 y = minY + h*(1-h0),与 layout 中 divider 摆位一致
         CGFloat colW[2] = { w * w0, w * (1 - w0) };
-        CGFloat rowH[2] = { h * (1 - h0), h * h0 };
+        CGFloat rowH[2] = { h * h0, h * (1 - h0) };
         NSInteger col = index % 2, row = index / 2; // row0=top
         CGFloat x = x0 + (col == 0 ? 0 : colW[0]);
         CGFloat y = y0 + (row == 0 ? rowH[1] : 0);
