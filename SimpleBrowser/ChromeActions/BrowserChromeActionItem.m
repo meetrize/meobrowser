@@ -23,6 +23,7 @@ NSString * const BrowserChromeActionShareID = @"share";
 NSString * const BrowserChromeActionScreenshotID = @"screenshot";
 NSString * const BrowserChromeActionExtensionID = @"extension";
 NSString * const BrowserChromeActionPageScraperID = @"pageScraper";
+NSString * const BrowserChromeActionPaneSyncID = @"paneSync";
 
 NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
 
@@ -196,6 +197,12 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                onSymbolName:nil
                                     toolTip:@"页面爬虫"
                                   onToolTip:nil
+                                    toggles:YES],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionPaneSyncID
+                                 symbolName:@"arrow.left.and.right"
+                               onSymbolName:@"arrow.left.and.right"
+                                    toolTip:@"同步输入"
+                                  onToolTip:@"退出同步输入"
                                     toggles:YES],
     ];
 }

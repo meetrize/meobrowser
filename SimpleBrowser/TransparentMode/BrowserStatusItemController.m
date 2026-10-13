@@ -7,6 +7,7 @@
 @property (nonatomic, strong, nullable) NSStatusItem *statusItem;
 @property (nonatomic, strong, nullable) NSMenuItem *toggleTransparentItem;
 @property (nonatomic, strong, nullable) NSMenuItem *toggleAfkItem;
+@property (nonatomic, strong, nullable) NSMenuItem *forceReloadItem;
 @property (nonatomic, assign) BOOL installed;
 @end
 
@@ -48,6 +49,13 @@
     toggleAfk.target = self;
     self.toggleAfkItem = toggleAfk;
     [menu addItem:toggleAfk];
+
+    NSMenuItem *forceReload = [[NSMenuItem alloc] initWithTitle:@"强制刷新"
+                                                         action:@selector(forceReloadPageFromStatusItem:)
+                                                  keyEquivalent:@""];
+    forceReload.target = self;
+    self.forceReloadItem = forceReload;
+    [menu addItem:forceReload];
 
     [menu addItem:[NSMenuItem separatorItem]];
 
@@ -112,6 +120,8 @@
     self.toggleAfkItem.title = afkOn ? @"退出摸鱼模式" : @"进入摸鱼模式";
     self.toggleAfkItem.state = afkOn ? NSControlStateValueOn : NSControlStateValueOff;
     self.toggleAfkItem.enabled = hasWindow;
+
+    self.forceReloadItem.enabled = hasWindow;
 }
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
@@ -136,6 +146,15 @@
         return;
     }
     [wc toggleAfkMode:sender];
+    [self refreshMenuAppearance];
+}
+
+- (void)forceReloadPageFromStatusItem:(id)sender {
+    BrowserWindowController *wc = [self targetBrowserWindowController];
+    if (!wc) {
+        return;
+    }
+    [wc hardReloadPage:sender];
     [self refreshMenuAppearance];
 }
 

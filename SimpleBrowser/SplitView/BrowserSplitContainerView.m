@@ -1,0 +1,209 @@
+#import "BrowserSplitContainerView.h"
+#import "BrowserPaneView.h"
+#import <WebKit/WebKit.h>
+#import "BrowserThinDivider.h"
+
+static const CGFloat kMinPane = 120.0;
+
+@implementation BrowserSplitContainerView {
+    NSMutableArray<BrowserPaneView *> *_panes;
+    NSMutableArray<BrowserThinDivider *> *_dividers;
+    void (^_pendingActiveHandler)(NSInteger);
+}
+
+- (instancetype)initWithFrame:(NSRect)f {
+    self = [super initWithFrame:f];
+    if (self) {
+        _layoutID = BrowserSplitLayoutSingle;
+        _weights = [BrowserSplitLayout defaultWeightsForLayout:_layoutID];
+        _panes = [NSMutableArray array];
+        _dividers = [NSMutableArray array];
+        _activePaneIndex = 0;
+        [self applyLayout:_layoutID weights:_weights urls:nil];
+    }
+    return self;
+}
+
+- (NSArray<BrowserPaneView *> *)panes { return [_panes copy]; }
+
+- (void)applyLayout:(BrowserSplitLayoutID)layout weights:(NSArray<NSNumber *> *)weights urls:(NSArray *)urls {
+    _layoutID = layout;
+    NSArray *w = weights.count ? weights : [BrowserSplitLayout defaultWeightsForLayout:layout];
+    _weights = [w copy];
+    for (NSView *v in [_panes arrayByAddingObjectsFromArray:_dividers]) [v removeFromSuperview];
+    [_panes removeAllObjects]; [_dividers removeAllObjects];
+    NSInteger n = [BrowserSplitLayout paneCountForLayout:layout];
+    for (NSInteger i = 0; i < n; i++) {
+        BrowserPaneView *p = [[BrowserPaneView alloc] initWithIndex:i];
+        // 手工 layout:用 autoresizing,初始 frame 给真实值,避免零尺寸导致内部约束被系统打断
+        p.translatesAutoresizingMaskIntoConstraints = YES;
+        p.autoresizingMask = NSViewNotSizable;
+        p.frame = [BrowserSplitLayout frameForPaneAtIndex:i ofLayout:layout weights:_weights inBounds:self.bounds];
+        p.active = (i == _activePaneIndex);
+        // click-to-focus 由 BrowserPaneView.mouseDown 直接处理(手势会吞地址栏点击,导致无法输入)
+        p.becameActiveHandler = nil;
+        if (_pendingActiveHandler) p.becameActiveHandler = _pendingActiveHandler;
+        [self addSubview:p];
+        [_panes addObject:p];
+        id u = (i < urls.count) ? urls[i] : nil;
+        NSURL *url = [u isKindOfClass:[NSURL class]] ? u : nil;
+        [p setPlaceholderURL:url];
+    }
+    // divider 数量:线性布局 n-1;quad 1竖+1横(简化:只支持整体比例2个weights);nine 2+2(简化同理)
+    NSInteger divCount = 0;
+    BOOL vertical = YES;
+    if (layout == BrowserSplitLayoutLR || layout == BrowserSplitLayoutUD ||
+        layout == BrowserSplitLayoutLCR || layout == BrowserSplitLayoutUMD) {
+        divCount = n - 1; vertical = [BrowserSplitLayout isHorizontalSplit:layout];
+    } else if (layout == BrowserSplitLayoutQuad) { divCount = 2; }
+    else if (layout == BrowserSplitLayoutNine) { divCount = 4; }
+    for (NSInteger i = 0; i < divCount; i++) {
+        BrowserThinDivider *d = [[BrowserThinDivider alloc] initWithFrame:NSZeroRect];
+        d.translatesAutoresizingMaskIntoConstraints = YES;
+        if (layout == BrowserSplitLayoutQuad) d.vertical = (i == 0);
+        else if (layout == BrowserSplitLayoutNine) d.vertical = (i < 2);
+        else d.vertical = vertical;
+        NSInteger tag = i;
+        __weak typeof(self) weak = self;
+        d.dragDeltaHandler = ^(CGFloat delta) { [weak handleDividerDrag:tag delta:delta]; };
+        d.dragDidEndHandler = ^{ if (weak.weightsDidChangeHandler) weak.weightsDidChangeHandler(weak.weights); };
+        [self addSubview:d];
+        [_dividers addObject:d];
+    }
+    [self setNeedsLayout:YES];
+}
+
+// click-to-focus 已移入 BrowserPaneView.mouseDown(见该文件)。
+
+- (void)focusPaneAtIndex:(NSInteger)index {
+    _activePaneIndex = index;
+    for (BrowserPaneView *p in _panes) {
+        // setActive 只改边框;用 setActiveAndReveal 让自动隐藏模式同步显隐地址栏
+        if ([p respondsToSelector:@selector(setActiveAndReveal:)]) [p setActiveAndReveal:(p.paneIndex == index)];
+        else p.active = (p.paneIndex == index);
+    }
+}
+
+- (void)handleDividerDrag:(NSInteger)tag delta:(CGFloat)delta {
+    NSMutableArray<NSNumber *> *w = [_weights mutableCopy];
+    CGFloat totalPx = self.verticalSplit ? NSWidth(self.bounds) : NSHeight(self.bounds);
+    // quad/nine 简化:weights[0]=横向比例,weights[1]=纵向比例
+    if (_layoutID == BrowserSplitLayoutQuad || _layoutID == BrowserSplitLayoutNine) {
+        if (w.count < 2) w = [@[@0.5, @0.5] mutableCopy];
+        BOOL isVert = _dividers[tag].vertical;
+        NSInteger wi = isVert ? 0 : 1;
+        double dw = delta / fmax(totalPx, 1);
+        double nv = fmin(fmax(((NSNumber *)w[wi]).doubleValue + dw, 0.15), 0.85);
+        w[wi] = @(nv);
+        _weights = [w copy];
+        [self setNeedsLayout:YES];
+        return;
+    }
+    if (totalPx <= 0 || w.count < 2) return;
+    NSInteger left = tag, right = tag + 1;
+    if (right >= w.count) return;
+    double total = 0; for (NSNumber *n in w) total += n.doubleValue;
+    double dw = delta / totalPx * total;
+    // 最小 120pt 约束
+    double leftPx = ((NSNumber *)w[left]).doubleValue / total * totalPx + dw * totalPx / total * 0 + delta;
+    double rightPx = ((NSNumber *)w[right]).doubleValue / total * totalPx - delta;
+    // NOTE: 简化按像素钳制
+    if (leftPx < kMinPane || rightPx < kMinPane) return;
+    double lv = ((NSNumber *)w[left]).doubleValue + dw, rv = ((NSNumber *)w[right]).doubleValue - dw;
+    if (lv <= 0.05 || rv <= 0.05) return;
+    w[left] = @(lv); w[right] = @(rv);
+    _weights = [w copy];
+    [self setNeedsLayout:YES];
+}
+
+- (void)bindWebViewsWithConfiguration:(WKWebViewConfiguration *)config
+                   navigationDelegate:(id<WKNavigationDelegate>)navDelegate
+                           uiDelegate:(id<WKUIDelegate>)uiDelegate
+                      openURLHandler:(void (^)(NSInteger, NSURL *))handler
+                     activeHandler:(void (^)(NSInteger))activeHandler {
+    for (BrowserPaneView *pane in _panes) {
+        if (!pane.webView) {
+            WKWebView *wv = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
+            wv.navigationDelegate = navDelegate;
+            wv.UIDelegate = uiDelegate;
+            wv.allowsBackForwardNavigationGestures = YES;
+            [pane attachWebView:wv];
+        }
+        pane.openURLHandler = handler;
+        pane.becameActiveHandler = activeHandler;
+    }
+    _pendingActiveHandler = [activeHandler copy];
+    return;
+}
+
+- (void)loadURLs:(NSArray *)urls {
+    for (NSInteger i = 0; i < _panes.count; i++) {
+        id u = (i < urls.count) ? urls[i] : nil;
+        NSURL *url = [u isKindOfClass:[NSURL class]] ? u : nil;
+        if (url) [_panes[i] loadURL:url];
+    }
+}
+- (void)setChromeMode:(NSInteger)mode forPane:(NSInteger)paneIndex {
+    for (BrowserPaneView *pane in _panes) {
+        if (paneIndex < 0 || pane.paneIndex == paneIndex) pane.chromeMode = (int)mode;
+    }
+}
+- (BOOL)verticalSplit {
+    if (_layoutID == BrowserSplitLayoutLR || _layoutID == BrowserSplitLayoutLCR) return YES;
+    return NO;
+}
+
+- (void)layout {
+    [super layout];
+    NSRect b = self.bounds;
+    NSInteger n = _panes.count;
+    for (NSInteger i = 0; i < n; i++) {
+        _panes[i].frame = [BrowserSplitLayout frameForPaneAtIndex:i ofLayout:_layoutID weights:_weights inBounds:b];
+    }
+    // divider 摆位:取相邻 pane 边界中线,hit 宽 7
+    for (BrowserThinDivider *d in _dividers) {
+        NSInteger tag = [_dividers indexOfObject:d];
+        if (_layoutID == BrowserSplitLayoutQuad) {
+            if (d.vertical) {
+                CGFloat x = NSMinX(b) + NSWidth(b) * ( _weights.count > 0 ? _weights[0].doubleValue : 0.5);
+                d.frame = NSMakeRect(x - 3.5, NSMinY(b), 7, NSHeight(b));
+            } else {
+                CGFloat y = NSMinY(b) + NSHeight(b) * (1 - (_weights.count > 1 ? _weights[1].doubleValue : 0.5));
+                // NOTE: quad weights[1] 为上半高?Layout中 h0=weights[1]为上半?保持一致:上半 h0
+                // frameForPane 用 h0 作上半高,下半分界 y = minY + h*(1-h0)
+                d.frame = NSMakeRect(NSMinX(b), y - 3.5, NSWidth(b), 7);
+            }
+            continue;
+        }
+        if (_layoutID == BrowserSplitLayoutNine) {
+            // 简化:weights[0]=列宽比例,weights[1]=行高比例
+            double cw = _weights.count > 0 ? _weights[0].doubleValue : 1.0/3;
+            double ch = _weights.count > 1 ? _weights[1].doubleValue : 1.0/3;
+            if (d.vertical) {
+                NSInteger col = (tag == 0) ? 0 : 1;
+                CGFloat x = NSMinX(b) + NSWidth(b) * cw * (col + 1);
+                d.frame = NSMakeRect(x - 3.5, NSMinY(b), 7, NSHeight(b));
+            } else {
+                NSInteger row = (tag == 2) ? 0 : 1; // 上分界/下分界
+                CGFloat h = NSHeight(b);
+                CGFloat y = (row == 0) ? NSMinY(b) + h * (1 - ch) : NSMinY(b) + h * (1 - 2 * ch);
+                d.frame = NSMakeRect(NSMinX(b), y - 3.5, NSWidth(b), 7);
+            }
+            continue;
+        }
+        BOOL vert = d.vertical;
+        // 线性:前 tag+1 个 pane 累计占比
+        double total = 0; for (NSNumber *x in _weights) total += x.doubleValue;
+        double acc = 0; for (NSInteger i = 0; i <= tag && i < _weights.count; i++) acc += _weights[i].doubleValue;
+        double frac = total > 0 ? acc / total : 0;
+        if (vert) {
+            CGFloat x = NSMinX(b) + NSWidth(b) * frac;
+            d.frame = NSMakeRect(x - 3.5, NSMinY(b), 7, NSHeight(b));
+        } else {
+            CGFloat y = NSMinY(b) + NSHeight(b) * (1 - frac);
+            d.frame = NSMakeRect(NSMinX(b), y - 3.5, NSWidth(b), 7);
+        }
+    }
+}
+
+@end

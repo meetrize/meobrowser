@@ -207,6 +207,49 @@
             notificationInbox.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
             notificationInbox.target = nil;
 
+            [viewMenu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *splitRoot = [[NSMenuItem alloc] initWithTitle:@"分栏" action:nil keyEquivalent:@""];
+            NSMenu *splitMenu = [[NSMenu alloc] initWithTitle:@"分栏"];
+            NSArray *layouts = @[
+                @[@"单栏", @"splitLayoutSingle:", @""],
+                @[@"左右双栏", @"splitLayoutLR:", @""],
+                @[@"上下双栏", @"splitLayoutUD:", @""],
+                @[@"左中右三栏", @"splitLayoutLCR:", @""],
+                @[@"上中下三栏", @"splitLayoutUMD:", @""],
+                @[@"四方格", @"splitLayoutQuad:", @""],
+                @[@"九宫格", @"splitLayoutNine:", @""],
+            ];
+            for (NSArray *e in layouts) {
+                NSMenuItem *it = [splitMenu addItemWithTitle:e[0] action:NSSelectorFromString(e[1]) keyEquivalent:e[2]];
+                it.target = nil;
+            }
+            [splitMenu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *fn = [splitMenu addItemWithTitle:@"聚焦下一栏" action:@selector(splitFocusNext:) keyEquivalent:@"]"];
+            fn.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+            fn.target = nil;
+            [splitMenu addItem:[NSMenuItem separatorItem]];
+            NSArray *chromes = @[
+                @[@"地址栏:总是显示", @"splitChromeAlways:"],
+                @[@"地址栏:自动隐藏", @"splitChromeAutohide:"],
+                @[@"地址栏:隐藏", @"splitChromeHidden:"],
+            ];
+            for (NSArray *e in chromes) {
+                NSMenuItem *it = [splitMenu addItemWithTitle:e[0] action:NSSelectorFromString(e[1]) keyEquivalent:@""];
+                it.target = nil;
+            }
+            [splitMenu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *saveP = [splitMenu addItemWithTitle:@"保存当前为预设…" action:@selector(splitSaveCurrentAsPreset:) keyEquivalent:@""];
+            saveP.target = nil;
+            NSMenuItem *delP = [splitMenu addItemWithTitle:@"删除预设…" action:@selector(splitDeletePreset:) keyEquivalent:@""];
+            [splitMenu addItem:[NSMenuItem separatorItem]];
+            NSMenuItem *syncT = [splitMenu addItemWithTitle:@"同步输入开/关" action:@selector(togglePaneSync:) keyEquivalent:@""];
+            syncT.target = nil;
+            delP.target = nil;
+            // 预设动态项由 BrowserWindowController 在菜单打开时重建(tag 9000+)
+            splitRoot.submenu = splitMenu;
+
+            [viewMenu addItem:splitRoot];
+
             NSMenuItem *pagePack = [viewMenu addItemWithTitle:@"页面插件"
                                                        action:@selector(togglePagePackSidebar:)
                                                 keyEquivalent:@"p"];

@@ -56,6 +56,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)toggleAlwaysOnTop:(nullable id)sender;
 - (void)toggleTransparentMode:(nullable id)sender;
 - (void)toggleAfkMode:(nullable id)sender;
+- (void)reloadPage:(nullable id)sender;
+- (void)hardReloadPage:(nullable id)sender;
 - (void)togglePresentationFullscreen:(nullable id)sender;
 - (void)focusAddressBar:(nullable id)sender;
 @property (nonatomic, assign, getter=isCompactModeEnabled) BOOL compactModeEnabled;
@@ -64,6 +66,26 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, getter=isAfkModeEnabled) BOOL afkModeEnabled;
 @property (nonatomic, assign, getter=isPresentationFullscreenActive, readonly) BOOL presentationFullscreenActive;
 @property (nonatomic, assign) BrowserWindowLayoutMode windowLayoutMode;
+
+/// 分栏脚手架(MW1): Single 时隐藏,零回归;非 Single 显示占位 panes。
+- (void)setSplitLayout:(NSInteger)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls;
+- (void)focusSplitPaneAtIndex:(NSInteger)index;
+- (void)setSplitLayout:(NSInteger)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(NSArray *)reuse;
+- (void)splitLayoutSingle:(nullable id)s;
+- (void)splitLayoutLR:(nullable id)s;
+- (void)splitLayoutUD:(nullable id)s;
+- (void)splitLayoutLCR:(nullable id)s;
+- (void)splitLayoutUMD:(nullable id)s;
+- (void)splitLayoutQuad:(nullable id)s;
+- (void)splitLayoutNine:(nullable id)s;
+- (void)splitFocusNext:(nullable id)s;
+- (void)splitChromeAlways:(nullable id)s;
+- (void)splitChromeAutohide:(nullable id)s;
+- (void)splitChromeHidden:(nullable id)s;
+- (void)splitSaveCurrentAsPreset:(nullable id)s;
+- (void)splitDeletePreset:(nullable id)s;
+- (void)splitLoadPreset:(nullable id)s;
+- (void)togglePaneSync:(nullable id)s;
 
 /// 透明模式右键拖窗进行中时抑制 WebKit 上下文菜单。
 - (BOOL)shouldSuppressContextMenuForTransparentRightDrag;

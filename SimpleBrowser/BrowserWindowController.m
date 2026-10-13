@@ -23,6 +23,13 @@
 #import "BrowserAutoScrollController.h"
 #import "BrowserAutoScrollPreferences.h"
 #import "BrowserWindowLayoutPresetStore.h"
+#import <objc/runtime.h>
+#import "BrowserSplitLayout.h"
+#import "BrowserSplitContainerView.h"
+#import "BrowserPaneView.h"
+#import "BrowserSplitPresetStore.h"
+#import "BrowserPaneSyncCoordinator.h"
+#import "BrowserTransientToast.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -1237,6 +1244,27 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self.rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
     ]];
 
+    if ([[[NSProcessInfo processInfo] arguments] containsObject:@"-MeoSplitTest"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // 走菜单同款入口,复现用户路径
+            [self splitLayoutLR:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                BrowserSplitContainerView *cc = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+                NSLog(@"[SplitDiag] container=%@ hidden=%d frame=%@ subviews=%lu", cc, cc.hidden,
+                    NSStringFromRect(cc.frame), (unsigned long)cc.subviews.count);
+                for (NSView *v in cc.subviews) NSLog(@"[SplitDiag] child %@ frame=%@", [v className], NSStringFromRect(v.frame));
+                NSLog(@"[SplitDiag] toolbarHidden=%d addrRowHidden=%d navHidden=%d toolbarFrame=%@ contentFrame=%@",
+                    self.toolbar.hidden, self.addressBarRow.hidden, self.navButtons.hidden,
+                    NSStringFromRect(self.toolbar.frame), NSStringFromRect(self.contentContainer.frame));
+                NSLog(@"[SplitDiag] selectedTab=%@ isNTP=%d url=%@", self.tabController.selectedTab.tabID,
+                    self.tabController.selectedTab.isNewTabPage, self.tabController.selectedTab.currentOrRestorableURL);
+                NSLog(@"[SplitDiag] snapshots=%@", [self splitSnapshotsByTabID]);
+                NSLog(@"[SplitDiag] zorder(front=last): %@", [self.contentContainer.subviews valueForKey:@"className"]);
+                NSLog(@"[SplitDiag] mainWV hidden=%d superview=%@", self.tabController.selectedTab.webView.hidden,
+                    NSStringFromClass([self.tabController.selectedTab.webView.superview class]));
+            });
+        });
+    }
     [self.findBarController installInContentContainer:self.contentContainer];
     [self.tabOverviewController installInContentContainer:self.contentContainer];
     [[CallAlertBannerController sharedController] installInContentContainer:self.contentContainer
@@ -1340,6 +1368,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(togglePagePackSidebar:)];
     [self wireChromeButton:BrowserChromeActionPageScraperID action:@selector(togglePageScraperSidebar:)];
+    [self wireChromeButton:BrowserChromeActionPaneSyncID action:@selector(togglePaneSync:)];
 }
 
 - (void)wireChromeButton:(NSString *)itemID action:(SEL)action {
@@ -1401,6 +1430,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:self.compactModeEnabled forItemID:BrowserChromeActionCompactModeID];
     [self.chromeActionsView setOn:self.alwaysOnTopEnabled forItemID:BrowserChromeActionAlwaysOnTopID];
     [self.chromeActionsView setOn:self.autoScrollController.enabled forItemID:BrowserChromeActionAutoScrollID];
+    { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator));
+      BOOL syncOn = co && (co.isSyncing || co.isPicking);
+      [self.chromeActionsView setOn:syncOn forItemID:BrowserChromeActionPaneSyncID]; }
 
     BOOL isSmall = (self.windowLayoutMode == BrowserWindowLayoutModeSmall);
     [self.chromeActionsView setOn:isSmall forItemID:BrowserChromeActionWindowLayoutID];
@@ -1655,6 +1687,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     (void)sender;
     self.autoScrollController.enabled = !self.autoScrollController.enabled;
     [self.chromeActionsView setOn:self.autoScrollController.enabled forItemID:BrowserChromeActionAutoScrollID];
+    { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator));
+      BOOL syncOn = co && (co.isSyncing || co.isPicking);
+      [self.chromeActionsView setOn:syncOn forItemID:BrowserChromeActionPaneSyncID]; }
 }
 
 - (void)openAutoScrollSpeedSettings:(id)sender {
@@ -2008,6 +2043,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self pinWebViewLayoutInSuperview:webView];
     [self.contentContainer layoutSubtreeIfNeeded];
     [self.window.contentView layoutSubtreeIfNeeded];
+    [self bringSplitContainerToFrontIfNeeded];
 }
 
 - (void)presentationFullscreenRestoreChromeAfterExit {
@@ -2349,6 +2385,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         showToolbar = chromeRevealed;
     }
 
+    if ([self isSplitActive]) {
+        showToolbar = NO;
+    }
     [self setStandardWindowButtonsHidden:!showTabStrip];
 
     if (transparent && self.transparentChromeStableLayoutActive) {
@@ -3515,6 +3554,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self pinWebViewLayoutInSuperview:webView];
     [self applyTransparentAppearanceIfNeededForWebView:webView];
     [self observeFullscreenStateForSelectedTab];
+    [self bringSplitContainerToFrontIfNeeded];
 }
 
 - (void)applyTransparentAppearanceIfNeededForWebView:(WKWebView *)webView {
@@ -3724,6 +3764,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL selectionChanged = selectedID != nil
         && ![selectedID isEqual:self.lastSelectedTabIDForAddressFocus];
     self.lastSelectedTabIDForAddressFocus = selectedID;
+    [self syncSplitContainerToSelectedTab];
     if (selectionChanged && selectedTab.isNewTabPage) {
         [self focusAddressBarForNewTabPage];
     }
@@ -3964,6 +4005,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                            !self.tabController.selectedTab.isNewTabPage) {
                     [self.contentContainer addSubview:webView];
                     [self pinWebViewLayoutInSuperview:webView];
+                    [self bringSplitContainerToFrontIfNeeded];
                 }
                 break;
         }
@@ -7290,6 +7332,568 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     (void)frame;
     [self handleGeolocationPermissionForOrigin:origin decisionHandler:decisionHandler];
 }
+
+
+#pragma mark - Split View (MW1 scaffold)
+- (BrowserSplitContainerView *)ensureSplitContainer {
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (!c) {
+        c = [[BrowserSplitContainerView alloc] initWithFrame:NSZeroRect];
+        c.translatesAutoresizingMaskIntoConstraints = NO;
+        c.hidden = YES;
+        [self.contentContainer addSubview:c];
+        [NSLayoutConstraint activateConstraints:@[
+            [c.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
+            [c.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
+            [c.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
+            [c.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+        ]];
+        __weak typeof(self) weak = self;
+        c.weightsDidChangeHandler = ^(NSArray<NSNumber *> *w) {
+            (void)w; [weak persistTabSession];
+        };
+        objc_setAssociatedObject(self, @selector(ensureSplitContainer), c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildSplitPresetMenu:) name:NSMenuDidBeginTrackingNotification object:nil];
+    }
+    return c;
+}
+#pragma mark - Split View per-tab (分栏跟标签,不跟窗口)
+- (NSMutableDictionary *)splitSnapshotsByTabID {
+    NSMutableDictionary *d = objc_getAssociatedObject(self, @selector(splitSnapshotsByTabID));
+    if (!d) {
+        d = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(self, @selector(splitSnapshotsByTabID), d, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return d;
+}
+/// 当前容器状态快照(含各栏 URL),用于切走标签时存档
+- (nullable NSDictionary *)snapshotOfSplitContainer:(BrowserSplitContainerView *)c {
+    if (c.hidden) return nil;
+    NSMutableArray *urls = [NSMutableArray array];
+    for (BrowserPaneView *pane in c.panes) {
+        NSString *u = pane.webView.URL.absoluteString ?: pane.addressField.stringValue ?: @"";
+        [urls addObject:u];
+    }
+    NSMutableArray *wvs = [NSMutableArray array];
+    for (BrowserPaneView *pane in c.panes) [wvs addObject:pane.webView ?: [NSNull null]];
+    NSInteger chrome = 1;
+    if (c.panes.count > 0) chrome = ((BrowserPaneView *)c.panes[0]).chromeMode;
+    return @{@"layout": @(c.layoutID), @"weights": (c.weights ?: @[]), @"urls": urls, @"chrome": @(chrome), @"webviews": wvs};
+}
+/// 切标签时调用:存档旧标签分栏,恢复新标签分栏(无存档=单栏)
+- (void)syncSplitContainerToSelectedTab {
+    BrowserTab *selected = self.tabController.selectedTab;
+    if (!selected) return;
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    NSUUID *prev = objc_getAssociatedObject(self, @selector(syncSplitContainerToSelectedTab));
+    if (prev && ![prev isEqual:selected.tabID] && c && !c.hidden) {
+        NSDictionary *snap = [self snapshotOfSplitContainer:c];
+        if (snap) [self splitSnapshotsByTabID][prev] = snap;
+    }
+    // 清理已关闭标签的存档
+    {
+        NSMutableSet *live = [NSMutableSet set];
+        for (BrowserTab *t in self.tabController.tabs) [live addObject:t.tabID];
+        NSMutableDictionary *store = [self splitSnapshotsByTabID];
+        for (NSUUID *key in [store.allKeys copy]) {
+            if (![live containsObject:key]) [store removeObjectForKey:key];
+        }
+    }
+    BOOL tabChanged = (prev == nil) || ![prev isEqual:selected.tabID];
+    objc_setAssociatedObject(self, @selector(syncSplitContainerToSelectedTab), selected.tabID, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSDictionary *snap = [self splitSnapshotsByTabID][selected.tabID];
+    // 同标签 refresh(页面加载进度等也会频繁触发):只确认前置+工具栏,不重建、不重载
+    if (!tabChanged) {
+        if (c && !c.hidden && snap) {
+            [self updateGlobalBarsForSplitActive:YES];
+            [self bringSplitContainerToFrontIfNeeded];
+        } else if (!c || c.hidden) {
+            [self updateGlobalBarsForSplitActive:NO];
+        } else {
+            // 有容器无快照(菜单刚建好、记账在 setSplitLayout 里已完成,此处 snap 应有;兜底隐藏防串扰)
+            c.hidden = YES;
+            [self updateGlobalBarsForSplitActive:NO];
+        }
+        return;
+    }
+    if (!snap) {
+        // 切到单栏标签:藏容器、恢复全局栏、把该标签自己的主 webView 挂回
+        if (c) c.hidden = YES;
+        [self updateGlobalBarsForSplitActive:NO];
+        if (selected.webView && selected.webView.superview != self.contentContainer
+            && ![self webViewIsInElementFullscreen:selected.webView]) {
+            [self attachWebViewForTab:selected];
+            selected.webView.hidden = NO;
+        }
+        return;
+    }
+    [self applySplitSnapshot:snap toNewTab:NO];
+}
+/// 快照应用到当前标签(记账到该标签)
+- (void)applySplitSnapshot:(NSDictionary *)snap toNewTab:(BOOL)toNewTab {
+    (void)toNewTab;
+    BrowserSplitLayoutID layout = (BrowserSplitLayoutID)[snap[@"layout"] integerValue];
+    NSArray *weights = snap[@"weights"];
+    NSMutableArray *urlObjs = [NSMutableArray array];
+    for (id u in (NSArray *)snap[@"urls"]) {
+        NSURL *url = ([u isKindOfClass:[NSString class]] && ((NSString *)u).length) ? [NSURL URLWithString:u] : nil;
+        [urlObjs addObject:url ?: [NSNull null]];
+    }
+    NSArray *cachedWVs = snap[@"webviews"];
+    NSInteger wantN = [BrowserSplitLayout paneCountForLayout:layout];
+    NSMutableArray *reuse = nil;
+    if ([cachedWVs isKindOfClass:[NSArray class]] && (NSInteger)cachedWVs.count == wantN) {
+        reuse = [NSMutableArray array];
+        for (id w in cachedWVs) [reuse addObject:([w isKindOfClass:[WKWebView class]] ? w : [NSNull null])];
+    }
+    if (reuse) {
+        [self setSplitLayout:layout weights:weights urls:nil reuseWebViews:reuse];
+    } else {
+        [self setSplitLayout:layout weights:weights urls:urlObjs];
+    }
+    [[self ensureSplitContainer] setChromeMode:[snap[@"chrome"] integerValue] forPane:-1];
+}
+- (BOOL)isSplitActive {
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    return c != nil && !c.hidden;
+}
+/// 主标签 webView 的挂载(addSubview)会盖到分栏容器上面:每次挂完都把分栏顶回最前,并把主 webView 藏到后面
+ - (void)bringSplitContainerToFrontIfNeeded {
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (!c || c.hidden) return;
+    [self.contentContainer addSubview:c positioned:NSWindowAbove relativeTo:nil];
+    // 只离屏选中标签自己的主 webView(分栏容器只属于当前标签);不碰全屏
+    BrowserTab *t = self.tabController.selectedTab;
+    if (t && t.webView && t.webView.superview == self.contentContainer
+        && ![self webViewIsInElementFullscreen:t.webView]) {
+        [t.webView removeFromSuperview];
+    }
+    // 其它标签的 webView 若还挂着,一律离屏(它们属于 refresh 过程中被 attach 的残留,不该可见)
+    for (BrowserTab *ot in self.tabController.tabs) {
+        if (ot != t && ot.webView && ot.webView.superview == self.contentContainer) {
+            [ot.webView removeFromSuperview];
+        }
+    }
+}
+- (void)updateGlobalBarsForSplitActive:(BOOL)splitActive {
+    // 分栏标签:全局工具栏整体收起(只留各栏顶部地址栏);单栏标签:恢复原样
+    // 注意:只藏子视图会留 8pt 空条,所以整个 toolbar 一起藏
+    self.addressBarRow.hidden = splitActive;
+    self.navButtons.hidden = splitActive;
+    self.toolbar.hidden = splitActive;
+}
+- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    BrowserTab *selected = self.tabController.selectedTab;
+    if (layout == BrowserSplitLayoutSingle) {
+        // 退出同步(布局变化使指纹失效)
+        { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator)); if (co && (co.isSyncing || co.isPicking)) [self stopPaneSync]; }
+        c.hidden = YES;
+        if (selected) [[self splitSnapshotsByTabID] removeObjectForKey:selected.tabID];
+        [self updateGlobalBarsForSplitActive:NO];
+        // 主 webView 之前已离屏,切回单栏要挂回来
+        if (selected && selected.webView && ![self webViewIsInElementFullscreen:selected.webView]) {
+            [self attachWebViewForTab:selected];
+            selected.webView.hidden = NO;
+        }
+        return;
+    }
+    // 开分栏:若未指定 URL,首栏沿用当前标签已打开的网页(新标签则全空栏)
+    NSMutableArray *effURLs = urls ? [urls mutableCopy] : [NSMutableArray array];
+    {
+        BOOL allEmpty = YES;
+        for (id e in effURLs) { if ([e isKindOfClass:[NSURL class]]) { allEmpty = NO; break; } }
+        if (allEmpty && selected && !selected.isNewTabPage) {
+            NSURL *cur = [selected currentOrRestorableURL];
+            if (cur) {
+                if (effURLs.count == 0) [effURLs addObject:cur];
+                else effURLs[0] = cur;
+            }
+        }
+    }
+    if (layout == BrowserSplitLayoutNine) {
+        NSAlert *g = [[NSAlert alloc] init];
+        g.messageText = @"九宫格将同时加载9个页面,内存占用较高";
+        g.informativeText = @"建议关闭不用的栏,或先保存预设。继续吗?";
+        [g addButtonWithTitle:@"继续"];
+        [g addButtonWithTitle:@"取消"];
+        if ([g runModal] != NSAlertFirstButtonReturn) return;
+    }
+    // 退出同步(布局变化使指纹失效)
+    { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator)); if (co.isSyncing || co.isPicking) [self stopPaneSync]; }
+    [self ensureSyncToolbarButton];
+    c.hidden = NO;
+    [self updateGlobalBarsForSplitActive:YES];
+    if (selected) {
+        // 记账到当前标签:切走再切回可恢复(含 weights/urls/chrome,URL 在切走时刷新)
+        NSMutableArray *urlStrs = [NSMutableArray array];
+        for (id e in effURLs) [urlStrs addObject:[e isKindOfClass:[NSURL class]] ? ((NSURL *)e).absoluteString : @""];
+        NSInteger chrome = 1;
+        if (c.panes.count > 0) chrome = ((BrowserPaneView *)c.panes[0]).chromeMode;
+        [self splitSnapshotsByTabID][selected.tabID] =
+            @{@"layout": @(layout), @"weights": (weights ?: [BrowserSplitLayout defaultWeightsForLayout:layout]),
+              @"urls": urlStrs, @"chrome": @(chrome)};
+    }
+    [c applyLayout:layout weights:weights urls:effURLs];
+    __weak typeof(self) weak = self;
+    [c bindWebViewsWithConfiguration:self.webViewConfiguration
+                  navigationDelegate:self
+                          uiDelegate:self
+                     openURLHandler:^(NSInteger idx, NSURL *url) {
+                         __strong typeof(weak) strong = weak;
+                         [strong splitPaneLoadURL:url atIndex:idx];
+                     }
+                    activeHandler:^(NSInteger idx) {
+                         __strong typeof(weak) strong = weak;
+                         [strong focusSplitPaneAtIndex:idx];
+                     }];
+    for (BrowserPaneView *pane in c.panes) { if (pane.webView) [self ensureSyncScriptForWebView:pane.webView]; }
+    [c loadURLs:effURLs];
+    [c focusPaneAtIndex:0];
+    [self bringSplitContainerToFrontIfNeeded];
+}
+- (void)focusSplitPaneAtIndex:(NSInteger)index { [[self ensureSplitContainer] focusPaneAtIndex:index]; }
+
+
+
+#pragma mark - Pane Sync (MW4)
+- (BrowserPaneSyncCoordinator *)paneSyncCoordinator {
+    BrowserPaneSyncCoordinator *c = objc_getAssociatedObject(self, @selector(paneSyncCoordinator));
+    if (!c) {
+        c = [[BrowserPaneSyncCoordinator alloc] init];
+        __weak typeof(self) weak = self;
+        c.statusDidChangeHandler = ^(NSString *status) {
+            __strong typeof(weak) strong = weak;
+            [strong showSyncStatusToast:status];
+        };
+        objc_setAssociatedObject(self, @selector(paneSyncCoordinator), c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return c;
+}
+- (NSString *)splitSyncJSSource {
+    static NSString *src = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *p = [[NSBundle mainBundle] pathForResource:@"split-sync" ofType:@"js"];
+        src = p ? [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil] : @"";
+    });
+    return src ?: @"";
+}
+- (void)ensureSyncScriptForWebView:(WKWebView *)wv {
+    NSString *src = [self splitSyncJSSource];
+    if (src.length == 0) return;
+    WKUserContentController *cc = wv.configuration.userContentController;
+    // 避免重复注入:检查已有 script 数量有限,直接追加(幂等由 JS 内 guard 保证)
+    WKUserScript *script = [[WKUserScript alloc] initWithSource:src injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
+    [cc addUserScript:script];
+    @try { [cc addScriptMessageHandler:self name:@"meoSync"]; } @catch (NSException *e) {}
+}
+- (void)showSyncStatusToast:(NSString *)status {
+    if (self.window) {
+        BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+        if (co.isSyncing || co.isPicking) [BrowserTransientToast showPersistentMessage:status inWindow:self.window];
+        else [BrowserTransientToast dismissPersistentMessageInWindow:self.window];
+    }
+    // 同步栏角标
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (c && ![c isHidden]) {
+        BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+        for (BrowserPaneView *pane in c.panes) {
+            NSString *badge = nil;
+            if (co.isPicking || co.isSyncing) {
+                BOOL paired = co.fingerprints[@(pane.paneIndex)] != nil;
+                badge = [NSString stringWithFormat:@"%@ %ld", paired ? @"●" : @"○", (long)pane.paneIndex + 1];
+                if (co.isSyncing && pane.paneIndex == co.masterPaneIndex) badge = [@"主 " stringByAppendingString:badge];
+            }
+            [pane setSyncBadge:badge];
+        }
+    }
+    [self updateSyncToolbarButton];
+}
+- (void)togglePaneSync:(id)s {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    if (c.hidden || c.panes.count < 2) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"需先进入分栏(至少2栏)再开启同步输入";
+        [a runModal];
+        return;
+    }
+    [self ensureSyncToolbarButton];
+    [self installSyncEscMonitor];
+    BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+    if (co.isSyncing || co.isPicking) { [self stopPaneSync]; return; }
+    [co startPickWithPaneCount:c.panes.count];
+    // 每栏注入脚本并进入拾取
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView) {
+            [self ensureSyncScriptForWebView:pane.webView];
+            [pane.webView evaluateJavaScript:@"window.meoSyncPickOnce().then(function(fp){ try{window.webkit.messageHandlers.meoSync.postMessage({type:'paired',fp:fp});}catch(e){} })" completionHandler:nil];
+        }
+    }
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = @"同步拾取中:请依次点击每一栏要同步的输入框";
+    a.informativeText = @"点完所有栏后自动开始同步;Esc 或再次点击菜单可退出。密码/验证码框会被自动排除。";
+    [a addButtonWithTitle:@"知道了"];
+    [a runModal];
+}
+- (void)installSyncEscMonitor {
+    if (objc_getAssociatedObject(self, @selector(installSyncEscMonitor))) return;
+    id mon = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *e) {
+        if (e.keyCode == 53) { // Esc
+            BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+            if (co.isSyncing || co.isPicking) { [self stopPaneSync]; return nil; }
+        }
+        return e;
+    }];
+    objc_setAssociatedObject(self, @selector(installSyncEscMonitor), mon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+- (NSButton *)syncToolbarButton {
+    return objc_getAssociatedObject(self, @selector(syncToolbarButton));
+}
+- (void)ensureSyncToolbarButton {
+    // MW5-rework:同步按钮已移到标签栏右侧图标工具栏(chromeActionsView),此处仅刷新其状态
+    [self updateSyncToolbarButton];
+}
+- (void)updateSyncToolbarButton {
+    [self syncChromeActionButtonStates];
+}
+- (void)stopPaneSync {
+    BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView) [pane.webView evaluateJavaScript:@"window.__meoSyncMaster=false" completionHandler:nil];
+    }
+    [co cancelAll];
+    if (self.window) [BrowserTransientToast dismissPersistentMessageInWindow:self.window];
+    BrowserSplitContainerView *cc = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (cc) { for (BrowserPaneView *pane in cc.panes) [pane setSyncBadge:nil]; }
+    [self updateSyncToolbarButton];
+}
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    // 复用:先透传给已有 handler(若有同名冲突则忽略)。仅处理 meoSync。
+    if (![message.name isEqualToString:@"meoSync"]) {
+        // 尝试转发给 loginAssist 等已注册的同名?本项目各模块用各自 name,不冲突,直接返回
+        return;
+    }
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
+    // 找到发送页所在栏
+    NSInteger fromPane = -1;
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView == message.webView) { fromPane = pane.paneIndex; break; }
+    }
+    if (fromPane < 0) return;
+    NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : @{};
+    NSString *type = body[@"type"];
+    if ([type isEqualToString:@"paired"]) {
+        NSDictionary *fp = body[@"fp"];
+        if ([fp isKindOfClass:[NSDictionary class]]) [co setFingerprint:fp forPane:fromPane];
+        if (co.statusDidChangeHandler) co.statusDidChangeHandler([co statusTextForPaneCount:c.panes.count]);
+        if ([co allPairedForPaneCount:c.panes.count]) {
+            [co beginSyncWithMaster:fromPane];
+            // 主栏标记,其余栏写入指纹
+            for (BrowserPaneView *pane in c.panes) {
+                if (!pane.webView) continue;
+                if (pane.paneIndex == fromPane) {
+                    [pane.webView evaluateJavaScript:@"window.__meoSyncMaster=true" completionHandler:nil];
+                } else {
+                    NSDictionary *sfp = co.fingerprints[@(pane.paneIndex)];
+                    NSData *d = [NSJSONSerialization dataWithJSONObject:sfp ?: @{} options:0 error:nil];
+                    NSString *json = [[NSString alloc] initWithData:d ?: [NSData data] encoding:NSUTF8StringEncoding] ?: @"{}";
+                    NSString *js = [NSString stringWithFormat:@"window.meoSyncSetFingerprint(%@)", json];
+                    [pane.webView evaluateJavaScript:js completionHandler:nil];
+                }
+            }
+            if (co.statusDidChangeHandler) co.statusDidChangeHandler([co statusTextForPaneCount:c.panes.count]);
+        }
+        return;
+    }
+    if (!co.isSyncing) return;
+    if ([type isEqualToString:@"input"]) {
+        if (fromPane != co.masterPaneIndex) return; // 仅主栏广播
+        NSString *value = [body[@"value"] isKindOfClass:[NSString class]] ? body[@"value"] : @"";
+        for (BrowserPaneView *pane in c.panes) {
+            if (pane.paneIndex == fromPane || !pane.webView) continue;
+            NSString *js = [co applyValueJS:value fp:co.fingerprints[@(pane.paneIndex)]];
+            [pane.webView evaluateJavaScript:js completionHandler:nil];
+        }
+        return;
+    }
+    if ([type isEqualToString:@"submit"]) {
+        if (fromPane != co.masterPaneIndex) return;
+        for (BrowserPaneView *pane in c.panes) {
+            if (pane.paneIndex == fromPane || !pane.webView) continue;
+            [pane.webView evaluateJavaScript:[co submitJS:co.fingerprints[@(pane.paneIndex)]] completionHandler:nil];
+        }
+        return;
+    }
+}
+
+#pragma mark - Split Presets (MW3)
+- (NSDictionary *)currentSplitSnapshot {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    NSMutableArray *urls = [NSMutableArray array];
+    for (BrowserPaneView *pane in c.panes) {
+        NSString *u = pane.webView.URL.absoluteString ?: pane.addressField.stringValue ?: @"";
+        [urls addObject:u];
+    }
+    NSMutableArray *wvs = [NSMutableArray array];
+    for (BrowserPaneView *pane in c.panes) [wvs addObject:pane.webView ?: [NSNull null]];
+    NSInteger chrome = 1;
+    if (c.panes.count > 0) chrome = ((BrowserPaneView *)c.panes[0]).chromeMode;
+    return @{@"layout": @(c.layoutID), @"weights": (c.weights ?: @[]), @"urls": urls, @"chrome": @(chrome), @"webviews": wvs};
+}
+- (void)splitSaveCurrentAsPreset:(id)s {
+    NSDictionary *snap = [self currentSplitSnapshot];
+    if ([[self ensureSplitContainer] isHidden]) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"当前为单栏,无分栏可保存";
+        [a runModal];
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"保存分栏预设";
+    alert.informativeText = [NSString stringWithFormat:@"布局:%@,共%lu栏", [BrowserSplitLayout nameForLayout:(BrowserSplitLayoutID)[snap[@"layout"] integerValue]], (unsigned long)[(NSArray *)snap[@"urls"] count]];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+    field.placeholderString = @"预设名称";
+    field.stringValue = [NSString stringWithFormat:@"%@ %lu", [BrowserSplitLayout nameForLayout:(BrowserSplitLayoutID)[snap[@"layout"] integerValue]], (unsigned long)([BrowserSplitPresetStore allPresets].count + 1)];
+    alert.accessoryView = field;
+    [alert addButtonWithTitle:@"保存"];
+    [alert addButtonWithTitle:@"取消"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+    NSString *name = [field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSMutableDictionary *preset = [snap mutableCopy];
+    preset[@"name"] = name.length ? name : @"未命名预设";
+    NSString *err = nil;
+    if (![BrowserSplitPresetStore savePreset:preset error:&err]) {
+        NSAlert *e = [[NSAlert alloc] init];
+        e.messageText = err ?: @"保存失败";
+        [e runModal];
+    }
+    [self rebuildSplitPresetMenu:nil];
+}
+- (void)splitDeletePreset:(id)s {
+    NSArray *all = [BrowserSplitPresetStore allPresets];
+    if (all.count == 0) return;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"删除预设";
+    NSPopUpButton *pop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 260, 26) pullsDown:NO];
+    for (NSDictionary *e in all) [pop addItemWithTitle:e[@"name"] ?: @""];
+    alert.accessoryView = pop;
+    [alert addButtonWithTitle:@"删除"];
+    [alert addButtonWithTitle:@"取消"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+    [BrowserSplitPresetStore deletePresetNamed:pop.titleOfSelectedItem];
+    [self rebuildSplitPresetMenu:nil];
+}
+- (void)splitLoadPreset:(id)sender {
+    NSDictionary *preset = nil;
+    if ([sender isKindOfClass:[NSMenuItem class]]) preset = ((NSMenuItem *)sender).representedObject;
+    if (![preset isKindOfClass:[NSDictionary class]]) return;
+    [self applySplitSnapshot:preset toNewTab:NO];
+}
+- (void)rebuildSplitPresetMenu:(NSNotification *)note {
+    NSMenu *main = [NSApp mainMenu];
+    if (!main) return;
+    NSMenu *viewMenu = nil;
+    for (NSMenuItem *mi in main.itemArray) {
+        if ([mi.submenu.title isEqualToString:@"查看"]) { viewMenu = mi.submenu; break; }
+    }
+    if (!viewMenu) return;
+    NSMenu *splitMenu = nil;
+    for (NSMenuItem *mi in viewMenu.itemArray) {
+        if ([mi.title isEqualToString:@"分栏"] && mi.submenu) { splitMenu = mi.submenu; break; }
+    }
+    if (!splitMenu) return;
+    // 清掉旧动态项
+    NSMutableArray *rm = [NSMutableArray array];
+    for (NSMenuItem *mi in splitMenu.itemArray) {
+        if (mi.tag >= 9000) [rm addObject:mi];
+    }
+    for (NSMenuItem *mi in rm) [splitMenu removeItem:mi];
+    NSArray *all = [BrowserSplitPresetStore allPresets];
+    if (all.count == 0) return;
+    NSMenuItem *sep = [NSMenuItem separatorItem];
+    sep.tag = 9000;
+    [splitMenu addItem:sep];
+    NSDictionary *cur = [self currentSplitSnapshot];
+    NSInteger ci = 0;
+    for (NSDictionary *e in all) {
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:[@"预设:" stringByAppendingString:(e[@"name"] ?: @"")] action:@selector(splitLoadPreset:) keyEquivalent:@""];
+        it.target = nil;
+        it.representedObject = e;
+        it.tag = 9001 + ci;
+        // 当前布局打勾
+        if ([e[@"layout"] integerValue] == [cur[@"layout"] integerValue]) it.state = NSControlStateValueOn;
+        [splitMenu addItem:it];
+        ci++;
+    }
+}
+
+- (void)splitPaneLoadURL:(NSURL *)url atIndex:(NSInteger)index {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    if (index < c.panes.count) {
+        id pane = c.panes[index];
+        [pane loadURL:url];
+        [pane updateAddressFieldWithURL:url];
+    }
+}
+// 复用版:panes 建壳后直接挂缓存 webView,不新建不加载(切回分栏标签不重载)
+- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(NSArray *)reuse {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    BrowserTab *selected = self.tabController.selectedTab;
+    { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator)); if (co && (co.isSyncing || co.isPicking)) [self stopPaneSync]; }
+    [self ensureSyncToolbarButton];
+    c.hidden = NO;
+    [self updateGlobalBarsForSplitActive:YES];
+    [c applyLayout:layout weights:weights urls:nil];
+    __weak typeof(self) weak = self;
+    for (NSInteger i = 0; i < c.panes.count; i++) {
+        BrowserPaneView *pane = c.panes[i];
+        id r = (i < reuse.count) ? reuse[i] : nil;
+        WKWebView *wv = [r isKindOfClass:[WKWebView class]] ? r : nil;
+        if (wv) {
+            wv.navigationDelegate = self;
+            wv.UIDelegate = self;
+            [pane attachWebView:wv];
+            [pane updateAddressFieldWithURL:wv.URL];
+            [self ensureSyncScriptForWebView:wv];
+        }
+    }
+    [c bindWebViewsWithConfiguration:self.webViewConfiguration
+                  navigationDelegate:self
+                          uiDelegate:self
+                     openURLHandler:^(NSInteger idx, NSURL *url) {
+                         __strong typeof(weak) strong = weak;
+                         [strong splitPaneLoadURL:url atIndex:idx];
+                     }
+                    activeHandler:^(NSInteger idx) {
+                         __strong typeof(weak) strong = weak;
+                         [strong focusSplitPaneAtIndex:idx];
+                     }];
+    for (BrowserPaneView *pane in c.panes) { if (pane.webView) [self ensureSyncScriptForWebView:pane.webView]; }
+    if (selected) {
+        NSDictionary *snap = [self snapshotOfSplitContainer:c];
+        if (snap) [self splitSnapshotsByTabID][selected.tabID] = snap;
+    }
+    [c focusPaneAtIndex:0];
+    [self bringSplitContainerToFrontIfNeeded];
+}
+- (void)setSplitLayoutTag:(NSInteger)tag { [self setSplitLayout:(BrowserSplitLayoutID)tag weights:nil urls:nil]; }
+- (void)splitLayoutSingle:(id)s { [self setSplitLayout:BrowserSplitLayoutSingle weights:nil urls:nil]; }
+- (void)splitLayoutLR:(id)s { [self setSplitLayout:BrowserSplitLayoutLR weights:nil urls:nil]; }
+- (void)splitLayoutUD:(id)s { [self setSplitLayout:BrowserSplitLayoutUD weights:nil urls:nil]; }
+- (void)splitLayoutLCR:(id)s { [self setSplitLayout:BrowserSplitLayoutLCR weights:nil urls:nil]; }
+- (void)splitLayoutUMD:(id)s { [self setSplitLayout:BrowserSplitLayoutUMD weights:nil urls:nil]; }
+- (void)splitLayoutQuad:(id)s { [self setSplitLayout:BrowserSplitLayoutQuad weights:nil urls:nil]; }
+- (void)splitLayoutNine:(id)s { [self setSplitLayout:BrowserSplitLayoutNine weights:nil urls:nil]; }
+- (void)splitFocusNext:(id)s {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    [c focusPaneAtIndex:(c.panes.count ? (c.activePaneIndex + 1) % c.panes.count : 0)];
+}
+- (void)splitChromeAlways:(id)s { [[self ensureSplitContainer] setChromeMode:0 forPane:-1]; }
+- (void)splitChromeAutohide:(id)s { [[self ensureSplitContainer] setChromeMode:1 forPane:-1]; }
+- (void)splitChromeHidden:(id)s { [[self ensureSplitContainer] setChromeMode:2 forPane:-1]; }
 
 - (void)webView:(WKWebView *)webView
 requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin

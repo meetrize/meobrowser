@@ -24,6 +24,7 @@ static NSString * const kLegacyAddressBarHiddenKey = @"BrowserAddressBarActionHi
         BrowserChromeActionWindowLayoutID,
         BrowserChromeActionExtensionID,
         BrowserChromeActionPageScraperID,
+        BrowserChromeActionPaneSyncID,
     ]];
     [ids addObjectsFromArray:[BrowserChromeActionItem addressBarMigratedActionIDs]];
     return [ids copy];
