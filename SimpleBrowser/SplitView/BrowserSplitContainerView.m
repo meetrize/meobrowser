@@ -9,6 +9,7 @@ static const CGFloat kMinPane = 120.0;
     NSMutableArray<BrowserPaneView *> *_panes;
     NSMutableArray<BrowserThinDivider *> *_dividers;
     void (^_pendingActiveHandler)(NSInteger);
+    BOOL _layoutScheduled;
 }
 
 - (instancetype)initWithFrame:(NSRect)f {
@@ -84,6 +85,16 @@ static const CGFloat kMinPane = 120.0;
     }
 }
 
+// 拖拽节流:一帧最多一次 layout,避免 mouseDragged 高频触发 9 个 webView 全量重排
+- (void)scheduleCoalescedLayout {
+    if (_layoutScheduled) return;
+    _layoutScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_layoutScheduled = NO;
+        [self setNeedsLayout:YES];
+        [self layoutSubtreeIfNeeded];
+    });
+}
 - (void)handleDividerDrag:(NSInteger)tag delta:(CGFloat)delta {
     NSMutableArray<NSNumber *> *w = [_weights mutableCopy];
     CGFloat totalPx = self.verticalSplit ? NSWidth(self.bounds) : NSHeight(self.bounds);
@@ -98,7 +109,7 @@ static const CGFloat kMinPane = 120.0;
         double nv = fmin(fmax(((NSNumber *)w[wi]).doubleValue + dw, 0.15), 0.85);
         w[wi] = @(nv);
         _weights = [w copy];
-        [self setNeedsLayout:YES];
+        [self scheduleCoalescedLayout];
         return;
     }
     if (totalPx <= 0 || w.count < 2) return;
@@ -115,7 +126,7 @@ static const CGFloat kMinPane = 120.0;
     if (lv <= 0.05 || rv <= 0.05) return;
     w[left] = @(lv); w[right] = @(rv);
     _weights = [w copy];
-    [self setNeedsLayout:YES];
+    [self scheduleCoalescedLayout];
 }
 
 - (void)bindWebViewsWithConfiguration:(WKWebViewConfiguration *)config

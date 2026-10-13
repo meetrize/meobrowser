@@ -3677,7 +3677,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             liveCount++;
         }
     }
-    BOOL skipSnapshotForPressure = (liveCount >= 8);
+    BOOL anySplitBG = NO;
+    for (NSUUID *key in [self splitSnapshotsByTabID]) {
+        if (![key isEqual:selectedTab.tabID]) { anySplitBG = YES; break; }
+    }
+    BOOL skipSnapshotForPressure = (liveCount >= 8) || anySplitBG;
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
@@ -7466,6 +7470,10 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     if (prev && ![prev isEqual:selected.tabID] && c && !c.hidden) {
         NSDictionary *snap = [self snapshotOfSplitContainer:c];
         if (snap) [self splitSnapshotsByTabID][prev] = snap;
+        // 后台分栏停画:hidden 不销毁不断网,切回秒开;9栏时前台只画当前标签,GPU/主线程立减
+        for (BrowserPaneView *pane in c.panes) {
+            if (pane.webView) pane.webView.hidden = YES;
+        }
     }
     // 清理已关闭标签的存档
     {
@@ -7479,17 +7487,21 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     BOOL tabChanged = (prev == nil) || ![prev isEqual:selected.tabID];
     objc_setAssociatedObject(self, @selector(syncSplitContainerToSelectedTab), selected.tabID, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSDictionary *snap = [self splitSnapshotsByTabID][selected.tabID];
-    // 同标签 refresh(页面加载进度等也会频繁触发):只确认前置+工具栏,不重建、不重载
+    // 同标签 refresh(页面加载进度等也会频繁触发):只做最轻量的前置确认,不碰 toolbar(它触发布局)
     if (!tabChanged) {
         if (c && !c.hidden && snap) {
-            [self updateGlobalBarsForSplitActive:YES];
-            [self bringSplitContainerToFrontIfNeeded];
-        } else if (!c || c.hidden) {
-            [self updateGlobalBarsForSplitActive:NO];
-        } else {
-            // 有容器无快照(菜单刚建好、记账在 setSplitLayout 里已完成,此处 snap 应有;兜底隐藏防串扰)
+            NSArray *subs = self.contentContainer.subviews;
+            if (subs.lastObject != c) [self.contentContainer addSubview:c positioned:NSWindowAbove relativeTo:nil];
+        } else if ((!c || c.hidden) && (self.toolbar.hidden || self.addressBarRow.hidden)) {
+            // 之前是分栏现已隐藏? Polyte:只在确实藏错时恢复,避免每次 refresh 都动 toolbar
+            self.toolbar.hidden = NO;
+            self.addressBarRow.hidden = NO;
+            self.navButtons.hidden = NO;
+        } else if (c && !c.hidden && !snap) {
             c.hidden = YES;
-            [self updateGlobalBarsForSplitActive:NO];
+            self.toolbar.hidden = NO;
+            self.addressBarRow.hidden = NO;
+            self.navButtons.hidden = NO;
         }
         return;
     }
@@ -7538,7 +7550,13 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
  - (void)bringSplitContainerToFrontIfNeeded {
     BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
     if (!c || c.hidden) return;
-    [self.contentContainer addSubview:c positioned:NSWindowAbove relativeTo:nil];
+    // 已在最前就跳过:addSubview 会触发整树 layout,9栏×webView 时一次几百ms
+    NSArray *subs = self.contentContainer.subviews;
+    if (subs.lastObject == c) {
+        // 仍需确认主 webView 离屏(轻量,不触发布局)
+    } else {
+        [self.contentContainer addSubview:c positioned:NSWindowAbove relativeTo:nil];
+    }
     // 只离屏选中标签自己的主 webView(分栏容器只属于当前标签);不碰全屏
     BrowserTab *t = self.tabController.selectedTab;
     if (t && t.webView && t.webView.superview == self.contentContainer
@@ -8123,6 +8141,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         if (wv) {
             wv.navigationDelegate = self;
             wv.UIDelegate = self;
+            wv.hidden = NO;
             [pane attachWebView:wv];
             [pane updateAddressFieldWithURL:wv.URL];
             [self ensureSyncScriptForWebView:wv];
