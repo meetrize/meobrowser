@@ -4910,6 +4910,14 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 - (void)reloadPage:(id)sender {
     (void)sender;
+    if ([self isSplitActive]) {
+        // 分栏:刷新所有栏(正在加载的栏改为停止,与单栏的 toggle 语义一致)
+        for (WKWebView *wv in [self splitPaneWebViews]) {
+            if (wv.isLoading) [self stopLoadingInWebView:wv];
+            else [wv reload];
+        }
+        return;
+    }
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab.pendingHardRecover) {
         [self reloadAfterHardRecoverForTab:tab];
@@ -4941,6 +4949,14 @@ didRequestTransferTabID:(NSUUID *)tabID
 
 - (void)hardReloadPage:(id)sender {
     (void)sender;
+    if ([self isSplitActive]) {
+        // 分栏:所有栏忽略缓存硬刷新
+        for (WKWebView *wv in [self splitPaneWebViews]) {
+            if (wv.isLoading) [self stopLoadingInWebView:wv];
+            else [wv reloadFromOrigin];
+        }
+        return;
+    }
     BrowserTab *tab = self.tabController.selectedTab;
     if (tab.pendingHardRecover) {
         [self reloadAfterHardRecoverForTab:tab];
@@ -5127,6 +5143,8 @@ didRequestTransferTabID:(NSUUID *)tabID
 }
 
 - (BOOL)canReloadCurrentPage {
+    // 分栏激活时:任一栏有页面即可刷新(刷新/强制刷新对所有栏生效);分栏多开在新标签页,主 tab 常为 NTP
+    if ([self isSplitActive]) return [self splitPaneWebViews].count > 0;
     BrowserTab *tab = self.tabController.selectedTab;
     return tab != nil && (tab.isHibernated || tab.pendingHardRecover || !tab.isNewTabPage);
 }
