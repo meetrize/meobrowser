@@ -3318,6 +3318,22 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.tabController restoreTabsFromEntries:tabs
                                  selectedIndex:selectedIndex
                                    pinnedCount:pinnedCount];
+    // 按下标恢复各标签的分栏快照(含布局/权重/各栏URL/显示名);选中项立刻应用,其余切过去时懒恢复
+    NSArray *splits = session[BrowserWindowSessionSplitKey];
+    if ([splits isKindOfClass:[NSArray class]]) {
+        NSArray *restored = self.tabController.tabs;
+        for (NSUInteger i = 0; i < splits.count && i < restored.count; i++) {
+            NSDictionary *sp = splits[i];
+            if (![sp isKindOfClass:[NSDictionary class]]) continue;
+            BrowserTab *t = restored[i];
+            NSMutableDictionary *m = [sp mutableCopy];
+            [m removeObjectForKey:@"webviews"];
+            [self splitSnapshotsByTabID][t.tabID] = [m copy];
+            if ([sp[@"name"] isKindOfClass:[NSString class]]) [self splitNameByTabID][t.tabID] = sp[@"name"];
+        }
+        [self syncSplitContainerToSelectedTab];
+        [self updateTabStripDisplay];
+    }
     [self applyChromeStateFromSessionDictionary:session];
 }
 
@@ -3364,12 +3380,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             [entries addObject:BrowserTabSessionNewTabMarker];
         }
     }
+    // 与 entries 等长的分栏快照(无分栏=@"" 占位,NSNull 非 plist 类型不可进 UserDefaults),重启后按下标恢复布局与各栏网页
+    NSMutableArray *splits = [[NSMutableArray alloc] init];
+    for (BrowserTab *tab in self.tabController.tabs) {
+        NSDictionary *sp = [self plistSafeSplitSnapshotForTab:tab];
+        [splits addObject:sp ?: @""];
+    }
 
     if (entries.count == 0) {
         NSMutableDictionary *empty = [@{
             BrowserWindowSessionTabsKey: @[BrowserTabSessionNewTabMarker],
             BrowserWindowSessionSelectedIndexKey: @0,
             BrowserWindowSessionPinnedCountKey: @0,
+            BrowserWindowSessionSplitKey: @[@""],
         } mutableCopy];
         if (self.compactModeEnabled) {
             empty[BrowserWindowSessionCompactModeKey] = @YES;
@@ -3398,7 +3421,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     session[BrowserWindowSessionTabsKey] = [entries copy];
     session[BrowserWindowSessionSelectedIndexKey] = @(selectedIndex);
     session[BrowserWindowSessionPinnedCountKey] = @(self.tabController.pinnedTabCount);
-    if (self.window) {
+    session[BrowserWindowSessionSplitKey] = [splits copy];    if (self.window) {
         session[BrowserWindowSessionFrameKey] = NSStringFromRect(self.window.frame);
     }
     if (self.compactModeEnabled) {
@@ -7498,6 +7521,30 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     }
     return d;
 }
+/// 会话落盘用快照:只保留 plist 类型(去掉 live webviews),带上分栏显示名
+- (nullable NSDictionary *)plistSafeSplitSnapshotForTab:(BrowserTab *)tab {
+    NSDictionary *snap = nil;
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (tab == self.tabController.selectedTab && c && !c.hidden) {
+        snap = [self snapshotOfSplitContainer:c];
+    } else {
+        snap = [self splitSnapshotsByTabID][tab.tabID];
+    }
+    if (![snap isKindOfClass:[NSDictionary class]]) return nil;
+    if ([snap[@"layout"] integerValue] == BrowserSplitLayoutSingle) return nil;
+    NSMutableDictionary *p = [NSMutableDictionary dictionary];
+    p[@"layout"] = snap[@"layout"] ?: @1;
+    p[@"weights"] = snap[@"weights"] ?: @[];
+    NSMutableArray *urls = [NSMutableArray array];
+    for (id u in (NSArray *)snap[@"urls"]) {
+        if ([u isKindOfClass:[NSString class]]) [urls addObject:u];
+    }
+    p[@"urls"] = urls;
+    p[@"chrome"] = snap[@"chrome"] ?: @1;
+    NSString *name = [self splitNameByTabID][tab.tabID];
+    if ([name isKindOfClass:[NSString class]] && name.length) p[@"name"] = name;
+    return [p copy];
+}
 /// 当前容器状态快照(含各栏 URL),用于切走标签时存档
 - (nullable NSDictionary *)snapshotOfSplitContainer:(BrowserSplitContainerView *)c {
     if (c.hidden) return nil;
@@ -7642,6 +7689,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
             [self attachWebViewForTab:selected];
             selected.webView.hidden = NO;
         }
+        [self schedulePersistTabSession];
         return;
     }
     // 开分栏:若未指定 URL,首栏沿用当前标签已打开的网页(新标签则全空栏)
@@ -7697,6 +7745,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     [c loadURLs:effURLs];
     [c focusPaneAtIndex:0];
     [self bringSplitContainerToFrontIfNeeded];
+    [self schedulePersistTabSession];
 }
 - (void)focusSplitPaneAtIndex:(NSInteger)index { [[self ensureSplitContainer] focusPaneAtIndex:index]; }
 
@@ -8216,6 +8265,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     }
     [c focusPaneAtIndex:0];
     [self bringSplitContainerToFrontIfNeeded];
+    [self schedulePersistTabSession];
 }
 - (void)setSplitLayoutTag:(NSInteger)tag { [self setSplitLayout:(BrowserSplitLayoutID)tag weights:nil urls:nil]; }
 - (void)splitLayoutSingle:(id)s { [self setSplitLayout:BrowserSplitLayoutSingle weights:nil urls:nil]; }

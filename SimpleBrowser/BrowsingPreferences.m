@@ -29,6 +29,7 @@ NSString * const BrowserWindowSessionCompactModeKey = @"compactMode";
 NSString * const BrowserWindowSessionAlwaysOnTopKey = @"alwaysOnTop";
 NSString * const BrowserWindowSessionTransparentModeKey = @"transparentMode";
 NSString * const BrowserWindowSessionAfkModeKey = @"afkMode";
+NSString * const BrowserWindowSessionSplitKey = @"split";
 
 @implementation BrowsingPreferences
 
@@ -180,6 +181,40 @@ NSString * const BrowserWindowSessionAfkModeKey = @"afkMode";
     id afkValue = raw[BrowserWindowSessionAfkModeKey];
     if ([afkValue isKindOfClass:[NSNumber class]] && ((NSNumber *)afkValue).boolValue) {
         session[BrowserWindowSessionAfkModeKey] = @YES;
+    }
+    // 分栏快照:与 tabs 等长的数组,字典逐字段校验,非字典一律转为 @"" 占位
+    id splitsValue = raw[BrowserWindowSessionSplitKey];
+    if ([splitsValue isKindOfClass:[NSArray class]]) {
+        NSMutableArray *cleanSplits = [NSMutableArray array];
+        for (id item in (NSArray *)splitsValue) {
+            NSDictionary *sp = ([item isKindOfClass:[NSDictionary class]] ? item : nil);
+            if (!sp) {
+                [cleanSplits addObject:@""];
+                continue;
+            }
+            NSMutableDictionary *m = [NSMutableDictionary dictionary];
+            m[@"layout"] = ([sp[@"layout"] isKindOfClass:[NSNumber class]] ? sp[@"layout"] : @1);
+            NSMutableArray *w = [NSMutableArray array];
+            if ([sp[@"weights"] isKindOfClass:[NSArray class]]) {
+                for (id n in (NSArray *)sp[@"weights"]) {
+                    if ([n isKindOfClass:[NSNumber class]]) [w addObject:n];
+                }
+            }
+            m[@"weights"] = w;
+            NSMutableArray *u = [NSMutableArray array];
+            if ([sp[@"urls"] isKindOfClass:[NSArray class]]) {
+                for (id s in (NSArray *)sp[@"urls"]) {
+                    if ([s isKindOfClass:[NSString class]]) [u addObject:s];
+                }
+            }
+            m[@"urls"] = u;
+            m[@"chrome"] = ([sp[@"chrome"] isKindOfClass:[NSNumber class]] ? sp[@"chrome"] : @1);
+            if ([sp[@"name"] isKindOfClass:[NSString class]]) m[@"name"] = sp[@"name"];
+            [cleanSplits addObject:[m copy]];
+        }
+        if (cleanSplits.count == entries.count) {
+            session[BrowserWindowSessionSplitKey] = [cleanSplits copy];
+        }
     }
     return [session copy];
 }

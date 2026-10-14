@@ -18,6 +18,7 @@ extern NSString * const BrowserWindowSessionCompactModeKey;
 extern NSString * const BrowserWindowSessionAlwaysOnTopKey;
 extern NSString * const BrowserWindowSessionTransparentModeKey;
 extern NSString * const BrowserWindowSessionAfkModeKey;
+extern NSString * const BrowserWindowSessionSplitKey;
 
 @interface BrowsingPreferences : NSObject
 
