@@ -3775,7 +3775,11 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         } else {
             // 热路径：WebView 仍在，同步挂回即可。
             [selectedTab wakeFromHibernationIfNeeded];
-            [self attachWebViewForTab:selectedTab];
+            if ([self splitSnapshotsByTabID][selectedTab.tabID]) {
+                // 分栏标签主 webView 注定被 bringSplit 离屏:跳过挂载省两次整树 layout(容器由 syncSplit 接管)
+            } else {
+                [self attachWebViewForTab:selectedTab];
+            }
             [selectedTab loadPendingRestorableURLIfNeeded];
             if (selectedTab.webView != nil) {
                 selectedTab.webView.hidden = NO;
@@ -7521,6 +7525,44 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     }
     return d;
 }
+// 分栏快照 LRU(新→旧):后台分栏的 live webView 只保留最近 1 份,再旧的只留 URL(切回重载),防 webView 无限堆积拖慢整机
+- (NSMutableArray *)splitSnapshotLRU {
+    NSMutableArray *a = objc_getAssociatedObject(self, @selector(splitSnapshotLRU));
+    if (!a) {
+        a = [NSMutableArray array];
+        objc_setAssociatedObject(self, @selector(splitSnapshotLRU), a, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return a;
+}
+- (void)noteSplitSnapshotStoredForTabID:(NSUUID *)tabID {
+    if (!tabID) return;
+    NSMutableArray *lru = [self splitSnapshotLRU];
+    [lru removeObject:tabID];
+    [lru addObject:tabID];
+    NSMutableDictionary *store = [self splitSnapshotsByTabID];
+    while (lru.count > 1) {
+        NSUUID *oldest = lru[0];
+        [lru removeObjectAtIndex:0];
+        NSDictionary *sp = store[oldest];
+        if (![sp isKindOfClass:[NSDictionary class]]) continue;
+        NSArray *wvs = sp[@"webviews"];
+        BOOL hasLive = NO;
+        if ([wvs isKindOfClass:[NSArray class]]) {
+            for (id w in wvs) {
+                if ([w isKindOfClass:[WKWebView class]]) {
+                    hasLive = YES;
+                    [(WKWebView *)w stopLoading];
+                    [(WKWebView *)w removeFromSuperview];
+                }
+            }
+        }
+        if (hasLive) {
+            NSMutableDictionary *m = [sp mutableCopy];
+            [m removeObjectForKey:@"webviews"];
+            store[oldest] = [m copy];
+        }
+    }
+}
 /// 会话落盘用快照:只保留 plist 类型(去掉 live webviews),带上分栏显示名
 - (nullable NSDictionary *)plistSafeSplitSnapshotForTab:(BrowserTab *)tab {
     NSDictionary *snap = nil;
@@ -7568,6 +7610,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     if (prev && ![prev isEqual:selected.tabID] && c && !c.hidden) {
         NSDictionary *snap = [self snapshotOfSplitContainer:c];
         if (snap) [self splitSnapshotsByTabID][prev] = snap;
+        [self noteSplitSnapshotStoredForTabID:prev];
         // 后台分栏停画:hidden 不销毁不断网,切回秒开;9栏时前台只画当前标签,GPU/主线程立减
         for (BrowserPaneView *pane in c.panes) {
             if (pane.webView) pane.webView.hidden = YES;
@@ -7581,6 +7624,9 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         for (NSUUID *key in [store.allKeys copy]) {
             if (![live containsObject:key]) [store removeObjectForKey:key];
         }
+        [[self splitSnapshotLRU] filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *b) {
+            return [live containsObject:obj];
+        }]];
     }
     BOOL tabChanged = (prev == nil) || ![prev isEqual:selected.tabID];
     objc_setAssociatedObject(self, @selector(syncSplitContainerToSelectedTab), selected.tabID, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -7619,6 +7665,8 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 /// 快照应用到当前标签(记账到该标签)
 - (void)applySplitSnapshot:(NSDictionary *)snap toNewTab:(BOOL)toNewTab {
     (void)toNewTab;
+    // 该标签 webView 进容器变前台,不再占后台 LRU 名额
+    [[self splitSnapshotLRU] removeObject:self.tabController.selectedTab.tabID];
     BrowserSplitLayoutID layout = (BrowserSplitLayoutID)[snap[@"layout"] integerValue];
     NSArray *weights = snap[@"weights"];
     NSMutableArray *urlObjs = [NSMutableArray array];
@@ -7634,7 +7682,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         for (id w in cachedWVs) [reuse addObject:([w isKindOfClass:[WKWebView class]] ? w : [NSNull null])];
     }
     if (reuse) {
-        [self setSplitLayout:layout weights:weights urls:nil reuseWebViews:reuse];
+        [self setSplitLayout:layout weights:weights urls:urlObjs reuseWebViews:reuse];
     } else {
         [self setSplitLayout:layout weights:weights urls:urlObjs];
     }
@@ -7729,18 +7777,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
               @"urls": urlStrs, @"chrome": @(chrome)};
     }
     [c applyLayout:layout weights:weights urls:effURLs];
-    __weak typeof(self) weak = self;
-    [c bindWebViewsWithConfiguration:self.webViewConfiguration
-                  navigationDelegate:self
-                          uiDelegate:self
-                     openURLHandler:^(NSInteger idx, NSURL *url) {
-                         __strong typeof(weak) strong = weak;
-                         [strong splitPaneLoadURL:url atIndex:idx];
-                     }
-                    activeHandler:^(NSInteger idx) {
-                         __strong typeof(weak) strong = weak;
-                         [strong focusSplitPaneAtIndex:idx];
-                     }];
+    [self bindSplitContainerWebViews:c];
     for (BrowserPaneView *pane in c.panes) { if (pane.webView) [self ensureSyncScriptForWebView:pane.webView]; }
     [c loadURLs:effURLs];
     [c focusPaneAtIndex:0];
@@ -8224,6 +8261,21 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         [pane updateAddressFieldWithURL:url];
     }
 }
+// 分栏容器统一接线:补建缺失栏 webView 并挂 openURL/聚焦回调(各 setSplitLayout 共用)
+- (void)bindSplitContainerWebViews:(BrowserSplitContainerView *)c {
+    __weak typeof(self) weak = self;
+    [c bindWebViewsWithConfiguration:self.webViewConfiguration
+                  navigationDelegate:self
+                          uiDelegate:self
+                     openURLHandler:^(NSInteger idx, NSURL *url) {
+                         __strong typeof(weak) strong = weak;
+                         [strong splitPaneLoadURL:url atIndex:idx];
+                     }
+                    activeHandler:^(NSInteger idx) {
+                         __strong typeof(weak) strong = weak;
+                         [strong focusSplitPaneAtIndex:idx];
+                     }];
+}
 // 复用版:panes 建壳后直接挂缓存 webView,不新建不加载(切回分栏标签不重载)
 - (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(NSArray *)reuse {
     BrowserSplitContainerView *c = [self ensureSplitContainer];
@@ -8232,8 +8284,49 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     [self ensureSyncToolbarButton];
     c.hidden = NO;
     [self updateGlobalBarsForSplitActive:YES];
+    NSInteger wantN = [BrowserSplitLayout paneCountForLayout:layout];
+    // 快路径:同布局同栏数(切标签高频路径)→复用现有 pane/分隔线,只换 webView,跳过整树重建(9栏重建可达秒级,正好卡住点击)
+    BOOL fastReuse = (c.layoutID == layout && (NSInteger)c.panes.count == wantN
+                      && [reuse isKindOfClass:[NSArray class]] && (NSInteger)reuse.count == wantN);
+    if (fastReuse) {
+        for (id r in reuse) {
+            if (r != (id)[NSNull null] && ![r isKindOfClass:[WKWebView class]]) { fastReuse = NO; break; }
+        }
+    }
+    NSMutableArray<NSNumber *> *missingPaneIndexes = [NSMutableArray array];
+    if (fastReuse) {
+        for (NSInteger i = 0; i < wantN; i++) {
+            BrowserPaneView *pane = c.panes[i];
+            WKWebView *wv = ([reuse[i] isKindOfClass:[WKWebView class]] ? reuse[i] : nil);
+            if (wv) {
+                if (pane.webView != wv) {
+                    wv.navigationDelegate = self;
+                    wv.UIDelegate = self;
+                    [pane attachWebView:wv];
+                    [pane updateAddressFieldWithURL:wv.URL];
+                    [self ensureSyncScriptForWebView:wv];
+                }
+                wv.hidden = NO;
+            } else {
+                if (pane.webView) [pane detachWebView];
+                [missingPaneIndexes addObject:@(i)];
+            }
+        }
+        [self bindSplitContainerWebViews:c];
+        for (BrowserPaneView *pane in c.panes) { if (pane.webView) [self ensureSyncScriptForWebView:pane.webView]; }
+        // 无缓存的栏按快照 URL 补加载
+        for (NSNumber *n in missingPaneIndexes) {
+            NSInteger i = n.integerValue;
+            if (i < c.panes.count && ((BrowserPaneView *)c.panes[i]).webView) {
+                id u = (i < ((NSArray *)urls).count) ? ((NSArray *)urls)[i] : nil;
+                NSURL *url = ([u isKindOfClass:[NSURL class]] ? u : nil);
+                if (url) [((BrowserPaneView *)c.panes[i]) loadURL:url];
+            }
+        }
+        c.weights = (weights.count ? weights : [BrowserSplitLayout defaultWeightsForLayout:layout]);
+        [c setNeedsLayout:YES];
+    } else {
     [c applyLayout:layout weights:weights urls:nil];
-    __weak typeof(self) weak = self;
     for (NSInteger i = 0; i < c.panes.count; i++) {
         BrowserPaneView *pane = c.panes[i];
         id r = (i < reuse.count) ? reuse[i] : nil;
@@ -8247,18 +8340,9 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
             [self ensureSyncScriptForWebView:wv];
         }
     }
-    [c bindWebViewsWithConfiguration:self.webViewConfiguration
-                  navigationDelegate:self
-                          uiDelegate:self
-                     openURLHandler:^(NSInteger idx, NSURL *url) {
-                         __strong typeof(weak) strong = weak;
-                         [strong splitPaneLoadURL:url atIndex:idx];
-                     }
-                    activeHandler:^(NSInteger idx) {
-                         __strong typeof(weak) strong = weak;
-                         [strong focusSplitPaneAtIndex:idx];
-                     }];
+    [self bindSplitContainerWebViews:c];
     for (BrowserPaneView *pane in c.panes) { if (pane.webView) [self ensureSyncScriptForWebView:pane.webView]; }
+    }
     if (selected) {
         NSDictionary *snap = [self snapshotOfSplitContainer:c];
         if (snap) [self splitSnapshotsByTabID][selected.tabID] = snap;

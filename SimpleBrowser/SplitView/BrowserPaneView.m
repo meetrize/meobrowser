@@ -193,6 +193,11 @@
     }
 }
 
+- (void)detachWebView {
+    [_webView removeFromSuperview];
+    _webView = nil;
+}
+
 - (void)attachWebView:(WKWebView *)webView {
     if (_webView == webView) return;
     [_webView removeFromSuperview];

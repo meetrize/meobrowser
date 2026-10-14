@@ -21,6 +21,7 @@ typedef NS_ENUM(NSInteger, BrowserPaneChromeMode) {
 @property (nonatomic, copy, nullable) void (^becameActiveHandler)(NSInteger paneIndex);
 - (instancetype)initWithIndex:(NSInteger)index;
 - (void)attachWebView:(WKWebView *)webView;
+- (void)detachWebView;
 - (void)setPlaceholderURL:(nullable NSURL *)url;
 - (void)loadURL:(NSURL *)url;
 - (void)updateAddressFieldWithURL:(nullable NSURL *)url;
