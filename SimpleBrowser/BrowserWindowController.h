@@ -86,6 +86,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)splitDeletePreset:(nullable id)s;
 - (void)splitLoadPreset:(nullable id)s;
 - (void)togglePaneSync:(nullable id)s;
+- (BOOL)isSplitActive;
+- (void)splitZoomInPane:(nullable id)s;
+- (void)splitZoomOutPane:(nullable id)s;
+- (void)splitZoomResetPane:(nullable id)s;
 
 /// 透明模式右键拖窗进行中时抑制 WebKit 上下文菜单。
 - (BOOL)shouldSuppressContextMenuForTransparentRightDrag;

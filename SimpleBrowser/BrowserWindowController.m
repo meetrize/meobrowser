@@ -5280,35 +5280,83 @@ static const CGFloat kBrowserPageZoomStep = 1.1;
 static const CGFloat kBrowserPageZoomMin = 0.5;
 static const CGFloat kBrowserPageZoomMax = 3.0;
 
+ - (NSArray<WKWebView *> *)splitPaneWebViews {
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (!c || c.hidden) return @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView) [out addObject:pane.webView];
+    }
+    return out;
+}
 - (BOOL)canZoomCurrentPage {
+    // 分栏激活时:任一栏有页面即可缩放(主菜单对所有栏生效)
+    if ([self isSplitActive]) return [self splitPaneWebViews].count > 0;
     BrowserTab *tab = self.tabController.selectedTab;
     return tab != nil && !tab.isNewTabPage && self.webView != nil;
 }
-
 - (void)zoomIn:(id)sender {
     (void)sender;
     if (![self canZoomCurrentPage]) {
+        return;
+    }
+    if ([self isSplitActive]) {
+        for (WKWebView *wv in [self splitPaneWebViews]) {
+            wv.pageZoom = MIN(wv.pageZoom * kBrowserPageZoomStep, kBrowserPageZoomMax);
+        }
         return;
     }
     CGFloat next = self.webView.pageZoom * kBrowserPageZoomStep;
     self.webView.pageZoom = MIN(next, kBrowserPageZoomMax);
 }
 
-- (void)zoomOut:(id)sender {
+ - (void)zoomOut:(id)sender {
     (void)sender;
     if (![self canZoomCurrentPage]) {
+        return;
+    }
+    if ([self isSplitActive]) {
+        for (WKWebView *wv in [self splitPaneWebViews]) {
+            wv.pageZoom = MAX(wv.pageZoom / kBrowserPageZoomStep, kBrowserPageZoomMin);
+        }
         return;
     }
     CGFloat next = self.webView.pageZoom / kBrowserPageZoomStep;
     self.webView.pageZoom = MAX(next, kBrowserPageZoomMin);
 }
 
-- (void)actualSize:(id)sender {
+ - (void)actualSize:(id)sender {
     (void)sender;
     if (![self canZoomCurrentPage]) {
         return;
     }
+    if ([self isSplitActive]) {
+        for (WKWebView *wv in [self splitPaneWebViews]) wv.pageZoom = 1.0;
+        return;
+    }
     self.webView.pageZoom = 1.0;
+}
+// 右键本栏缩放:sender 为 NSMenuItem,representedObject 即该栏 webView
+- (WKWebView *)paneWebViewFromSender:(id)sender {
+    id obj = [sender isKindOfClass:[NSMenuItem class]] ? ((NSMenuItem *)sender).representedObject : nil;
+    WKWebView *wv = [obj isKindOfClass:[WKWebView class]] ? obj : nil;
+    if (wv) return wv;
+    // 兜底:活动栏
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    if (c && !c.hidden && c.activePaneIndex < c.panes.count) return ((BrowserPaneView *)c.panes[c.activePaneIndex]).webView;
+    return nil;
+}
+- (void)splitZoomInPane:(id)sender {
+    WKWebView *wv = [self paneWebViewFromSender:sender];
+    if (wv) wv.pageZoom = MIN(wv.pageZoom * kBrowserPageZoomStep, kBrowserPageZoomMax);
+}
+- (void)splitZoomOutPane:(id)sender {
+    WKWebView *wv = [self paneWebViewFromSender:sender];
+    if (wv) wv.pageZoom = MAX(wv.pageZoom / kBrowserPageZoomStep, kBrowserPageZoomMin);
+}
+- (void)splitZoomResetPane:(id)sender {
+    WKWebView *wv = [self paneWebViewFromSender:sender];
+    if (wv) wv.pageZoom = 1.0;
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
@@ -5369,7 +5417,10 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     }
     if (action == @selector(zoomIn:) ||
         action == @selector(zoomOut:) ||
-        action == @selector(actualSize:)) {
+        action == @selector(actualSize:) ||
+        action == @selector(splitZoomInPane:) ||
+        action == @selector(splitZoomOutPane:) ||
+        action == @selector(splitZoomResetPane:)) {
         return [self canZoomCurrentPage];
     }
     if (action == @selector(showFindBar:) ||

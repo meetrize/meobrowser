@@ -483,6 +483,23 @@ static NSString *MeoScrollToFragmentJS(void) {
     viewSource.target = self;
     [menu addItem:viewSource];
 
+    // 分栏 pane 内:追加本栏缩放(走 responder 链到 WindowController,用 representedObject 传 webView)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]] && [(BrowserWindowController *)wc isSplitActive]) {
+        [menu addItem:[NSMenuItem separatorItem]];
+        NSArray *zoomDefs = @[
+            @[@"放大本栏", @"splitZoomInPane:"],
+            @[@"缩小本栏", @"splitZoomOutPane:"],
+            @[@"本栏实际大小", @"splitZoomResetPane:"],
+        ];
+        for (NSArray *def in zoomDefs) {
+            NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:def[0] action:NSSelectorFromString(def[1]) keyEquivalent:@""];
+            it.target = nil; // FirstResponder -> BrowserWindowController
+            it.representedObject = self;
+            [menu addItem:it];
+        }
+    }
+
     [MeoContextMenuLocalizer localizeMenu:menu];
 
     // 异步检查右键点是否在 iframe 内，若在则显示「重新载入框架」。
