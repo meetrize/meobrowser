@@ -483,7 +483,8 @@ static NSString *MeoScrollToFragmentJS(void) {
     viewSource.target = self;
     [menu addItem:viewSource];
 
-    // 分栏 pane 内:追加本栏缩放(走 responder 链到 WindowController,用 representedObject 传 webView)
+    // 分栏 pane 内:追加本栏缩放(直接以 WindowController 为 target,用 representedObject 传 webView;
+    // target=nil 走 responder 链在 WKWebView 右键菜单里到不了 WindowController,会导致菜单灰掉/点击无反应)
     id wc = self.window.windowController;
     if ([wc isKindOfClass:[BrowserWindowController class]] && [(BrowserWindowController *)wc isSplitActive]) {
         [menu addItem:[NSMenuItem separatorItem]];
@@ -494,7 +495,7 @@ static NSString *MeoScrollToFragmentJS(void) {
         ];
         for (NSArray *def in zoomDefs) {
             NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:def[0] action:NSSelectorFromString(def[1]) keyEquivalent:@""];
-            it.target = nil; // FirstResponder -> BrowserWindowController
+            it.target = wc;
             it.representedObject = self;
             [menu addItem:it];
         }

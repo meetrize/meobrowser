@@ -1,5 +1,6 @@
 #import "BrowserSplitContainerView.h"
 #import "BrowserPaneView.h"
+#import "BrowserWebView.h"
 #import <WebKit/WebKit.h>
 #import "BrowserThinDivider.h"
 
@@ -10,6 +11,7 @@ static const CGFloat kMinPane = 120.0;
     NSMutableArray<BrowserThinDivider *> *_dividers;
     void (^_pendingActiveHandler)(NSInteger);
     BOOL _layoutScheduled;
+    id _clickToFocusMonitor;
 }
 
 - (instancetype)initWithFrame:(NSRect)f {
@@ -21,8 +23,39 @@ static const CGFloat kMinPane = 120.0;
         _dividers = [NSMutableArray array];
         _activePaneIndex = 0;
         [self applyLayout:_layoutID weights:_weights urls:nil];
+        [self installClickToFocusMonitor];
     }
     return self;
+}
+
+- (void)dealloc {
+    if (_clickToFocusMonitor) {
+        [NSEvent removeMonitor:_clickToFocusMonitor];
+        _clickToFocusMonitor = nil;
+    }
+}
+
+// 点击切聚焦:WKWebView 会吃掉栏内的点击,pane 的 mouseDown 永远收不到,
+// 只能在事件分发前按坐标命中 pane。点分隔线不切换。
+- (void)installClickToFocusMonitor {
+    if (_clickToFocusMonitor) return;
+    __weak typeof(self) weak = self;
+    _clickToFocusMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *event) {
+        __strong typeof(weak) strong = weak;
+        if (strong && !strong.hidden && event.window == strong.window && NSPointInRect([strong convertPoint:event.locationInWindow fromView:nil], strong.bounds)) {
+            NSPoint p = [strong convertPoint:event.locationInWindow fromView:nil];
+            for (BrowserThinDivider *d in strong->_dividers) {
+                if (NSPointInRect(p, d.frame)) return event;
+            }
+            for (BrowserPaneView *pane in strong->_panes) {
+                if (NSPointInRect(p, pane.frame) && pane.paneIndex != strong->_activePaneIndex) {
+                    [strong focusPaneAtIndex:pane.paneIndex];
+                    break;
+                }
+            }
+        }
+        return event;
+    }];
 }
 
 - (NSArray<BrowserPaneView *> *)panes { return [_panes copy]; }
@@ -74,7 +107,7 @@ static const CGFloat kMinPane = 120.0;
     [self setNeedsLayout:YES];
 }
 
-// click-to-focus 已移入 BrowserPaneView.mouseDown(见该文件)。
+// click-to-focus 由 installClickToFocusMonitor 按坐标命中(见该方法)。
 
 - (void)focusPaneAtIndex:(NSInteger)index {
     _activePaneIndex = index;
@@ -136,7 +169,8 @@ static const CGFloat kMinPane = 120.0;
                      activeHandler:(void (^)(NSInteger))activeHandler {
     for (BrowserPaneView *pane in _panes) {
         if (!pane.webView) {
-            WKWebView *wv = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
+            // 用 BrowserWebView(而非原生 WKWebView):分栏右键菜单(本栏缩放/查看源码/重新载入框架等)靠它的 willOpenMenu 注入
+            WKWebView *wv = [[BrowserWebView alloc] initWithFrame:NSZeroRect configuration:config];
             wv.navigationDelegate = navDelegate;
             wv.UIDelegate = uiDelegate;
             wv.allowsBackForwardNavigationGestures = YES;
