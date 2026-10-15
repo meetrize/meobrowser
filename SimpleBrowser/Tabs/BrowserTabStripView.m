@@ -1,4 +1,5 @@
 #import "BrowserTabStripView.h"
+#import <QuartzCore/QuartzCore.h>
 #import "BrowserTab.h"
 #import "BrowserTabItemView.h"
 #import "BrowserTabOverflowMenuRowView.h"
@@ -1263,30 +1264,97 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     }
 
     NSPoint inContent = [self.tabsContentView convertPoint:locationInWindow fromView:nil];
-    CGFloat centerX = inContent.x;
-    NSUInteger target = [self insertionIndexForDraggedItem:item centerX:centerX];
-    if (target == self.draggingPreviewIndex || target == NSNotFound) {
+    CGFloat mouseX = inContent.x;
+    NSUInteger target = [self gapIndexForMouseX:mouseX draggedItem:item];
+    if (target == NSNotFound) {
         return;
     }
-
-    NSUInteger current = [self.tabItems indexOfObject:item];
-    if (current == NSNotFound || current == target) {
-        self.draggingPreviewIndex = target;
+    // 迟滞：只有越过当前空位边界 10pt 才换位，避免在交会处来回跳。
+    if (target == self.draggingPreviewIndex) {
         return;
     }
-
-    [self.tabItems removeObjectAtIndex:current];
-    NSUInteger insertAt = target;
-    if (target > current) {
-        insertAt = MIN(target, self.tabItems.count);
-    } else {
-        insertAt = target;
+    if ([self shouldHoldGapIndex:self.draggingPreviewIndex forMouseX:mouseX draggedItem:item]) {
+        return;
     }
-    insertAt = MIN(insertAt, self.tabItems.count);
-    [self.tabItems insertObject:item atIndex:insertAt];
-    self.draggingPreviewIndex = insertAt;
-
+    self.draggingPreviewIndex = target;
     [self layoutTabsExcludingDraggedItem:item];
+}
+
+/// 鼠标 X → 空位下标：按“去掉被拖项后”的紧凑坐标算边界，空位即鼠标正下方的槽。
+- (NSUInteger)gapIndexForMouseX:(CGFloat)mouseX draggedItem:(BrowserTabItemView *)dragged {
+    BOOL pinned = dragged.tabPinned;
+    NSUInteger actualPinned = 0;
+    for (BrowserTabItemView *candidate in self.tabItems) {
+        if (candidate.tabPinned) {
+            actualPinned++;
+        }
+    }
+    NSUInteger low = pinned ? 0 : actualPinned;
+    NSUInteger high = pinned ? actualPinned : self.tabItems.count;
+    // 紧凑坐标下可插入槽位数
+    NSMutableArray<NSNumber *> *boundaries = [NSMutableArray array];
+    CGFloat x = 0;
+    NSUInteger slot = 0;
+    for (BrowserTabItemView *item in self.tabItems) {
+        if (item == dragged) {
+            continue;
+        }
+        if (slot >= low && slot <= high) {
+            [boundaries addObject:@(x)];
+        }
+        if (!item.hidden) {
+            x += [self layoutWidthForItem:item] + kTabSpacing;
+        }
+        slot++;
+    }
+    [boundaries addObject:@(x)];
+    // boundaries[k] 是第 k 个槽的左边界，槽 k 区间 [b_k, b_{k+1})
+    NSUInteger slots = boundaries.count - 1;
+    for (NSUInteger k = 0; k < slots; k++) {
+        CGFloat left = boundaries[k].doubleValue;
+        CGFloat right = boundaries[k + 1].doubleValue;
+        CGFloat mid = (left + right) * 0.5;
+        // 用中点划分：鼠标在左半落左槽、右半落右槽，保证占位符始终在鼠标下
+        if (mouseX < mid) {
+            return low + k;
+        }
+    }
+    return low + slots - 1;
+}
+
+/// 当前空位保持住：鼠标仍在空位区间 ±10pt 内就不换位。
+- (BOOL)shouldHoldGapIndex:(NSUInteger)gap forMouseX:(CGFloat)mouseX draggedItem:(BrowserTabItemView *)dragged {
+    if (gap == NSNotFound) {
+        return NO;
+    }
+    BOOL pinned = dragged.tabPinned;
+    NSUInteger actualPinned = 0;
+    for (BrowserTabItemView *candidate in self.tabItems) {
+        if (candidate.tabPinned) {
+            actualPinned++;
+        }
+    }
+    NSUInteger low = pinned ? 0 : actualPinned;
+    if (gap < low) {
+        return NO;
+    }
+    CGFloat gapW = [self layoutWidthForItem:dragged];
+    CGFloat x = 0;
+    NSUInteger slot = 0;
+    for (BrowserTabItemView *item in self.tabItems) {
+        if (item == dragged) {
+            continue;
+        }
+        if (slot == gap) {
+            break;
+        }
+        slot++;
+        if (!item.hidden) {
+            x += [self layoutWidthForItem:item] + kTabSpacing;
+        }
+    }
+    // 空位区间 [x, x+gapW]，外扩 10pt 迟滞
+    return mouseX >= x - 10.0 && mouseX <= x + gapW + 10.0;
 }
 
 - (NSUInteger)insertionIndexForDraggedItem:(BrowserTabItemView *)item centerX:(CGFloat)centerX {
@@ -1320,30 +1388,96 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         } else if (candidate != item && !candidate.hidden) {
             x += [self layoutWidthForItem:candidate] + kTabSpacing;
         } else if (candidate == item) {
+            // 预留占位宽度：与 layoutTabsExcluding 保持一致，槽位中心才对得上。
             x += [self layoutWidthForItem:candidate] + kTabSpacing;
+        }
+    }
+    // 拖到末尾：允许落到末端；加 8pt 迟滞避免边界来回跳。
+    {
+        CGFloat endDistance = fabs(x - centerX);
+        if (endDistance + 8.0 < bestDistance) {
+            NSUInteger current = [self.tabItems indexOfObject:item];
+            NSUInteger end = self.tabItems.count > 0 ? self.tabItems.count - 1 : 0;
+            if (current != NSNotFound && current == end) {
+                best = current;
+            } else {
+                best = MIN(high > 0 ? high - 1 : 0, self.tabItems.count > 0 ? self.tabItems.count - 1 : 0);
+            }
         }
     }
     return best;
 }
 
+- (void)layoutItem:(BrowserTabItemView *)item toFrame:(NSRect)frame tabWidth:(CGFloat)tabWidth animated:(BOOL)animated freezeMode:(BOOL)freeze {
+    [item setTabHeight:NSHeight(frame)];
+    if (freeze) {
+        // 拖拽中：直接设 frame，不走 animator、不碰档位约束。
+        // mouseMoved 高频触发时 animator 动画会互相打架，这就是交会处闪动的根因。
+        NSRect cur = item.frame;
+        if (fabs(NSMinX(cur) - NSMinX(frame)) > 0.5 || fabs(NSWidth(cur) - NSWidth(frame)) > 0.5) {
+            [NSAnimationContext beginGrouping];
+            [[NSAnimationContext currentContext] setDuration:0];
+            item.animator.frame = frame;
+            [NSAnimationContext endGrouping];
+            item.frame = frame;
+        }
+        return;
+    }
+    if (animated) {
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0.16;
+            ctx.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+            item.animator.frame = frame;
+        } completionHandler:nil];
+    } else {
+        item.frame = frame;
+    }
+    [item applyAvailableWidth:tabWidth];
+}
+
 - (void)layoutTabsExcludingDraggedItem:(BrowserTabItemView *)dragged {
+    [self layoutTabsExcludingDraggedItem:dragged animated:YES];
+}
+
+- (void)layoutTabsExcludingDraggedItem:(BrowserTabItemView *)dragged animated:(BOOL)animated {
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
+    // 条内拖拽：在 draggingPreviewIndex 处预留等宽空位（鼠标下的占位符），
+    // 数组拖动中不再搬移，只挪 frame，从根上消除交会闪动。
+    CGFloat gapW = [self layoutWidthForItem:dragged];
+    NSUInteger gap = self.draggingPreviewIndex;
+    if (gap == NSNotFound || gap > self.tabItems.count) {
+        gap = [self.tabItems indexOfObject:dragged];
+    }
     CGFloat x = 0;
+    NSUInteger slot = 0;
     for (BrowserTabItemView *item in self.tabItems) {
         if (item == dragged) {
-            x += [self layoutWidthForItem:item] + kTabSpacing;
             continue;
         }
+        if (slot == gap) {
+            x += gapW + kTabSpacing;
+        }
+        slot++;
         if (!item.hidden) {
             CGFloat tabWidth = [self layoutWidthForItem:item];
-            item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
-            [item setTabHeight:tabHeight];
-            [item applyAvailableWidth:tabWidth];
+            NSRect frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            [self layoutItem:item toFrame:frame tabWidth:tabWidth animated:NO freezeMode:YES];
             x += tabWidth + kTabSpacing;
         }
     }
+    if (slot <= gap) {
+        // 落到末尾：末端留空位
+        x += gapW + kTabSpacing;
+    }
+    CGFloat contentW = MAX(x - kTabSpacing, 1);
+    NSRect cf = self.tabsContentView.frame;
+    cf.size.width = MAX(contentW, NSWidth(self.tabsClipView.bounds));
+    CGFloat stripH = 0;
+    [self tabVerticalMetricsWithStripHeight:&stripH topInset:NULL tabHeight:NULL];
+    cf.size.height = stripH;
+    self.tabsContentView.frame = cf;
 }
 
 - (void)layoutTabsCollapsingDraggedItem:(BrowserTabItemView *)dragged {
@@ -1357,9 +1491,12 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         }
         if (!item.hidden) {
             CGFloat tabWidth = [self layoutWidthForItem:item];
-            item.frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
-            [item setTabHeight:tabHeight];
-            [item applyAvailableWidth:tabWidth];
+            NSRect frame = NSMakeRect(x, topInset, tabWidth, tabHeight);
+            if (fabs(NSMinX(item.frame) - x) > 0.5 || fabs(NSWidth(item.frame) - tabWidth) > 0.5) {
+                [self layoutItem:item toFrame:frame tabWidth:tabWidth animated:YES freezeMode:YES];
+            } else {
+                [item setTabHeight:tabHeight];
+            }
             x += tabWidth + kTabSpacing;
         }
     }
@@ -1524,7 +1661,10 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         return;
     }
 
-    NSUInteger toIndex = [self.tabItems indexOfObject:item];
+    NSUInteger toIndex = self.draggingPreviewIndex;
+    if (toIndex == NSNotFound) {
+        toIndex = [self.tabItems indexOfObject:item];
+    }
     NSUInteger fromIndex = self.draggingFromIndex;
     NSUUID *tabID = [self.tabItemIDs objectForKey:item];
     NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
@@ -1605,6 +1745,15 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
+        }
+        // 落点即松手时鼠标下的空位：先本地搬移数组再恢复布局，避免先弹回原位再跳变。
+        if (tabID && toIndex != NSNotFound && fromIndex != NSNotFound && toIndex != fromIndex) {
+            NSUInteger cur = [strongSelf.tabItems indexOfObject:item];
+            if (cur != NSNotFound) {
+                [strongSelf.tabItems removeObjectAtIndex:cur];
+                NSUInteger insertAt = MIN(toIndex, strongSelf.tabItems.count);
+                [strongSelf.tabItems insertObject:item atIndex:insertAt];
+            }
         }
         [strongSelf finishDragSessionRestoringItem:item];
         if (tabID && toIndex != NSNotFound && toIndex != fromIndex) {
