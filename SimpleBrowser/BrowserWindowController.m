@@ -4208,6 +4208,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (webView == nil) {
         return;
     }
+    // 分栏场景:无论是否主 webView,先把宿主栏地址栏实时同步(SPA pushState 也走这里/KVO 兜底)
+    [self updateSplitPaneAddressForWebView:webView URL:webView.URL];
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (!tab || tab.isNewTabPage) {
         return;
@@ -6903,6 +6905,8 @@ didBecomeDownload:(WKDownload *)download {
         if (!tab && [self isSplitPaneWebView:webView]) {
             NSURL *u = [self.pendingProvisionalURLByWebView objectForKey:webView] ?: webView.URL;
             if (u) [self startPaneLoadWatchdogForWebView:webView URL:u];
+            // 分栏点击链接后立即回写该栏地址栏,无需等 commit(跨站跳转 commit 前也有可见反馈)
+            if (u) [self updateSplitPaneAddressForWebView:webView URL:u];
         }
         return;
     }
@@ -6937,6 +6941,7 @@ didBecomeDownload:(WKDownload *)download {
     if ([self isSplitPaneWebView:webView]) {
         [self cancelPaneLoadWatchdogForWebView:webView];
         [self clearSplitPaneFailedHostForWebView:webView];
+        [self updateSplitPaneAddressForWebView:webView URL:webView.URL];
     }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
@@ -7052,6 +7057,7 @@ didBecomeDownload:(WKDownload *)download {
     if ([self isSplitPaneWebView:webView]) {
         [self cancelPaneLoadWatchdogForWebView:webView];
         [self clearSplitPaneFailedHostForWebView:webView];
+        [self updateSplitPaneAddressForWebView:webView URL:webView.URL];
     }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
@@ -7925,6 +7931,19 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         }
     }
     return NO;
+}
+/// 分栏地址栏实时回写:找到宿主 pane 并刷新其地址字符(跳过用户编辑中,内部做主线程切换)
+- (void)updateSplitPaneAddressForWebView:(WKWebView *)webView URL:(nullable NSURL *)url {
+    if (!webView) return;
+    NSURL *u = url ?: webView.URL;
+    if (!u) return;
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView == webView) {
+            [pane updateAddressFieldWithURL:u];
+            return;
+        }
+    }
 }
 - (NSMapTable *)paneWatchdogByWebView {
     NSMapTable *t = objc_getAssociatedObject(self, @selector(paneWatchdogByWebView));

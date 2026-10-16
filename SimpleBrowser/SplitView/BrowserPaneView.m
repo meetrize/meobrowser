@@ -8,7 +8,7 @@
 @property (nonatomic, strong) NSButton *fwdBtn;
 @property (nonatomic, strong) NSButton *goBtn;
 @property (nonatomic, strong) NSTrackingArea *chromeTracking;
-@property (nonatomic, strong) NSTextField *syncBadge;
+@property (nonatomic, strong) NSTextField *syncBadgeLabel;
 @property (nonatomic, assign) BOOL mouseInside;
 @end
 
@@ -98,22 +98,22 @@
         // 注意:chromeBar 已在 contentHost 之前 addSubview,需显式顶到最前
         [self addSubview:_chromeBar positioned:NSWindowAbove relativeTo:nil];
         [self applyChromeModeAnimated:NO];
-        _syncBadge = [NSTextField labelWithString:@""];
-        _syncBadge.translatesAutoresizingMaskIntoConstraints = NO;
-        _syncBadge.font = [NSFont boldSystemFontOfSize:11];
-        _syncBadge.textColor = [NSColor controlAccentColor];
-        _syncBadge.hidden = YES;
-        [self addSubview:_syncBadge];
+        _syncBadgeLabel = [NSTextField labelWithString:@""];
+        _syncBadgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        _syncBadgeLabel.font = [NSFont boldSystemFontOfSize:11];
+        _syncBadgeLabel.textColor = [NSColor controlAccentColor];
+        _syncBadgeLabel.hidden = YES;
+        [self addSubview:_syncBadgeLabel];
         [NSLayoutConstraint activateConstraints:@[
-            [_syncBadge.topAnchor constraintEqualToAnchor:self.topAnchor constant:34],
-            [_syncBadge.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
+            [_syncBadgeLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:34],
+            [_syncBadgeLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-6],
         ]];
     }
     return self;
 }
 - (void)setSyncBadge:(NSString *)badge {
-    _syncBadge.stringValue = badge ?: @"";
-    _syncBadge.hidden = (badge.length == 0);
+    _syncBadgeLabel.stringValue = badge ?: @"";
+    _syncBadgeLabel.hidden = (badge.length == 0);
 }
 
 - (NSView *)contentHost { return _contentHostInner; }
@@ -194,12 +194,39 @@
 }
 
 - (void)detachWebView {
+    if (_webView) {
+        @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+    }
     [_webView removeFromSuperview];
     _webView = nil;
 }
 
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context {
+    if ([keyPath isEqualToString:@"URL"] && object == _webView) {
+        NSURL *url = _webView.URL ?: change[NSKeyValueChangeNewKey];
+        if ([url isKindOfClass:[NSNull class]]) url = nil;
+        if ([url isKindOfClass:[NSURL class]] || url == nil) {
+            [self updateAddressFieldWithURL:url];
+        }
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+- (void)dealloc {
+    if (_webView) {
+        @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+    }
+}
+
 - (void)attachWebView:(WKWebView *)webView {
     if (_webView == webView) return;
+    if (_webView) {
+        @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+    }
     [_webView removeFromSuperview];
     _webView = webView;
     webView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -210,6 +237,11 @@
         [webView.trailingAnchor constraintEqualToAnchor:_contentHostInner.trailingAnchor],
         [webView.bottomAnchor constraintEqualToAnchor:_contentHostInner.bottomAnchor],
     ]];
+    @try {
+        [webView addObserver:self forKeyPath:@"URL"
+                    options:NSKeyValueObservingOptionNew
+                    context:NULL];
+    } @catch (NSException *e) {}
     [self updateAddressFieldWithURL:webView.URL];
 }
 
@@ -224,7 +256,18 @@
 }
 
 - (void)updateAddressFieldWithURL:(NSURL *)url {
-    if (url) _addressFieldInner.stringValue = url.absoluteString;
+    if (![NSThread isMainThread]) {
+        NSURL *u = url;
+        dispatch_async(dispatch_get_main_queue(), ^{ [self updateAddressFieldWithURL:u]; });
+        return;
+    }
+    if (!url) return;
+    // 用户正在本栏输入时不抢写,避免覆盖编辑中的字符
+    if (self.window.firstResponder && self.window.firstResponder == (id)_addressFieldInner.currentEditor) return;
+    NSString *s = url.absoluteString;
+    if (s.length && ![s isEqualToString:_addressFieldInner.stringValue]) {
+        _addressFieldInner.stringValue = s;
+    }
 }
 
 - (void)goBack:(id)s { if ([_webView canGoBack]) [_webView goBack]; }
