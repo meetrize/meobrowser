@@ -22,6 +22,7 @@ static CFRunLoopObserverRef sHangObserver = NULL;
 static dispatch_source_t sHangTimer = NULL;
 static atomic_uint_fast64_t sLastMainTickNs = 0;
 static atomic_bool sHangLogged = false;
+static atomic_bool sMainThreadBusy = false;
 static NSTimeInterval sLoggedHangMs = 0;
 static FILE *sLogFile = NULL;
 static dispatch_once_t sLogFileOnce;
@@ -183,12 +184,19 @@ static uint64_t MeoNowNs(void) {
     return (uint64_t)(CACurrentMediaTime() * 1e9);
 }
 
+// 主线程忙/闲标记：避免把“空闲等事件”误报成 HANG。
+// 之前只在“距上次 runloop 活动 >120ms”就报卡，但空闲时主线程本就停在
+// nextEventMatchingMask，不会有 runloop 活动 → 误报一堆 130–160ms 假 HANG。
+// 现在：BeforeWaiting（即将睡眠等事件）= 空闲；其它 activity = 正在处理。
+// 只有当“主线程在忙”且距上次活动超过阈值时才算真卡。
 static void MeoHangObserverCallback(CFRunLoopObserverRef observer,
                                     CFRunLoopActivity activity,
                                     void *info) {
     (void)observer;
-    (void)activity;
     (void)info;
+    atomic_store_explicit(&sMainThreadBusy,
+                          activity != kCFRunLoopBeforeWaiting,
+                          memory_order_relaxed);
     atomic_store_explicit(&sLastMainTickNs, MeoNowNs(), memory_order_relaxed);
     if (atomic_exchange_explicit(&sHangLogged, false, memory_order_relaxed)) {
         NSTimeInterval hangMs = sLoggedHangMs;
@@ -247,6 +255,10 @@ void BrowserTabUIDiagnosticsStartHangWatchdogIfNeeded(void) {
         if (stalledMs < threshold) {
             return;
         }
+        // 主线程空闲（停在 nextEventMatchingMask 等事件）不算卡——真正的卡是“在忙却迟迟回不来”。
+        if (!atomic_load_explicit(&sMainThreadBusy, memory_order_relaxed)) {
+            return;
+        }
         static NSTimeInterval sLastReportedMs = 0;
         BOOL first = !atomic_load_explicit(&sHangLogged, memory_order_relaxed);
         if (!first && stalledMs < sLastReportedMs + 250.0) {
@@ -257,7 +269,7 @@ void BrowserTabUIDiagnosticsStartHangWatchdogIfNeeded(void) {
         atomic_store_explicit(&sHangLogged, true, memory_order_relaxed);
         // 卡顿时主线程可能堵死，文件/os_log 仍可从后台队列写出。
         NSString *msg = [NSString stringWithFormat:
-                         @"HANG main-thread blocked ~%.0fms (threshold %.0fms)",
+                         @"HANG main-thread BUSY ~%.0fms (threshold %.0fms)",
                          stalledMs, threshold];
         os_log_with_type(MeoTabUIOSLog(), OS_LOG_TYPE_ERROR, "%{public}@", msg);
         MeoTabUIEnsureLogFile();
@@ -268,6 +280,10 @@ void BrowserTabUIDiagnosticsStartHangWatchdogIfNeeded(void) {
             fflush(sLogFile);
         }
         NSLog(@"[MeoTabUI] %@", msg);
+        // 不再在进程内抓栈（会干扰主线程）。需要栈时用系统采样：
+        //   sample MeoBrowser 5 -file /tmp/meo-sample.txt
+        // 或用 Activity Monitor 的“取样进程”。HANG 日志本身已给出时长与频率。
+        (void)0;
     });
     dispatch_resume(sHangTimer);
 

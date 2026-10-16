@@ -15,11 +15,11 @@ static const NSInteger kMax = 20;
     return out;
 }
 
-+ (BOOL)savePreset:(NSDictionary *)preset error:(NSString **)outError {
++ (BOOL)savePreset:(NSDictionary *)preset error:(NSString * _Nullable * _Nullable)outError {
     NSMutableArray *all = [[self allPresets] mutableCopy];
     NSString *name = preset[@"name"];
     if (name.length == 0) { if (outError) *outError = @"名称为空"; return NO; }
-    NSUInteger found = [all indexOfObjectPassingTest:^BOOL(NSDictionary *e, NSUInteger i, BOOL *s) {
+    NSUInteger found = [all indexOfObjectPassingTest:^BOOL(NSDictionary *e, NSUInteger __unused i, BOOL *__unused s) {
         return [e[@"name"] isEqualToString:name];
     }];
     if (found != NSNotFound) { all[found] = preset; }
@@ -33,7 +33,7 @@ static const NSInteger kMax = 20;
 
 + (void)deletePresetNamed:(NSString *)name {
     NSMutableArray *all = [[self allPresets] mutableCopy];
-    NSUInteger found = [all indexOfObjectPassingTest:^BOOL(NSDictionary *e, NSUInteger i, BOOL *s) {
+    NSUInteger found = [all indexOfObjectPassingTest:^BOOL(NSDictionary *e, NSUInteger __unused i, BOOL *__unused s) {
         return [e[@"name"] isEqualToString:name];
     }];
     if (found != NSNotFound) {

@@ -6,7 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// item = @{name, layout:@(int), weights:@[@..], urls:@[@"https://.."], chrome:@(int)}
 @interface BrowserSplitPresetStore : NSObject
 + (NSArray<NSDictionary *> *)allPresets;
-+ (BOOL)savePreset:(NSDictionary *)preset error:(NSString **)outError; // 同名覆盖
++ (BOOL)savePreset:(NSDictionary *)preset error:(NSString * _Nullable * _Nullable)outError; // 同名覆盖
 + (void)deletePresetNamed:(NSString *)name;
 + (void)replaceAll:(NSArray<NSDictionary *> *)presets;
 + (NSInteger)maxCount;

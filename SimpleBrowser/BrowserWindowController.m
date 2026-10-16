@@ -3704,7 +3704,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     for (NSUUID *key in [self splitSnapshotsByTabID]) {
         if (![key isEqual:selectedTab.tabID]) { anySplitBG = YES; break; }
     }
-    BOOL skipSnapshotForPressure = (liveCount >= 8) || anySplitBG;
+    BrowserSplitContainerView *splitC = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    NSUInteger splitLiveCount = 0;
+    if (splitC && !splitC.hidden) {
+        for (BrowserPaneView *pane in splitC.panes) {
+            if (pane.webView) splitLiveCount++;
+        }
+    }
+    // 分栏 4 个重页（gemini/chatgpt 等 GPU+长轮询）常驻时，一律跳过缩略图快照：
+    // takeSnapshot 会跟重页抢 GPU，是切标签卡死的主凶之一。
+    BOOL skipSnapshotForPressure = (liveCount + splitLiveCount >= 5) || anySplitBG || splitLiveCount > 0;
+    // 先挂选中页（关键路径同步），再异步剥离后台页：切标签手感只取决于 attach，
+    // detach（含重页 layout/shutdown）扔到下一拍，不挡点击响应。
+    NSMutableArray<BrowserTab *> *tabsToDetach = [NSMutableArray array];
     for (BrowserTab *tab in self.tabController.tabs) {
         if (tab == selectedTab) {
             continue;
@@ -3754,8 +3766,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         }
         if (wv != nil && wv.superview != nil) {
             detachedCount++;
+            // 后台页剥离延后到选中页挂载之后，避免 4 重页同时 layout 挡住点击。
+            [tabsToDetach addObject:tab];
         }
-        [self detachWebViewIfNeeded:wv];
     }
     NSTimeInterval detachMs = (CACurrentMediaTime() - tDetach) * 1000.0;
 
@@ -3793,35 +3806,71 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     NSTimeInterval attachMs = (CACurrentMediaTime() - tAttach) * 1000.0;
 
+    // 选中页已挂载后再剥离后台页：主线程只做 removeFromSuperview，不做 stopLoading
+    //（stopLoading 卡在代理超时的 content 进程时会直接卡住 UI；后台页的加载让 watchdog 超时自己收）。
+    if (tabsToDetach.count > 0) {
+        __weak typeof(self) weakDetach = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (BrowserTab *tab in tabsToDetach) {
+                WKWebView *wv = tab.webView;
+                if (tab == weakDetach.tabController.selectedTab) continue;
+                [weakDetach detachWebViewIfNeeded:wv];
+            }
+        });
+    }
     CFTimeInterval tChrome = CACurrentMediaTime();
     BOOL showLaunchpad = selectedTab.isNewTabPage;
     self.launchpadView.hidden = !showLaunchpad || self.transparentModeEnabled;
 
-    [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
-    [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
-    [self.contentContainer addSubview:self.navigationErrorView positioned:NSWindowAbove relativeTo:nil];
-    if (self.findBarController.isVisible) {
-        [self.contentContainer addSubview:self.findBarController.findBarView positioned:NSWindowAbove relativeTo:nil];
+    // 覆盖视图抬升只在被新 WebView 压住时做：对装着活 WKWebView 的容器反复
+    // addSubview:positioned: 会强制容器重排，进而让 WebKit 同步提交图层到正忙的
+    // WebContent/GPU 进程——实测在 goofish 这类重页上可达 3 秒主线程 BUSY。
+    CFTimeInterval tOverlay = CACurrentMediaTime();
+    NSView *topSubview = self.contentContainer.subviews.lastObject;
+    BOOL overlaysBuried = (topSubview == nil)
+        || [topSubview isKindOfClass:[WKWebView class]]
+        || (self.loadingProgressView.superview != self.contentContainer)
+        || (self.certificateWarningView.superview != self.contentContainer)
+        || (self.navigationErrorView.superview != self.contentContainer);
+    if (overlaysBuried) {
+        [self.contentContainer addSubview:self.loadingProgressView positioned:NSWindowAbove relativeTo:nil];
+        [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
+        [self.contentContainer addSubview:self.navigationErrorView positioned:NSWindowAbove relativeTo:nil];
+        if (self.findBarController.isVisible) {
+            [self.contentContainer addSubview:self.findBarController.findBarView positioned:NSWindowAbove relativeTo:nil];
+        }
+        if (self.tabOverviewController.isVisible) {
+            [self.tabOverviewController bringToFront];
+        }
     }
-    if (self.tabOverviewController.isVisible) {
-        [self.tabOverviewController bringToFront];
-    }
+    NSTimeInterval overlayMs = (CACurrentMediaTime() - tOverlay) * 1000.0;
+    CFTimeInterval tFind = CACurrentMediaTime();
     [self.findBarController syncWithSelectedTab];
     [self observeLoadingProgressForSelectedTab];
+    NSTimeInterval findMs = (CACurrentMediaTime() - tFind) * 1000.0;
 
     // 切换标签时结束地址栏编辑，避免不安全徽章的 leading inset 留在 field editor 里带到新标签。
+    CFTimeInterval tEndEdit = CACurrentMediaTime();
     [self endAddressBarEditingIfNeeded];
+    NSTimeInterval endEditMs = (CACurrentMediaTime() - tEndEdit) * 1000.0;
 
     // sync：顺序/数量不变时保留标签视图，避免 mouseDown 选中后重建导致拖拽失效
+    CFTimeInterval tStrip = CACurrentMediaTime();
     [self updateTabStripDisplay];
+    NSTimeInterval stripMs = (CACurrentMediaTime() - tStrip) * 1000.0;
+
+    CFTimeInterval tNavState = CACurrentMediaTime();
     [self repositionTrafficLightButtonsAfterLayout];
     [self updateNavigationState];
+    NSTimeInterval navStateMs = (CACurrentMediaTime() - tNavState) * 1000.0;
 
     NSUUID *selectedID = selectedTab.tabID;
     BOOL selectionChanged = selectedID != nil
         && ![selectedID isEqual:self.lastSelectedTabIDForAddressFocus];
     self.lastSelectedTabIDForAddressFocus = selectedID;
+    CFTimeInterval tSyncSplit = CACurrentMediaTime();
     [self syncSplitContainerToSelectedTab];
+    NSTimeInterval syncSplitMs = (CACurrentMediaTime() - tSyncSplit) * 1000.0;
     if (selectionChanged && selectedTab.isNewTabPage) {
         [self focusAddressBarForNewTabPage];
     }
@@ -3830,17 +3879,48 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSTimeInterval slow = BrowserTabUISlowThresholdMs();
     if (BrowserTabUIDiagnosticsEnabled()) {
         NSString *tag = (totalMs >= slow) ? @"SLOW refreshTabsUI" : @"refreshTabsUI";
-        BrowserTabUILog(@"%@ total=%.1fms detach=%.1fms(n=%lu) attach=%.1fms chrome=%.1fms coldWake=%d snap=%d ntp=%d tabs=%lu",
+        BrowserTabUILog(@"%@ total=%.1fms detach=%.1fms(n=%lu) attach=%.1fms chrome=%.1fms(overlay=%.1f find=%.1f endEdit=%.1f strip=%.1f navState=%.1f syncSplit=%.1f) coldWake=%d snap=%d ntp=%d tabs=%lu",
                         tag,
                         totalMs,
                         detachMs,
                         (unsigned long)detachedCount,
                         attachMs,
                         chromeMs,
+                        overlayMs,
+                        findMs,
+                        endEditMs,
+                        stripMs,
+                        navStateMs,
+                        syncSplitMs,
                         deferredColdWake ? 1 : 0,
                         scheduledSnapshot ? 1 : 0,
                         showLaunchpad ? 1 : 0,
                         (unsigned long)self.tabController.tabs.count);
+    }
+
+    // 慢切换现场快照：total 超阈值时多记一笔，卡顿分析只看这两行就够。
+    // 含：是否分栏、各栏 host/isLoading、失败 host 记忆、选中页 host。
+    if (totalMs >= BrowserTabUISlowThresholdMs()) {
+        BrowserSplitContainerView *splitC = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+        BOOL splitActive = (splitC != nil && !splitC.hidden);
+        NSMutableArray<NSString *> *paneStates = [NSMutableArray array];
+        if (splitC) {
+            for (BrowserPaneView *pane in splitC.panes) {
+                WKWebView *pwv = pane.webView;
+                NSString *host = pwv.URL.host ?: pane.addressField.stringValue ?: @"?";
+                if (host.length > 60) host = [host substringToIndex:60];
+                [paneStates addObject:[NSString stringWithFormat:@"%@%@%@",
+                                       host,
+                                       (pwv ? (pwv.isLoading ? @"(loading)" : @"") : @"(empty)"),
+                                       (pwv.hidden ? @"(hidden)" : @"")]];
+            }
+        }
+        NSSet *failed = [self splitFailedHostsForTab:selectedTab.tabID];
+        BrowserTabUILog(@"SLOW-CTX split=%d panes=[%@] failedHosts=%@ selected=%@",
+                        splitActive ? 1 : 0,
+                        [paneStates componentsJoinedByString:@", "],
+                        failed.count ? [failed.allObjects componentsJoinedByString:@","] : @"-",
+                        selectedTab.webView.URL.host ?: (selectedTab.isNewTabPage ? @"ntp" : @"?"));
     }
 
     // 非关键 chrome + 冷唤醒：下一 runloop，避免占满选中关键路径。
@@ -5388,7 +5468,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (wv) return wv;
     // 兜底:活动栏
     BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
-    if (c && !c.hidden && c.activePaneIndex < c.panes.count) return ((BrowserPaneView *)c.panes[c.activePaneIndex]).webView;
+    if (c && !c.hidden && c.activePaneIndex < (NSInteger)c.panes.count) return ((BrowserPaneView *)c.panes[c.activePaneIndex]).webView;
     return nil;
 }
 - (void)splitZoomInPane:(id)sender {
@@ -6817,6 +6897,13 @@ didBecomeDownload:(WKDownload *)download {
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab beginMainFrameNavigation:navigation]) {
+        // 分栏 pane 的 webView 不属于任何 BrowserTab：主标签的 T0/T1 看门狗走不到这里，
+        // 被代理挡住的站（如 chatgpt）会永远 isLoading=YES 空转并拖慢每次切标签。
+        // 给 pane 单独挂一个轻量超时：25s 未 commit 就停掉，避免僵尸加载。
+        if (!tab && [self isSplitPaneWebView:webView]) {
+            NSURL *u = [self.pendingProvisionalURLByWebView objectForKey:webView] ?: webView.URL;
+            if (u) [self startPaneLoadWatchdogForWebView:webView URL:u];
+        }
         return;
     }
 
@@ -6846,6 +6933,11 @@ didBecomeDownload:(WKDownload *)download {
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+    // pane 成功 commit：取消 pane 超时 + 洗掉该 host 的失败标记（恢复自动重载资格）
+    if ([self isSplitPaneWebView:webView]) {
+        [self cancelPaneLoadWatchdogForWebView:webView];
+        [self clearSplitPaneFailedHostForWebView:webView];
+    }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
         return;
@@ -6957,6 +7049,10 @@ didBecomeDownload:(WKDownload *)download {
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    if ([self isSplitPaneWebView:webView]) {
+        [self cancelPaneLoadWatchdogForWebView:webView];
+        [self clearSplitPaneFailedHostForWebView:webView];
+    }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
         return;
@@ -6988,6 +7084,10 @@ didBecomeDownload:(WKDownload *)download {
 - (void)webView:(WKWebView *)webView
 didFailProvisionalNavigation:(WKNavigation *)navigation
       withError:(NSError *)error {
+    if ([self isSplitPaneWebView:webView]) {
+        [self cancelPaneLoadWatchdogForWebView:webView];
+        [self noteSplitPaneLoadFailedForWebView:webView error:error];
+    }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if ([tab isMainFrameNavigation:navigation]) {
         [tab endMainFrameNavigation:navigation];
@@ -7000,6 +7100,10 @@ didFailProvisionalNavigation:(WKNavigation *)navigation
 - (void)webView:(WKWebView *)webView
 didFailNavigation:(WKNavigation *)navigation
       withError:(NSError *)error {
+    if ([self isSplitPaneWebView:webView]) {
+        [self cancelPaneLoadWatchdogForWebView:webView];
+        [self noteSplitPaneLoadFailedForWebView:webView error:error];
+    }
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if ([tab isMainFrameNavigation:navigation]) {
         [tab endMainFrameNavigation:navigation];
@@ -7564,17 +7668,21 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         NSDictionary *sp = store[oldest];
         if (![sp isKindOfClass:[NSDictionary class]]) continue;
         NSArray *wvs = sp[@"webviews"];
-        BOOL hasLive = NO;
+        NSMutableArray<WKWebView *> *live = [NSMutableArray array];
         if ([wvs isKindOfClass:[NSArray class]]) {
             for (id w in wvs) {
-                if ([w isKindOfClass:[WKWebView class]]) {
-                    hasLive = YES;
-                    [(WKWebView *)w stopLoading];
-                    [(WKWebView *)w removeFromSuperview];
-                }
+                if ([w isKindOfClass:[WKWebView class]]) [live addObject:w];
             }
         }
-        if (hasLive) {
+        if (live.count > 0) {
+            // 防卡：stopLoading/removeFromSuperview 可能阻塞在无响应的 content 进程
+            // （尤其境外站 + 代理超时），一律扔到下一拍异步执行，不挡当前切标签。
+            dispatch_async(dispatch_get_main_queue(), ^{
+                for (WKWebView *wv in live) {
+                    @try { [wv stopLoading]; } @catch (__unused NSException *e) {}
+                    [wv removeFromSuperview];
+                }
+            });
             NSMutableDictionary *m = [sp mutableCopy];
             [m removeObjectForKey:@"webviews"];
             store[oldest] = [m copy];
@@ -7617,7 +7725,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     for (BrowserPaneView *pane in c.panes) [wvs addObject:pane.webView ?: [NSNull null]];
     NSInteger chrome = 1;
     if (c.panes.count > 0) chrome = ((BrowserPaneView *)c.panes[0]).chromeMode;
-    return @{@"layout": @(c.layoutID), @"weights": (c.weights ?: @[]), @"urls": urls, @"chrome": @(chrome), @"webviews": wvs};
+    return @{@"layout": @(c.layoutID), @"weights": (c.weights ?: @[]), @"urls": urls, @"chrome": @(chrome), @"webviews": wvs, @"savedAt": @([[NSDate date] timeIntervalSince1970])};
 }
 /// 切标签时调用:存档旧标签分栏,恢复新标签分栏(无存档=单栏)
 - (void)syncSplitContainerToSelectedTab {
@@ -7629,9 +7737,46 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         NSDictionary *snap = [self snapshotOfSplitContainer:c];
         if (snap) [self splitSnapshotsByTabID][prev] = snap;
         [self noteSplitSnapshotStoredForTabID:prev];
-        // 后台分栏停画:hidden 不销毁不断网,切回秒开;9栏时前台只画当前标签,GPU/主线程立减
+        // 久置 4 重页 hidden=YES 仍在跑 JS/长轮询/占 GPU，切走必须真剥离：
+        // removeFromSuperview + hidden，让 content 进程可节流；live 引用留在快照里，
+        // 新鲜（10 分钟内）切回秒复用，超期则丢弃重载（见 applySplitSnapshot）。
+        // stopLoading 不在这里同步做（代理超时会卡主线程），只剥离视图。
+        // 例外：仍在 isLoading 的 pane（含被挡住永远转圈的站）必须停掉，
+        // 否则它在后台空转 30 分钟，切回时就是僵尸页。stop 扔下一拍异步。
+        NSMutableArray<WKWebView *> *panesToStop = [NSMutableArray array];
         for (BrowserPaneView *pane in c.panes) {
-            if (pane.webView) pane.webView.hidden = YES;
+            WKWebView *wv = pane.webView;
+            if (wv) {
+                [self cancelPaneLoadWatchdogForWebView:wv];
+                if (wv.isLoading) [panesToStop addObject:wv];
+            }
+        }
+        if (panesToStop.count) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                for (WKWebView *wv in panesToStop) {
+                    @try { [wv stopLoading]; } @catch (__unused NSException *e) {}
+                }
+            });
+        }
+        for (BrowserPaneView *pane in c.panes) {
+            WKWebView *wv = pane.webView;
+            if (wv) {
+                wv.hidden = YES;
+                @try {
+                    // 暂停 audible 媒体，避免后台继续耗 CPU；失败忽略
+                    if (wv.URL) [wv evaluateJavaScript:@"(function(){try{document.querySelectorAll('video,audio').forEach(function(m){m.pause();});}catch(e){}})()" completionHandler:nil];
+                } @catch (__unused NSException *e) {}
+                [wv removeFromSuperview];
+                [pane detachWebView];
+            }
+        }
+        // 快照在 snapshotOfSplitContainer 时已抓了 webView 引用和 savedAt，这里补救旧快照缺时间戳的情况
+        NSMutableDictionary *store = [self splitSnapshotsByTabID];
+        NSDictionary *sp = store[prev];
+        if ([sp isKindOfClass:[NSDictionary class]] && !sp[@"savedAt"]) {
+            NSMutableDictionary *m = [sp mutableCopy];
+            m[@"savedAt"] = @([[NSDate date] timeIntervalSince1970]);
+            store[prev] = [m copy];
         }
     }
     // 清理已关闭标签的存档
@@ -7642,7 +7787,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         for (NSUUID *key in [store.allKeys copy]) {
             if (![live containsObject:key]) [store removeObjectForKey:key];
         }
-        [[self splitSnapshotLRU] filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *b) {
+        [[self splitSnapshotLRU] filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *__unused b) {
             return [live containsObject:obj];
         }]];
     }
@@ -7692,19 +7837,177 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         NSURL *url = ([u isKindOfClass:[NSString class]] && ((NSString *)u).length) ? [NSURL URLWithString:u] : nil;
         [urlObjs addObject:url ?: [NSNull null]];
     }
-    NSArray *cachedWVs = snap[@"webviews"];
+    // 久置恢复：分栏在后台超过 10 分钟，live webView 的 JS 堆/长轮询/代理连接
+    // 大概率已腐烂（切回同时唤醒 4 个 = 必卡，且卡完也恢复不了）。此时丢弃 live，
+    // 只留 URL，先秒摆空壳、再逐栏错峰 reload，响应和速度一起回来。
+    NSTimeInterval savedAt = [snap[@"savedAt"] doubleValue];
+    BOOL stale = (savedAt > 0 && ([[NSDate date] timeIntervalSince1970] - savedAt > 600));
+    NSArray *cachedWVs = stale ? nil : snap[@"webviews"];
     NSInteger wantN = [BrowserSplitLayout paneCountForLayout:layout];
     NSMutableArray *reuse = nil;
     if ([cachedWVs isKindOfClass:[NSArray class]] && (NSInteger)cachedWVs.count == wantN) {
         reuse = [NSMutableArray array];
         for (id w in cachedWVs) [reuse addObject:([w isKindOfClass:[WKWebView class]] ? w : [NSNull null])];
+        if (stale) {
+            // 丢弃旧进程引用：异步 stop，避免卡住本次点击
+            NSArray *toKill = [reuse copy];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                for (id w in toKill) {
+                    if ([w isKindOfClass:[WKWebView class]]) {
+                        @try { [(WKWebView *)w stopLoading]; } @catch (__unused NSException *e) {}
+                        [(WKWebView *)w removeFromSuperview];
+                    }
+                }
+            });
+            reuse = nil;
+        }
     }
     if (reuse) {
         [self setSplitLayout:layout weights:weights urls:urlObjs reuseWebViews:reuse];
+    } else if (stale) {
+        // 空壳先行：只建 pane 不建 webView，主线程零重活，切标签立刻响应；
+        // 再逐栏错峰建页（每栏间隔 0.35s），避免 4 个 AI 站同时经代理建连打爆。
+        [self setSplitLayout:layout weights:weights urls:urlObjs reuseWebViews:nil];
+        [self staggeredReloadSplitPanesWithURLs:urlObjs];
     } else {
         [self setSplitLayout:layout weights:weights urls:urlObjs];
     }
     [[self ensureSplitContainer] setChromeMode:[snap[@"chrome"] integerValue] forPane:-1];
+}
+/// 久置分栏的错峰恢复：逐栏建 webView + load，避免 4 重页同时 layout/建连
+- (void)staggeredReloadSplitPanesWithURLs:(NSArray *)urlObjs {
+    BrowserSplitContainerView *c = [self ensureSplitContainer];
+    NSUUID *owner = self.tabController.selectedTab.tabID;
+    // 之前已确认不可达的 host（如被代理挡住的 chatgpt）不再自动重载：
+    // 否则每次点回四栏都会重新挂起一个永远 isLoading 的僵尸页，再次拖慢切换。
+    // 用户点该栏地址栏回车可手动重试（重试成功会自动洗掉标记）。
+    NSSet *failedHosts = [self splitFailedHostsForTab:owner];
+    NSInteger n = (NSInteger)c.panes.count;
+    for (NSInteger i = 0; i < n; i++) {
+        id u = (i < (NSInteger)urlObjs.count) ? urlObjs[i] : nil;
+        NSURL *url = ([u isKindOfClass:[NSURL class]] ? u : nil);
+        if (!url) continue;
+        if ([failedHosts containsObject:url.host.lowercaseString]) {
+            BrowserPaneView *existing = (i < (NSInteger)c.panes.count) ? c.panes[i] : nil;
+            [existing setPlaceholderURL:url];
+            BrowserNavigationLog(@"split-stagger skip unreachable host=%@ pane=%ld", url.host ?: @"?", (long)i);
+            continue;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 350 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            if (![self.tabController.selectedTab.tabID isEqual:owner]) return;
+            BrowserSplitContainerView *cc = [self ensureSplitContainer];
+            if (cc.hidden || (NSInteger)cc.panes.count <= i) return;
+            BrowserPaneView *pane = cc.panes[i];
+            if (pane.webView) { [pane loadURL:url]; return; }
+            [self bindSplitContainerWebViews:cc];
+            if (pane.webView) {
+                [self ensureSyncScriptForWebView:pane.webView];
+                [pane loadURL:url];
+            }
+        });
+    }
+}
+#pragma mark - Split pane load guard（不可达栏自停）
+// 分栏 pane 的 webView 不挂 BrowserTab，主标签的 T0/T1 看门狗覆盖不到。
+// 被代理挡住的站会永远 isLoading 空转：每次切标签都要反复 attach 这个僵尸页，
+// 越放越慢、一点四栏就污染后续所有切换。以下给 pane 单独的轻量超时 + 失败 host 记忆。
+- (BOOL)isSplitPaneWebView:(WKWebView *)webView {
+    if (![webView isKindOfClass:[WKWebView class]]) return NO;
+    BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+    for (BrowserPaneView *pane in c.panes) {
+        if (pane.webView == webView) return YES;
+    }
+    // 已从 pane 剥离但仍归属快照的 webView 同样视为 pane 页
+    for (NSDictionary *sp in [self splitSnapshotsByTabID].allValues) {
+        if (![sp isKindOfClass:[NSDictionary class]]) continue;
+        for (id w in (NSArray *)sp[@"webviews"]) {
+            if (w == webView) return YES;
+        }
+    }
+    return NO;
+}
+- (NSMapTable *)paneWatchdogByWebView {
+    NSMapTable *t = objc_getAssociatedObject(self, @selector(paneWatchdogByWebView));
+    if (!t) {
+        t = [NSMapTable weakToStrongObjectsMapTable];
+        objc_setAssociatedObject(self, @selector(paneWatchdogByWebView), t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return t;
+}
+- (void)startPaneLoadWatchdogForWebView:(WKWebView *)webView URL:(NSURL *)url {
+    if (!webView || !url) return;
+    [self cancelPaneLoadWatchdogForWebView:webView];
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWV = webView;
+    NSString *host = url.host.lowercaseString ?: @"";
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        __strong typeof(weakSelf) strong = weakSelf;
+        WKWebView *wv = weakWV;
+        if (!strong || !wv) return;
+        // 已 commit/结束的不管；仍在转的直接停掉，结束僵尸加载
+        if (!wv.isLoading || ![strong isSplitPaneWebView:wv]) return;
+        BrowserNavigationLog(@"split-pane timeout stop host=%@", host);
+        @try { [wv stopLoading]; } @catch (__unused NSException *e) {}
+        [strong noteSplitPaneLoadFailedForWebView:wv error:nil];
+    });
+    [[self paneWatchdogByWebView] setObject:block forKey:webView];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+}
+- (void)cancelPaneLoadWatchdogForWebView:(WKWebView *)webView {
+    if (!webView) return;
+    NSMapTable *t = objc_getAssociatedObject(self, @selector(paneWatchdogByWebView));
+    dispatch_block_t b = [t objectForKey:webView];
+    if (b) dispatch_block_cancel(b);
+    [t removeObjectForKey:webView];
+}
+- (NSMutableDictionary *)splitFailedHostsByTabID {
+    NSMutableDictionary *d = objc_getAssociatedObject(self, @selector(splitFailedHostsByTabID));
+    if (!d) {
+        d = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(self, @selector(splitFailedHostsByTabID), d, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return d;
+}
+- (NSSet *)splitFailedHostsForTab:(NSUUID *)tabID {
+    if (!tabID) return [NSSet set];
+    NSSet *s = [self splitFailedHostsByTabID][tabID];
+    return [s isKindOfClass:[NSSet class]] ? s : [NSSet set];
+}
+- (void)noteSplitPaneLoadFailedForWebView:(WKWebView *)webView error:(NSError *)error {
+    if (error && [self shouldIgnoreNavigationError:error]) return; // 取消/下载类不算失败；超时传 nil，必须标记
+    NSURL *u = webView.URL;
+    if (![u.host length]) {
+        // provisional 失败时 URL 还没进来，从 pane 地址栏取
+        BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
+        for (BrowserPaneView *pane in c.panes) {
+            if (pane.webView == webView && pane.addressField.stringValue.length) {
+                u = [NSURL URLWithString:pane.addressField.stringValue];
+                break;
+            }
+        }
+    }
+    if (![u.host length]) return;
+    // 归属到当前选中的分栏标签（失败发生时用户大概率正看着它）
+    NSUUID *owner = self.tabController.selectedTab.tabID;
+    if (!owner) return;
+    NSMutableDictionary *store = [self splitFailedHostsByTabID];
+    NSMutableSet *s = [[self splitFailedHostsForTab:owner] mutableCopy] ?: [NSMutableSet set];
+    [s addObject:u.host.lowercaseString];
+    store[owner] = [s copy];
+    BrowserNavigationLog(@"split-pane failed host=%@ err=%@ marked, skip auto-reload", u.host, error.localizedDescription ?: @"timeout");
+}
+- (void)clearSplitPaneFailedHostForWebView:(WKWebView *)webView {
+    NSString *host = webView.URL.host.lowercaseString;
+    if (!host.length) return;
+    NSMutableDictionary *store = [self splitFailedHostsByTabID];
+    for (NSUUID *key in store.allKeys) {
+        NSMutableSet *s = [store[key] mutableCopy];
+        if (![s isKindOfClass:[NSMutableSet class]]) continue;
+        if ([s containsObject:host]) {
+            [s removeObject:host];
+            store[key] = [s copy];
+        }
+    }
 }
 - (BOOL)isSplitActive {
     BrowserSplitContainerView *c = objc_getAssociatedObject(self, @selector(ensureSplitContainer));
@@ -7836,7 +8139,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     // 避免重复注入:检查已有 script 数量有限,直接追加(幂等由 JS 内 guard 保证)
     WKUserScript *script = [[WKUserScript alloc] initWithSource:src injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
     [cc addUserScript:script];
-    @try { [cc addScriptMessageHandler:self name:@"meoSync"]; } @catch (NSException *e) {}
+    @try { [cc addScriptMessageHandler:(id<WKScriptMessageHandler>)self name:@"meoSync"]; } @catch (NSException *e) {}
 }
 - (void)showSyncStatusToast:(NSString *)status {
     if (self.window) {
@@ -7890,12 +8193,12 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     __weak typeof(self) weak = self;
     __weak WKWebView *weakWV = wv;
     NSString *js = @"(typeof window.meoSyncPickOnce === 'function') ? 'ready' : 'notready'";
-    [wv evaluateJavaScript:js completionHandler:^(id result, NSError *err) {
+    [wv evaluateJavaScript:js completionHandler:^(id result, NSError *__unused err) {
         __strong typeof(weak) strong = weak;
         WKWebView *strongWV = weakWV;
         if (!strong || !strongWV) return;
         if ([result isKindOfClass:[NSString class]] && [result isEqualToString:@"ready"]) {
-            [strongWV evaluateJavaScript:@"window.meoSyncPickOnce().then(function(fp){ try{window.webkit.messageHandlers.meoSync.postMessage({type:'paired',fp:fp});}catch(e){} });'armed'" completionHandler:^(id r2, NSError *e2) {
+            [strongWV evaluateJavaScript:@"window.meoSyncPickOnce().then(function(fp){ try{window.webkit.messageHandlers.meoSync.postMessage({type:'paired',fp:fp});}catch(e){} });'armed'" completionHandler:^(id __unused r2, NSError *e2) {
                 if (e2) NSLog(@"[PaneSync] pick arm failed: %@", e2);
             }];
         } else if (retries > 0) {
@@ -7983,7 +8286,6 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 }
 /// 自动测试探针(-MeoSyncSelfTest):四栏各放测试页,程序化配对+输入+校验回读
 - (void)runSyncSelfTest {
-    BrowserSplitContainerView *c = [self ensureSplitContainer];
     // 切四方格,各栏加载本地同构测试页
     NSMutableArray *urls = [NSMutableArray array];
     for (NSInteger i = 1; i <= 4; i++) {
@@ -8027,7 +8329,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 - (void)syncSelfTestTypeText:(NSString *)text step:(NSInteger)step {
     BrowserSplitContainerView *cc = [self ensureSplitContainer];
     BrowserPaneSyncCoordinator *co = [self paneSyncCoordinator];
-    if (step >= text.length) {
+    if (step >= (NSInteger)text.length) {
         // 4) 回读各栏值(通用:读 activeElement 或第一个可见编辑器,不依赖 #q)
         NSString *readback = @"(function(){function txt(e){if(!e)return '';try{if(e.isContentEditable)return e.innerText;if('value' in e)return e.value;return e.innerText||'';}catch(x){return '';}}"
             @"var t=null;try{t=document.activeElement;}catch(e){}"
@@ -8273,8 +8575,21 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
 
 - (void)splitPaneLoadURL:(NSURL *)url atIndex:(NSInteger)index {
     BrowserSplitContainerView *c = [self ensureSplitContainer];
-    if (index < c.panes.count) {
+    if (index < (NSInteger)c.panes.count) {
+        // 用户手动回车 = 明确重试：洗掉该 host 的失败标记，本次强制加载
+        if ([url.host length]) {
+            NSUUID *owner = self.tabController.selectedTab.tabID;
+            NSMutableDictionary *store = [self splitFailedHostsByTabID];
+            NSMutableSet *s = [[self splitFailedHostsForTab:owner] mutableCopy];
+            if ([s containsObject:url.host.lowercaseString]) {
+                [s removeObject:url.host.lowercaseString];
+                store[owner] = [s copy];
+            }
+        }
         id pane = c.panes[index];
+        // 跳过自动重载的失败栏可能没有 webView（空壳），先补建再加载
+        if (![pane webView]) [self bindSplitContainerWebViews:c];
+        if ([pane webView]) [self startPaneLoadWatchdogForWebView:[pane webView] URL:url];
         [pane loadURL:url];
         [pane updateAddressFieldWithURL:url];
     }
@@ -8295,7 +8610,7 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
                      }];
 }
 // 复用版:panes 建壳后直接挂缓存 webView,不新建不加载(切回分栏标签不重载)
-- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(NSArray *)reuse {
+- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(nullable NSArray *)reuse {
     BrowserSplitContainerView *c = [self ensureSplitContainer];
     BrowserTab *selected = self.tabController.selectedTab;
     { BrowserPaneSyncCoordinator *co = objc_getAssociatedObject(self, @selector(paneSyncCoordinator)); if (co && (co.isSyncing || co.isPicking)) [self stopPaneSync]; }
@@ -8335,8 +8650,8 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         // 无缓存的栏按快照 URL 补加载
         for (NSNumber *n in missingPaneIndexes) {
             NSInteger i = n.integerValue;
-            if (i < c.panes.count && ((BrowserPaneView *)c.panes[i]).webView) {
-                id u = (i < ((NSArray *)urls).count) ? ((NSArray *)urls)[i] : nil;
+            if (i < (NSInteger)c.panes.count && ((BrowserPaneView *)c.panes[i]).webView) {
+                id u = (i < (NSInteger)((NSArray *)urls).count) ? ((NSArray *)urls)[i] : nil;
                 NSURL *url = ([u isKindOfClass:[NSURL class]] ? u : nil);
                 if (url) [((BrowserPaneView *)c.panes[i]) loadURL:url];
             }
@@ -8345,9 +8660,9 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
         [c setNeedsLayout:YES];
     } else {
     [c applyLayout:layout weights:weights urls:nil];
-    for (NSInteger i = 0; i < c.panes.count; i++) {
+    for (NSInteger i = 0; i < (NSInteger)c.panes.count; i++) {
         BrowserPaneView *pane = c.panes[i];
-        id r = (i < reuse.count) ? reuse[i] : nil;
+        id r = (i < (NSInteger)reuse.count) ? reuse[i] : nil;
         WKWebView *wv = [r isKindOfClass:[WKWebView class]] ? r : nil;
         if (wv) {
             wv.navigationDelegate = self;

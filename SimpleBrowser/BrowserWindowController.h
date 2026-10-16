@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import "BrowserWindowLayoutPresetStore.h"
+#import "BrowserSplitLayout.h"
 
 @class BrowserTabController;
 @class BrowserTab;
@@ -68,9 +69,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BrowserWindowLayoutMode windowLayoutMode;
 
 /// 分栏脚手架(MW1): Single 时隐藏,零回归;非 Single 显示占位 panes。
-- (void)setSplitLayout:(NSInteger)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls;
+- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls;
 - (void)focusSplitPaneAtIndex:(NSInteger)index;
-- (void)setSplitLayout:(NSInteger)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(NSArray *)reuse;
+- (void)setSplitLayout:(BrowserSplitLayoutID)layout weights:(nullable NSArray *)weights urls:(nullable NSArray *)urls reuseWebViews:(nullable NSArray *)reuse;
 - (void)splitLayoutSingle:(nullable id)s;
 - (void)splitLayoutLR:(nullable id)s;
 - (void)splitLayoutUD:(nullable id)s;
