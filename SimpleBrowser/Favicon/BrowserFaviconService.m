@@ -627,22 +627,17 @@ typedef void (^FaviconRaceCompletion)(NSImage * _Nullable image, NSURL * _Nullab
     __block NSImage *winnerImage = nil;
     __block NSURL *winnerURL = nil;
     __block NSString *winnerChannel = nil;
-    __block NSInteger pending = (NSInteger)entries.count;
     NSObject *lock = [[NSObject alloc] init];
 
     for (NSDictionary *entry in entries) {
         NSString *urlString = entry[@"url"];
         NSString *channel = entry[@"channel"];
         if (urlString.length == 0 || channel.length == 0) {
-            @synchronized (lock) {
-                pending -= 1;
-            }
             continue;
         }
         [self downloadImageFromURLString:urlString completion:^(NSImage *img, NSURL *url, NSError *error) {
             (void)error;
             @synchronized (lock) {
-                pending -= 1;
                 BOOL usable = (img != nil);
                 if (usable && !allowSmall && BrowserFaviconMaxPixelEdge(img) < kPreferredMinPixelEdge) {
                     usable = NO;

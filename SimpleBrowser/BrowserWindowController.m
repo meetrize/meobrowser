@@ -3819,8 +3819,24 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         });
     }
     CFTimeInterval tChrome = CACurrentMediaTime();
+    CFTimeInterval tLaunch = CACurrentMediaTime();
     BOOL showLaunchpad = selectedTab.isNewTabPage;
-    self.launchpadView.hidden = !showLaunchpad || self.transparentModeEnabled;
+    BOOL wantLaunchHidden = !showLaunchpad || self.transparentModeEnabled;
+    BOOL launchWasHidden = self.launchpadView.hidden;
+    if (launchWasHidden != wantLaunchHidden) {
+        self.launchpadView.hidden = wantLaunchHidden;
+    }
+    NSTimeInterval launchMs = (CACurrentMediaTime() - tLaunch) * 1000.0;
+    // launch 段若异常（>500ms），多记一笔现场：launchpad 子树规模 + 容器子树规模，
+    // 验证“隐藏巨型 layer-backed 子树触发同步提交”的假设。
+    if (launchMs >= 500.0 && BrowserTabUIDiagnosticsEnabled()) {
+        BrowserTabUILog(@"launchToggle slow launch=%.1fms wasHidden=%d wantHidden=%d launchpadSubviews=%lu containerSubviews=%lu",
+                        launchMs,
+                        launchWasHidden ? 1 : 0,
+                        wantLaunchHidden ? 1 : 0,
+                        (unsigned long)self.launchpadView.subviews.count,
+                        (unsigned long)self.contentContainer.subviews.count);
+    }
 
     // 覆盖视图抬升只在被新 WebView 压住时做：对装着活 WKWebView 的容器反复
     // addSubview:positioned: 会强制容器重排，进而让 WebKit 同步提交图层到正忙的
@@ -3879,13 +3895,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSTimeInterval slow = BrowserTabUISlowThresholdMs();
     if (BrowserTabUIDiagnosticsEnabled()) {
         NSString *tag = (totalMs >= slow) ? @"SLOW refreshTabsUI" : @"refreshTabsUI";
-        BrowserTabUILog(@"%@ total=%.1fms detach=%.1fms(n=%lu) attach=%.1fms chrome=%.1fms(overlay=%.1f find=%.1f endEdit=%.1f strip=%.1f navState=%.1f syncSplit=%.1f) coldWake=%d snap=%d ntp=%d tabs=%lu",
+        BrowserTabUILog(@"%@ total=%.1fms detach=%.1fms(n=%lu) attach=%.1fms chrome=%.1fms(launch=%.1f overlay=%.1f find=%.1f endEdit=%.1f strip=%.1f navState=%.1f syncSplit=%.1f) coldWake=%d snap=%d ntp=%d tabs=%lu",
                         tag,
                         totalMs,
                         detachMs,
                         (unsigned long)detachedCount,
                         attachMs,
                         chromeMs,
+                        launchMs,
                         overlayMs,
                         findMs,
                         endEditMs,

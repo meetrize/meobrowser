@@ -6,6 +6,7 @@
 @property (nonatomic, strong) NSTextField *addressFieldInner;
 @property (nonatomic, strong) NSButton *backBtn;
 @property (nonatomic, strong) NSButton *fwdBtn;
+@property (nonatomic, strong) NSButton *reloadBtn;
 @property (nonatomic, strong) NSButton *goBtn;
 @property (nonatomic, strong) NSTrackingArea *chromeTracking;
 @property (nonatomic, strong) NSTextField *syncBadgeLabel;
@@ -42,14 +43,20 @@
             [chromeBottomLine.heightAnchor constraintEqualToConstant:1],
         ]];
 
-        _backBtn = [NSButton buttonWithTitle:@"‹" target:self action:@selector(goBack:)];
+        _backBtn = [NSButton buttonWithTitle:@"" target:self action:@selector(goBack:)];
         _backBtn.translatesAutoresizingMaskIntoConstraints = NO;
-        _backBtn.bezelStyle = NSBezelStyleInline;
+        [self styleNavButton:_backBtn symbol:@"chevron.backward" fallback:@"‹" tip:@"后退"];
         [_chromeBar addSubview:_backBtn];
-        _fwdBtn = [NSButton buttonWithTitle:@"›" target:self action:@selector(goForward:)];
+        _fwdBtn = [NSButton buttonWithTitle:@"" target:self action:@selector(goForward:)];
         _fwdBtn.translatesAutoresizingMaskIntoConstraints = NO;
-        _fwdBtn.bezelStyle = NSBezelStyleInline;
+        [self styleNavButton:_fwdBtn symbol:@"chevron.forward" fallback:@"›" tip:@"前进"];
         [_chromeBar addSubview:_fwdBtn];
+        _reloadBtn = [NSButton buttonWithTitle:@"" target:self action:@selector(reloadPane:)];
+        _reloadBtn.translatesAutoresizingMaskIntoConstraints = NO;
+        _reloadBtn.enabled = NO;
+        [self styleNavButton:_reloadBtn symbol:@"arrow.clockwise" fallback:@"↻" tip:@"刷新本栏"];
+        [_chromeBar addSubview:_reloadBtn];
+        [self applyReloadIconForLoading:NO];
         _addressFieldInner = [[NSTextField alloc] initWithFrame:NSZeroRect];
         _addressFieldInner.translatesAutoresizingMaskIntoConstraints = NO;
         _addressFieldInner.delegate = self;
@@ -61,10 +68,17 @@
         _addressFieldInner.editable = YES;
         _addressFieldInner.selectable = YES;
         _addressFieldInner.refusesFirstResponder = NO;
+        // 分栏地址栏恒为单行：长 URL 超宽时尾部截断，不折行（折行会把栏撑高、错位）。
+        _addressFieldInner.usesSingleLineMode = YES;
+        _addressFieldInner.lineBreakMode = NSLineBreakByTruncatingTail;
+        _addressFieldInner.cell.wraps = NO;
+        _addressFieldInner.cell.truncatesLastVisibleLine = YES;
+        // 去掉聚焦时的加粗蓝色描边（focus ring），改用自身边框表达聚焦。
+        _addressFieldInner.focusRingType = NSFocusRingTypeNone;
         [_chromeBar addSubview:_addressFieldInner];
-        _goBtn = [NSButton buttonWithTitle:@"前往" target:self action:@selector(commitAddress:)];
+        _goBtn = [NSButton buttonWithTitle:@"" target:self action:@selector(commitAddress:)];
         _goBtn.translatesAutoresizingMaskIntoConstraints = NO;
-        _goBtn.bezelStyle = NSBezelStyleInline;
+        [self styleNavButton:_goBtn symbol:@"arrow.right.circle" fallback:@"→" tip:@"前往"];
         [_chromeBar addSubview:_goBtn];
 
         _contentHostInner = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -82,10 +96,15 @@
             [_fwdBtn.leadingAnchor constraintEqualToAnchor:_backBtn.trailingAnchor constant:2],
             [_fwdBtn.centerYAnchor constraintEqualToAnchor:_chromeBar.centerYAnchor],
             [_fwdBtn.widthAnchor constraintEqualToConstant:20],
+            [_reloadBtn.leadingAnchor constraintEqualToAnchor:_fwdBtn.trailingAnchor constant:2],
+            [_reloadBtn.centerYAnchor constraintEqualToAnchor:_chromeBar.centerYAnchor],
+            [_reloadBtn.widthAnchor constraintEqualToConstant:20],
+            [_reloadBtn.heightAnchor constraintEqualToConstant:20],
             [_goBtn.trailingAnchor constraintEqualToAnchor:_chromeBar.trailingAnchor constant:-4],
             [_goBtn.centerYAnchor constraintEqualToAnchor:_chromeBar.centerYAnchor],
-            [_goBtn.widthAnchor constraintEqualToConstant:36],
-            [_addressFieldInner.leadingAnchor constraintEqualToAnchor:_fwdBtn.trailingAnchor constant:4],
+            [_goBtn.widthAnchor constraintEqualToConstant:22],
+            [_goBtn.heightAnchor constraintEqualToConstant:20],
+            [_addressFieldInner.leadingAnchor constraintEqualToAnchor:_reloadBtn.trailingAnchor constant:4],
             [_addressFieldInner.trailingAnchor constraintEqualToAnchor:_goBtn.leadingAnchor constant:-4],
             [_addressFieldInner.centerYAnchor constraintEqualToAnchor:_chromeBar.centerYAnchor],
             // 内容区永远撑满整个 pane(自动隐藏/隐藏模式不给地址栏预留空间)
@@ -196,29 +215,49 @@
 - (void)detachWebView {
     if (_webView) {
         @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+        @try { [_webView removeObserver:self forKeyPath:@"isLoading"]; } @catch (NSException *e) {}
     }
     [_webView removeFromSuperview];
     _webView = nil;
+    [self syncReloadButtonState];
+    [self syncNavButtonStates];
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                        context:(void *)context {
+    if ([keyPath isEqualToString:@"isLoading"] && object == _webView) {
+        [self applyReloadIconForLoading:_webView.isLoading];
+        return;
+    }
     if ([keyPath isEqualToString:@"URL"] && object == _webView) {
         NSURL *url = _webView.URL ?: change[NSKeyValueChangeNewKey];
         if ([url isKindOfClass:[NSNull class]]) url = nil;
         if ([url isKindOfClass:[NSURL class]] || url == nil) {
             [self updateAddressFieldWithURL:url];
         }
+        [self syncNavButtonStates];
         return;
     }
     [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
+/// 后退/前进可用态随历史变化；不可用时降到三级标签色，一眼看出"没得可点"。
+- (void)syncNavButtonStates {
+    BOOL hasWebView = (_webView != nil);
+    BOOL canBack = hasWebView && _webView.canGoBack;
+    BOOL canFwd = hasWebView && _webView.canGoForward;
+    _backBtn.enabled = canBack;
+    _fwdBtn.enabled = canFwd;
+    _backBtn.contentTintColor = canBack ? [NSColor secondaryLabelColor] : [NSColor tertiaryLabelColor];
+    _fwdBtn.contentTintColor = canFwd ? [NSColor secondaryLabelColor] : [NSColor tertiaryLabelColor];
+}
+
 - (void)dealloc {
     if (_webView) {
         @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+        @try { [_webView removeObserver:self forKeyPath:@"isLoading"]; } @catch (NSException *e) {}
     }
 }
 
@@ -226,6 +265,7 @@
     if (_webView == webView) return;
     if (_webView) {
         @try { [_webView removeObserver:self forKeyPath:@"URL"]; } @catch (NSException *e) {}
+        @try { [_webView removeObserver:self forKeyPath:@"isLoading"]; } @catch (NSException *e) {}
     }
     [_webView removeFromSuperview];
     _webView = webView;
@@ -242,6 +282,14 @@
                     options:NSKeyValueObservingOptionNew
                     context:NULL];
     } @catch (NSException *e) {}
+    @try {
+        [webView addObserver:self forKeyPath:@"isLoading"
+                    options:NSKeyValueObservingOptionNew
+                    context:NULL];
+    } @catch (NSException *e) {}
+    [self syncReloadButtonState];
+    [self syncNavButtonStates];
+    [self applyReloadIconForLoading:webView.isLoading];
     [self updateAddressFieldWithURL:webView.URL];
 }
 
@@ -270,12 +318,85 @@
     }
 }
 
-- (void)goBack:(id)s { if ([_webView canGoBack]) [_webView goBack]; }
-- (void)goForward:(id)s { if ([_webView canGoForward]) [_webView goForward]; }
+- (void)goBack:(id)s { if ([_webView canGoBack]) { [_webView goBack]; [self syncNavButtonStates]; } }
+- (void)goForward:(id)s { if ([_webView canGoForward]) { [_webView goForward]; [self syncNavButtonStates]; } }
+
+/// 导航键统一外观：无边框图标按钮（macOS 11+ 用 SF Symbol，旧系统回退字符）。
+- (void)styleNavButton:(NSButton *)button symbol:(NSString *)symbol fallback:(NSString *)fallback tip:(NSString *)tip {
+    button.bezelStyle = NSBezelStyleInline;
+    button.bordered = NO;
+    button.imagePosition = NSImageOnly;
+    button.contentTintColor = [NSColor secondaryLabelColor];
+    button.toolTip = tip;
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *cfg =
+            [NSImageSymbolConfiguration configurationWithPointSize:12
+                                                             weight:NSFontWeightRegular
+                                                              scale:NSImageSymbolScaleMedium];
+        NSImage *img = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:tip];
+        if (img) { button.image = [img imageWithSymbolConfiguration:cfg]; return; }
+    }
+    button.title = fallback;
+}
+
+/// 刷新图标:空闲=顺时针箭头,加载中=叉(点击即停止),与 Safari 一致。
+- (void)applyReloadIconForLoading:(BOOL)loading {
+    if (@available(macOS 11.0, *)) {
+        NSString *symbol = loading ? @"xmark" : @"arrow.clockwise";
+        NSImageSymbolConfiguration *cfg =
+            [NSImageSymbolConfiguration configurationWithPointSize:12
+                                                             weight:NSFontWeightRegular
+                                                              scale:NSImageSymbolScaleMedium];
+        NSImage *img = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:(loading ? @"停止" : @"刷新")];
+        if (img) _reloadBtn.image = [img imageWithSymbolConfiguration:cfg];
+    } else {
+        _reloadBtn.title = loading ? @"✕" : @"↻";
+    }
+    _reloadBtn.toolTip = loading ? @"停止加载" : @"刷新本栏";
+}
+
+- (void)syncReloadButtonState {
+    BOOL hasWebView = (_webView != nil);
+    _reloadBtn.enabled = hasWebView;
+    if (!hasWebView) {
+        [self applyReloadIconForLoading:NO];
+    }
+}
+
+- (void)reloadPane:(id)s {
+    WKWebView *webView = _webView;
+    if (!webView) {
+        // 该栏还没建页：退回成「按地址栏内容加载」
+        [self submitAddressField];
+        return;
+    }
+    if (webView.isLoading) {
+        [webView stopLoading];
+        return;
+    }
+    NSURL *url = webView.URL;
+    if (url) {
+        [webView loadRequest:[NSURLRequest requestWithURL:url]];
+    } else {
+        [webView reload];
+    }
+}
+
 - (void)commitAddress:(id)s { [self submitAddressField]; }
 
 - (void)controlTextDidEndEditing:(NSNotification *)obj {
-    if (obj.object == _addressFieldInner) [self submitAddressField];
+    if (obj.object != _addressFieldInner) return;
+    // 结束编辑 ≠ 回车提交。点地址栏后再点页面也会走这里，若无条件提交就会把当前页
+    // 重新 load 一遍（表现为"点一下页面自动刷新"）。仅当内容与当前页 URL 不同才跳转。
+    [self submitAddressFieldOnlyIfChanged];
+}
+
+/// 仅在地址栏内容与当前页地址不同时才跳转（用于失焦提交）。
+- (void)submitAddressFieldOnlyIfChanged {
+    NSString *typed = [_addressFieldInner.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *current = _webView.URL.absoluteString ?: @"";
+    if (typed.length == 0 || [typed isEqualToString:current]) return;
+    [self submitAddressField];
 }
 
 - (void)submitAddressField {
