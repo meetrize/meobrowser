@@ -2,13 +2,55 @@
 #import "SBTextView.h"
 #import <WebKit/WebKit.h>
 
-static const CGFloat kHUDMaxWidth = 360.0;
+static const CGFloat kHUDMaxWidth = 480.0;
 static const CGFloat kHUDPadding = 10.0;
-static const CGFloat kHUDTitleHeight = 22.0;
-static const CGFloat kHUDRowHeight = 16.0;
-static const CGFloat kHUDButtonSize = 26.0;
-static const CGFloat kHUDHoverCopyWidth = 44.0;
-static const NSUInteger kHUDMaxAttributeRows = 8;
+static const CGFloat kHUDTitleHeight = 20.0;
+static const CGFloat kHUDRowHeight = 15.0;
+static const CGFloat kHUDIconButton = 22.0;
+static const CGFloat kHUDOnionItemH = 18.0;
+static const CGFloat kHUDOnionWidth = 92.0;
+static const CGFloat kHUDOnionGap = 1.0;
+
+#pragma mark - Helpers
+
+static NSImage *MeoHUDSymbol(NSString *name, CGFloat pointSize) {
+    if (@available(macOS 11.0, *)) {
+        NSImage *img = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
+        if (!img) return nil;
+        NSImageSymbolConfiguration *cfg =
+            [NSImageSymbolConfiguration configurationWithPointSize:pointSize
+                                                            weight:NSFontWeightMedium];
+        return [img imageWithSymbolConfiguration:cfg];
+    }
+    return nil;
+}
+
+static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fallback, NSString *tip) {
+    button.bordered = NO;
+    button.bezelStyle = NSBezelStyleInline;
+    button.controlSize = NSControlSizeSmall;
+    button.toolTip = tip;
+    button.wantsLayer = YES;
+    NSImage *img = MeoHUDSymbol(symbol, 12.0);
+    if (img) {
+        img.template = YES;
+        button.image = img;
+        button.imagePosition = NSImageOnly;
+        button.title = @"";
+        if (@available(macOS 10.14, *)) {
+            button.contentTintColor = [NSColor whiteColor];
+        }
+    } else {
+        button.image = nil;
+        button.imagePosition = NSNoImage;
+        button.attributedTitle = [[NSAttributedString alloc]
+            initWithString:fallback
+                attributes:@{
+                    NSForegroundColorAttributeName: [NSColor whiteColor],
+                    NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightBold],
+                }];
+    }
+}
 
 #pragma mark - HUD View
 
@@ -17,6 +59,8 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
 @property (nonatomic, strong) NSButton *dismissButton;
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) SBTextView *bodyTextView;
+@property (nonatomic, strong) NSView *onionBar;
+@property (nonatomic, strong) NSMutableArray<NSButton *> *onionButtons;
 @end
 
 @implementation BrowserDOMInspectorHUDView
@@ -27,7 +71,10 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
         _titleText = @"";
         _subtitleText = @"";
         _attributeRows = @[];
+        _onionLabels = @[];
+        _selectedOnionIndex = NSNotFound;
         _pinnedAppearance = NO;
+        _onionButtons = [NSMutableArray array];
         self.wantsLayer = YES;
         self.layer.backgroundColor = [NSColor clearColor].CGColor;
         self.layer.cornerRadius = 8.0;
@@ -44,21 +91,15 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
 - (BOOL)isFlipped { return YES; }
 
 - (void)buildInteractiveChrome {
-    self.selectorCopyButton = [NSButton buttonWithTitle:@"复制"
-                                                  target:self
-                                                  action:@selector(handleCopy:)];
-    self.selectorCopyButton.bezelStyle = NSBezelStyleRounded;
-    self.selectorCopyButton.controlSize = NSControlSizeSmall;
-    self.selectorCopyButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    self.selectorCopyButton.toolTip = @"复制 CSS 选择器";
+    self.selectorCopyButton = [[NSButton alloc] initWithFrame:NSZeroRect];
+    self.selectorCopyButton.target = self;
+    self.selectorCopyButton.action = @selector(handleCopy:);
+    MeoStyleIconButton(self.selectorCopyButton, @"doc.on.doc", @"⎘", @"复制 CSS 选择器");
 
-    self.dismissButton = [NSButton buttonWithTitle:@"关闭"
-                                             target:self
-                                             action:@selector(handleClose:)];
-    self.dismissButton.bezelStyle = NSBezelStyleRounded;
-    self.dismissButton.controlSize = NSControlSizeSmall;
-    self.dismissButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    self.dismissButton.toolTip = @"取消钉住";
+    self.dismissButton = [[NSButton alloc] initWithFrame:NSZeroRect];
+    self.dismissButton.target = self;
+    self.dismissButton.action = @selector(handleClose:);
+    MeoStyleIconButton(self.dismissButton, @"xmark", @"✕", @"取消钉住");
 
     self.bodyTextView = [SBTextView standardTextView];
     self.bodyTextView.editable = NO;
@@ -75,9 +116,13 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     self.scrollView.drawsBackground = NO;
     self.scrollView.documentView = self.bodyTextView;
 
+    self.onionBar = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.onionBar.wantsLayer = YES;
+
     [self addSubview:self.selectorCopyButton];
     [self addSubview:self.dismissButton];
     [self addSubview:self.scrollView];
+    [self addSubview:self.onionBar];
 }
 
 - (void)setPinnedAppearance:(BOOL)pinnedAppearance {
@@ -86,12 +131,23 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     [self applyInteractionMode];
 }
 
+- (void)setOnionLabels:(NSArray<NSString *> *)onionLabels {
+    _onionLabels = [onionLabels copy] ?: @[];
+    [self rebuildOnionButtons];
+}
+
+- (void)setSelectedOnionIndex:(NSInteger)selectedOnionIndex {
+    if (_selectedOnionIndex == selectedOnionIndex) return;
+    _selectedOnionIndex = selectedOnionIndex;
+    [self refreshOnionSelectionAppearance];
+}
+
 - (void)applyInteractionMode {
     BOOL pinned = self.pinnedAppearance;
-    // 悬停也显示「复制」，便于点中；关闭与正文仅交互态显示。
     self.selectorCopyButton.hidden = NO;
     self.dismissButton.hidden = !pinned;
     self.scrollView.hidden = !pinned;
+    self.onionBar.hidden = (self.onionLabels.count == 0);
     if (!pinned) {
         [self.window makeFirstResponder:nil];
     }
@@ -99,45 +155,121 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     [self setNeedsDisplay:YES];
 }
 
+- (void)rebuildOnionButtons {
+    NSArray<NSView *> *old = [self.onionBar.subviews copy];
+    for (NSView *v in old) {
+        [v removeFromSuperview];
+    }
+    [self.onionButtons removeAllObjects];
+
+    NSInteger count = (NSInteger)self.onionLabels.count;
+    for (NSInteger i = 0; i < count; i++) {
+        NSString *label = self.onionLabels[(NSUInteger)i];
+        NSButton *btn = [[NSButton alloc] initWithFrame:NSZeroRect];
+        btn.bordered = NO;
+        btn.bezelStyle = NSBezelStyleInline;
+        btn.controlSize = NSControlSizeMini;
+        btn.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightMedium];
+        btn.target = self;
+        btn.action = @selector(handleOnion:);
+        btn.tag = i;
+        btn.toolTip = [NSString stringWithFormat:@"查看 <%@> 的属性", label];
+        btn.wantsLayer = YES;
+        // 非末级前加分隔符感：标题即标签名
+        btn.title = label;
+        [self.onionBar addSubview:btn];
+        [self.onionButtons addObject:btn];
+
+    }
+    self.onionBar.hidden = (count == 0);
+    [self refreshOnionSelectionAppearance];
+    [self layoutChrome];
+}
+
+- (void)refreshOnionSelectionAppearance {
+    NSInteger sel = self.selectedOnionIndex;
+    for (NSButton *btn in self.onionButtons) {
+        BOOL on = (btn.tag == sel);
+        if (@available(macOS 10.14, *)) {
+            btn.contentTintColor = on
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.62 blue:0.25 alpha:1.0]
+                : [NSColor colorWithCalibratedWhite:0.78 alpha:1.0];
+        }
+        btn.font = [NSFont monospacedSystemFontOfSize:10
+                                               weight:on ? NSFontWeightBold : NSFontWeightMedium];
+    }
+}
+
 - (void)reloadPinnedContent {
     if (!self.pinnedAppearance) return;
     NSMutableString *text = [NSMutableString string];
     NSString *title = self.titleText.length > 0 ? self.titleText : @"";
-    [text appendFormat:@"钉住 · %@\n", title];
+    [text appendFormat:@"%@\n", title];
     if (self.subtitleText.length > 0) {
         [text appendFormat:@"%@\n", self.subtitleText];
     }
-    [text appendString:@"────────────────\n"];
-    for (NSString *row in self.attributeRows) {
-        [text appendFormat:@"%@\n", row];
+    if (self.attributeRows.count > 0) {
+        [text appendString:@"────────────────\n"];
+        for (NSString *row in self.attributeRows) {
+            [text appendFormat:@"%@\n", row];
+        }
     }
     self.bodyTextView.string = text;
     [self.bodyTextView setSelectedRange:NSMakeRange(0, 0)];
     [self layoutChrome];
 }
 
+- (CGFloat)onionColumnWidth {
+    return (self.onionLabels.count > 0) ? kHUDOnionWidth : 0;
+}
+
 - (void)layoutChrome {
     CGFloat w = NSWidth(self.bounds);
     CGFloat h = NSHeight(self.bounds);
-    CGFloat btnW = kHUDHoverCopyWidth;
-    if (self.pinnedAppearance) {
-        self.dismissButton.frame = NSMakeRect(w - kHUDPadding - btnW, kHUDPadding, btnW, kHUDButtonSize);
-        self.selectorCopyButton.frame = NSMakeRect(w - kHUDPadding - btnW * 2 - 6, kHUDPadding, btnW, kHUDButtonSize);
+    CGFloat btn = kHUDIconButton;
 
-        CGFloat bodyTop = kHUDPadding + kHUDButtonSize + 6;
-        CGFloat bodyW = MAX(0, w - kHUDPadding * 2);
+    self.dismissButton.frame = self.pinnedAppearance
+        ? NSMakeRect(w - kHUDPadding - btn, kHUDPadding, btn, btn)
+        : NSZeroRect;
+    self.selectorCopyButton.frame = self.pinnedAppearance
+        ? NSMakeRect(w - kHUDPadding - btn * 2 - 6, kHUDPadding, btn, btn)
+        : NSMakeRect(w - kHUDPadding - btn, kHUDPadding, btn, btn);
+
+    CGFloat onionW = [self onionColumnWidth];
+    CGFloat top = self.pinnedAppearance ? (kHUDPadding + btn + 4) : (kHUDPadding + kHUDTitleHeight +
+        (self.subtitleText.length > 0 ? kHUDRowHeight : 0) + 4);
+    // 悬停态正文由 drawRect 绘制，洋葱列贴左下；钉住态正文在右侧 scroll。
+    if (!self.pinnedAppearance) {
+        top = kHUDPadding;
+    }
+    CGFloat onionH = MAX(0, h - top - kHUDPadding);
+    self.onionBar.frame = NSMakeRect(kHUDPadding, top, onionW, onionH);
+    [self layoutOnionButtonsInBar];
+
+    if (self.pinnedAppearance) {
+        CGFloat bodyTop = kHUDPadding + btn + 6;
+        CGFloat bodyX = kHUDPadding + (onionW > 0 ? onionW + 8 : 0);
+        CGFloat bodyW = MAX(0, w - bodyX - kHUDPadding);
         CGFloat bodyH = MAX(0, h - bodyTop - kHUDPadding);
-        self.scrollView.frame = NSMakeRect(kHUDPadding, bodyTop, bodyW, bodyH);
+        self.scrollView.frame = NSMakeRect(bodyX, bodyTop, bodyW, bodyH);
         self.bodyTextView.minSize = NSMakeSize(0, 0);
         self.bodyTextView.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
         NSUInteger lines = MAX(1, [[self.bodyTextView.string componentsSeparatedByCharactersInSet:
                                     [NSCharacterSet newlineCharacterSet]] count]);
-        CGFloat textH = MAX(bodyH, lines * (kHUDRowHeight + 2));
+        CGFloat textH = MAX(bodyH, lines * (kHUDRowHeight + 1));
         [self.bodyTextView setFrameSize:NSMakeSize(MAX(bodyW - 4, 1), textH)];
     } else {
-        self.selectorCopyButton.frame = NSMakeRect(w - kHUDPadding - btnW, kHUDPadding, btnW, kHUDButtonSize);
-        self.dismissButton.frame = NSZeroRect;
         self.scrollView.frame = NSZeroRect;
+    }
+}
+
+- (void)layoutOnionButtonsInBar {
+    CGFloat y = 0;
+    CGFloat w = NSWidth(self.onionBar.bounds);
+    for (NSButton *btn in self.onionButtons) {
+        btn.frame = NSMakeRect(0, y, w, kHUDOnionItemH);
+        btn.alignment = NSTextAlignmentLeft;
+        y += kHUDOnionItemH + kHUDOnionGap;
     }
 }
 
@@ -159,7 +291,16 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     if (self.onClose) self.onClose();
 }
 
-/// 悬停：仅「复制」可点；钉住：整块可点。
+- (void)handleOnion:(id)sender {
+    NSButton *btn = (NSButton *)sender;
+    if (![btn isKindOfClass:[NSButton class]]) return;
+    NSInteger idx = btn.tag;
+    if (self.onSelectOnionIndex) self.onSelectOnionIndex(idx);
+    if (!self.pinnedAppearance && self.onRequestInteractiveLock) {
+        self.onRequestInteractiveLock();
+    }
+}
+
 - (NSView *)hitTest:(NSPoint)point {
     if (self.hidden || self.alphaValue < 0.01) return nil;
     NSPoint local = [self convertPoint:point fromView:self.superview];
@@ -168,10 +309,15 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
         NSView *hit = [super hitTest:point];
         return hit ?: self;
     }
-    // 悬停穿透：只把命中交给复制按钮。
+    // 悬停穿透：复制 + 洋葱导航可点。
     if (!self.selectorCopyButton.hidden &&
         NSPointInRect(local, self.selectorCopyButton.frame)) {
         return [self.selectorCopyButton hitTest:point] ?: self.selectorCopyButton;
+    }
+    if (!self.onionBar.hidden && NSPointInRect(local, self.onionBar.frame)) {
+        NSView *hit = [self.onionBar hitTest:point];
+        if (hit && hit != self.onionBar) return hit;
+        return nil;
     }
     return nil;
 }
@@ -200,11 +346,12 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     accent.lineWidth = 2;
     [accent stroke];
 
-    // 钉住态正文由 SBTextView 承担。
     if (self.pinnedAppearance) return;
 
-    CGFloat titleMaxW = w - kHUDPadding * 2 - kHUDHoverCopyWidth - 8;
-    CGFloat y = h - kHUDPadding - kHUDTitleHeight + 2;
+    CGFloat onionW = [self onionColumnWidth];
+    CGFloat contentX = kHUDPadding + (onionW > 0 ? onionW + 8 : 0);
+    CGFloat titleMaxW = w - contentX - kHUDPadding - kHUDIconButton - 4;
+    CGFloat y = kHUDPadding + 2;
     NSDictionary *titleAttrs = @{
         NSFontAttributeName: [BrowserDOMInspectorHUDView titleFont],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.95 alpha:1.0],
@@ -214,10 +361,10 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
         dispTitle = [dispTitle substringToIndex:dispTitle.length - 1];
     }
     if (dispTitle.length < self.titleText.length) dispTitle = [dispTitle stringByAppendingString:@"\u2026"];
-    [dispTitle drawAtPoint:NSMakePoint(kHUDPadding, y) withAttributes:titleAttrs];
+    [dispTitle drawAtPoint:NSMakePoint(contentX, y) withAttributes:titleAttrs];
+    y += kHUDTitleHeight;
 
     if (self.subtitleText.length > 0) {
-        y -= kHUDRowHeight;
         NSDictionary *subAttrs = @{
             NSFontAttributeName: [BrowserDOMInspectorHUDView subtitleFont],
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.55 alpha:1.0],
@@ -227,23 +374,25 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
             sub = [sub substringToIndex:sub.length - 1];
         }
         if (sub.length < self.subtitleText.length) sub = [sub stringByAppendingString:@"\u2026"];
-        [sub drawAtPoint:NSMakePoint(kHUDPadding, y) withAttributes:subAttrs];
+        [sub drawAtPoint:NSMakePoint(contentX, y) withAttributes:subAttrs];
+        y += kHUDRowHeight;
     }
 
     NSDictionary *rowAttrs = @{
         NSFontAttributeName: [BrowserDOMInspectorHUDView rowFont],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.72 alpha:1.0],
     };
-    y -= 4;
+    y += 2;
+    CGFloat attrBottom = h - kHUDPadding;
     for (NSString *row in self.attributeRows) {
-        y -= kHUDRowHeight;
-        if (y < kHUDPadding) break;
+        if (y + kHUDRowHeight > attrBottom) break;
         NSString *disp = row;
         while (disp.length > 4 && [disp sizeWithAttributes:rowAttrs].width > titleMaxW) {
             disp = [disp substringToIndex:disp.length - 1];
         }
         if (disp.length < row.length) disp = [disp stringByAppendingString:@"\u2026"];
-        [disp drawAtPoint:NSMakePoint(kHUDPadding, y) withAttributes:rowAttrs];
+        [disp drawAtPoint:NSMakePoint(contentX, y) withAttributes:rowAttrs];
+        y += kHUDRowHeight;
     }
 }
 @end
@@ -256,6 +405,9 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
 @property (nonatomic, copy, nullable) NSString *pendingSelector;
 @property (nonatomic, assign) NSRect lastGeometry;
 @property (nonatomic, assign) NSRect lastWebViewRect;
+@property (nonatomic, copy, nullable) NSArray<NSDictionary *> *ancestors;
+@property (nonatomic, assign) NSInteger selectedAncestorIndex;
+@property (nonatomic, copy, nullable) NSDictionary *rootSnapshot;
 @end
 
 @implementation BrowserDOMInspectorHUD
@@ -286,9 +438,114 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
         [weakSelf lockInteractiveWithCurrentSnapshot];
         if (weakSelf.onInteractiveLockFromCopy) weakSelf.onInteractiveLockFromCopy();
     };
+    view.onSelectOnionIndex = ^(NSInteger index) {
+        [weakSelf selectAncestorAtIndex:index];
+    };
     [host addSubview:view positioned:NSWindowAbove relativeTo:nil];
     self.view = view;
     return view;
+}
+
+- (NSArray<NSDictionary *> *)normalizedAncestorsFromSnapshot:(NSDictionary *)snapshot {
+    NSArray *raw = [snapshot[@"ancestors"] isKindOfClass:[NSArray class]] ? snapshot[@"ancestors"] : nil;
+    if (raw.count > 0) {
+        NSMutableArray *out = [NSMutableArray array];
+        for (id item in raw) {
+            if ([item isKindOfClass:[NSDictionary class]]) [out addObject:item];
+        }
+        if (out.count > 0) return out;
+    }
+    // 无 ancestors 时退化为仅当前节点。
+    return @[ snapshot ];
+}
+
+- (NSString *)labelForAncestor:(NSDictionary *)node {
+    NSString *tag = [node[@"tagName"] isKindOfClass:[NSString class]] ? node[@"tagName"] : @"?";
+    NSString *elementID = [node[@"id"] isKindOfClass:[NSString class]] ? node[@"id"] : @"";
+    NSString *cls = [node[@"className"] isKindOfClass:[NSString class]] ? node[@"className"] : @"";
+    if (elementID.length > 0) {
+        return [NSString stringWithFormat:@"%@#%@", tag, elementID];
+    }
+    if (cls.length > 0) {
+        NSString *first = [[cls componentsSeparatedByCharactersInSet:
+                            [NSCharacterSet whitespaceAndNewlineCharacterSet]] firstObject];
+        if (first.length > 0) {
+            return [NSString stringWithFormat:@"%@.%@", tag, first];
+        }
+    }
+    return tag;
+}
+
+- (NSArray<NSString *> *)attributeRowsForAncestor:(NSDictionary *)node includeSelector:(BOOL)includeSelector {
+    NSMutableArray<NSString *> *rows = [NSMutableArray array];
+    NSString *selector = [node[@"selector"] isKindOfClass:[NSString class]] ? node[@"selector"] : @"";
+    NSString *cls = [node[@"className"] isKindOfClass:[NSString class]] ? node[@"className"] : @"";
+    NSArray *attributes = [node[@"attributes"] isKindOfClass:[NSArray class]] ? node[@"attributes"] : @[];
+
+    if (includeSelector && selector.length > 0) {
+        [rows addObject:[NSString stringWithFormat:@"selector=%@", selector]];
+    }
+    if (cls.length > 0) {
+        [rows addObject:[NSString stringWithFormat:@"class=\"%@\"", cls]];
+    }
+    for (NSDictionary *attr in attributes) {
+        if (![attr isKindOfClass:[NSDictionary class]]) continue;
+        NSString *name = [attr[@"name"] isKindOfClass:[NSString class]] ? attr[@"name"] : nil;
+        NSString *value = [attr[@"value"] isKindOfClass:[NSString class]] ? attr[@"value"] : @"";
+        if (name.length == 0 || [name isEqualToString:@"class"]) continue;
+        [rows addObject:[NSString stringWithFormat:@"%@=\"%@\"", name, value]];
+    }
+    return rows;
+}
+
+- (void)applySelectedAncestorToView:(BrowserDOMInspectorHUDView *)view {
+    if (self.ancestors.count == 0) return;
+    NSInteger idx = self.selectedAncestorIndex;
+    if (idx < 0 || idx >= (NSInteger)self.ancestors.count) {
+        idx = (NSInteger)self.ancestors.count - 1;
+        self.selectedAncestorIndex = idx;
+    }
+    NSDictionary *node = self.ancestors[(NSUInteger)idx];
+    view.titleText = [self labelForAncestor:node];
+    view.attributeRows = [self attributeRowsForAncestor:node includeSelector:YES];
+    view.selectedOnionIndex = idx;
+
+    NSString *selector = [node[@"selector"] isKindOfClass:[NSString class]] ? node[@"selector"] : @"";
+    self.pendingSelector = selector;
+
+    // 几何信息仍用根快照（页面上当前高亮元素）。
+    NSDictionary *geo = [self.rootSnapshot[@"geometry"] isKindOfClass:[NSDictionary class]]
+        ? self.rootSnapshot[@"geometry"] : nil;
+    if (geo) {
+        view.subtitleText = [NSString stringWithFormat:@"%@×%@ @ (%@, %@)%@",
+                             geo[@"width"] ?: @0, geo[@"height"] ?: @0,
+                             geo[@"x"] ?: @0, geo[@"y"] ?: @0,
+                             [geo[@"inViewport"] boolValue] ? @"" : @" · 视口外"];
+    } else {
+        view.subtitleText = @"";
+    }
+}
+
+- (void)selectAncestorAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.ancestors.count) return;
+    self.selectedAncestorIndex = index;
+    BrowserDOMInspectorHUDView *view = self.view;
+    NSWindow *window = self.hostWindow;
+    if (!view || !window) return;
+    [self applySelectedAncestorToView:view];
+    NSSize size = [self contentSizeForView:view
+                                    pinned:view.pinnedAppearance
+                                  inWindow:window];
+    view.frame = [self frameForGeometry:self.lastGeometry
+                            webViewRect:self.lastWebViewRect
+                             contentSize:size
+                                inWindow:window];
+    if (view.pinnedAppearance) {
+        [view reloadPinnedContent];
+    } else {
+        [view layoutChrome];
+        [view setNeedsDisplay:YES];
+    }
 }
 
 - (void)showSnapshot:(NSDictionary *)snapshot
@@ -304,50 +561,22 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     [window.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
     view.layer.zPosition = 20000;
 
-    NSString *selector = [snapshot[@"selector"] isKindOfClass:[NSString class]] ? snapshot[@"selector"] : @"";
-    NSString *tag = [snapshot[@"tagName"] isKindOfClass:[NSString class]] ? snapshot[@"tagName"] : @"";
-    NSString *elementID = [snapshot[@"id"] isKindOfClass:[NSString class]] ? snapshot[@"id"] : @"";
-    NSString *cls = [snapshot[@"className"] isKindOfClass:[NSString class]] ? snapshot[@"className"] : @"";
-    view.titleText = elementID.length > 0 ? [NSString stringWithFormat:@"%@#%@", tag, elementID] : tag;
+    self.rootSnapshot = snapshot;
+    self.ancestors = [self normalizedAncestorsFromSnapshot:snapshot];
+    self.selectedAncestorIndex = (NSInteger)self.ancestors.count - 1;
 
-    NSDictionary *geo = [snapshot[@"geometry"] isKindOfClass:[NSDictionary class]] ? snapshot[@"geometry"] : nil;
-    if (geo) {
-        view.subtitleText = [NSString stringWithFormat:@"%@×%@ @ (%@, %@)%@",
-                             geo[@"width"] ?: @0, geo[@"height"] ?: @0,
-                             geo[@"x"] ?: @0, geo[@"y"] ?: @0,
-                             [geo[@"inViewport"] boolValue] ? @"" : @" \u00b7 \u89c6\u53e3\u5916"];
-    } else {
-        view.subtitleText = @"";
+    NSMutableArray<NSString *> *labels = [NSMutableArray array];
+    for (NSDictionary *node in self.ancestors) {
+        [labels addObject:[self labelForAncestor:node]];
     }
+    view.onionLabels = labels;
 
-    NSArray *attributes = [snapshot[@"attributes"] isKindOfClass:[NSArray class]] ? snapshot[@"attributes"] : @[];
-    NSMutableArray<NSString *> *rows = [NSMutableArray array];
-    NSUInteger shown = 0;
-    for (NSDictionary *attr in attributes) {
-        if (shown >= kHUDMaxAttributeRows) break;
-        NSString *name = [attr[@"name"] isKindOfClass:[NSString class]] ? attr[@"name"] : nil;
-        NSString *value = [attr[@"value"] isKindOfClass:[NSString class]] ? attr[@"value"] : @"";
-        if (name.length == 0 || [name isEqualToString:@"class"]) continue;
-        [rows addObject:[NSString stringWithFormat:@"%@=\"%@\"", name, value]];
-        shown++;
-    }
-    if (cls.length > 0) {
-        [rows insertObject:[NSString stringWithFormat:@"class=\"%@\"", cls] atIndex:0];
-    }
-    if (attributes.count > shown) {
-        [rows addObject:[NSString stringWithFormat:@"\u2026 \u53e6\u6709 %lu \u4e2a\u5c5e\u6027",
-                          (unsigned long)(attributes.count - shown)]];
-    }
-    if (selector.length > 0) {
-        [rows insertObject:[NSString stringWithFormat:@"selector=%@", selector] atIndex:0];
-    }
-    view.attributeRows = rows;
+    [self applySelectedAncestorToView:view];
     view.pinnedAppearance = pinned;
     self.lastGeometry = geometry;
     self.lastWebViewRect = webViewRect;
-    self.pendingSelector = selector;
 
-    NSSize size = [self contentSizeForView:view pinned:pinned];
+    NSSize size = [self contentSizeForView:view pinned:pinned inWindow:window];
     view.frame = [self frameForGeometry:geometry
                             webViewRect:webViewRect
                              contentSize:size
@@ -371,7 +600,7 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
         return;
     }
     view.pinnedAppearance = YES;
-    NSSize size = [self contentSizeForView:view pinned:YES];
+    NSSize size = [self contentSizeForView:view pinned:YES inWindow:window];
     view.frame = [self frameForGeometry:self.lastGeometry
                             webViewRect:self.lastWebViewRect
                              contentSize:size
@@ -380,24 +609,36 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     [view setNeedsDisplay:YES];
 }
 
-- (NSSize)contentSizeForView:(BrowserDOMInspectorHUDView *)view pinned:(BOOL)pinned {
+- (NSSize)contentSizeForView:(BrowserDOMInspectorHUDView *)view
+                      pinned:(BOOL)pinned
+                    inWindow:(NSWindow *)window {
     NSFont *titleFont = [BrowserDOMInspectorHUDView titleFont];
     NSFont *bodyFont = [BrowserDOMInspectorHUDView rowFont];
-    NSString *titleForWidth = pinned
-        ? [@"钉住 · " stringByAppendingString:(view.titleText ?: @"")]
-        : (view.titleText ?: @"");
-    CGFloat width = [titleForWidth sizeWithAttributes:@{NSFontAttributeName: titleFont}].width;
+
+    CGFloat contentW = [(view.titleText ?: @"") sizeWithAttributes:@{NSFontAttributeName: titleFont}].width;
     for (NSString *row in view.attributeRows) {
-        width = MAX(width, [row sizeWithAttributes:@{NSFontAttributeName: bodyFont}].width);
+        contentW = MAX(contentW, [row sizeWithAttributes:@{NSFontAttributeName: bodyFont}].width);
     }
-    CGFloat trailing = pinned ? 110.0 : (kHUDHoverCopyWidth + 16.0);
-    width = MIN(MAX(ceil(width) + kHUDPadding * 2 + trailing, pinned ? 260.0 : 180.0), kHUDMaxWidth);
-    CGFloat height = kHUDPadding * 2 + kHUDTitleHeight;
-    if (view.subtitleText.length > 0) height += kHUDRowHeight;
-    height += view.attributeRows.count * kHUDRowHeight;
-    if (pinned) {
-        height = MAX(height + 20.0, 140.0);
-    }
+
+    CGFloat onionW = (view.onionLabels.count > 0) ? kHUDOnionWidth : 0;
+    CGFloat trailing = pinned ? (kHUDIconButton * 2 + 20.0) : (kHUDIconButton + 16.0);
+    CGFloat width = ceil(contentW) + kHUDPadding * 2 + trailing + (onionW > 0 ? onionW + 8 : 0);
+    width = MIN(MAX(width, pinned ? 320.0 : 240.0), kHUDMaxWidth);
+
+    CGFloat attrH = kHUDPadding * 2 + kHUDTitleHeight;
+    if (view.subtitleText.length > 0) attrH += kHUDRowHeight;
+    attrH += 4 + view.attributeRows.count * kHUDRowHeight;
+    if (pinned) attrH += kHUDIconButton + 8;
+
+    CGFloat onionH = kHUDPadding * 2 + view.onionLabels.count * (kHUDOnionItemH + kHUDOnionGap);
+    CGFloat height = MAX(attrH, onionH);
+
+    CGFloat maxH = NSHeight(self.lastWebViewRect);
+    if (maxH < 80) maxH = NSHeight(window.contentView.bounds) * 0.7;
+    maxH = MAX(140.0, maxH - 24.0);
+    if (height > maxH) height = maxH;
+    if (pinned) height = MAX(height, 140.0);
+
     return NSMakeSize(width, height);
 }
 
@@ -432,6 +673,9 @@ static const NSUInteger kHUDMaxAttributeRows = 8;
     self.view.hidden = YES;
     self.view.pinnedAppearance = NO;
     self.pendingSelector = nil;
+    self.ancestors = nil;
+    self.rootSnapshot = nil;
+    self.selectedAncestorIndex = NSNotFound;
 }
 
 - (void)dealloc {

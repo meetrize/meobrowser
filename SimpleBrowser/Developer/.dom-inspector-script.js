@@ -179,6 +179,26 @@
     }
     return out;
   }
+  // body → … → el（不含 html），供气泡洋葱导航。
+  function collectAncestors(el) {
+    var chain = [];
+    var node = el;
+    var guard = 0;
+    while (node && node.nodeType === 1 && guard++ < 48) {
+      var tag = node.tagName ? node.tagName.toLowerCase() : '';
+      if (!tag || tag === 'html') { break; }
+      chain.unshift({
+        tagName: tag,
+        id: node.id || '',
+        className: scrubClasses(node),
+        selector: cssPath(node),
+        attributes: collectAttributes(node, false)
+      });
+      if (tag === 'body') { break; }
+      node = node.parentElement;
+    }
+    return chain;
+  }
   function snapshot(el, full) {
     var r = el.getBoundingClientRect();
     var own = '';
@@ -186,6 +206,7 @@
     var t = clip(own, full ? 2000 : 120);
     var attrs = collectAttributes(el, full);
     var props = full ? collectProperties(el) : [];
+    var ancestors = collectAncestors(el);
     return {
       tagName: el.tagName ? el.tagName.toLowerCase() : '',
       selector: cssPath(el),
@@ -194,6 +215,7 @@
       className: scrubClasses(el),
       attributes: attrs,
       properties: props,
+      ancestors: ancestors,
       geometry: {
         x: Math.round(r.left), y: Math.round(r.top),
         width: Math.round(r.width), height: Math.round(r.height),
@@ -208,7 +230,7 @@
               label: el.getAttribute('aria-label') || '',
               alt: el.getAttribute('alt') || '',
               hidden: !!el.hidden },
-      counts: { attributes: attrs.length, properties: props.length }
+      counts: { attributes: attrs.length, properties: props.length, ancestors: ancestors.length }
     };
   }
   function flushHover() {
