@@ -4522,6 +4522,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (void)tabControllerDidChange:(id)controller {
     (void)controller;
+    // DOM 探针气泡按标签隔离：选中标签变化时立刻隐藏（内部会比对 tabID）。
+    [self.domInspectorController noteSelectedTabDidChange];
     if (self.autoScrollController.enabled) {
         self.autoScrollController.enabled = NO;
     }

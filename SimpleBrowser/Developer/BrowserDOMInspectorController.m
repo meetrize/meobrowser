@@ -17,6 +17,8 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 @property (nonatomic, strong) NSNumber *reinjectionGeneration;
 /// 当前气泡所属标签；切走时隐藏，且只接受该标签 WebView 的快照。
 @property (nonatomic, copy, nullable) NSUUID *hudBoundTabID;
+/// 上次观察到的选中标签（用于在 tabControllerDidChange 中判断是否真的切了标签）。
+@property (nonatomic, copy, nullable) NSUUID *observedSelectedTabID;
 @end
 
 @implementation BrowserDOMInspectorController
@@ -55,20 +57,13 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
         };
 
         _reinjectionGeneration = @0;
-
-        BrowserTabController *tabController = self.windowController.tabController;
-        if (tabController) {
-            [tabController addObserver:self
-                            forKeyPath:@"selectedTab"
-                               options:NSKeyValueObservingOptionNew
-                               context:NULL];
-        }
+        // 注意：此时 windowController.tabController 往往尚未创建，
+        // 不能在这里做 KVO；改由 BrowserWindowController.tabControllerDidChange 回调。
     }
     return self;
 }
 
 - (void)dealloc {
-    [_windowController.tabController removeObserver:self forKeyPath:@"selectedTab"];
     [_bridge stop];
 }
 
@@ -77,21 +72,33 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
     return self.bubblePinned;
 }
 
-- (void)observeValueForKeyPath:(NSString *)keyPath
-                      ofObject:(id)object
-                        change:(NSDictionary *)change
-                       context:(void *)context {
-    (void)object; (void)change; (void)context;
-    if (![keyPath isEqualToString:@"selectedTab"]) {
-        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-        return;
-    }
-    // 切标签：立刻收起气泡，避免残留在别的标签页窗口上。
+- (void)hideBubbleForTabSwitch {
     self.bubblePinned = NO;
     self.hudBoundTabID = nil;
     [self.hud hide];
-    if (!self.active) return;
-    [self attachToCurrentWebView:self.windowController.webView];
+}
+
+- (void)noteSelectedTabDidChange {
+    NSUUID *currentID = self.windowController.tabController.selectedTab.tabID;
+    // 气泡已绑到别的标签：无论 observed 如何，都立刻藏掉。
+    if (self.hudBoundTabID != nil && currentID != nil &&
+        ![self.hudBoundTabID isEqual:currentID]) {
+        [self hideBubbleForTabSwitch];
+    }
+    if (self.observedSelectedTabID == currentID ||
+        [self.observedSelectedTabID isEqual:currentID]) {
+        return;
+    }
+    NSUUID *previousID = self.observedSelectedTabID;
+    self.observedSelectedTabID = [currentID copy];
+    // 首次同步选中态时不强制收起（窗口刚起来）；之后每次真正切标签都立刻隐藏。
+    if (previousID == nil) {
+        return;
+    }
+    [self hideBubbleForTabSwitch];
+    if (self.active) {
+        [self attachToCurrentWebView:self.windowController.webView];
+    }
 }
 
 #pragma mark - Configuration
@@ -126,6 +133,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
     self.active = YES;
     self.bubblePinned = NO;
     self.hudBoundTabID = nil;
+    self.observedSelectedTabID = self.windowController.tabController.selectedTab.tabID;
     [self.hud hide];
     [self showToast:@"DOM 探针已开启：移动查看，点击钉住气泡"];
 }

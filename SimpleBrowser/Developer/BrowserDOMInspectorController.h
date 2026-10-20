@@ -30,6 +30,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDOMInspectorStateDidChangeNoti
 /// 标签切换后调用；若处于开启态则迁移到新的 WebView。
 - (void)attachToCurrentWebView:(nullable WKWebView *)webView;
 
+/// 窗口侧在 tabControllerDidChange 时调用：选中标签变化则立刻隐藏气泡。
+- (void)noteSelectedTabDidChange;
+
 /// 页面导航完成后调用；处于开启态时重新注入脚本（新文档会清掉旧监听器）。
 - (void)noteNavigationFinishedInWebView:(nullable WKWebView *)webView;
 
