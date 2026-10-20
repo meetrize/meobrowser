@@ -96,9 +96,14 @@
 
             NSMenuItem *captchaAssist = [fileMenu addItemWithTitle:@"验证码助手"
                                                             action:@selector(toggleCaptchaAssistPanel:)
-                                                     keyEquivalent:@"c"];
-            captchaAssist.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+                                                     keyEquivalent:@""];
             captchaAssist.target = nil;
+
+            NSMenuItem *domInspector = [fileMenu addItemWithTitle:@"DOM 探针"
+                                                           action:@selector(toggleDOMInspector:)
+                                                    keyEquivalent:@"c"];
+            domInspector.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+            domInspector.target = nil;
 
             fileMenuItem.submenu = fileMenu;
             NSInteger editIndex = [self indexOfMenuTitled:@"编辑"];

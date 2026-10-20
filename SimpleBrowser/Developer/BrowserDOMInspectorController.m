@@ -43,6 +43,10 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
             weakSelf.bubblePinned = YES;
             [weakSelf.bridge pinLastHovered];
         };
+        _hud.onCopiedSegment = ^(NSString *segment) {
+            (void)segment;
+            [weakSelf showToast:@"已复制"];
+        };
         _hud.onClosePinned = ^{
             [weakSelf unpinBubbleFromHUD];
         };

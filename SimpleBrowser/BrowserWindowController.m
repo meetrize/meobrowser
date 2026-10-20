@@ -5624,6 +5624,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
     if (action == @selector(toggleCaptchaAssistPanel:)) {
         return YES;
     }
+    if (action == @selector(toggleDOMInspector:)) {
+        return YES;
+    }
     if (action == @selector(toggleNotificationInboxSidebar:)) {
         return YES;
     }

@@ -13,10 +13,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSArray<NSString *> *onionLabels;
 @property (nonatomic, assign) NSInteger selectedOnionIndex;
 @property (nonatomic, assign, getter=isPinnedAppearance) BOOL pinnedAppearance;
+/// 用户是否已拖拽过气泡（改尺寸时保留原点）。
+@property (nonatomic, assign) BOOL userRepositioned;
 @property (nonatomic, copy, nullable) void (^onCopySelector)(void);
 @property (nonatomic, copy, nullable) void (^onClose)(void);
 @property (nonatomic, copy, nullable) void (^onRequestInteractiveLock)(void);
 @property (nonatomic, copy, nullable) void (^onSelectOnionIndex)(NSInteger index);
+/// 属性段点击复制后回调（用于 toast）。
+@property (nonatomic, copy, nullable) void (^onCopiedSegment)(NSString *segment);
 - (void)reloadPinnedContent;
 - (void)layoutChrome;
 - (void)rebuildOnionButtons;
@@ -36,6 +40,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onCopySelector)(NSString *selector);
 @property (nonatomic, copy, nullable) void (^onClosePinned)(void);
 @property (nonatomic, copy, nullable) void (^onInteractiveLockFromCopy)(void);
+@property (nonatomic, copy, nullable) void (^onCopiedSegment)(NSString *segment);
 
 - (void)hide;
 

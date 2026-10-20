@@ -45,6 +45,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)oneClickLogin:(nullable id)sender;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;
+- (void)toggleDOMInspector:(nullable id)sender;
 
 /// 标签概览 overlay。
 - (void)toggleTabOverview:(nullable id)sender;
