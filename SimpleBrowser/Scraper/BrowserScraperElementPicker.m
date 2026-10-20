@@ -1,9 +1,15 @@
 #import "BrowserScraperElementPicker.h"
 #import "LoginAssistScriptMessageProxy.h"
+#import "BrowserWebViewPickCoordinator.h"
 
 static NSString * const kScraperPickHandlerName = @"meoScraperPick";
 static BrowserScraperPickCompletion gScraperPickCompletion = nil;
 static __weak WKWebView *gScraperPickWebView = nil;
+static id gScraperPickOwnerToken = nil;
+static BOOL gYieldObserverInstalled = NO;
+
+@interface BrowserScraperElementPicker ()
+@end
 
 @implementation BrowserScraperElementPicker
 
@@ -36,6 +42,10 @@ static __weak WKWebView *gScraperPickWebView = nil;
     gScraperPickWebView = nil;
     BrowserScraperPickCompletion completion = gScraperPickCompletion;
     gScraperPickCompletion = nil;
+    if (gScraperPickOwnerToken) {
+        [[BrowserWebViewPickCoordinator shared] endPickForOwner:gScraperPickOwnerToken];
+        gScraperPickOwnerToken = nil;
+    }
     if (webView) {
         [webView evaluateJavaScript:@"window.__meoScraperStopPick && window.__meoScraperStopPick();"
                   completionHandler:nil];
@@ -61,6 +71,19 @@ static __weak WKWebView *gScraperPickWebView = nil;
         if (completion) completion(nil, YES);
         return;
     }
+    if (!gYieldObserverInstalled) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(pickCoordinatorDidYield:)
+                                                     name:BrowserWebViewPickCoordinatorDidYieldNotification
+                                                   object:nil];
+        gYieldObserverInstalled = YES;
+    }
+    id token = [BrowserScraperElementPicker class];
+    if (![[BrowserWebViewPickCoordinator shared] beginPickInWebView:webView owner:token]) {
+        if (completion) completion(nil, YES);
+        return;
+    }
+    gScraperPickOwnerToken = token;
     gScraperPickWebView = webView;
     gScraperPickCompletion = [completion copy];
     NSString *modeStr = @"container";
@@ -312,10 +335,21 @@ static __weak WKWebView *gScraperPickWebView = nil;
     [webView evaluateJavaScript:script completionHandler:nil];
 }
 
++ (void)pickCoordinatorDidYield:(NSNotification *)notification {
+    id yielded = notification.userInfo[BrowserWebViewPickYieldedOwnerKey];
+    if (yielded && yielded == gScraperPickOwnerToken) {
+        [self cancelActivePick];
+    }
+}
+
 + (void)handleScriptMessageBody:(id)body {
     BrowserScraperPickCompletion completion = gScraperPickCompletion;
     gScraperPickCompletion = nil;
     gScraperPickWebView = nil;
+    if (gScraperPickOwnerToken) {
+        [[BrowserWebViewPickCoordinator shared] endPickForOwner:gScraperPickOwnerToken];
+        gScraperPickOwnerToken = nil;
+    }
     if (!completion) return;
     if (![body isKindOfClass:[NSDictionary class]]) {
         completion(nil, YES);

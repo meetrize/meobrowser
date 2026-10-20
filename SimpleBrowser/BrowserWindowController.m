@@ -30,6 +30,7 @@
 #import "BrowserSplitPresetStore.h"
 #import "BrowserPaneSyncCoordinator.h"
 #import "BrowserTransientToast.h"
+#import "BrowserDOMInspectorController.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import "BrowserTabItemView.h"
@@ -247,6 +248,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) CaptchaAssistController *captchaAssistController;
 @property (nonatomic, strong) BrowserFeedAssistController *feedAssistController;
 @property (nonatomic, strong) BrowserFindBarController *findBarController;
+@property (nonatomic, strong) BrowserDOMInspectorController *domInspectorController;
 @property (nonatomic, strong) BrowserTabOverviewController *tabOverviewController;
 @property (nonatomic, strong) BrowserTabAudioController *tabAudioController;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingAudibleStripUpdateBlock;
@@ -450,6 +452,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
         _captchaAssistController = [[CaptchaAssistController alloc] initWithWindowController:self];
         _feedAssistController = [[BrowserFeedAssistController alloc] initWithWindowController:self];
         _findBarController = [[BrowserFindBarController alloc] initWithWindowController:self];
+        _domInspectorController = [[BrowserDOMInspectorController alloc] initWithWindowController:self];
         _tabOverviewController = [[BrowserTabOverviewController alloc] initWithWindowController:self];
         _tabAudioController = [[BrowserTabAudioController alloc] init];
         __weak typeof(self) weakSelfForAudio = self;
@@ -542,6 +545,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
     [self.captchaAssistController configureWebViewConfiguration:configuration];
     [self.feedAssistController configureWebViewConfiguration:configuration];
     [self.findBarController configureWebViewConfiguration:configuration];
+    [self.domInspectorController configureWebViewConfiguration:configuration];
     [BrowserScraperMessageHub installOnConfiguration:configuration];
     [BrowserTransparentModeController installPageStyleUserScriptOnConfiguration:configuration];
 }
@@ -1039,6 +1043,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.addressAutocompleteController install];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(domInspectorStateDidChange:)
+                                                 name:BrowserDOMInspectorStateDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(companionChannelStateDidChange:)
                                                  name:CompanionChannelStateDidChangeNotification
                                                object:nil];
@@ -1394,6 +1402,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(togglePagePackSidebar:)];
     [self wireChromeButton:BrowserChromeActionPageScraperID action:@selector(togglePageScraperSidebar:)];
+    [self wireChromeButton:BrowserChromeActionDOMInspectorID action:@selector(toggleDOMInspector:)];
     [self wireChromeButton:BrowserChromeActionPaneSyncID action:@selector(togglePaneSync:)];
 }
 
@@ -1540,6 +1549,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
         return self.scraperSidebarController.visible;
     }
+    if ([itemID isEqualToString:BrowserChromeActionDOMInspectorID]) {
+        return self.domInspectorController.active;
+    }
     return NO;
 }
 
@@ -1647,6 +1659,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
         [self togglePageScraperSidebar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionDOMInspectorID]) {
+        [self toggleDOMInspector:nil];
         return;
     }
 }
@@ -2870,6 +2886,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self updateHistoryButtonAppearance];
     [self updateNotificationInboxButtonAppearance];
     [self.chromeActionsView setOn:open forItemID:BrowserChromeActionPageScraperID];
+}
+
+#pragma mark - DOM Inspector
+
+- (void)domInspectorStateDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self.chromeActionsView setOn:self.domInspectorController.active
+                         forItemID:BrowserChromeActionDOMInspectorID];
+}
+
+- (void)toggleDOMInspector:(id)sender {
+    (void)sender;
+    [self.domInspectorController toggle:nil];
+    [self.chromeActionsView setOn:self.domInspectorController.active
+                         forItemID:BrowserChromeActionDOMInspectorID];
 }
 
 - (void)scraperSidebarDidRequestClose:(BrowserScraperSidebarController *)controller {
@@ -7093,6 +7124,7 @@ didBecomeDownload:(WKDownload *)download {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.findBarController noteNavigationFinishedInWebView:webView];
+        [self.domInspectorController noteNavigationFinishedInWebView:webView];
         [self.tabOverviewController updateThumbnailForSelectedTabIfVisible];
         [self updateReloadStopButtonAppearance];
         [self reloadPagePackSidebarIfVisible];

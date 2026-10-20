@@ -100,6 +100,14 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserDeveloperPreferences.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserWebInspector.m \
                    $(BROWSER_SRC_DIR)/Developer/BrowserPageSource.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserWebViewPickCoordinator.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorScript.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorBridge.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorHUD.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorController.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMValueSegmenter.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorRowView.m \
+                   $(BROWSER_SRC_DIR)/Developer/BrowserDOMInspectorPanel.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationTimeouts.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationSession.m \
                    $(BROWSER_SRC_DIR)/Navigation/BrowserNavigationWatchdog.m \
