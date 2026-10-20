@@ -1,5 +1,4 @@
 #import "BrowserDOMInspectorController.h"
-#import "BrowserDOMInspectorPanel.h"
 #import "BrowserDOMInspectorScript.h"
 #import "BrowserDOMInspectorBridge.h"
 #import "BrowserDOMInspectorHUD.h"
@@ -12,10 +11,8 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 @interface BrowserDOMInspectorController ()
 @property (nonatomic, strong) BrowserDOMInspectorBridge *bridge;
 @property (nonatomic, strong) BrowserDOMInspectorHUD *hud;
-@property (nonatomic, strong, nullable) BrowserDOMInspectorPanel *panel;
 @property (nonatomic, assign, getter=isActive) BOOL active;
-@property (nonatomic, assign, getter=isPanelVisible) BOOL panelVisible;
-@property (nonatomic, strong, nullable) NSLayoutConstraint *panelWidthConstraint;
+@property (nonatomic, assign, getter=isBubblePinned) BOOL bubblePinned;
 @property (nonatomic, strong) NSNumber *reinjectionGeneration;
 @end
 
@@ -41,16 +38,16 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
             [pb setString:selector forType:NSPasteboardTypeString];
             [weakSelf showToast:@"已复制 CSS 选择器"];
         };
+        _hud.onInteractiveLockFromCopy = ^{
+            // 悬停点复制：冻结气泡为可交互，并尽量钉住当前悬停元素。
+            weakSelf.bubblePinned = YES;
+            [weakSelf.bridge pinLastHovered];
+        };
+        _hud.onClosePinned = ^{
+            [weakSelf unpinBubbleFromHUD];
+        };
 
         _reinjectionGeneration = @0;
-        _panel = [[BrowserDOMInspectorPanel alloc] initWithFrame:NSZeroRect];
-        _panel.translatesAutoresizingMaskIntoConstraints = NO;
-        _panel.onCopy = ^(NSString *description) {
-            [weakSelf showToast:[NSString stringWithFormat:@"已复制 %@", description]];
-        };
-        _panel.onRequestClose = ^{
-            [weakSelf hidePanel];
-        };
 
         BrowserTabController *tabController = self.windowController.tabController;
         if (tabController) {
@@ -66,6 +63,11 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 - (void)dealloc {
     [_windowController.tabController removeObserver:self forKeyPath:@"selectedTab"];
     [_bridge stop];
+}
+
+- (BOOL)isPanelVisible {
+    // 兼容旧 API：现表示「气泡已钉住」。
+    return self.bubblePinned;
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -110,17 +112,26 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
         return;
     }
     self.active = YES;
+    self.bubblePinned = NO;
     [self.hud hide];
-    [self showToast:@"DOM 探针已开启：移动鼠标查看，点击钉住"];
+    [self showToast:@"DOM 探针已开启：移动查看，点击钉住气泡"];
 }
 
 - (void)stop {
     if (!self.active) return;
     self.active = NO;
+    self.bubblePinned = NO;
     [self.hud hide];
-    [self hidePanel];
     [self.bridge stop];
     [self notifyStateChanged];
+}
+
+- (void)unpinBubbleFromHUD {
+    if (!self.active || !self.bubblePinned) return;
+    self.bubblePinned = NO;
+    [self.hud hide];
+    [self.bridge unpinBubble];
+    [self showToast:@"已取消钉住：移动鼠标继续查看"];
 }
 
 - (void)attachToCurrentWebView:(WKWebView *)webView {
@@ -129,54 +140,24 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
         [self stop];
         return;
     }
+    self.bubblePinned = NO;
     [self.hud hide];
-    [self hidePanel];
     [self.bridge stop];
     if (![self.bridge startInWebView:webView]) {
         self.active = NO;
         [self notifyStateChanged];
         return;
     }
-    // 页面可能已完成加载，iframe 也已就绪：再补几轮以覆盖延迟渲染。
     [self scheduleReinjectionForWebView:webView];
-}
-
-- (void)attachPanelToWindowIfNeeded {
-    NSWindow *window = self.windowController.window;
-    if (!window || !self.panel) return;
-    if (self.panel.superview == window.contentView) return;
-    [window.contentView addSubview:self.panel positioned:NSWindowAbove relativeTo:nil];
-    self.panelWidthConstraint = [self.panel.widthAnchor constraintEqualToConstant:320.0];
-    [NSLayoutConstraint activateConstraints:@[
-        [self.panel.topAnchor constraintEqualToAnchor:window.contentView.topAnchor],
-        [self.panel.bottomAnchor constraintEqualToAnchor:window.contentView.bottomAnchor],
-        [self.panel.trailingAnchor constraintEqualToAnchor:window.contentView.trailingAnchor],
-        self.panelWidthConstraint,
-    ]];
-    self.panel.hidden = YES;
-}
-
-- (void)showPanelWithSnapshot:(NSDictionary *)snapshot {
-    NSWindow *window = self.windowController.window;
-    if (!window) return;
-    [self attachPanelToWindowIfNeeded];
-    [self.panel showSnapshot:snapshot];
-    self.panel.hidden = NO;
-    self.panelVisible = YES;
-    [self.panel setNeedsLayout:YES];
-}
-
-- (void)hidePanel {
-    if (!self.panelVisible) return;
-    [self.panel hidePanel];
-    self.panel.hidden = YES;
-    self.panelVisible = NO;
 }
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView {
     if (!self.active || !webView) return;
+    self.bubblePinned = NO;
+    [self.hud hide];
     [self scheduleReinjectionForWebView:webView];
 }
+
 /// iframe 常在主文档之后才加载完成，因此分批重试若干次。
 - (void)scheduleReinjectionForWebView:(WKWebView *)webView {
     self.reinjectionGeneration = @(self.reinjectionGeneration.unsignedIntegerValue + 1);
@@ -197,22 +178,34 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 
 - (void)handleSnapshotType:(NSString *)type payload:(NSDictionary *)payload {
     NSWindow *window = self.windowController.window;
-    if (!window) return;
-
-    if ([type isEqualToString:@"pinned"]) {
-        [self.hud hide];
-        [self showPanelWithSnapshot:payload];
-        return;
-    }
+    if (!window || !payload) return;
 
     WKWebView *webView = self.windowController.webView;
     if (!webView) return;
+
+    if ([type isEqualToString:@"pinned"]) {
+        self.bubblePinned = YES;
+        NSRect geoInContent = [self rectInWindowForGeometry:payload[@"geometry"] webView:webView window:window];
+        NSRect webViewInContent = [webView convertRect:webView.bounds toView:window.contentView];
+        [self.hud showSnapshot:payload
+              geometryInContent:geoInContent
+                webViewInContent:webViewInContent
+                       inWindow:window
+                         pinned:YES];
+        [self showToast:@"气泡已钉住"];
+        return;
+    }
+
+    // 气泡钉住后忽略后续 hover，避免跟着别的元素跑。
+    if (self.bubblePinned) return;
+
     NSRect geoInContent = [self rectInWindowForGeometry:payload[@"geometry"] webView:webView window:window];
     NSRect webViewInContent = [webView convertRect:webView.bounds toView:window.contentView];
     [self.hud showSnapshot:payload
           geometryInContent:geoInContent
             webViewInContent:webViewInContent
-                   inWindow:window];
+                   inWindow:window
+                     pinned:NO];
 }
 
 - (NSRect)rectInWindowForGeometry:(id)geometry
@@ -224,7 +217,6 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
     CGFloat w = [geo[@"width"] doubleValue];
     CGFloat h = [geo[@"height"] doubleValue];
     NSRect webFrameInWindow = [webView convertRect:webView.bounds toView:window.contentView];
-    // 页面坐标原点在左上，AppKit 在左下。
     CGFloat windowY = NSMaxY(webFrameInWindow) - (y + h);
     return NSMakeRect(NSMinX(webFrameInWindow) + x, windowY, w, h);
 }
@@ -234,8 +226,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 - (void)showToast:(NSString *)message {
     NSWindow *window = self.windowController.window;
     if (!window) return;
-    NSString *text = message;
-    [BrowserTransientToast showMessage:text inWindow:window duration:2.0];
+    [BrowserTransientToast showMessage:message inWindow:window duration:2.0];
 }
 
 - (void)notifyStateChanged {

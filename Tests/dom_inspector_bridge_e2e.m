@@ -84,14 +84,20 @@ int main(int argc, const char *argv[]) { @autoreleasepool {
 
     printf("3) mouseover r1\n");
     NSInteger b1 = h.hoverCount;
-    [webView evaluateJavaScript:@"document.querySelector('#r1 td:last-child').dispatchEvent(new MouseEvent('mouseover', {bubbles:true, composed:true}))"
+    [webView evaluateJavaScript:
+        @"(function(){var el=document.querySelector('#r1 td:last-child');var r=el.getBoundingClientRect();"
+         "el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,composed:true,clientX:r.left+5,clientY:r.top+5}));})()"
           completionHandler:nil];
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
     printf("   hover delta = %ld\n", (long)(h.hoverCount - b1));
 
     printf("4) mousedown to pin\n");
     NSInteger bp = h.pinnedCount;
-    [webView evaluateJavaScript:@"document.querySelector('#r1 td:last-child').dispatchEvent(new MouseEvent('mousedown', {bubbles:true, composed:true}))"
+    [webView evaluateJavaScript:
+        @"(function(){var el=document.querySelector('#r1 td:last-child');var r=el.getBoundingClientRect();"
+         "var o={bubbles:true,composed:true,cancelable:true,button:0,clientX:r.left+5,clientY:r.top+5};"
+         "el.dispatchEvent(new PointerEvent('pointerdown',o));"
+         "el.dispatchEvent(new MouseEvent('mousedown',o));})()"
           completionHandler:nil];
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
     printf("   pinned delta = %ld\n", (long)(h.pinnedCount - bp));

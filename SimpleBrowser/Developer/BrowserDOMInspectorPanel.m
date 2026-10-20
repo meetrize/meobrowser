@@ -70,11 +70,16 @@ static const CGFloat kPanelDefaultWidth = 320.0;
         _allCopyPairs = @[];
         _currentSnapshot = @{};
         self.wantsLayer = YES;
+        self.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.11 alpha:0.98].CGColor;
+        self.layer.borderColor = [NSColor colorWithCalibratedWhite:1 alpha:0.12].CGColor;
+        self.layer.borderWidth = 1.0;
         [self buildScrollView];
         [self buildHeader];
     }
     return self;
 }
+
+- (BOOL)isFlipped { return YES; }
 
 - (void)buildScrollView {
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];

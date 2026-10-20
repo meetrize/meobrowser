@@ -27,6 +27,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 向 webView 及其所有子框架重新注入探针脚本（幂等）。
 - (void)reinjectIntoWebView:(nullable WKWebView *)webView;
 
+/// 解除页面侧钉住高亮，恢复悬停跟随（气泡关闭按钮）。
+- (void)unpinBubble;
+
+/// 将当前悬停元素钉住（悬停气泡点「复制」进入可交互时调用）。
+- (void)pinLastHovered;
+
 @end
 
 NS_ASSUME_NONNULL_END

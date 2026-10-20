@@ -29,19 +29,36 @@
     }
     return { dx: dx, dy: dy };
   }
+  function deliver(msg) {
+    if (window.top !== window) {
+      window.top.postMessage({__meo:'dom-inspector-payload', payload: msg}, '*');
+      return;
+    }
+    window.webkit.messageHandlers.meoDomInspector.postMessage(msg);
+  }
   function post(payload) {
     try {
-      var off = frameOffset();
-      var p = payload.payload;
-      if (p && p.geometry && (off.dx || off.dy)) {
-        p.geometry.x += off.dx; p.geometry.y += off.dy;
+      // JSON 往返：去掉不可序列化字段，并避免原地改 geometry 污染后续快照。
+      var msg = JSON.parse(JSON.stringify(payload));
+      var p = msg.payload;
+      if (p && p.geometry) {
+        var off = frameOffset();
+        if (off.dx || off.dy) {
+          p.geometry.x += off.dx; p.geometry.y += off.dy;
+        }
       }
       // 跨源 iframe 里 WebKit 不会把消息路由到原生 handler，
       // 只能先 postMessage 给顶层窗口，由主框架代为转发。
-      if (window.top !== window) {
-        try { window.top.postMessage({__meo:'dom-inspector-payload', payload: payload}, '*'); return; } catch (e) {}
+      try {
+        deliver(msg);
+      } catch (e1) {
+        // 全量快照过大时 WK 可能拒收：去掉 properties 再试一次。
+        if (msg.payload && msg.payload.properties) {
+          msg.payload.properties = [];
+          if (msg.payload.counts) { msg.payload.counts.properties = 0; }
+          try { deliver(msg); } catch (e2) {}
+        }
       }
-      window.webkit.messageHandlers.meoDomInspector.postMessage(payload);
     } catch (e) {}
   }
   function ensureStyle() {
@@ -126,8 +143,9 @@
     clientWidth:1, clientHeight:1, scrollWidth:1, scrollHeight:1, offsetWidth:1, offsetHeight:1,
     offsetTop:1, offsetLeft:1, offsetParent:1, slot:1, shadowRoot:1, assignedSlot:1 };
   function collectProperties(el) {
-    var out = [], names = Object.getOwnPropertyNames(el).slice(0, 400);
-    for (var i = 0; i < names.length; i++) {
+    // 控制体量：过大时 WKScriptMessage 会静默丢弃，钉住侧栏永远打不开。
+    var out = [], names = Object.getOwnPropertyNames(el).slice(0, 120);
+    for (var i = 0; i < names.length && out.length < 80; i++) {
       var n = names[i];
       if (SKIP_PROPS[n]) { continue; }
       var v;
@@ -136,7 +154,7 @@
       if (v && typeof v === 'object') {
         try { v = JSON.stringify(v); } catch (err2) { v = String(v); }
       }
-      var c = clip(v, 2000);
+      var c = clip(v, 500);
       out.push({ name: n, value: c.text, truncated: c.truncated, kind: 'property' });
     }
     return out;
@@ -252,6 +270,8 @@
     return list[0];
   }
   function consider(el) {
+    // 气泡已钉住：不再跟随其它元素，也不再发 hover。
+    if (pinnedEl) { return; }
     if (!el || el.nodeType !== 1 || el === lastHovered) { return; }
     if (el === document.documentElement || el === document.body) { return; }
     pendingEl = el;
@@ -272,23 +292,45 @@
       }
     }, DEBOUNCE_MS);
   }
-  function onMouseDown(e) {
-    if (!e) { return; }
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    var el = e.target;
-    // 事件被页面吞掉时 target 可能为空，退回坐标采样。
-    if ((!el || el.nodeType !== 1) && typeof e.clientX === 'number') {
-      try { el = pickElementAt(e.clientX, e.clientY); } catch (err) { el = null; }
-    }
-    if (!el || el.nodeType !== 1) { return; }
-    unpin();
-    pinnedEl = el;
-    el.classList.add(PINNED);
+  var pinGuardUntil = 0;
+  function pinElement(el) {
+    if (!el || el.nodeType !== 1) { return false; }
+    var now = Date.now();
+    if (now < pinGuardUntil) { return true; }
+    // 已钉住同一元素：忽略重复点击。
+    if (pinnedEl === el) { return true; }
+    pinGuardUntil = now + 250;
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
     if (rafFallback) { clearTimeout(rafFallback); rafFallback = null; }
     pendingEl = null;
-    post({ type: 'pinned', payload: snapshot(el, true) });
+    clearHover();
+    unpin();
+    pinnedEl = el;
+    lastHovered = el;
+    el.classList.add(PINNED);
+    // 钉住气泡：只发轻量快照（原生侧固定 HUD，不再开侧栏）。
+    post({ type: 'pinned', payload: snapshot(el, false) });
+    return true;
+  }
+  function resolvePinTarget(e) {
+    // 未钉住：优先当前悬停目标。已钉住：按点击位置换钉。
+    if (!pinnedEl && lastHovered && lastHovered.nodeType === 1) { return lastHovered; }
+    var el = null;
+    if (e && typeof e.clientX === 'number') {
+      try { el = pickElementAt(e.clientX, e.clientY); } catch (err) { el = null; }
+    }
+    if ((!el || el.nodeType !== 1) && e) { el = e.target; }
+    if (el === document.documentElement || el === document.body) { return null; }
+    return el;
+  }
+  function onPinGesture(e) {
+    if (!e) { return; }
+    if (typeof e.button === 'number' && e.button !== 0) { return; }
+    var el = resolvePinTarget(e);
+    if (!el) { return; } // 钉不住时不吞事件
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    pinElement(el);
   }
   function onKey(e) {
     if (e.key !== 'Escape') { return; }
@@ -299,16 +341,22 @@
   }
   function cleanup() {
     window.removeEventListener('mouseover', onOver, true);
-    window.removeEventListener('mousedown', onMouseDown, true);
+    window.removeEventListener('mousedown', onPinGesture, true);
+    window.removeEventListener('pointerdown', onPinGesture, true);
+    window.removeEventListener('click', onPinGesture, true);
     window.removeEventListener('mouseover', onOver, false);
-    window.removeEventListener('mousedown', onMouseDown, false);
+    window.removeEventListener('mousedown', onPinGesture, false);
+    window.removeEventListener('pointerdown', onPinGesture, false);
+    window.removeEventListener('click', onPinGesture, false);
     window.removeEventListener('pointermove', onPointerMove, true);
     window.removeEventListener('pointermove', onPointerMove, false);
     window.removeEventListener('mousemove', onPointerMove, true);
     window.removeEventListener('mousemove', onPointerMove, false);
     window.removeEventListener('keydown', onKey, true);
     document.removeEventListener('mouseover', onOver, true);
-    document.removeEventListener('mousedown', onMouseDown, true);
+    document.removeEventListener('mousedown', onPinGesture, true);
+    document.removeEventListener('pointerdown', onPinGesture, true);
+    document.removeEventListener('click', onPinGesture, true);
     document.removeEventListener('keydown', onKey, true);
     if (observer) { try { observer.disconnect(); } catch (e) {} observer = null; }
     if (rafFallback) { clearTimeout(rafFallback); rafFallback = null; }
@@ -319,6 +367,24 @@
     if (s) { s.remove(); }
     window.__meoDomInspectorStop = null;
   }
+  // 原生气泡「关闭」：解除钉住，恢复悬停跟随。
+  window.__meoDomInspectorUnpin = function () {
+    if (!window.__meoDomInspectorStop) { return; }
+    unpin();
+    clearHover();
+    lastHovered = null;
+    pendingEl = null;
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+    if (rafFallback) { clearTimeout(rafFallback); rafFallback = null; }
+    frame = null;
+  };
+  // 原生气泡点「复制」：钉住当前悬停元素，停止跟随。
+  window.__meoDomInspectorPinLast = function () {
+    if (!window.__meoDomInspectorStop) { return false; }
+    var el = pinnedEl || lastHovered;
+    if (!el || el.nodeType !== 1) { return false; }
+    return pinElement(el);
+  };
   // 注册入口：可被反复调用（幂等），供原生侧开/关探针时复用。
   window.__meoDomInspectorStart = function () {
     if (window.__meoDomInspectorStop) { return; }
@@ -327,7 +393,10 @@
     // 真实站点（bootstrap-table 等）常在 document 上用捕获监听器 +
     // stopImmediatePropagation 抢占事件，若探针也注册在 document 上会被直接跳过。
     window.addEventListener('mouseover', onOver, true);
-    window.addEventListener('mousedown', onMouseDown, true);
+    // pointerdown / mousedown / click：覆盖站点吞事件与兼容路径。
+    window.addEventListener('pointerdown', onPinGesture, true);
+    window.addEventListener('mousedown', onPinGesture, true);
+    window.addEventListener('click', onPinGesture, true);
     window.addEventListener('keydown', onKey, true);
     // pointermove 采样通道：页面即使吞掉 mouseover/mousedown 也能工作。
     window.addEventListener('pointermove', onPointerMove, true);
@@ -335,7 +404,9 @@
     window.addEventListener('mousemove', onPointerMove, true);
     window.addEventListener('mousemove', onPointerMove, false);
     document.addEventListener('mouseover', onOver, true);
-    document.addEventListener('mousedown', onMouseDown, true);
+    document.addEventListener('pointerdown', onPinGesture, true);
+    document.addEventListener('mousedown', onPinGesture, true);
+    document.addEventListener('click', onPinGesture, true);
     document.addEventListener('keydown', onKey, true);
     // 自愈：SPA / bootstrap-table 这类会持续重绘并可能清掉探针注入的 <style>。
     // 监听器挂在 window 上不受重绘影响，但样式节点可能被移除，

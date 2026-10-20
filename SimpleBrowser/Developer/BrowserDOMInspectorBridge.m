@@ -155,6 +155,36 @@ static NSString * const kDOMInspectorHandlerName = @"meoDomInspector";
     [self injectIntoWebView:webView];
 }
 
+- (void)unpinBubble {
+    WKWebView *webView = self.webView;
+    if (!webView || !self.active) return;
+    NSString *js =
+        @"(function(){\n"
+         "  try { if (window.__meoDomInspectorUnpin) { window.__meoDomInspectorUnpin(); } } catch (e) {}\n"
+         "  var fs = [];\n"
+         "  try { fs = document.querySelectorAll('iframe,frame'); } catch (e) { return; }\n"
+         "  for (var i = 0; i < fs.length; i++) {\n"
+         "    try { fs[i].contentWindow.postMessage({__meo:'dom-inspector',unpin:1}, '*'); } catch (x) {}\n"
+         "  }\n"
+         "})();";
+    [webView evaluateJavaScript:js completionHandler:nil];
+}
+
+- (void)pinLastHovered {
+    WKWebView *webView = self.webView;
+    if (!webView || !self.active) return;
+    NSString *js =
+        @"(function(){\n"
+         "  try { if (window.__meoDomInspectorPinLast) { window.__meoDomInspectorPinLast(); } } catch (e) {}\n"
+         "  var fs = [];\n"
+         "  try { fs = document.querySelectorAll('iframe,frame'); } catch (e) { return; }\n"
+         "  for (var i = 0; i < fs.length; i++) {\n"
+         "    try { fs[i].contentWindow.postMessage({__meo:'dom-inspector',pinLast:1}, '*'); } catch (x) {}\n"
+         "  }\n"
+         "})();";
+    [webView evaluateJavaScript:js completionHandler:nil];
+}
+
 - (void)stop {
     if (!self.active) return;
     self.active = NO;
@@ -201,6 +231,14 @@ static NSString * const kDOMInspectorHandlerName = @"meoDomInspector";
         return;
     }
     NSDictionary *payload = [dict[@"payload"] isKindOfClass:[NSDictionary class]] ? dict[@"payload"] : nil;
+    if ([type isEqualToString:@"hover"] || [type isEqualToString:@"pinned"]) {
+        if (!payload) {
+            NSLog(@"[DOMInspector] %@ message missing payload", type);
+            return;
+        }
+        if (self.onSnapshot) self.onSnapshot(type, payload);
+        return;
+    }
     if (payload && self.onSnapshot) self.onSnapshot(type, payload);
     if ([type isEqualToString:@"dom-inspector-diag"]) {
         NSLog(@"[DOMInspector][diag] %@", dict[@"tag"] ?: @"");

@@ -12,7 +12,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserDOMInspectorStateDidChangeNoti
 
 @property (nonatomic, weak, nullable) BrowserWindowController *windowController;
 @property (nonatomic, readonly, getter=isActive) BOOL active;
-/// 钉住面板是否可见。
+/// 气泡是否已钉住（常显、不再跟随悬停）。
+@property (nonatomic, readonly, getter=isBubblePinned) BOOL bubblePinned;
+/// 兼容旧名：等同于 bubblePinned（已无右侧面板）。
 @property (nonatomic, readonly, getter=isPanelVisible) BOOL panelVisible;
 
 - (instancetype)initWithWindowController:(BrowserWindowController *)windowController;
