@@ -20,9 +20,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onCancelled)(void);
 
 @property (nonatomic, readonly, getter=isActive) BOOL active;
+/// 当前探针绑定的 WebView（用于丢弃其它标签页的残留消息）。
+@property (nonatomic, readonly, weak, nullable) WKWebView *boundWebView;
 
 /// 供消息中枢转发。
-- (void)handleScriptMessageBody:(id)body;
+- (void)handleScriptMessageBody:(id)body fromWebView:(nullable WKWebView *)webView;
 
 /// 向 webView 及其所有子框架重新注入探针脚本（幂等）。
 - (void)reinjectIntoWebView:(nullable WKWebView *)webView;

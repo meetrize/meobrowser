@@ -38,7 +38,7 @@ static NSString * const kDOMInspectorHandlerName = @"meoDomInspector";
       didReceiveScriptMessage:(WKScriptMessage *)message {
     (void)userContentController;
     if (![message.name isEqualToString:kDOMInspectorHandlerName]) return;
-    [self.activeBridge handleScriptMessageBody:message.body];
+    [self.activeBridge handleScriptMessageBody:message.body fromWebView:message.webView];
 }
 
 @end
@@ -221,8 +221,14 @@ static NSString * const kDOMInspectorHandlerName = @"meoDomInspector";
 
 #pragma mark - Script Message
 
-- (void)handleScriptMessageBody:(id)body {
+- (WKWebView *)boundWebView {
+    return self.webView;
+}
+
+- (void)handleScriptMessageBody:(id)body fromWebView:(WKWebView *)webView {
     if (!self.active) return;
+    // 丢弃非当前绑定 WebView 的消息（切标签后旧页异步回调）。
+    if (!webView || webView != self.webView) return;
     if (![body isKindOfClass:[NSDictionary class]]) return;
     NSDictionary *dict = (NSDictionary *)body;
     NSString *type = [dict[@"type"] isKindOfClass:[NSString class]] ? dict[@"type"] : @"";

@@ -7,7 +7,9 @@
   var PINNED = 'meo-dom-inspector-pinned';
   var STYLE_ID = '__meo_dom_inspector_style';
   var DEBOUNCE_MS = 40;
-  var MAX_VALUE_LEN = 160;
+  var MAX_VALUE_LEN = 2000;
+  var MAX_ATTR_FULL = 8000;
+  var MAX_HTML_PREVIEW = 8000;
   var lastHovered = null;
   var pinnedEl = null;
   var hoverTimer = null;
@@ -16,6 +18,8 @@
   var rafFallback = null;
   var observer = null;
   var observerPending = false;
+  var pinObserver = null;
+  var pinRefreshTimer = null;
   function frameOffset() {
     var dx = 0, dy = 0, win = window;
     try {
@@ -75,6 +79,7 @@
     lastHovered = null;
   }
   function unpin() {
+    stopPinWatch();
     if (pinnedEl && pinnedEl.classList) { pinnedEl.classList.remove(PINNED); }
     pinnedEl = null;
   }
@@ -128,11 +133,13 @@
   }
   function collectAttributes(el, full) {
     var out = [], list = el.attributes;
+    var limit = full ? MAX_ATTR_FULL : MAX_VALUE_LEN;
     for (var i = 0; i < list.length; i++) {
       var a = list[i];
       var raw = a.value;
+      // class 去掉探针高亮 class，其余属性原样保留（含后期渲染写入的值）。
       if (a.name === 'class') { raw = scrubClasses(el); }
-      var c = clip(raw, full ? 4000 : MAX_VALUE_LEN);
+      var c = clip(raw, limit);
       out.push({ name: a.name, value: c.text, truncated: c.truncated, kind: attrKind(a.name) });
     }
     return out;
@@ -169,6 +176,31 @@
       return c && c !== HOVER && c !== PINNED;
     }).join(' ');
   }
+  /// 克隆节点并去掉探针高亮 class，得到接近真实 DOM 的 outerHTML。
+  function scrubbedOuterHTML(el, maxLen) {
+    maxLen = maxLen || MAX_HTML_PREVIEW;
+    try {
+      var clone = el.cloneNode(true);
+      (function walk(n) {
+        if (!n || n.nodeType !== 1) { return; }
+        if (n.classList) {
+          n.classList.remove(HOVER);
+          n.classList.remove(PINNED);
+          if (!n.className) { n.removeAttribute('class'); }
+        }
+        var kids = n.children;
+        if (!kids) { return; }
+        for (var i = 0; i < kids.length; i++) { walk(kids[i]); }
+      })(clone);
+      var html = clone.outerHTML || '';
+      if (html.length > maxLen) {
+        return html.slice(0, maxLen) + '…';
+      }
+      return html;
+    } catch (e) {
+      return '';
+    }
+  }
   function styleSummary(el) {
     var out = {}, cs;
     try { cs = window.getComputedStyle(el); } catch (e) { return out; }
@@ -180,19 +212,24 @@
     return out;
   }
   // body → … → el（不含 html），供气泡洋葱导航。
-  function collectAncestors(el) {
+  function collectAncestors(el, full) {
     var chain = [];
     var node = el;
     var guard = 0;
     while (node && node.nodeType === 1 && guard++ < 48) {
       var tag = node.tagName ? node.tagName.toLowerCase() : '';
       if (!tag || tag === 'html') { break; }
+      var ownText = '';
+      try { ownText = String(node.textContent || '').trim(); } catch (e) {}
+      var textClip = clip(ownText, full ? 4000 : 500);
       chain.unshift({
         tagName: tag,
         id: node.id || '',
         className: scrubClasses(node),
         selector: cssPath(node),
-        attributes: collectAttributes(node, false)
+        attributes: collectAttributes(node, !!full),
+        outerHTML: scrubbedOuterHTML(node, full ? MAX_HTML_PREVIEW : 2500),
+        text: { own: textClip.text, truncated: textClip.truncated, length: textClip.length }
       });
       if (tag === 'body') { break; }
       node = node.parentElement;
@@ -203,10 +240,11 @@
     var r = el.getBoundingClientRect();
     var own = '';
     try { own = String(el.textContent || '').trim(); } catch (e) {}
-    var t = clip(own, full ? 2000 : 120);
-    var attrs = collectAttributes(el, full);
+    var t = clip(own, full ? 4000 : 500);
+    var attrs = collectAttributes(el, !!full);
     var props = full ? collectProperties(el) : [];
-    var ancestors = collectAncestors(el);
+    var ancestors = collectAncestors(el, full);
+    var html = scrubbedOuterHTML(el, full ? MAX_HTML_PREVIEW : 2500);
     return {
       tagName: el.tagName ? el.tagName.toLowerCase() : '',
       selector: cssPath(el),
@@ -216,6 +254,7 @@
       attributes: attrs,
       properties: props,
       ancestors: ancestors,
+      outerHTML: html,
       geometry: {
         x: Math.round(r.left), y: Math.round(r.top),
         width: Math.round(r.width), height: Math.round(r.height),
@@ -232,6 +271,32 @@
               hidden: !!el.hidden },
       counts: { attributes: attrs.length, properties: props.length, ancestors: ancestors.length }
     };
+  }
+  function stopPinWatch() {
+    if (pinObserver) { try { pinObserver.disconnect(); } catch (e) {} pinObserver = null; }
+    if (pinRefreshTimer) { clearTimeout(pinRefreshTimer); pinRefreshTimer = null; }
+  }
+  // 钉住后监听属性/子树变化，覆盖后期渲染补全的 class/文本。
+  function startPinWatch(el) {
+    stopPinWatch();
+    if (!el || !window.MutationObserver) { return; }
+    pinObserver = new MutationObserver(function () {
+      if (pinnedEl !== el) { return; }
+      if (pinRefreshTimer) { clearTimeout(pinRefreshTimer); }
+      pinRefreshTimer = setTimeout(function () {
+        pinRefreshTimer = null;
+        if (pinnedEl !== el) { return; }
+        post({ type: 'pinned', payload: snapshot(el, true) });
+      }, 220);
+    });
+    try {
+      pinObserver.observe(el, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true
+      });
+    } catch (e) { pinObserver = null; }
   }
   function flushHover() {
     frame = null;
@@ -319,8 +384,11 @@
     if (!el || el.nodeType !== 1) { return false; }
     var now = Date.now();
     if (now < pinGuardUntil) { return true; }
-    // 已钉住同一元素：忽略重复点击。
-    if (pinnedEl === el) { return true; }
+    // 已钉住同一元素：刷新完整快照（覆盖后期渲染）。
+    if (pinnedEl === el) {
+      post({ type: 'pinned', payload: snapshot(el, true) });
+      return true;
+    }
     pinGuardUntil = now + 250;
     if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
     if (rafFallback) { clearTimeout(rafFallback); rafFallback = null; }
@@ -330,8 +398,9 @@
     pinnedEl = el;
     lastHovered = el;
     el.classList.add(PINNED);
-    // 钉住气泡：只发轻量快照（原生侧固定 HUD，不再开侧栏）。
-    post({ type: 'pinned', payload: snapshot(el, false) });
+    // 钉住：发完整快照（含 outerHTML 与全量属性）。
+    post({ type: 'pinned', payload: snapshot(el, true) });
+    startPinWatch(el);
     return true;
   }
   function resolvePinTarget(e) {

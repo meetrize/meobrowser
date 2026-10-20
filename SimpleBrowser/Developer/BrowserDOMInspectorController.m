@@ -5,6 +5,7 @@
 #import "BrowserTransientToast.h"
 #import "BrowserWindowController.h"
 #import "BrowserTabController.h"
+#import "BrowserTab.h"
 
 NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"BrowserDOMInspectorStateDidChangeNotification";
 
@@ -14,6 +15,8 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 @property (nonatomic, assign, getter=isActive) BOOL active;
 @property (nonatomic, assign, getter=isBubblePinned) BOOL bubblePinned;
 @property (nonatomic, strong) NSNumber *reinjectionGeneration;
+/// 当前气泡所属标签；切走时隐藏，且只接受该标签 WebView 的快照。
+@property (nonatomic, copy, nullable) NSUUID *hudBoundTabID;
 @end
 
 @implementation BrowserDOMInspectorController
@@ -83,6 +86,11 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
         return;
     }
+    // 切标签：立刻收起气泡，避免残留在别的标签页窗口上。
+    self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
+    [self.hud hide];
+    if (!self.active) return;
     [self attachToCurrentWebView:self.windowController.webView];
 }
 
@@ -117,6 +125,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
     }
     self.active = YES;
     self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
     [self.hud hide];
     [self showToast:@"DOM 探针已开启：移动查看，点击钉住气泡"];
 }
@@ -125,6 +134,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
     if (!self.active) return;
     self.active = NO;
     self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
     [self.hud hide];
     [self.bridge stop];
     [self notifyStateChanged];
@@ -133,6 +143,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 - (void)unpinBubbleFromHUD {
     if (!self.active || !self.bubblePinned) return;
     self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
     [self.hud hide];
     [self.bridge unpinBubble];
     [self showToast:@"已取消钉住：移动鼠标继续查看"];
@@ -145,6 +156,7 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
         return;
     }
     self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
     [self.hud hide];
     [self.bridge stop];
     if (![self.bridge startInWebView:webView]) {
@@ -157,7 +169,10 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView {
     if (!self.active || !webView) return;
+    // 仅处理当前选中标签的导航，避免后台标签刷新影响前景气泡。
+    if (webView != self.windowController.webView) return;
     self.bubblePinned = NO;
+    self.hudBoundTabID = nil;
     [self.hud hide];
     [self scheduleReinjectionForWebView:webView];
 }
@@ -180,12 +195,27 @@ NSNotificationName const BrowserDOMInspectorStateDidChangeNotification = @"Brows
 
 #pragma mark - Snapshot
 
+- (BOOL)shouldAcceptSnapshotFromCurrentTab {
+    if (!self.active) return NO;
+    BrowserTab *tab = self.windowController.tabController.selectedTab;
+    WKWebView *selectedWV = tab.webView ?: self.windowController.webView;
+    if (!selectedWV) return NO;
+    if (self.bridge.boundWebView != selectedWV) return NO;
+    if (self.hudBoundTabID && tab.tabID && ![self.hudBoundTabID isEqual:tab.tabID]) {
+        return NO;
+    }
+    return YES;
+}
+
 - (void)handleSnapshotType:(NSString *)type payload:(NSDictionary *)payload {
     NSWindow *window = self.windowController.window;
     if (!window || !payload) return;
+    if (![self shouldAcceptSnapshotFromCurrentTab]) return;
 
     WKWebView *webView = self.windowController.webView;
     if (!webView) return;
+    BrowserTab *tab = self.windowController.tabController.selectedTab;
+    self.hudBoundTabID = tab.tabID;
 
     if ([type isEqualToString:@"pinned"]) {
         self.bubblePinned = YES;

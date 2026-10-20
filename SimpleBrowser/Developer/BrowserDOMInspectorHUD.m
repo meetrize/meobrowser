@@ -2,7 +2,7 @@
 #import "SBTextView.h"
 #import <WebKit/WebKit.h>
 
-static const CGFloat kHUDMaxWidth = 480.0;
+static const CGFloat kHUDMaxWidth = 960.0;
 static const CGFloat kHUDPadding = 10.0;
 static const CGFloat kHUDTitleHeight = 20.0;
 static const CGFloat kHUDRowHeight = 15.0;
@@ -10,12 +10,31 @@ static const CGFloat kHUDIconButton = 22.0;
 static const CGFloat kHUDOnionItemH = 18.0;
 static const CGFloat kHUDOnionWidth = 92.0;
 static const CGFloat kHUDOnionGap = 1.0;
+static const CGFloat kHUDResizeEdge = 6.0;
+static const CGFloat kHUDMinResizeWidth = 280.0;
+static const CGFloat kHUDMinResizeHeight = 120.0;
+static const NSUInteger kHUDHTMLCollapsedMaxLines = 3;
+
+typedef NS_OPTIONS(NSUInteger, MeoHUDResizeMask) {
+    MeoHUDResizeNone = 0,
+    MeoHUDResizeMinX = 1 << 0, // 左
+    MeoHUDResizeMaxX = 1 << 1, // 右
+    MeoHUDResizeMinY = 1 << 2, // 下（superview 坐标）
+    MeoHUDResizeMaxY = 1 << 3, // 上（superview 坐标）
+};
 static NSString * const kMeoCopySegmentAttr = @"MeoDOMInspectorCopySegment";
+static NSString * const kMeoExpandHTMLAttr = @"MeoDOMInspectorExpandHTML";
+static NSString * const kMeoCollapseHTMLAttr = @"MeoDOMInspectorCollapseHTML";
+static NSString * const kMeoHTMLEllipsis = @"…";
+/// 展开态 HTML 上方的收起控件文案（与省略号同为行内可点链）。
+static NSString * const kMeoHTMLCollapseLabel = @"▲ 收起";
 
 #pragma mark - Segment Text View
 
 @interface MeoDOMInspectorSegmentTextView : SBTextView
 @property (nonatomic, copy, nullable) void (^onSegmentCopied)(NSString *segment);
+@property (nonatomic, copy, nullable) void (^onExpandHTML)(void);
+@property (nonatomic, copy, nullable) void (^onCollapseHTML)(void);
 @end
 
 @implementation MeoDOMInspectorSegmentTextView
@@ -38,6 +57,14 @@ static NSString * const kMeoCopySegmentAttr = @"MeoDOMInspectorCopySegment";
         return;
     }
     NSRange eff = NSMakeRange(0, 0);
+    if ([self.textStorage attribute:kMeoExpandHTMLAttr atIndex:charIndex effectiveRange:&eff]) {
+        if (self.onExpandHTML) self.onExpandHTML();
+        return;
+    }
+    if ([self.textStorage attribute:kMeoCollapseHTMLAttr atIndex:charIndex effectiveRange:&eff]) {
+        if (self.onCollapseHTML) self.onCollapseHTML();
+        return;
+    }
     NSString *segment = [self.textStorage attribute:kMeoCopySegmentAttr
                                             atIndex:charIndex
                                      effectiveRange:&eff];
@@ -63,6 +90,28 @@ static NSString * const kMeoCopySegmentAttr = @"MeoDOMInspectorCopySegment";
     if (self.onSegmentCopied) self.onSegmentCopied(segment);
 }
 
+- (void)addHandCursorForAttribute:(NSString *)attrName
+                          storage:(NSTextStorage *)storage
+                    layoutManager:(NSLayoutManager *)lm
+                    textContainer:(NSTextContainer *)tc {
+    NSUInteger idx = 0;
+    while (idx < storage.length) {
+        NSRange eff = NSMakeRange(0, 0);
+        id val = [storage attribute:attrName atIndex:idx effectiveRange:&eff];
+        if (val) {
+            NSRect rect = [lm boundingRectForGlyphRange:[lm glyphRangeForCharacterRange:eff
+                                                                   actualCharacterRange:NULL]
+                                        inTextContainer:tc];
+            rect.origin.x += self.textContainerOrigin.x;
+            rect.origin.y += self.textContainerOrigin.y;
+            [self addCursorRect:rect cursor:[NSCursor pointingHandCursor]];
+            idx = NSMaxRange(eff);
+        } else {
+            idx = (eff.length > 0) ? NSMaxRange(eff) : idx + 1;
+        }
+    }
+}
+
 - (void)resetCursorRects {
     [super resetCursorRects];
     if (self.string.length == 0) return;
@@ -70,6 +119,8 @@ static NSString * const kMeoCopySegmentAttr = @"MeoDOMInspectorCopySegment";
     NSLayoutManager *lm = self.layoutManager;
     NSTextContainer *tc = self.textContainer;
     if (!lm || !tc) return;
+    [self addHandCursorForAttribute:kMeoExpandHTMLAttr storage:storage layoutManager:lm textContainer:tc];
+    [self addHandCursorForAttribute:kMeoCollapseHTMLAttr storage:storage layoutManager:lm textContainer:tc];
     NSUInteger idx = 0;
     while (idx < storage.length) {
         NSRange eff = NSMakeRange(0, 0);
@@ -143,8 +194,12 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 @property (nonatomic, assign) BOOL draggingBubble;
 @property (nonatomic, assign) NSPoint dragMouseInSuperview;
 @property (nonatomic, assign) NSPoint dragFrameOrigin;
+@property (nonatomic, assign) MeoHUDResizeMask resizingMask;
+@property (nonatomic, assign) NSRect resizeStartFrame;
+@property (nonatomic, assign) NSPoint resizeStartMouseInSuperview;
 - (NSRect)clampedFrame:(NSRect)frame inSuperview:(NSView *)superview;
 - (CGFloat)dragChromeHeight;
+- (MeoHUDResizeMask)resizeMaskAtPoint:(NSPoint)local;
 @end
 
 @implementation BrowserDOMInspectorHUDView
@@ -154,11 +209,15 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     if (self) {
         _titleText = @"";
         _subtitleText = @"";
+        _htmlPreview = @"";
+        _htmlPreviewExpanded = NO;
         _attributeRows = @[];
         _onionLabels = @[];
         _selectedOnionIndex = NSNotFound;
         _pinnedAppearance = NO;
         _userRepositioned = NO;
+        _userResized = NO;
+        _resizingMask = MeoHUDResizeNone;
         _onionButtons = [NSMutableArray array];
         self.wantsLayer = YES;
         self.layer.backgroundColor = [NSColor clearColor].CGColor;
@@ -196,6 +255,23 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     __weak typeof(self) weakSelf = self;
     self.bodyTextView.onSegmentCopied = ^(NSString *segment) {
         if (weakSelf.onCopiedSegment) weakSelf.onCopiedSegment(segment);
+    };
+    void (^toggleHTMLExpanded)(BOOL) = ^(BOOL expanded) {
+        if (weakSelf.htmlPreviewExpanded == expanded) return;
+        weakSelf.htmlPreviewExpanded = expanded;
+        [weakSelf reloadPinnedContent];
+        if (weakSelf.onContentSizeMayChange) weakSelf.onContentSizeMayChange();
+        // 折叠后滚回顶部，避免仍停在展开时的滚动位置。
+        if (!expanded) {
+            [weakSelf.scrollView.contentView scrollToPoint:NSZeroPoint];
+            [weakSelf.scrollView reflectScrolledClipView:weakSelf.scrollView.contentView];
+        }
+    };
+    self.bodyTextView.onExpandHTML = ^{
+        toggleHTMLExpanded(YES);
+    };
+    self.bodyTextView.onCollapseHTML = ^{
+        toggleHTMLExpanded(NO);
     };
 
     self.scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -340,6 +416,20 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     return out;
 }
 
+- (void)markCopySegmentIn:(NSMutableAttributedString *)text
+                     range:(NSRange)absRange
+                   payload:(NSString *)payload {
+    if (absRange.length == 0 || payload.length == 0) return;
+    [text addAttribute:kMeoCopySegmentAttr value:payload range:absRange];
+    [text addAttribute:NSUnderlineStyleAttributeName
+                 value:@(NSUnderlineStyleSingle | NSUnderlineStylePatternDot)
+                 range:absRange];
+    [text addAttribute:NSUnderlineColorAttributeName
+                 value:[NSColor colorWithCalibratedWhite:1.0 alpha:0.28]
+                 range:absRange];
+    [text addAttribute:NSCursorAttributeName value:[NSCursor pointingHandCursor] range:absRange];
+}
+
 /// 按 = / "" / [] 切段，段内文字可点击复制（分隔符本身不点）。
 - (void)annotateCopySegmentsIn:(NSMutableAttributedString *)text range:(NSRange)range {
     if (range.length == 0 || NSMaxRange(range) > text.length) return;
@@ -358,14 +448,7 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
         if (trimEnd <= trimStart) return;
         NSRange abs = NSMakeRange(range.location + locInS + trimStart, trimEnd - trimStart);
         NSString *payload = [s substringWithRange:NSMakeRange(locInS + trimStart, trimEnd - trimStart)];
-        [text addAttribute:kMeoCopySegmentAttr value:payload range:abs];
-        [text addAttribute:NSUnderlineStyleAttributeName
-                     value:@(NSUnderlineStyleSingle | NSUnderlineStylePatternDot)
-                     range:abs];
-        [text addAttribute:NSUnderlineColorAttributeName
-                     value:[NSColor colorWithCalibratedWhite:1.0 alpha:0.28]
-                     range:abs];
-        [text addAttribute:NSCursorAttributeName value:[NSCursor pointingHandCursor] range:abs];
+        [self markCopySegmentIn:text range:abs payload:payload];
     };
 
     while (i < s.length) {
@@ -427,10 +510,193 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     }
 }
 
+/// HTML 预览按标签结构切段：
+/// `<div class="th-inner">任务名称(mtasksname)</div>`
+/// → div / class / th-inner / 任务名称 / mtasksname / div
+- (void)annotateHTMLCopySegmentsIn:(NSMutableAttributedString *)text range:(NSRange)range {
+    if (range.length == 0 || NSMaxRange(range) > text.length) return;
+    NSString *s = [text.string substringWithRange:range];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    // 文本节点内再拆：空白与 ()[]{}<>/"'=
+    NSCharacterSet *textDelims = [NSCharacterSet characterSetWithCharactersInString:@"()[]{}<>/\"'="];
+
+    void (^mark)(NSUInteger, NSUInteger) = ^(NSUInteger locInS, NSUInteger len) {
+        if (len == 0) return;
+        NSUInteger trimStart = 0;
+        NSUInteger trimEnd = len;
+        while (trimStart < trimEnd &&
+               [ws characterIsMember:[s characterAtIndex:locInS + trimStart]]) {
+            trimStart++;
+        }
+        while (trimEnd > trimStart &&
+               [ws characterIsMember:[s characterAtIndex:locInS + trimEnd - 1]]) {
+            trimEnd--;
+        }
+        if (trimEnd <= trimStart) return;
+        NSRange abs = NSMakeRange(range.location + locInS + trimStart, trimEnd - trimStart);
+        NSString *payload = [s substringWithRange:NSMakeRange(locInS + trimStart, trimEnd - trimStart)];
+        [self markCopySegmentIn:text range:abs payload:payload];
+    };
+
+    void (^markTextRuns)(NSUInteger, NSUInteger) = ^(NSUInteger locInS, NSUInteger len) {
+        NSUInteger j = locInS;
+        NSUInteger end = locInS + len;
+        while (j < end) {
+            unichar c = [s characterAtIndex:j];
+            if ([ws characterIsMember:c] || [textDelims characterIsMember:c]) {
+                j++;
+                continue;
+            }
+            NSUInteger start = j;
+            while (j < end) {
+                unichar x = [s characterAtIndex:j];
+                if ([ws characterIsMember:x] || [textDelims characterIsMember:x]) break;
+                j++;
+            }
+            mark(start, j - start);
+        }
+    };
+
+    NSUInteger i = 0;
+    while (i < s.length) {
+        unichar c = [s characterAtIndex:i];
+        if (c == '<') {
+            // 跳过注释 / DOCTYPE
+            if (i + 3 < s.length &&
+                [s characterAtIndex:i + 1] == '!' &&
+                [s characterAtIndex:i + 2] == '-' &&
+                [s characterAtIndex:i + 3] == '-') {
+                NSRange close = [s rangeOfString:@"-->" options:0
+                                           range:NSMakeRange(i + 4, s.length - (i + 4))];
+                i = (close.location != NSNotFound) ? NSMaxRange(close) : s.length;
+                continue;
+            }
+            i++; // '<'
+            // 可选 '/'
+            if (i < s.length && [s characterAtIndex:i] == '/') i++;
+            // 标签名
+            NSUInteger nameStart = i;
+            while (i < s.length) {
+                unichar x = [s characterAtIndex:i];
+                if ([ws characterIsMember:x] || x == '>' || x == '/') break;
+                i++;
+            }
+            mark(nameStart, i - nameStart);
+            // 属性区直到 '>'
+            while (i < s.length) {
+                unichar x = [s characterAtIndex:i];
+                if (x == '>') {
+                    i++;
+                    break;
+                }
+                if (x == '/') {
+                    i++;
+                    continue;
+                }
+                if ([ws characterIsMember:x] || x == '=') {
+                    i++;
+                    continue;
+                }
+                if (x == '"' || x == '\'') {
+                    unichar quote = x;
+                    i++;
+                    NSUInteger vStart = i;
+                    while (i < s.length && [s characterAtIndex:i] != quote) i++;
+                    // 引号内按空白拆（class 多值）；再对每段按 ()[] 等拆
+                    NSUInteger v = vStart;
+                    NSUInteger vEnd = i;
+                    while (v < vEnd) {
+                        unichar y = [s characterAtIndex:v];
+                        if ([ws characterIsMember:y]) {
+                            v++;
+                            continue;
+                        }
+                        NSUInteger t0 = v;
+                        while (v < vEnd && ![ws characterIsMember:[s characterAtIndex:v]]) v++;
+                        markTextRuns(t0, v - t0);
+                    }
+                    if (i < s.length) i++; // closing quote
+                    continue;
+                }
+                // 属性名或无引号值
+                NSUInteger aStart = i;
+                while (i < s.length) {
+                    unichar y = [s characterAtIndex:i];
+                    if ([ws characterIsMember:y] || y == '=' || y == '>' || y == '/' ||
+                        y == '"' || y == '\'') {
+                        break;
+                    }
+                    i++;
+                }
+                mark(aStart, i - aStart);
+            }
+            continue;
+        }
+        // 文本节点：直到下一个 '<'
+        NSUInteger tStart = i;
+        while (i < s.length && [s characterAtIndex:i] != '<') i++;
+        markTextRuns(tStart, i - tStart);
+    }
+}
+
+/// 在给定宽度下，HTML 是否超过 maxLines 行。
+- (BOOL)html:(NSString *)html exceedsLines:(NSUInteger)maxLines width:(CGFloat)width font:(NSFont *)font {
+    if (html.length == 0 || width < 8) return NO;
+    NSDictionary *attrs = @{NSFontAttributeName: font};
+    NSRect rect = [html boundingRectWithSize:NSMakeSize(width, CGFLOAT_MAX)
+                                     options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                  attributes:attrs];
+    CGFloat lineH = MAX(font.boundingRectForFont.size.height, kHUDRowHeight);
+    return ceil(rect.size.height) > (CGFloat)maxLines * lineH + 0.5;
+}
+
+/// 折叠为最多 maxLines 行；若需截断则末尾带 `…`（由调用方单独标注点击展开）。
+- (NSString *)collapsedHTML:(NSString *)html
+                  maxLines:(NSUInteger)maxLines
+                     width:(CGFloat)width
+                      font:(NSFont *)font
+                needsEllipsis:(BOOL *)needsEllipsisOut {
+    if (needsEllipsisOut) *needsEllipsisOut = NO;
+    if (html.length == 0) return @"";
+    if (![self html:html exceedsLines:maxLines width:width font:font]) {
+        return html;
+    }
+    NSDictionary *attrs = @{NSFontAttributeName: font};
+    CGFloat lineH = MAX(font.boundingRectForFont.size.height, kHUDRowHeight);
+    CGFloat maxH = (CGFloat)maxLines * lineH + 0.5;
+    NSUInteger lo = 0, hi = html.length, best = 0;
+    while (lo <= hi) {
+        NSUInteger mid = lo + (hi - lo) / 2;
+        NSString *cand = [[html substringToIndex:mid] stringByAppendingString:kMeoHTMLEllipsis];
+        NSRect rect = [cand boundingRectWithSize:NSMakeSize(width, CGFLOAT_MAX)
+                                         options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                      attributes:attrs];
+        if (rect.size.height <= maxH) {
+            best = mid;
+            lo = mid + 1;
+        } else if (mid == 0) {
+            break;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if (needsEllipsisOut) *needsEllipsisOut = YES;
+    return [[html substringToIndex:best] stringByAppendingString:kMeoHTMLEllipsis];
+}
+
+- (CGFloat)htmlPreviewContentWidth {
+    CGFloat onionW = [self onionColumnWidth];
+    CGFloat w = NSWidth(self.bounds);
+    if (w < 40) w = kHUDMaxWidth;
+    CGFloat bodyX = kHUDPadding + (onionW > 0 ? onionW + 8 : 0);
+    return MAX(80.0, w - bodyX - kHUDPadding - 8.0);
+}
+
 - (void)reloadPinnedContent {
     if (!self.pinnedAppearance) return;
     NSFont *titleFont = [BrowserDOMInspectorHUDView titleFont];
     NSFont *subFont = [BrowserDOMInspectorHUDView subtitleFont];
+    NSFont *rowFont = [BrowserDOMInspectorHUDView rowFont];
     NSMutableAttributedString *text = [[NSMutableAttributedString alloc] init];
 
     NSString *title = self.titleText.length > 0 ? self.titleText : @"";
@@ -443,6 +709,75 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
             initWithString:[self.subtitleText stringByAppendingString:@"\n"]
                 attributes:[self attrsWithFont:subFont
                                          color:[NSColor colorWithCalibratedWhite:0.55 alpha:1.0]]]];
+    }
+    if (self.htmlPreview.length > 0) {
+        [text appendAttributedString:[[NSAttributedString alloc]
+            initWithString:@"────────────────\n"
+                attributes:[self attrsWithFont:subFont
+                                         color:[NSColor colorWithCalibratedWhite:0.35 alpha:1.0]]]];
+        NSColor *htmlColor = [NSColor colorWithCalibratedRed:0.95 green:0.82 blue:0.55 alpha:1.0];
+        NSColor *linkColor = [NSColor colorWithCalibratedRed:0.45 green:0.78 blue:1.00 alpha:1.0];
+        CGFloat htmlW = [self htmlPreviewContentWidth];
+        // 展开态：HTML 上方放「▲ 收起」，与折叠态末尾「…」形成一对对称操作。
+        if (self.htmlPreviewExpanded) {
+            NSUInteger collapseLoc = text.length;
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:[kMeoHTMLCollapseLabel stringByAppendingString:@"\n"]
+                    attributes:[self attrsWithFont:subFont color:linkColor]]];
+            NSRange collapseRange = NSMakeRange(collapseLoc, kMeoHTMLCollapseLabel.length);
+            [text addAttribute:kMeoCollapseHTMLAttr value:@YES range:collapseRange];
+            [text addAttribute:NSUnderlineStyleAttributeName
+                         value:@(NSUnderlineStyleSingle)
+                         range:collapseRange];
+            [text addAttribute:NSCursorAttributeName
+                         value:[NSCursor pointingHandCursor]
+                         range:collapseRange];
+            NSUInteger htmlStart = text.length;
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:[self.htmlPreview stringByAppendingString:@"\n"]
+                    attributes:[self attrsWithFont:rowFont color:htmlColor]]];
+            [self annotateHTMLCopySegmentsIn:text
+                                       range:NSMakeRange(htmlStart, self.htmlPreview.length)];
+        } else {
+            BOOL showEllipsis = NO;
+            NSString *displayHTML = [self collapsedHTML:self.htmlPreview
+                                               maxLines:kHUDHTMLCollapsedMaxLines
+                                                  width:htmlW
+                                                   font:rowFont
+                                          needsEllipsis:&showEllipsis];
+            NSUInteger htmlStart = text.length;
+            if (showEllipsis && [displayHTML hasSuffix:kMeoHTMLEllipsis]) {
+                NSString *prefix = [displayHTML substringToIndex:displayHTML.length - kMeoHTMLEllipsis.length];
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:prefix
+                        attributes:[self attrsWithFont:rowFont color:htmlColor]]];
+                NSUInteger ellipsisLoc = text.length;
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:kMeoHTMLEllipsis
+                        attributes:[self attrsWithFont:rowFont color:linkColor]]];
+                NSRange ellipsisRange = NSMakeRange(ellipsisLoc, kMeoHTMLEllipsis.length);
+                [text addAttribute:kMeoExpandHTMLAttr value:@YES range:ellipsisRange];
+                [text addAttribute:NSUnderlineStyleAttributeName
+                             value:@(NSUnderlineStyleSingle)
+                             range:ellipsisRange];
+                [text addAttribute:NSCursorAttributeName
+                             value:[NSCursor pointingHandCursor]
+                             range:ellipsisRange];
+                if (prefix.length > 0) {
+                    [self annotateHTMLCopySegmentsIn:text
+                                               range:NSMakeRange(htmlStart, prefix.length)];
+                }
+            } else {
+                [text appendAttributedString:[[NSAttributedString alloc]
+                    initWithString:displayHTML
+                        attributes:[self attrsWithFont:rowFont color:htmlColor]]];
+                [self annotateHTMLCopySegmentsIn:text
+                                           range:NSMakeRange(htmlStart, displayHTML.length)];
+            }
+            [text appendAttributedString:[[NSAttributedString alloc]
+                initWithString:@"\n"
+                    attributes:[self attrsWithFont:rowFont color:htmlColor]]];
+        }
     }
     NSUInteger attrsStart = NSNotFound;
     if (self.attributeRows.count > 0) {
@@ -567,7 +902,37 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     if (!self.dismissButton.hidden && NSPointInRect(local, self.dismissButton.frame)) {
         return NO;
     }
+    // 边缘改大小优先于整体拖动。
+    if ([self resizeMaskAtPoint:local] != MeoHUDResizeNone) return NO;
     return YES;
+}
+
+/// 钉住态：四边四角可拖；视图 isFlipped，local.y=0 为视觉顶部。
+- (MeoHUDResizeMask)resizeMaskAtPoint:(NSPoint)local {
+    if (!self.pinnedAppearance) return MeoHUDResizeNone;
+    NSRect b = self.bounds;
+    if (!NSPointInRect(local, b)) return MeoHUDResizeNone;
+    MeoHUDResizeMask mask = MeoHUDResizeNone;
+    if (local.x <= kHUDResizeEdge) mask |= MeoHUDResizeMinX;
+    if (local.x >= NSWidth(b) - kHUDResizeEdge) mask |= MeoHUDResizeMaxX;
+    // flipped：顶部 → superview MaxY；底部 → MinY
+    if (local.y <= kHUDResizeEdge) mask |= MeoHUDResizeMaxY;
+    if (local.y >= NSHeight(b) - kHUDResizeEdge) mask |= MeoHUDResizeMinY;
+    return mask;
+}
+
+- (NSCursor *)cursorForResizeMask:(MeoHUDResizeMask)mask {
+    BOOL left = (mask & MeoHUDResizeMinX) != 0;
+    BOOL right = (mask & MeoHUDResizeMaxX) != 0;
+    BOOL bottom = (mask & MeoHUDResizeMinY) != 0;
+    BOOL top = (mask & MeoHUDResizeMaxY) != 0;
+    if ((left || right) && !(top || bottom)) return [NSCursor resizeLeftRightCursor];
+    if ((top || bottom) && !(left || right)) return [NSCursor resizeUpDownCursor];
+    // 四角：用对角语义光标（系统无公开对角时退回十字）。
+    if ((left && top) || (right && bottom) || (left && bottom) || (right && top)) {
+        return [NSCursor crosshairCursor];
+    }
+    return [NSCursor arrowCursor];
 }
 
 - (NSRect)clampedFrame:(NSRect)frame inSuperview:(NSView *)superview {
@@ -582,12 +947,55 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     return frame;
 }
 
+- (NSRect)resizedFrameFromStart:(NSRect)start
+                          delta:(NSPoint)delta
+                           mask:(MeoHUDResizeMask)mask {
+    NSRect frame = start;
+    if (mask & MeoHUDResizeMinX) {
+        frame.origin.x = start.origin.x + delta.x;
+        frame.size.width = start.size.width - delta.x;
+    }
+    if (mask & MeoHUDResizeMaxX) {
+        frame.size.width = start.size.width + delta.x;
+    }
+    if (mask & MeoHUDResizeMinY) {
+        frame.origin.y = start.origin.y + delta.y;
+        frame.size.height = start.size.height - delta.y;
+    }
+    if (mask & MeoHUDResizeMaxY) {
+        frame.size.height = start.size.height + delta.y;
+    }
+    // 最小尺寸：若压得太小则钉住对边。
+    if (NSWidth(frame) < kHUDMinResizeWidth) {
+        if (mask & MeoHUDResizeMinX) {
+            frame.origin.x = NSMaxX(start) - kHUDMinResizeWidth;
+        }
+        frame.size.width = kHUDMinResizeWidth;
+    }
+    if (NSHeight(frame) < kHUDMinResizeHeight) {
+        if (mask & MeoHUDResizeMinY) {
+            frame.origin.y = NSMaxY(start) - kHUDMinResizeHeight;
+        }
+        frame.size.height = kHUDMinResizeHeight;
+    }
+    return frame;
+}
+
 - (void)mouseDown:(NSEvent *)event {
     if (!self.pinnedAppearance) {
         [super mouseDown:event];
         return;
     }
     NSPoint local = [self convertPoint:event.locationInWindow fromView:nil];
+    MeoHUDResizeMask resizeMask = [self resizeMaskAtPoint:local];
+    if (resizeMask != MeoHUDResizeNone) {
+        self.resizingMask = resizeMask;
+        self.resizeStartFrame = self.frame;
+        self.resizeStartMouseInSuperview =
+            [self.superview convertPoint:event.locationInWindow fromView:nil];
+        [[self cursorForResizeMask:resizeMask] push];
+        return;
+    }
     if (![self pointInDragChrome:local]) {
         [super mouseDown:event];
         return;
@@ -599,6 +1007,20 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 }
 
 - (void)mouseDragged:(NSEvent *)event {
+    if (self.resizingMask != MeoHUDResizeNone && self.superview) {
+        NSPoint mouse = [self.superview convertPoint:event.locationInWindow fromView:nil];
+        NSPoint delta = NSMakePoint(mouse.x - self.resizeStartMouseInSuperview.x,
+                                    mouse.y - self.resizeStartMouseInSuperview.y);
+        NSRect frame = [self resizedFrameFromStart:self.resizeStartFrame
+                                             delta:delta
+                                              mask:self.resizingMask];
+        self.frame = [self clampedFrame:frame inSuperview:self.superview];
+        self.userResized = YES;
+        self.userRepositioned = YES;
+        [self layoutChrome];
+        [self.window invalidateCursorRectsForView:self];
+        return;
+    }
     if (!self.draggingBubble || !self.superview) {
         [super mouseDragged:event];
         return;
@@ -614,6 +1036,13 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    if (self.resizingMask != MeoHUDResizeNone) {
+        self.resizingMask = MeoHUDResizeNone;
+        [NSCursor pop];
+        [self layoutChrome];
+        [self.window invalidateCursorRectsForView:self];
+        return;
+    }
     if (self.draggingBubble) {
         self.draggingBubble = NO;
         [NSCursor pop];
@@ -625,8 +1054,29 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 - (void)resetCursorRects {
     [super resetCursorRects];
     if (!self.pinnedAppearance) return;
-    NSRect chrome = NSMakeRect(0, 0, NSWidth(self.bounds), [self dragChromeHeight]);
-    // 去掉按钮区域，避免覆盖按钮光标。
+    CGFloat w = NSWidth(self.bounds);
+    CGFloat h = NSHeight(self.bounds);
+    CGFloat e = kHUDResizeEdge;
+    // 四角优先
+    [self addCursorRect:NSMakeRect(0, 0, e, e)
+                 cursor:[self cursorForResizeMask:MeoHUDResizeMinX | MeoHUDResizeMaxY]];
+    [self addCursorRect:NSMakeRect(w - e, 0, e, e)
+                 cursor:[self cursorForResizeMask:MeoHUDResizeMaxX | MeoHUDResizeMaxY]];
+    [self addCursorRect:NSMakeRect(0, h - e, e, e)
+                 cursor:[self cursorForResizeMask:MeoHUDResizeMinX | MeoHUDResizeMinY]];
+    [self addCursorRect:NSMakeRect(w - e, h - e, e, e)
+                 cursor:[self cursorForResizeMask:MeoHUDResizeMaxX | MeoHUDResizeMinY]];
+    // 四边
+    [self addCursorRect:NSMakeRect(e, 0, w - 2 * e, e)
+                 cursor:[NSCursor resizeUpDownCursor]];
+    [self addCursorRect:NSMakeRect(e, h - e, w - 2 * e, e)
+                 cursor:[NSCursor resizeUpDownCursor]];
+    [self addCursorRect:NSMakeRect(0, e, e, h - 2 * e)
+                 cursor:[NSCursor resizeLeftRightCursor]];
+    [self addCursorRect:NSMakeRect(w - e, e, e, h - 2 * e)
+                 cursor:[NSCursor resizeLeftRightCursor]];
+
+    NSRect chrome = NSMakeRect(e, e, MAX(0, w - 2 * e), MAX(0, [self dragChromeHeight] - e));
     [self addCursorRect:chrome cursor:[NSCursor openHandCursor]];
 }
 
@@ -635,6 +1085,10 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     NSPoint local = [self convertPoint:point fromView:self.superview];
     if (!NSPointInRect(local, self.bounds)) return nil;
     if (self.pinnedAppearance) {
+        // 边缘改大小优先于内部控件。
+        if ([self resizeMaskAtPoint:local] != MeoHUDResizeNone) {
+            return self;
+        }
         // 顶部拖拽条优先归自己（按钮除外），便于拖动整块气泡。
         if ([self pointInDragChrome:local]) {
             return self;
@@ -856,6 +1310,27 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     view.onSelectOnionIndex = ^(NSInteger index) {
         [weakSelf selectAncestorAtIndex:index];
     };
+    view.onContentSizeMayChange = ^{
+        BrowserDOMInspectorHUDView *v = weakSelf.view;
+        NSWindow *win = weakSelf.hostWindow;
+        if (!v || !win || v.hidden) return;
+        // 用户已拖过大小：只重排内部，不改外框。
+        if (v.userResized) {
+            [v layoutChrome];
+            [v setNeedsDisplay:YES];
+            return;
+        }
+        NSSize size = [weakSelf contentSizeForView:v
+                                            pinned:v.pinnedAppearance
+                                          inWindow:win];
+        v.frame = [weakSelf placedFrameForView:v
+                                          size:size
+                                      geometry:weakSelf.lastGeometry
+                                   webViewRect:weakSelf.lastWebViewRect
+                                      inWindow:win];
+        [v layoutChrome];
+        [v setNeedsDisplay:YES];
+    };
     [host addSubview:view positioned:NSWindowAbove relativeTo:nil];
     self.view = view;
     return view;
@@ -900,17 +1375,40 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     if (includeSelector && selector.length > 0) {
         [rows addObject:[NSString stringWithFormat:@"selector=%@", selector]];
     }
-    if (cls.length > 0) {
-        [rows addObject:[NSString stringWithFormat:@"class=\"%@\"", cls]];
-    }
+    BOOL hasClassAttr = NO;
     for (NSDictionary *attr in attributes) {
         if (![attr isKindOfClass:[NSDictionary class]]) continue;
         NSString *name = [attr[@"name"] isKindOfClass:[NSString class]] ? attr[@"name"] : nil;
         NSString *value = [attr[@"value"] isKindOfClass:[NSString class]] ? attr[@"value"] : @"";
-        if (name.length == 0 || [name isEqualToString:@"class"]) continue;
+        if (name.length == 0) continue;
+        if ([name isEqualToString:@"class"]) hasClassAttr = YES;
+        // 全量展示：不截断、不跳过任何属性名。
         [rows addObject:[NSString stringWithFormat:@"%@=\"%@\"", name, value]];
     }
+    // attributes 里若缺 class，用 scrub 后的 className 补上。
+    if (!hasClassAttr && cls.length > 0) {
+        NSUInteger insertAt = includeSelector && selector.length > 0 ? 1 : 0;
+        [rows insertObject:[NSString stringWithFormat:@"class=\"%@\"", cls] atIndex:insertAt];
+    }
     return rows;
+}
+
+- (NSString *)htmlPreviewForAncestor:(NSDictionary *)node {
+    NSString *html = [node[@"outerHTML"] isKindOfClass:[NSString class]] ? node[@"outerHTML"] : @"";
+    if (html.length > 0) return html;
+    // 无 outerHTML 时用标签 + 文本拼一个可读预览。
+    NSString *tag = [node[@"tagName"] isKindOfClass:[NSString class]] ? node[@"tagName"] : @"div";
+    NSString *cls = [node[@"className"] isKindOfClass:[NSString class]] ? node[@"className"] : @"";
+    NSString *elementID = [node[@"id"] isKindOfClass:[NSString class]] ? node[@"id"] : @"";
+    NSDictionary *textObj = [node[@"text"] isKindOfClass:[NSDictionary class]] ? node[@"text"] : nil;
+    NSString *own = [textObj[@"own"] isKindOfClass:[NSString class]] ? textObj[@"own"] : @"";
+    NSMutableString *open = [NSMutableString stringWithFormat:@"<%@", tag];
+    if (elementID.length > 0) [open appendFormat:@" id=\"%@\"", elementID];
+    if (cls.length > 0) [open appendFormat:@" class=\"%@\"", cls];
+    [open appendString:@">"];
+    [open appendString:own];
+    [open appendFormat:@"</%@>", tag];
+    return open;
 }
 
 - (void)applySelectedAncestorToView:(BrowserDOMInspectorHUDView *)view {
@@ -922,6 +1420,7 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     }
     NSDictionary *node = self.ancestors[(NSUInteger)idx];
     view.titleText = [self labelForAncestor:node];
+    view.htmlPreview = [self htmlPreviewForAncestor:node];
     view.attributeRows = [self attributeRowsForAncestor:node includeSelector:YES];
     view.selectedOnionIndex = idx;
 
@@ -963,10 +1462,11 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     BrowserDOMInspectorHUDView *view = self.view;
     NSWindow *window = self.hostWindow;
     if (!view || !window) return;
+    view.htmlPreviewExpanded = NO;
     [self applySelectedAncestorToView:view];
-    NSSize size = [self contentSizeForView:view
-                                    pinned:view.pinnedAppearance
-                                  inWindow:window];
+    NSSize size = view.userResized
+        ? view.frame.size
+        : [self contentSizeForView:view pinned:view.pinnedAppearance inWindow:window];
     view.frame = [self placedFrameForView:view
                                      size:size
                                  geometry:self.lastGeometry
@@ -994,8 +1494,17 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     view.layer.zPosition = 20000;
 
     self.rootSnapshot = snapshot;
+    NSInteger prevOnion = self.selectedAncestorIndex;
     self.ancestors = [self normalizedAncestorsFromSnapshot:snapshot];
-    self.selectedAncestorIndex = (NSInteger)self.ancestors.count - 1;
+    // 钉住刷新（后期渲染）时尽量保持当前洋葱选中；新悬停/新钉住落到叶子。
+    if (pinned && view.pinnedAppearance && !view.hidden &&
+        prevOnion >= 0 && prevOnion < (NSInteger)self.ancestors.count) {
+        self.selectedAncestorIndex = prevOnion;
+        // 钉住后期渲染刷新：保留 HTML 展开状态
+    } else {
+        self.selectedAncestorIndex = (NSInteger)self.ancestors.count - 1;
+        view.htmlPreviewExpanded = NO;
+    }
 
     NSMutableArray<NSString *> *labels = [NSMutableArray array];
     for (NSDictionary *node in self.ancestors) {
@@ -1004,17 +1513,21 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     view.onionLabels = labels;
 
     [self applySelectedAncestorToView:view];
-    // 悬停刷新时清掉用户拖拽位置；已钉住且用户拖过则保留。
+    // 悬停刷新时清掉用户拖拽/改大小；已钉住且用户拖过则保留。
     if (!pinned) {
         view.userRepositioned = NO;
+        view.userResized = NO;
     }
     BOOL keepUserPos = pinned && view.pinnedAppearance && view.userRepositioned && !view.hidden;
+    BOOL keepUserSize = pinned && view.pinnedAppearance && view.userResized && !view.hidden;
     view.pinnedAppearance = pinned;
     self.lastGeometry = geometry;
     self.lastWebViewRect = webViewRect;
 
-    NSSize size = [self contentSizeForView:view pinned:pinned inWindow:window];
-    if (keepUserPos) {
+    NSSize size = keepUserSize
+        ? view.frame.size
+        : [self contentSizeForView:view pinned:pinned inWindow:window];
+    if (keepUserPos || keepUserSize) {
         view.frame = [self placedFrameForView:view
                                          size:size
                                      geometry:geometry
@@ -1058,6 +1571,10 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 - (NSSize)contentSizeForView:(BrowserDOMInspectorHUDView *)view
                       pinned:(BOOL)pinned
                     inWindow:(NSWindow *)window {
+    (void)window;
+    if (pinned && view.userResized && NSWidth(view.frame) > 1 && NSHeight(view.frame) > 1) {
+        return view.frame.size;
+    }
     NSFont *titleFont = [BrowserDOMInspectorHUDView titleFont];
     NSFont *bodyFont = [BrowserDOMInspectorHUDView rowFont];
 
@@ -1069,10 +1586,25 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
     CGFloat onionW = (view.onionLabels.count > 0) ? kHUDOnionWidth : 0;
     CGFloat trailing = pinned ? (kHUDIconButton * 2 + 20.0) : (kHUDIconButton + 16.0);
     CGFloat width = ceil(contentW) + kHUDPadding * 2 + trailing + (onionW > 0 ? onionW + 8 : 0);
-    width = MIN(MAX(width, pinned ? 320.0 : 240.0), kHUDMaxWidth);
+    width = MIN(MAX(width, pinned ? 640.0 : 480.0), kHUDMaxWidth);
 
     CGFloat attrH = kHUDPadding * 2 + kHUDTitleHeight;
     if (view.subtitleText.length > 0) attrH += kHUDRowHeight;
+    if (view.htmlPreview.length > 0) {
+        NSUInteger htmlLines = kHUDHTMLCollapsedMaxLines;
+        if (view.htmlPreviewExpanded) {
+            CGFloat bodyW = MAX(80.0, width - kHUDPadding * 2 - (onionW > 0 ? onionW + 8 : 0) - 8.0);
+            NSDictionary *htmlAttrs = @{NSFontAttributeName: bodyFont};
+            NSRect htmlRect = [view.htmlPreview boundingRectWithSize:NSMakeSize(bodyW, CGFLOAT_MAX)
+                                                             options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                          attributes:htmlAttrs];
+            CGFloat lineH = MAX(bodyFont.boundingRectForFont.size.height, kHUDRowHeight);
+            htmlLines = MAX(1, (NSUInteger)ceil(htmlRect.size.height / lineH));
+            htmlLines = MIN(htmlLines, 40); // 展开后也限制高度，其余靠滚动
+            htmlLines += 1; // 「▲ 收起」一行
+        }
+        attrH += 8 + htmlLines * (kHUDRowHeight + 2);
+    }
     // 属性行之间多留 4pt 间距（钉住态还有空行，高度按约 1.6 倍估算）
     CGFloat rowPitch = pinned ? (kHUDRowHeight * 1.7) : (kHUDRowHeight + 4.0);
     attrH += 4 + view.attributeRows.count * rowPitch;
@@ -1132,6 +1664,8 @@ static void MeoStyleIconButton(NSButton *button, NSString *symbol, NSString *fal
 - (void)hide {
     self.view.hidden = YES;
     self.view.userRepositioned = NO;
+    self.view.userResized = NO;
+    self.view.htmlPreviewExpanded = NO;
     self.view.pinnedAppearance = NO;
     self.pendingSelector = nil;
     self.ancestors = nil;
