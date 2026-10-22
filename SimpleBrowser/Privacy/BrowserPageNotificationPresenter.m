@@ -31,8 +31,23 @@ static NSString * const kPageNotifCategory = @"MEO_PAGE_NOTIFICATION";
     return self;
 }
 
++ (void)openSystemNotificationSettings {
+    NSURL *url = nil;
+    if (@available(macOS 13.0, *)) {
+        url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.Notifications-Settings.extension"];
+    }
+    if (url == nil || ![[NSWorkspace sharedWorkspace] openURL:url]) {
+        url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.notifications"];
+        if (url != nil) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+    }
+}
+
 - (void)requestAuthorizationIfNeeded {
-    [self ensureAuthorizationIfNeeded];
+    [self ensureAuthorizationWithCompletion:^(BOOL granted) {
+        (void)granted;
+    }];
 }
 
 - (void)installDelegateIfNeeded {
@@ -50,23 +65,54 @@ static NSString * const kPageNotifCategory = @"MEO_PAGE_NOTIFICATION";
     }
 }
 
-- (void)ensureAuthorizationIfNeeded {
+- (void)ensureAuthorizationWithCompletion:(void (^)(BOOL granted))completion {
+    void (^finish)(BOOL) = ^(BOOL granted) {
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion(granted);
+            });
+        }
+    };
+
     [self installDelegateIfNeeded];
-    if (self.didRequestAuthorization) {
-        return;
-    }
-    self.didRequestAuthorization = YES;
     if (@available(macOS 10.14, *)) {
         UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
-        [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-                              completionHandler:^(BOOL granted, NSError * _Nullable error) {
-            if (error) {
-                os_log_error(OS_LOG_DEFAULT, "page notif auth error: %{public}@", error.localizedDescription);
-            } else {
-                os_log_info(OS_LOG_DEFAULT, "page notif auth granted=%{public}d", granted);
+        [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings * _Nonnull settings) {
+            UNAuthorizationStatus status = settings.authorizationStatus;
+            if (status == UNAuthorizationStatusAuthorized ||
+                status == UNAuthorizationStatusProvisional) {
+                finish(YES);
+                return;
             }
+            if (status == UNAuthorizationStatusDenied) {
+                os_log_info(OS_LOG_DEFAULT, "page notif auth denied → open system settings");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [[self class] openSystemNotificationSettings];
+                });
+                finish(NO);
+                return;
+            }
+
+            // NotDetermined：弹出系统授权框；若用户拒绝则再打开设置页。
+            self.didRequestAuthorization = YES;
+            [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                                  completionHandler:^(BOOL granted, NSError * _Nullable error) {
+                if (error) {
+                    os_log_error(OS_LOG_DEFAULT, "page notif auth error: %{public}@", error.localizedDescription);
+                } else {
+                    os_log_info(OS_LOG_DEFAULT, "page notif auth granted=%{public}d", granted);
+                }
+                if (!granted) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [[self class] openSystemNotificationSettings];
+                    });
+                }
+                finish(granted);
+            }];
         }];
+        return;
     }
+    finish(NO);
 }
 
 - (void)presentWithTitle:(NSString *)title
@@ -81,8 +127,6 @@ static NSString * const kPageNotifCategory = @"MEO_PAGE_NOTIFICATION";
     NSString *safeTag = tag.length > 0 ? tag : @"default";
     NSString *safeHost = host.length > 0 ? host : @"unknown";
 
-    [self ensureAuthorizationIfNeeded];
-
     os_log_info(OS_LOG_DEFAULT,
                 "page notif present host=%{public}@ tag=%{public}@ titleLen=%lu bodyLen=%lu",
                 safeHost,
@@ -90,31 +134,36 @@ static NSString * const kPageNotifCategory = @"MEO_PAGE_NOTIFICATION";
                 (unsigned long)safeTitle.length,
                 (unsigned long)safeBody.length);
 
-    if (@available(macOS 10.14, *)) {
-        UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
-        content.title = safeTitle;
-        content.body = safeBody;
-        content.sound = [UNNotificationSound defaultSound];
-        content.categoryIdentifier = kPageNotifCategory;
-        content.threadIdentifier = safeHost;
-
-        NSString *identifier = [NSString stringWithFormat:@"page-notify-%@-%@", safeHost, safeTag];
-        if (identifier.length > 180) {
-            identifier = [identifier substringToIndex:180];
+    [self ensureAuthorizationWithCompletion:^(BOOL granted) {
+        if (!granted) {
+            return;
         }
+        if (@available(macOS 10.14, *)) {
+            UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+            content.title = safeTitle;
+            content.body = safeBody;
+            content.sound = [UNNotificationSound defaultSound];
+            content.categoryIdentifier = kPageNotifCategory;
+            content.threadIdentifier = safeHost;
 
-        UNNotificationRequest *request =
-            [UNNotificationRequest requestWithIdentifier:identifier
-                                                 content:content
-                                                 trigger:nil];
-        [[UNUserNotificationCenter currentNotificationCenter]
-            addNotificationRequest:request
-             withCompletionHandler:^(NSError * _Nullable error) {
-                 if (error) {
-                     os_log_error(OS_LOG_DEFAULT, "page notif deliver failed: %{public}@", error.localizedDescription);
-                 }
-             }];
-    }
+            NSString *identifier = [NSString stringWithFormat:@"page-notify-%@-%@", safeHost, safeTag];
+            if (identifier.length > 180) {
+                identifier = [identifier substringToIndex:180];
+            }
+
+            UNNotificationRequest *request =
+                [UNNotificationRequest requestWithIdentifier:identifier
+                                                     content:content
+                                                     trigger:nil];
+            [[UNUserNotificationCenter currentNotificationCenter]
+                addNotificationRequest:request
+                 withCompletionHandler:^(NSError * _Nullable error) {
+                     if (error) {
+                         os_log_error(OS_LOG_DEFAULT, "page notif deliver failed: %{public}@", error.localizedDescription);
+                     }
+                 }];
+        }
+    }];
 }
 
 #pragma mark - UNUserNotificationCenterDelegate

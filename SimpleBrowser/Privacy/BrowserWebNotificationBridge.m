@@ -57,20 +57,13 @@ static const NSTimeInterval kMinIntervalSeconds = 3.0;
 }
 
 + (NSString *)userScriptSource {
+    // 覆盖 WK 原生 Notification（http / 局域网上常为 permission=denied 且无法弹授权框）。
+    // 不要求 isSecureContext，以便 FeedGen 等 http://IP 阅读器可用。
     return @
     "(function() {\n"
     "  if (window.__meoWebNotificationInstalled) { return; }\n"
     "  var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.meoWebNotification;\n"
     "  if (!handler) { return; }\n"
-    "  function isSecureContext() {\n"
-    "    try {\n"
-    "      if (window.isSecureContext === true) { return true; }\n"
-    "      var p = location.protocol || '';\n"
-    "      var h = location.hostname || '';\n"
-    "      return p === 'https:' || h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';\n"
-    "    } catch (e) { return false; }\n"
-    "  }\n"
-    "  if (!isSecureContext()) { return; }\n"
     "  window.__meoWebNotificationInstalled = true;\n"
     "  var pending = Object.create(null);\n"
     "  function post(msg) { try { handler.postMessage(msg); } catch (e) {} }\n"
@@ -213,15 +206,11 @@ static const NSTimeInterval kMinIntervalSeconds = 3.0;
 + (NSString *)permissionStringForHost:(NSString *)host {
     BrowserSitePermissionDecision decision =
         [[BrowserSitePermissionStore sharedStore] notificationDecisionForHost:host];
-    switch (decision) {
-        case BrowserSitePermissionDecisionAllow:
-            return @"granted";
-        case BrowserSitePermissionDecisionDeny:
-            return @"denied";
-        case BrowserSitePermissionDecisionUnknown:
-        default:
-            return @"default";
+    // 仅同步 granted。deny 若暴露给页面，FeedGen 等会短路不再调用 requestPermission。
+    if (decision == BrowserSitePermissionDecisionAllow) {
+        return @"granted";
     }
+    return @"default";
 }
 
 - (BOOL)shouldRateLimitHost:(NSString *)host tag:(NSString *)tag {
@@ -237,19 +226,26 @@ static const NSTimeInterval kMinIntervalSeconds = 3.0;
 
 #pragma mark - Permission flow
 
++ (void)finishWithSystemAuthorization:(void (^)(NSString *permission))completion {
+    [[BrowserPageNotificationPresenter sharedPresenter] ensureAuthorizationWithCompletion:^(BOOL granted) {
+        // 系统已拒绝时 Presenter 会打开「通知」设置；返回 default 便于页面再次点击重试
+        //（若返回 denied，FeedGen 等站点会永久短路不再调用 requestPermission）。
+        completion(granted ? @"granted" : @"default");
+    }];
+}
+
 + (void)resolvePermissionForHost:(NSString *)host
                       hostWindow:(nullable NSWindow *)hostWindow
                       completion:(void (^)(NSString *permission))completion {
     BrowserSitePermissionStore *store = [BrowserSitePermissionStore sharedStore];
     BrowserSitePermissionDecision existing = [store notificationDecisionForHost:host];
     if (existing == BrowserSitePermissionDecisionAllow) {
-        [[BrowserPageNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
-        completion(@"granted");
+        [self finishWithSystemAuthorization:completion];
         return;
     }
     if (existing == BrowserSitePermissionDecisionDeny) {
-        completion(@"denied");
-        return;
+        // 允许用户再次点击时重新询问站点权限。
+        [store setNotificationDecision:BrowserSitePermissionDecisionUnknown forHost:host];
     }
 
     NSString *display = [self displayHost:host];
@@ -263,8 +259,7 @@ static const NSTimeInterval kMinIntervalSeconds = 3.0;
     [self presentPanel:alert hostWindow:hostWindow completionHandler:^(NSModalResponse returnCode) {
         if (returnCode == NSAlertFirstButtonReturn) {
             [store setNotificationDecision:BrowserSitePermissionDecisionAllow forHost:host];
-            [[BrowserPageNotificationPresenter sharedPresenter] requestAuthorizationIfNeeded];
-            completion(@"granted");
+            [self finishWithSystemAuthorization:completion];
         } else {
             [store setNotificationDecision:BrowserSitePermissionDecisionDeny forHost:host];
             completion(@"denied");

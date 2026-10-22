@@ -1,5 +1,6 @@
 #import "BrowserPageNotificationBridge.h"
 #import "BrowserPageNotificationPresenter.h"
+#import "BrowserSitePermissionStore.h"
 #import "LoginAssistScriptMessageProxy.h"
 #import <os/log.h>
 
@@ -98,6 +99,12 @@ static const NSTimeInterval kMinIntervalSeconds = 10.0;
     if ([normalized isEqualToString:@"localhost"] ||
         [normalized isEqualToString:@"127.0.0.1"] ||
         [normalized isEqualToString:@"::1"]) {
+        return YES;
+    }
+
+    // 已通过标准 Notification.requestPermission 授权的站点，同步放行 meoPageNotify。
+    if ([[BrowserSitePermissionStore sharedStore] notificationDecisionForHost:normalized] ==
+        BrowserSitePermissionDecisionAllow) {
         return YES;
     }
 

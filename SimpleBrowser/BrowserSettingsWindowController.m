@@ -5,6 +5,7 @@
 #import "BrowserLocationPreferences.h"
 #import "BrowserLocationService.h"
 #import "BrowserSitePermissionStore.h"
+#import "BrowserPageNotificationPresenter.h"
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserWebInspector.h"
 #import "BrowserDownloadPreferences.h"
@@ -1052,10 +1053,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 
 - (void)openSystemNotificationSettingsClicked:(id)sender {
     (void)sender;
-    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.Notifications-Settings.extension"];
-    if (url == nil || ![[NSWorkspace sharedWorkspace] openURL:url]) {
-        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.notifications"]];
-    }
+    [BrowserPageNotificationPresenter openSystemNotificationSettings];
 }
 
 - (void)clearSiteNotificationPermissionsClicked:(id)sender {
