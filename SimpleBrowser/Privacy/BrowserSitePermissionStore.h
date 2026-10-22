@@ -20,6 +20,11 @@ typedef NS_ENUM(NSInteger, BrowserSitePermissionDecision) {
 - (void)removeGeolocationDecisionForHost:(NSString *)host;
 - (void)removeAllGeolocationDecisions;
 
+- (BrowserSitePermissionDecision)notificationDecisionForHost:(NSString *)host;
+- (void)setNotificationDecision:(BrowserSitePermissionDecision)decision forHost:(NSString *)host;
+- (void)removeNotificationDecisionForHost:(NSString *)host;
+- (void)removeAllNotificationDecisions;
+
 @end
 
 NS_ASSUME_NONNULL_END

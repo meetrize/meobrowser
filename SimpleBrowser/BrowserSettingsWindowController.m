@@ -4,6 +4,7 @@
 #import "BrowserUserAgent.h"
 #import "BrowserLocationPreferences.h"
 #import "BrowserLocationService.h"
+#import "BrowserSitePermissionStore.h"
 #import "BrowserDeveloperPreferences.h"
 #import "BrowserWebInspector.h"
 #import "BrowserDownloadPreferences.h"
@@ -39,6 +40,9 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSButton *geolocationEnabledCheckbox;
 @property (nonatomic, strong) NSTextField *locationHintLabel;
 @property (nonatomic, strong) NSButton *openSystemLocationSettingsButton;
+@property (nonatomic, strong) NSTextField *notificationHintLabel;
+@property (nonatomic, strong) NSButton *openSystemNotificationSettingsButton;
+@property (nonatomic, strong) NSButton *clearSiteNotificationPermissionsButton;
 
 @property (nonatomic, strong) NSButton *allowWebInspectionCheckbox;
 @property (nonatomic, strong) NSTextField *developerHintLabel;
@@ -484,6 +488,16 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                                                                target:self
                                                                action:@selector(openSystemLocationSettingsClicked:)];
     self.openSystemLocationSettingsButton.bezelStyle = NSBezelStyleRounded;
+    self.notificationHintLabel = [self makeHint:
+        @"网站可通过 Notification API 在通知中心发送桌面通知。首次请求时会询问是否允许该站点。"];
+    self.openSystemNotificationSettingsButton = [NSButton buttonWithTitle:@"打开系统通知设置…"
+                                                                   target:self
+                                                                   action:@selector(openSystemNotificationSettingsClicked:)];
+    self.openSystemNotificationSettingsButton.bezelStyle = NSBezelStyleRounded;
+    self.clearSiteNotificationPermissionsButton = [NSButton buttonWithTitle:@"清除网站通知权限…"
+                                                                     target:self
+                                                                     action:@selector(clearSiteNotificationPermissionsClicked:)];
+    self.clearSiteNotificationPermissionsButton.bezelStyle = NSBezelStyleRounded;
     self.privacyHintLabel = [self makeHint:
         @"清除网站数据不会删除浏览历史；频繁清除 Cookie 可能导致部分站点反复要求人机验证。\n"
         @"网页与图标等网络请求均遵循系统「网络」中的代理设置；境外站点请在系统中配置可用代理，应用不会为加速而绕过代理。"];
@@ -537,15 +551,22 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
             toTabView:self.tabView
            widthViews:@[self.keyboardHintLabel]];
 
+    NSStackView *notificationRow = [NSStackView stackViewWithViews:@[
+        self.openSystemNotificationSettingsButton, self.clearSiteNotificationPermissionsButton
+    ]];
+    notificationRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    notificationRow.spacing = 12;
+
     [self addTabNamed:@"隐私"
            identifier:BrowserSettingsTabPrivacy
                 views:@[
                     privacyRow, self.clearWebsiteDataStatusLabel,
                     self.geolocationEnabledCheckbox, self.locationHintLabel, self.openSystemLocationSettingsButton,
+                    self.notificationHintLabel, notificationRow,
                     self.clearHistoryOnQuitCheckbox, self.privacyHintLabel,
                 ]
             toTabView:self.tabView
-           widthViews:@[self.locationHintLabel, self.privacyHintLabel]];
+           widthViews:@[self.locationHintLabel, self.notificationHintLabel, self.privacyHintLabel]];
 
     [self addTabNamed:@"开发者"
            identifier:BrowserSettingsTabDeveloper
@@ -1027,6 +1048,30 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 - (void)openSystemLocationSettingsClicked:(id)sender {
     (void)sender;
     [BrowserLocationService openSystemLocationSettings];
+}
+
+- (void)openSystemNotificationSettingsClicked:(id)sender {
+    (void)sender;
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.Notifications-Settings.extension"];
+    if (url == nil || ![[NSWorkspace sharedWorkspace] openURL:url]) {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.notifications"]];
+    }
+}
+
+- (void)clearSiteNotificationPermissionsClicked:(id)sender {
+    (void)sender;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"清除所有网站的通知权限？";
+    alert.informativeText = @"之后网站再次请求通知时会重新询问。不会更改系统「通知」里对 MeoBrowser 的授权。";
+    [alert addButtonWithTitle:@"清除"];
+    [alert addButtonWithTitle:@"取消"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+        if (returnCode != NSAlertFirstButtonReturn) {
+            return;
+        }
+        [[BrowserSitePermissionStore sharedStore] removeAllNotificationDecisions];
+        self.clearWebsiteDataStatusLabel.stringValue = @"已清除网站通知权限";
+    }];
 }
 
 - (void)clearHistoryOnQuitChanged:(id)sender {
