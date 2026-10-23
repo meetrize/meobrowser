@@ -34,11 +34,17 @@ static void SBTextFieldSelectAllText(SBTextField *field) {
 }
 
 static void SBTextFieldConsumeMouseUpEvents(void) {
+    // 硬限：若 makeFirstResponder 期间内部泵过 runloop 已吃掉 mouseUp，
+    // distantFuture 会永远等下一次抬起 → 地址栏点击后整窗假死。
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.45];
     while (YES) {
         NSEvent *next = [NSApp nextEventMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged)
-                                           untilDate:[NSDate distantFuture]
+                                           untilDate:deadline
                                               inMode:NSEventTrackingRunLoopMode
                                              dequeue:YES];
+        if (next == nil) {
+            break;
+        }
         if (next.type == NSEventTypeLeftMouseUp) {
             break;
         }

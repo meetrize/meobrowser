@@ -3,6 +3,8 @@
 #import "MeoContextMenuLocalizer.h"
 #import "BrowserWindowController.h"
 
+#import <objc/message.h>
+
 // 查询参数名：document-start 脚本据此在页面脚本运行前写回 location.hash。
 static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 
@@ -1110,6 +1112,35 @@ static NSString *MeoScrollToFragmentJS(void) {
                       completionHandler:^(__unused WKDownload *download) {
         }];
     }
+}
+
+#pragma mark - First responder（避开 WebKit 同步 SetFocused IPC）
+
+/// 直接调用 NSView 的实现，跳过 WKWebView 里对 WebContent 的 sync IPC。
+/// 该 IPC 在重页/直播等场景下会阻塞主线程约 3s，导致点标签/地址栏完全无响应。
+static BOOL MeoCallNSViewFocusMethod(BrowserWebView *view, SEL selector) {
+    struct objc_super superNSView = {
+        .receiver = view,
+        .super_class = [NSView class],
+    };
+    return ((BOOL (*)(struct objc_super *, SEL))objc_msgSendSuper)(&superNSView, selector);
+}
+
+- (BOOL)becomeFirstResponder {
+    // 不调用 [super becomeFirstResponder]：WKWebView 会对 WebContent 发 SetFocused sync IPC，
+    // 内容进程繁忙时主线程会卡死约 3s（tab-ui 里 endEdit≈3000ms）。
+    return MeoCallNSViewFocusMethod(self, _cmd);
+}
+
+- (BOOL)resignFirstResponder {
+    BOOL ok = MeoCallNSViewFocusMethod(self, _cmd);
+    // AppKit 侧已失焦；页面内 caret 异步 blur，避免阻塞 chrome。
+    [self evaluateJavaScript:
+         @"try{var a=document.activeElement;"
+          "if(a&&a!==document.body&&a.blur)a.blur();}"
+          "catch(e){}"
+           completionHandler:nil];
+    return ok;
 }
 
 @end

@@ -2503,7 +2503,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSResponder *first = self.window.firstResponder;
     NSText *editor = self.addressField.currentEditor;
     if (first == self.addressField || first == editor) {
-        [self.window makeFirstResponder:self.webView ?: (NSResponder *)self.window];
+        // 切回窗口自身，勿强制 makeFirstResponder:webView。
+        // 即便 BrowserWebView 已绕开 sync IPC，把焦点还给重页仍可能触发昂贵布局。
+        [self.addressField abortEditing];
+        [self.window makeFirstResponder:self.window];
     }
 }
 
@@ -6522,7 +6525,10 @@ doCommandBySelector:(SEL)commandSelector {
     BOOL addressIsFocused = (firstResponder == self.addressField)
         || (editor != nil && firstResponder == editor);
     if (addressIsFocused) {
-        [window makeFirstResponder:nil];
+        // abortEditing 结束 field editor，且避免 AppKit「恢复先前 firstResponder」
+        // 把焦点还回 WKWebView（旧路径 makeFirstResponder:nil 会触发约 3s sync IPC）。
+        [self.addressField abortEditing];
+        [window makeFirstResponder:window];
     }
     self.addressFieldIsEditing = NO;
 }
