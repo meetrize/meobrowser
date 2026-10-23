@@ -19,6 +19,8 @@ static const NSUInteger kSelectionFillMaxLength = 200;
 @property (nonatomic, strong) NSLayoutConstraint *barTopConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *barTrailingConstraint;
 @property (nonatomic, strong) NSLayoutConstraint *barWidthConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *barHeightConstraint;
+@property (nonatomic, strong) NSLayoutConstraint *barLeadingMinConstraint;
 @property (nonatomic, assign, readwrite, getter=isVisible) BOOL visible;
 @property (nonatomic, strong, nullable) dispatch_block_t pendingSearch;
 @property (nonatomic, strong, nullable) id localKeyMonitor;
@@ -52,6 +54,14 @@ static const NSUInteger kSelectionFillMaxLength = 200;
     [BrowserFindEngine installOnConfiguration:configuration];
 }
 
+- (void)setFindBarLayoutActive:(BOOL)active {
+    self.barTopConstraint.active = active;
+    self.barTrailingConstraint.active = active;
+    self.barWidthConstraint.active = active;
+    self.barHeightConstraint.active = active;
+    self.barLeadingMinConstraint.active = active;
+}
+
 - (void)installInContentContainer:(NSView *)contentContainer {
     self.contentContainer = contentContainer;
     if (self.findBarView.superview != contentContainer) {
@@ -60,13 +70,14 @@ static const NSUInteger kSelectionFillMaxLength = 200;
         self.barTopConstraint = [self.findBarView.topAnchor constraintEqualToAnchor:contentContainer.topAnchor constant:10];
         self.barTrailingConstraint = [self.findBarView.trailingAnchor constraintEqualToAnchor:contentContainer.trailingAnchor constant:-12];
         self.barWidthConstraint = [self.findBarView.widthAnchor constraintEqualToConstant:400];
-        [NSLayoutConstraint activateConstraints:@[
-            self.barTopConstraint,
-            self.barTrailingConstraint,
-            self.barWidthConstraint,
-            [self.findBarView.heightAnchor constraintEqualToConstant:36],
-            [self.findBarView.leadingAnchor constraintGreaterThanOrEqualToAnchor:contentContainer.leadingAnchor constant:12],
-        ]];
+        // 偏好宽即可；隐藏时会整组停用，避免常驻约束抬高窗口 minSize
+        self.barWidthConstraint.priority = NSLayoutPriorityWindowSizeStayPut - 1;
+        self.barHeightConstraint = [self.findBarView.heightAnchor constraintEqualToConstant:36];
+        self.barLeadingMinConstraint =
+            [self.findBarView.leadingAnchor constraintGreaterThanOrEqualToAnchor:contentContainer.leadingAnchor
+                                                                        constant:12];
+        // 初始隐藏：不激活贴边约束，否则内部 Required 子控件宽会把窗口顶到 ~400
+        [self setFindBarLayoutActive:self.visible];
     }
     [self restoreWindowPreferencesIntoBar];
 }
@@ -168,6 +179,7 @@ static const NSUInteger kSelectionFillMaxLength = 200;
     session.caseSensitive = self.findBarView.caseSensitive;
     [self bringBarToFront];
     self.visible = YES;
+    [self setFindBarLayoutActive:YES];
     self.findBarView.hidden = NO;
     self.findBarView.alphaValue = 1;
     [self.findBarView applySession:session];
@@ -204,6 +216,8 @@ static const NSUInteger kSelectionFillMaxLength = 200;
     void (^finish)(void) = ^{
         self.findBarView.hidden = YES;
         self.findBarView.alphaValue = 1;
+        // 停用贴边约束，避免隐藏态仍参与窗口最小宽度计算
+        [self setFindBarLayoutActive:NO];
         [self.windowController.window makeFirstResponder:webView];
     };
 

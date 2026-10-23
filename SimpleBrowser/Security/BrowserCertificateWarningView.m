@@ -16,6 +16,11 @@
         self.wantsLayer = YES;
         self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
         _hostDisplay = @"";
+        // 贴满 content 时标题/正文 intrinsic 很宽；水平让位给窗口拖窄（min ≈ 200）
+        [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         iconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -40,6 +45,8 @@
         self.titleLabel.textColor = [NSColor labelColor];
         self.titleLabel.alignment = NSTextAlignmentCenter;
         self.titleLabel.maximumNumberOfLines = 2;
+        [self.titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:self.titleLabel];
 
         self.messageLabel = [NSTextField wrappingLabelWithString:@""];
@@ -47,7 +54,10 @@
         self.messageLabel.font = [NSFont systemFontOfSize:14];
         self.messageLabel.textColor = [NSColor secondaryLabelColor];
         self.messageLabel.alignment = NSTextAlignmentCenter;
-        self.messageLabel.preferredMaxLayoutWidth = 480;
+        // 勿用固定 480：会经贴边约束抬高窗口 min；随 bounds 在 layout 里更新
+        self.messageLabel.preferredMaxLayoutWidth = 160;
+        [self.messageLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:self.messageLabel];
 
         self.goBackButton = [NSButton buttonWithTitle:@"返回"
@@ -99,6 +109,14 @@
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
     self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+}
+
+- (void)layout {
+    [super layout];
+    CGFloat maxW = MAX(80.0, NSWidth(self.bounds) - 80.0);
+    if (fabs(self.messageLabel.preferredMaxLayoutWidth - maxW) > 0.5) {
+        self.messageLabel.preferredMaxLayoutWidth = maxW;
+    }
 }
 
 - (void)configureWithHost:(NSString *)host {

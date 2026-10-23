@@ -126,7 +126,6 @@ static const CGFloat kMaxCardWidth = 320.0;
 
             [_searchField.trailingAnchor constraintEqualToAnchor:_addTabButton.leadingAnchor constant:-12],
             [_searchField.centerYAnchor constraintEqualToAnchor:_topBar.centerYAnchor],
-            [_searchField.widthAnchor constraintEqualToConstant:220],
             [_searchField.heightAnchor constraintEqualToConstant:28],
             [_searchField.leadingAnchor constraintGreaterThanOrEqualToAnchor:_titleLabel.trailingAnchor constant:16],
 
@@ -138,6 +137,10 @@ static const CGFloat kMaxCardWidth = 320.0;
             [_emptyLabel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
             [_emptyLabel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor constant:12],
         ]];
+        // 不可 Required：概览若贴边进窗口树，定宽 220 会抬高窗口 minSize ≈400
+        NSLayoutConstraint *searchWidth = [_searchField.widthAnchor constraintEqualToConstant:220];
+        searchWidth.priority = NSLayoutPriorityWindowSizeStayPut - 1;
+        searchWidth.active = YES;
 
         [self applyBackground];
     }

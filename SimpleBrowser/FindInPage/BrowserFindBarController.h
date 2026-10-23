@@ -26,6 +26,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (IBAction)useSelectionForFind:(nullable id)sender;
 
 - (void)hideFindBarClearingHighlights:(BOOL)clearHighlights;
+/// 仅切换贴边约束（演示全屏等场景隐藏条时调用，避免抬高窗口 minSize）
+- (void)setFindBarLayoutActive:(BOOL)active;
 - (void)syncWithSelectedTab;
 - (void)noteNavigationCommittedInWebView:(WKWebView *)webView;
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView;

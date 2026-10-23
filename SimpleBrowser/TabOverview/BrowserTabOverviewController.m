@@ -12,6 +12,7 @@
 @interface BrowserTabOverviewController () <BrowserTabOverviewViewDelegate>
 @property (nonatomic, strong, readwrite) BrowserTabOverviewView *overviewView;
 @property (nonatomic, weak) NSView *contentContainer;
+@property (nonatomic, copy) NSArray<NSLayoutConstraint *> *installConstraints;
 @property (nonatomic, assign, readwrite, getter=isVisible) BOOL visible;
 @property (nonatomic, strong, readwrite) BrowserTabThumbnailCache *thumbnailCache;
 @property (nonatomic, copy) NSString *filterQuery;
@@ -41,17 +42,25 @@
     [self uninstallKeyMonitor];
 }
 
+- (void)setOverviewLayoutActive:(BOOL)active {
+    for (NSLayoutConstraint *c in self.installConstraints) {
+        c.active = active;
+    }
+}
+
 - (void)installInContentContainer:(NSView *)contentContainer {
     self.contentContainer = contentContainer;
     if (self.overviewView.superview != contentContainer) {
         [self.overviewView removeFromSuperview];
         [contentContainer addSubview:self.overviewView positioned:NSWindowAbove relativeTo:nil];
-        [NSLayoutConstraint activateConstraints:@[
+        // 隐藏时必须停用贴边约束：概览内搜索框定宽 220(Required) 会把窗口 min 顶到 ~400
+        self.installConstraints = @[
             [self.overviewView.topAnchor constraintEqualToAnchor:contentContainer.topAnchor],
             [self.overviewView.leadingAnchor constraintEqualToAnchor:contentContainer.leadingAnchor],
             [self.overviewView.trailingAnchor constraintEqualToAnchor:contentContainer.trailingAnchor],
             [self.overviewView.bottomAnchor constraintEqualToAnchor:contentContainer.bottomAnchor],
-        ]];
+        ];
+        [self setOverviewLayoutActive:self.visible];
     }
 }
 
@@ -81,6 +90,7 @@
 
     [self bringToFront];
     self.visible = YES;
+    [self setOverviewLayoutActive:YES];
     self.overviewView.hidden = NO;
     self.filterQuery = @"";
     self.overviewView.searchField.stringValue = @"";
@@ -129,6 +139,7 @@
         self.overviewView.hidden = YES;
         self.overviewView.alphaValue = 1.0;
         self.overviewView.layer.transform = CATransform3DIdentity;
+        [self setOverviewLayoutActive:NO];
         WKWebView *webView = self.windowController.webView;
         if (webView) {
             [self.windowController.window makeFirstResponder:webView];

@@ -426,10 +426,34 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
             width = actions.fittingSize.width;
         }
     }
+    // 窗口被拖到极窄时，宽度约束可能被压破：按实际占位扣减，避免标签区被「偏好宽度」挤没
+    CGFloat actual = NSWidth(actions.bounds);
+    if (actual > 1.0 && actual + 0.5 < width) {
+        width = actual;
+    }
     if (width < 1.0) {
         return 0;
     }
     return width + kChromeGap;
+}
+
+/// 窗口极窄时给标签留出 Compact 宽（约 56，选中可点关闭），其余才给右侧工具栏。
+- (CGFloat)clampedChromeActionsWidth:(CGFloat)preferred {
+    CGFloat minChrome = 1.0;
+    if ([self.chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
+        minChrome = [(BrowserTabStripChromeActionsView *)self.chromeActionsView minimumPreferredWidth];
+    }
+    CGFloat stripW = floor(NSWidth(self.bounds));
+    if (stripW < 1.0) {
+        return MAX(preferred, minChrome);
+    }
+    CGFloat maxChrome = stripW
+        - [self tabsClipLeadingOffset]
+        - BrowserTabItemCompactMinWidth
+        - kTrailingDragWidth
+        - kChromeGap;
+    maxChrome = MAX(minChrome, maxChrome);
+    return MIN(MAX(preferred, minChrome), maxChrome);
 }
 
 - (void)refreshChromeActionsLayout {
@@ -447,7 +471,10 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
     if (actionsWidth < 1.0) {
         actionsWidth = self.chromeActionsView.fittingSize.width;
     }
-    self.chromeActionsWidthConstraint.constant = MAX(actionsWidth, 1);
+    actionsWidth = [self clampedChromeActionsWidth:actionsWidth];
+    if (fabs(self.chromeActionsWidthConstraint.constant - actionsWidth) > 0.05) {
+        self.chromeActionsWidthConstraint.constant = MAX(actionsWidth, 1);
+    }
     [self invalidateTabLayoutCache];
     [self setNeedsLayout:YES];
     // 拖宽时立刻同步布局，让竖三点拖柄与鼠标同帧对齐，避免「跟手滞后」
@@ -525,8 +552,9 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
         [chromeActionsView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
     self.chromeActionsWidthConstraint =
         [chromeActionsView.widthAnchor constraintEqualToConstant:MAX(actionsWidth, 1)];
-    // 不可 Required：用户拉宽动作区后，定宽会抬高窗口最小宽度，无法再拖窄
-    self.chromeActionsWidthConstraint.priority = NSLayoutPriorityDefaultHigh;
+    // 必须 ≤ WindowSizeStayPut(500)：更高优先级的定宽会参与窗口 minSize 计算，
+    // 把可拖最小宽度顶到「整条工具栏偏好宽」(≈300+)，导致 minSize=200 无效。
+    self.chromeActionsWidthConstraint.priority = NSLayoutPriorityWindowSizeStayPut - 1;
 
     [NSLayoutConstraint activateConstraints:@[
         self.tabsClipTrailingToChromeActions,
@@ -709,6 +737,20 @@ NSColor *BrowserTabStripFillColor(void) {
 }
 
 - (void)layout {
+    // 窗口拖窄时先钳制右侧工具栏宽度，保证中间还能放下紧凑标签
+    if (self.chromeActionsView && self.chromeActionsWidthConstraint) {
+        CGFloat preferred = 0;
+        if ([self.chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
+            preferred = [(BrowserTabStripChromeActionsView *)self.chromeActionsView preferredWidth];
+        }
+        if (preferred < 1.0) {
+            preferred = self.chromeActionsWidthConstraint.constant;
+        }
+        CGFloat clamped = [self clampedChromeActionsWidth:preferred];
+        if (fabs(self.chromeActionsWidthConstraint.constant - clamped) > 0.5) {
+            self.chromeActionsWidthConstraint.constant = MAX(clamped, 1);
+        }
+    }
     [super layout];
     if (!self.suppressLayoutDuringDrag) {
         [self updateTabFrames];

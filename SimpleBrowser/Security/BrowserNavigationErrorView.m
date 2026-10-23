@@ -15,6 +15,10 @@
     if (self) {
         self.wantsLayer = YES;
         self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+        [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
         iconView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -39,6 +43,8 @@
         self.titleLabel.textColor = [NSColor labelColor];
         self.titleLabel.alignment = NSTextAlignmentCenter;
         self.titleLabel.maximumNumberOfLines = 2;
+        [self.titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:self.titleLabel];
 
         self.messageLabel = [NSTextField wrappingLabelWithString:@""];
@@ -46,7 +52,9 @@
         self.messageLabel.font = [NSFont systemFontOfSize:14];
         self.messageLabel.textColor = [NSColor secondaryLabelColor];
         self.messageLabel.alignment = NSTextAlignmentCenter;
-        self.messageLabel.preferredMaxLayoutWidth = 480;
+        self.messageLabel.preferredMaxLayoutWidth = 160;
+        [self.messageLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:self.messageLabel];
 
         self.goBackButton = [NSButton buttonWithTitle:@"返回"
@@ -95,6 +103,14 @@
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
     self.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+}
+
+- (void)layout {
+    [super layout];
+    CGFloat maxW = MAX(80.0, NSWidth(self.bounds) - 80.0);
+    if (fabs(self.messageLabel.preferredMaxLayoutWidth - maxW) > 0.5) {
+        self.messageLabel.preferredMaxLayoutWidth = maxW;
+    }
 }
 
 - (void)configureWithTitle:(NSString *)title

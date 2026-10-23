@@ -24,6 +24,12 @@
     if (self) {
         _mode = BrowserFindModeLiteral;
         _caseSensitive = NO;
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        // 查找条常驻 hidden 在窗口里；默认抗压缩 750 会把窗口 min 顶到整条查找栏宽度
+        [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self buildUI];
     }
     return self;
@@ -92,9 +98,14 @@
     self.queryField.delegate = self;
     self.queryField.font = [NSFont systemFontOfSize:13];
     self.queryField.trailingContentInset = 22;
-    [self.queryField.widthAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
+    NSLayoutConstraint *queryMinWidth =
+        [self.queryField.widthAnchor constraintGreaterThanOrEqualToConstant:140];
+    queryMinWidth.priority = NSLayoutPriorityWindowSizeStayPut - 1;
+    queryMinWidth.active = YES;
     [self.queryField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.queryField setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                              forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.clearButton = [NSButton buttonWithImage:[self symbol:@"xmark.circle.fill"]
                                           target:self
@@ -119,7 +130,12 @@
     self.countLabel.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
     self.countLabel.textColor = [NSColor secondaryLabelColor];
     self.countLabel.alignment = NSTextAlignmentRight;
-    [self.countLabel.widthAnchor constraintGreaterThanOrEqualToConstant:52].active = YES;
+    NSLayoutConstraint *countMinWidth =
+        [self.countLabel.widthAnchor constraintGreaterThanOrEqualToConstant:52];
+    countMinWidth.priority = NSLayoutPriorityWindowSizeStayPut - 1;
+    countMinWidth.active = YES;
+    [self.countLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                              forOrientation:NSLayoutConstraintOrientationHorizontal];
     self.countDefaultColor = self.countLabel.textColor;
 
     self.closeButton = [self iconButtonWithSymbol:@"xmark"

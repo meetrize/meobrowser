@@ -31,6 +31,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 供标签条扣减中间可用宽度（含左侧拖拽柄）。
 - (CGFloat)preferredWidth;
 
+/// 仅保留拖柄 + ⋯ 时的最小宽度（窗口极窄时钳制用）。
+- (CGFloat)minimumPreferredWidth;
+
 /// 因宽度不足而暂时藏进 ⋯ 的 pinned 动作 id（不含用户主动隐藏项）。
 - (NSArray<NSString *> *)widthOverflowedActionIDs;
 

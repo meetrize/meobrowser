@@ -220,6 +220,9 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
+@property (nonatomic, copy) NSArray<NSLayoutConstraint *> *launchpadEdgeConstraints;
+@property (nonatomic, copy) NSArray<NSLayoutConstraint *> *certificateWarningEdgeConstraints;
+@property (nonatomic, copy) NSArray<NSLayoutConstraint *> *navigationErrorEdgeConstraints;
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
 @property (nonatomic, weak) WKWebView *observedProgressWebView;
 @property (nonatomic, weak) WKWebView *observedFullscreenWebView;
@@ -441,8 +444,9 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
                                                        defer:NO];
     window.title = BrowserAppDisplayName;
     window.releasedWhenClosed = NO;
-    // 多标签时由标签条自适应/溢出菜单承接；窗口下限刻意较小以便随时拖窄
-    window.minSize = NSMakeSize(400, 300);
+    // 下限对齐标签条极窄可用布局（约 200）：
+    // 红绿灯区(~78) + 紧凑标签(~56，可选中态关闭) + 右侧 ⋮+⋯(~34) + 拖窗带(~16) + 间隙
+    window.minSize = NSMakeSize(200, 300);
 
     self = [super initWithWindow:window];
     if (self) {
@@ -514,6 +518,9 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
         _hardRecoverTokenByWebView = [NSMapTable weakToStrongObjectsMapTable];
         _webViewsWithHTTPAuthPrompt = [NSHashTable weakObjectsHashTable];
         [self setupUI];
+        // setupUI 装入查找条等 AL 子树后，再钉死下限（避免高优先级定宽把有效 min 顶回去）
+        window.minSize = NSMakeSize(200, 300);
+        window.contentMinSize = NSMakeSize(200, 300);
         [self installReloadKeyMonitor];
         [self startTabAudioMonitoring];
         if (loadTabs) {
@@ -995,6 +1002,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.addressField.compactTextUpwardBiasWhenEditing = 1.0;
     [self.addressField setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+    // 默认抗压缩 750：会按 URL 文字 intrinsic 宽抬高窗口 min（截图里整段 URL 撑满 ≈400）
+    [self.addressField setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
     // 胶囊外框：地址栏 RowView 垫一层 sibling 浅灰胶囊（无描边）。
     self.addressField.usesCapsuleBezel = YES;
     // 半圆端头留白；与编辑态共用（再右移 2pt → 8）。
@@ -1172,19 +1182,26 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     self.navigationErrorView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.contentContainer addSubview:self.navigationErrorView];
 
-    [NSLayoutConstraint activateConstraints:@[
+    // 隐藏态勿激活贴边约束：否则 Launchpad 收藏格 / 证书页文案的 intrinsic 会把窗口 min 顶到 ~300–400
+    self.launchpadEdgeConstraints = @[
         [self.launchpadView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.launchpadView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.launchpadView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
         [self.launchpadView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+    ];
+    self.certificateWarningEdgeConstraints = @[
         [self.certificateWarningView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.certificateWarningView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.certificateWarningView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
         [self.certificateWarningView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+    ];
+    self.navigationErrorEdgeConstraints = @[
         [self.navigationErrorView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.navigationErrorView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.navigationErrorView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
         [self.navigationErrorView.bottomAnchor constraintEqualToAnchor:self.contentContainer.bottomAnchor],
+    ];
+    [NSLayoutConstraint activateConstraints:@[
         [self.loadingProgressView.topAnchor constraintEqualToAnchor:self.contentContainer.topAnchor],
         [self.loadingProgressView.leadingAnchor constraintEqualToAnchor:self.contentContainer.leadingAnchor],
         [self.loadingProgressView.trailingAnchor constraintEqualToAnchor:self.contentContainer.trailingAnchor],
@@ -2042,16 +2059,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         [self setStandardWindowButtonsHidden:YES];
         self.toolbar.hidden = YES;
         self.launchpadView.hidden = YES;
+        [self setLaunchpadLayoutActive:NO];
         self.loadingProgressView.hidden = YES;
         self.certificateWarningView.hidden = YES;
+        [self setEdgeConstraints:self.certificateWarningEdgeConstraints active:NO];
         self.navigationErrorView.hidden = YES;
+        [self setEdgeConstraints:self.navigationErrorEdgeConstraints active:NO];
         self.findBarController.findBarView.hidden = YES;
+        [self.findBarController setFindBarLayoutActive:NO];
         self.presentationFullscreenExitOverlay.active = YES;
     } else {
         self.presentationFullscreenExitOverlay.active = NO;
         [self presentationFullscreenAttachTabStripAccessoryIfNeeded];
         self.loadingProgressView.hidden = NO;
         self.findBarController.findBarView.hidden = !self.findBarController.isVisible;
+        [self.findBarController setFindBarLayoutActive:self.findBarController.isVisible];
         [self syncCertificateWarningVisibilityForSelectedTab];
         [self syncNavigationErrorVisibilityForSelectedTab];
     }
@@ -2134,6 +2156,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                   webViews:[self liveWebViewsForTransparentMode]];
 
     self.launchpadView.hidden = YES;
+    [self setLaunchpadLayoutActive:NO];
     [self syncTransparentPageStyleForSelection];
     [self.transparentModeController setWindowRightDragMoveEnabled:YES];
 
@@ -3861,6 +3884,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL launchWasHidden = self.launchpadView.hidden;
     if (launchWasHidden != wantLaunchHidden) {
         self.launchpadView.hidden = wantLaunchHidden;
+        [self setLaunchpadLayoutActive:!wantLaunchHidden];
     }
     NSTimeInterval launchMs = (CACurrentMediaTime() - tLaunch) * 1000.0;
     // launch 段若异常（>500ms），多记一笔现场：launchpad 子树规模 + 容器子树规模，
@@ -4721,7 +4745,7 @@ didRequestTransferTabID:(NSUUID *)tabID
     }
 
     NSSize defaultSize = self.window ? self.window.frame.size : NSMakeSize(1024, 700);
-    if (defaultSize.width < 400) {
+    if (defaultSize.width < 200) {
         defaultSize.width = 1024;
     }
     if (defaultSize.height < 300) {
@@ -4854,6 +4878,7 @@ didRequestTransferTabID:(NSUUID *)tabID
     }
 
     self.launchpadView.hidden = YES;
+    [self setLaunchpadLayoutActive:NO];
     NSString *urlString = url.absoluteString;
     if (urlString.length > 0) {
         self.addressField.stringValue = urlString;
@@ -5989,11 +6014,22 @@ doCommandBySelector:(SEL)commandSelector {
     [self hideCertificateWarningOverlay];
 }
 
+- (void)setEdgeConstraints:(NSArray<NSLayoutConstraint *> *)constraints active:(BOOL)active {
+    for (NSLayoutConstraint *c in constraints) {
+        c.active = active;
+    }
+}
+
+- (void)setLaunchpadLayoutActive:(BOOL)active {
+    [self setEdgeConstraints:self.launchpadEdgeConstraints active:active];
+}
+
 - (void)showCertificateWarningForPending:(BrowserPendingSSLAuth *)pending {
     if (!pending || pending.webView != self.webView) {
         return;
     }
     [self.certificateWarningView configureWithHost:pending.hostDisplay];
+    [self setEdgeConstraints:self.certificateWarningEdgeConstraints active:YES];
     self.certificateWarningView.hidden = NO;
     [self.contentContainer addSubview:self.certificateWarningView positioned:NSWindowAbove relativeTo:nil];
     [self.loadingProgressView resetHidden];
@@ -6001,6 +6037,7 @@ doCommandBySelector:(SEL)commandSelector {
 
 - (void)hideCertificateWarningOverlay {
     self.certificateWarningView.hidden = YES;
+    [self setEdgeConstraints:self.certificateWarningEdgeConstraints active:NO];
 }
 
 - (void)syncCertificateWarningVisibilityForSelectedTab {
@@ -6036,6 +6073,7 @@ doCommandBySelector:(SEL)commandSelector {
                                          message:pending.message
                                       showGoBack:pending.canGoBack
                                reloadButtonTitle:reloadTitle];
+    [self setEdgeConstraints:self.navigationErrorEdgeConstraints active:YES];
     self.navigationErrorView.hidden = NO;
     [self.contentContainer addSubview:self.navigationErrorView positioned:NSWindowAbove relativeTo:nil];
     [self.loadingProgressView resetHidden];
@@ -6043,6 +6081,7 @@ doCommandBySelector:(SEL)commandSelector {
 
 - (void)hideNavigationErrorOverlay {
     self.navigationErrorView.hidden = YES;
+    [self setEdgeConstraints:self.navigationErrorEdgeConstraints active:NO];
 }
 
 - (void)syncNavigationErrorVisibilityForSelectedTab {

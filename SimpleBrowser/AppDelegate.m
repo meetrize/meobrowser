@@ -162,7 +162,7 @@
     BOOL hasValidFrame = NO;
     if ([frameString isKindOfClass:[NSString class]] && frameString.length > 0) {
         NSRect frame = NSRectFromString(frameString);
-        if (frame.size.width >= 400 && frame.size.height >= 300) {
+        if (frame.size.width >= 200 && frame.size.height >= 300) {
             [controller.window setFrame:frame display:YES];
             hasValidFrame = YES;
         }
@@ -184,7 +184,7 @@
     [_browserWindows addObject:controller];
     [controller adoptTab:tab];
     [controller showWindow:nil];
-    if (frame.size.width >= 400 && frame.size.height >= 300) {
+    if (frame.size.width >= 200 && frame.size.height >= 300) {
         [controller.window setFrame:frame display:YES];
     } else if (_browserWindows.count == 1) {
         [controller.window center];

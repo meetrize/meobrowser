@@ -456,6 +456,11 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     self.wantsLayer = YES;
     // 壁纸 aspectFill 会超出 layer bounds；必须裁剪，避免盖住标签栏/地址栏。
     self.clipsToBounds = YES;
+    // 贴边后收藏格 intrinsic 很宽；水平抗压缩必须 ≤ WindowSizeStayPut，否则会把窗口 min 顶到 ~300
+    [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     _wallpaperView = [[NSView alloc] initWithFrame:NSZeroRect];
     _wallpaperView.wantsLayer = YES;
@@ -537,6 +542,14 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     _scrollView.horizontalScrollElasticity = NSScrollElasticityNone;
     _scrollView.verticalScrollElasticity = NSScrollElasticityAllowed;
     _scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [_scrollView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_scrollView setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                            forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_collectionView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                              forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_collectionView setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                forOrientation:NSLayoutConstraintOrientationHorizontal];
     [self addSubview:_scrollView];
 
     _settingsButton = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleAppearancePopover:)];

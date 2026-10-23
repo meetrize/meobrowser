@@ -145,7 +145,7 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
         _lastVisibleButtonCount = -1;
         _lastMenuStartIndex = -1;
         self.translatesAutoresizingMaskIntoConstraints = NO;
-        [self setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
                          forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -182,9 +182,9 @@ static NSString * const kActionHiddenDefaultsKey = @"BrowserAddressBarActionHidd
             [self.overflowButton.heightAnchor constraintEqualToConstant:kActionButtonSize],
         ]];
 
-        // 不可 Required：否则用户拉宽动作区后，定宽会抬高窗口最小宽度，无法再拖窄
+        // 必须 ≤ WindowSizeStayPut：更高优先级定宽会参与窗口 minSize，拖不窄
         _widthConstraint = [self.widthAnchor constraintEqualToConstant:_preferredWidth];
-        _widthConstraint.priority = NSLayoutPriorityDefaultHigh;
+        _widthConstraint.priority = NSLayoutPriorityWindowSizeStayPut - 1;
         _widthConstraint.active = YES;
 
         [self ensureCompanionLinkStatusDot];

@@ -167,6 +167,11 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     self = [super initWithFrame:frameRect];
     if (self) {
         self.translatesAutoresizingMaskIntoConstraints = NO;
+        // intrinsic 默认抗压缩 750，同样会抬高窗口 minSize；水平方向让位给窗口拖窄
+        [self setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationHorizontal];
         _buttonsByID = [NSMutableDictionary dictionary];
         _onStateByID = [NSMutableDictionary dictionary];
         _actionButtons = [NSMutableArray array];
@@ -183,6 +188,8 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         _clipView = [[BrowserTabStripChromeActionsClipView alloc] initWithFrame:NSZeroRect];
         _clipView.translatesAutoresizingMaskIntoConstraints = NO;
         _clipView.clipsToBounds = YES;
+        [_clipView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
         [self addSubview:_clipView];
 
         _stackView = [NSStackView stackViewWithViews:@[]];
@@ -190,6 +197,10 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         _stackView.spacing = kChromeActionSpacing;
         _stackView.alignment = NSLayoutAttributeCenterY;
         _stackView.translatesAutoresizingMaskIntoConstraints = NO;
+        [_stackView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                             forOrientation:NSLayoutConstraintOrientationHorizontal];
+        [_stackView setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                               forOrientation:NSLayoutConstraintOrientationHorizontal];
         [_clipView addSubview:_stackView];
 
         [NSLayoutConstraint activateConstraints:@[
@@ -262,6 +273,10 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         return self.allocatedWidth;
     }
     return [self fullContentWidth];
+}
+
+- (CGFloat)minimumPreferredWidth {
+    return [self minimumAllocatedWidth];
 }
 
 - (NSSize)intrinsicContentSize {
