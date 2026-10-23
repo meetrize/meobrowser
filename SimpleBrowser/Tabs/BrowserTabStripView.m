@@ -437,8 +437,12 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
         return;
     }
     CGFloat actionsWidth = 0;
+    BOOL liveResize = NO;
     if ([self.chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
-        actionsWidth = [(BrowserTabStripChromeActionsView *)self.chromeActionsView preferredWidth];
+        BrowserTabStripChromeActionsView *actions =
+            (BrowserTabStripChromeActionsView *)self.chromeActionsView;
+        actionsWidth = [actions preferredWidth];
+        liveResize = actions.isResizingWidth;
     }
     if (actionsWidth < 1.0) {
         actionsWidth = self.chromeActionsView.fittingSize.width;
@@ -446,6 +450,14 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
     self.chromeActionsWidthConstraint.constant = MAX(actionsWidth, 1);
     [self invalidateTabLayoutCache];
     [self setNeedsLayout:YES];
+    // 拖宽时立刻同步布局，让竖三点拖柄与鼠标同帧对齐，避免「跟手滞后」
+    if (liveResize) {
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0;
+            ctx.allowsImplicitAnimation = NO;
+            [self layoutSubtreeIfNeeded];
+        }];
+    }
 }
 
 - (void)setChromeActionsView:(NSView *)chromeActionsView {
@@ -492,7 +504,13 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
 
     CGFloat actionsWidth = 0;
     if ([chromeActionsView isKindOfClass:[BrowserTabStripChromeActionsView class]]) {
-        actionsWidth = [(BrowserTabStripChromeActionsView *)chromeActionsView preferredWidth];
+        BrowserTabStripChromeActionsView *actions =
+            (BrowserTabStripChromeActionsView *)chromeActionsView;
+        actionsWidth = [actions preferredWidth];
+        __weak typeof(self) weakSelf = self;
+        actions.onPreferredWidthDidChange = ^{
+            [weakSelf refreshChromeActionsLayout];
+        };
     }
     if (actionsWidth < 1.0) {
         actionsWidth = chromeActionsView.fittingSize.width;
@@ -507,6 +525,8 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
         [chromeActionsView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor];
     self.chromeActionsWidthConstraint =
         [chromeActionsView.widthAnchor constraintEqualToConstant:MAX(actionsWidth, 1)];
+    // 不可 Required：用户拉宽动作区后，定宽会抬高窗口最小宽度，无法再拖窄
+    self.chromeActionsWidthConstraint.priority = NSLayoutPriorityDefaultHigh;
 
     [NSLayoutConstraint activateConstraints:@[
         self.tabsClipTrailingToChromeActions,

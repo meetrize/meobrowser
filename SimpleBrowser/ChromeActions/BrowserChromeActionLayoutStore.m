@@ -6,6 +6,7 @@ NSNotificationName const BrowserChromeActionLayoutDidChangeNotification =
 
 static NSString * const kOrderDefaultsKey = @"BrowserChromeActionOrder";
 static NSString * const kHiddenDefaultsKey = @"BrowserChromeActionHidden";
+static NSString * const kPreferredWidthDefaultsKey = @"BrowserChromeActionPreferredWidth";
 static NSString * const kSeededAddressBarToolsHiddenKey = @"BrowserChromeActionSeededAddressBarToolsHidden";
 static NSString * const kMigratedFromAddressBarKey = @"BrowserChromeActionMigratedFromAddressBar";
 static NSString * const kLegacyAddressBarOrderKey = @"BrowserAddressBarActionOrder";
@@ -264,6 +265,19 @@ static NSString * const kLegacyAddressBarHiddenKey = @"BrowserAddressBarActionHi
 + (void)postLayoutDidChange {
     [[NSNotificationCenter defaultCenter] postNotificationName:BrowserChromeActionLayoutDidChangeNotification
                                                         object:nil];
+}
+
++ (CGFloat)preferredToolbarWidth {
+    id value = [[NSUserDefaults standardUserDefaults] objectForKey:kPreferredWidthDefaultsKey];
+    if (![value isKindOfClass:[NSNumber class]]) {
+        return 0;
+    }
+    return MAX(0, [(NSNumber *)value doubleValue]);
+}
+
++ (void)setPreferredToolbarWidth:(CGFloat)width {
+    CGFloat clamped = MAX(0, round(width));
+    [[NSUserDefaults standardUserDefaults] setDouble:clamped forKey:kPreferredWidthDefaultsKey];
 }
 
 @end

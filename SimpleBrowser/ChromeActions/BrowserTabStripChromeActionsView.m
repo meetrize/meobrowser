@@ -5,6 +5,8 @@
 
 static const CGFloat kChromeActionButtonSize = 22.0;
 static const CGFloat kChromeActionSpacing = 2.0;
+static const CGFloat kChromeResizeHandleWidth = 10.0;
+static const CGFloat kChromeResizeHandleSpacing = 2.0;
 static const CGFloat kChromeActionSymbolPointSize = 12.0;
 static const CGFloat kChromeActionReorderDragThreshold = 4.0;
 static const CGFloat kChromeActionMoreDropPadding = 4.0;
@@ -14,6 +16,91 @@ static const CGFloat kChromeActionGhostAlpha = 0.92;
 static const CGFloat kChromeActionSourceDragAlpha = 0.28;
 
 @class BrowserTabStripChromeActionsView;
+
+/// 竖三点拖柄。用窗口坐标回调，避免视图随宽度移动时本地 delta 反馈抖动。
+@interface BrowserTabStripChromeResizeHandleView : NSView
+@property (nonatomic, copy, nullable) void (^onDragBegan)(NSEvent *event);
+@property (nonatomic, copy, nullable) void (^onDragToWindowX)(CGFloat windowX);
+@property (nonatomic, copy, nullable) void (^onDragEnded)(void);
+@end
+
+@implementation BrowserTabStripChromeResizeHandleView
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSRect bounds = self.bounds;
+    CGFloat cx = NSMidX(bounds);
+    CGFloat cy = NSMidY(bounds);
+    CGFloat radius = 1.15;
+    CGFloat gap = 4.0;
+    NSColor *color = [NSColor tertiaryLabelColor];
+    for (NSInteger i = -1; i <= 1; i++) {
+        NSRect dot = NSMakeRect(cx - radius, cy + (CGFloat)i * gap - radius, radius * 2.0, radius * 2.0);
+        NSBezierPath *path = [NSBezierPath bezierPathWithOvalInRect:dot];
+        [color setFill];
+        [path fill];
+    }
+}
+
+- (void)resetCursorRects {
+    [super resetCursorRects];
+    [self addCursorRect:self.bounds cursor:[NSCursor resizeLeftRightCursor]];
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    [self.window disableCursorRects];
+    [[NSCursor resizeLeftRightCursor] set];
+    if (self.onDragBegan) {
+        self.onDragBegan(event);
+    }
+
+    // 全程用窗口坐标；勿 convert 到 self，否则父视图变宽后本地点会反向漂移
+    while (YES) {
+        NSEvent *next = [self.window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)];
+        if (next.type == NSEventTypeLeftMouseUp) {
+            break;
+        }
+        if (self.onDragToWindowX) {
+            self.onDragToWindowX(next.locationInWindow.x);
+        }
+    }
+
+    if (self.onDragEnded) {
+        self.onDragEnded();
+    }
+    [self.window enableCursorRects];
+    [self.window invalidateCursorRectsForView:self];
+}
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    return YES;
+}
+
+@end
+
+/// 裁剪容器：右侧图标被宽度挤出时平滑裁切，而不是显隐闪动。
+@interface BrowserTabStripChromeActionsClipView : NSView
+@end
+
+@implementation BrowserTabStripChromeActionsClipView
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    // 裁剪区外（含被挤出的图标）不接收点击
+    NSPoint local = [self convertPoint:point fromView:self.superview];
+    if (!NSPointInRect(local, self.bounds)) {
+        return nil;
+    }
+    return [super hitTest:point];
+}
+@end
 
 @interface BrowserTabStripChromeActionButton : NSButton
 @property (nonatomic, copy) NSString *itemID;
@@ -39,11 +126,19 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
 
 @interface BrowserTabStripChromeActionsView ()
 @property (nonatomic, copy, readwrite) NSArray<BrowserChromeActionItem *> *items;
+@property (nonatomic, strong) BrowserTabStripChromeResizeHandleView *resizeHandle;
+@property (nonatomic, strong) BrowserTabStripChromeActionsClipView *clipView;
 @property (nonatomic, strong) NSStackView *stackView;
+@property (nonatomic, strong, nullable) BrowserTabStripChromeActionButton *moreMenuButton;
+@property (nonatomic, strong) NSMutableArray<BrowserTabStripChromeActionButton *> *actionButtons;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, BrowserTabStripChromeActionButton *> *buttonsByID;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *onStateByID;
+@property (nonatomic, assign) CGFloat allocatedWidth;
+@property (nonatomic, assign, readwrite) BOOL isResizingWidth;
 @property (nonatomic, assign) BOOL isReordering;
 @property (nonatomic, assign) BOOL moreMenuDropHighlighted;
+@property (nonatomic, assign) CGFloat resizeGrabOffsetInWindow;
+@property (nonatomic, assign) CGFloat resizeTrailingXInWindow;
 @property (nonatomic, strong, nullable) NSPanel *dragGhostPanel;
 @property (nonatomic, strong, nullable) NSImageView *dragGhostImageView;
 @property (nonatomic, assign) NSPoint dragGhostGrabInSource;
@@ -74,39 +169,122 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         self.translatesAutoresizingMaskIntoConstraints = NO;
         _buttonsByID = [NSMutableDictionary dictionary];
         _onStateByID = [NSMutableDictionary dictionary];
+        _actionButtons = [NSMutableArray array];
         _items = @[];
+        _allocatedWidth = 0;
+        self.clipsToBounds = YES;
+
+        _resizeHandle = [[BrowserTabStripChromeResizeHandleView alloc] initWithFrame:NSZeroRect];
+        _resizeHandle.translatesAutoresizingMaskIntoConstraints = NO;
+        _resizeHandle.toolTip = @"拖动调整工具栏宽度";
+        [self addSubview:_resizeHandle];
+
+        // 裁剪区 + 完整按钮栈：变窄时右侧图标被裁切进 ⋯，无显隐闪动
+        _clipView = [[BrowserTabStripChromeActionsClipView alloc] initWithFrame:NSZeroRect];
+        _clipView.translatesAutoresizingMaskIntoConstraints = NO;
+        _clipView.clipsToBounds = YES;
+        [self addSubview:_clipView];
 
         _stackView = [NSStackView stackViewWithViews:@[]];
         _stackView.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         _stackView.spacing = kChromeActionSpacing;
         _stackView.alignment = NSLayoutAttributeCenterY;
         _stackView.translatesAutoresizingMaskIntoConstraints = NO;
-        [self addSubview:_stackView];
+        [_clipView addSubview:_stackView];
 
         [NSLayoutConstraint activateConstraints:@[
-            [_stackView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
-            [_stackView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
-            [_stackView.topAnchor constraintEqualToAnchor:self.topAnchor],
-            [_stackView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+            [_resizeHandle.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+            [_resizeHandle.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            [_resizeHandle.widthAnchor constraintEqualToConstant:kChromeResizeHandleWidth],
+            [_resizeHandle.heightAnchor constraintEqualToConstant:kChromeActionButtonSize],
+
+            [_clipView.leadingAnchor constraintEqualToAnchor:_resizeHandle.trailingAnchor
+                                                    constant:kChromeResizeHandleSpacing],
+            [_clipView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor
+                                                     constant:-(kChromeActionSpacing + kChromeActionButtonSize)],
+            [_clipView.topAnchor constraintEqualToAnchor:self.topAnchor],
+            [_clipView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+
+            // 栈只贴 leading，宽度随内容；裁剪区变窄时从右侧切掉图标
+            [_stackView.leadingAnchor constraintEqualToAnchor:_clipView.leadingAnchor],
+            [_stackView.centerYAnchor constraintEqualToAnchor:_clipView.centerYAnchor],
+            [_stackView.heightAnchor constraintEqualToAnchor:_clipView.heightAnchor],
+
             [self.heightAnchor constraintEqualToConstant:kChromeActionButtonSize],
         ]];
+
+        __weak typeof(self) weakSelf = self;
+        _resizeHandle.onDragBegan = ^(NSEvent *event) {
+            [weakSelf beginWidthResizeWithEvent:event];
+        };
+        _resizeHandle.onDragToWindowX = ^(CGFloat windowX) {
+            [weakSelf applyWidthToWindowX:windowX];
+        };
+        _resizeHandle.onDragEnded = ^{
+            [weakSelf endWidthResize];
+        };
 
         [self reloadFromLayoutStore];
     }
     return self;
 }
 
-- (CGFloat)preferredWidth {
-    NSUInteger count = self.items.count;
-    if (count == 0) {
-        return 0;
+#pragma mark - Width math
+
+- (CGFloat)leadingChromeWidth {
+    return kChromeResizeHandleWidth + kChromeResizeHandleSpacing;
+}
+
+- (CGFloat)widthForCustomButtonCount:(NSInteger)count {
+    CGFloat width = [self leadingChromeWidth] + kChromeActionButtonSize; // moreMenu 始终在
+    if (count > 0) {
+        width += (CGFloat)count * kChromeActionButtonSize + (CGFloat)count * kChromeActionSpacing;
     }
-    return count * kChromeActionButtonSize + (count - 1) * kChromeActionSpacing;
+    return width;
+}
+
+- (CGFloat)fullContentWidth {
+    return [self widthForCustomButtonCount:(NSInteger)MAX(0, (NSInteger)self.actionButtons.count - 1)];
+}
+
+- (CGFloat)minimumAllocatedWidth {
+    return [self widthForCustomButtonCount:0];
+}
+
+- (CGFloat)clampedAllocatedWidth:(CGFloat)width {
+    CGFloat minWidth = [self minimumAllocatedWidth];
+    CGFloat maxWidth = MAX(minWidth, [self fullContentWidth]);
+    return MIN(MAX(width, minWidth), maxWidth);
+}
+
+- (CGFloat)preferredWidth {
+    if (self.allocatedWidth > 0.5) {
+        return self.allocatedWidth;
+    }
+    return [self fullContentWidth];
 }
 
 - (NSSize)intrinsicContentSize {
     return NSMakeSize([self preferredWidth], kChromeActionButtonSize);
 }
+
+- (void)notifyPreferredWidthDidChange {
+    [self invalidateIntrinsicContentSize];
+    if (!self.onPreferredWidthDidChange) {
+        return;
+    }
+    if (self.isResizingWidth) {
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0;
+            ctx.allowsImplicitAnimation = NO;
+            self.onPreferredWidthDidChange();
+        }];
+    } else {
+        self.onPreferredWidthDidChange();
+    }
+}
+
+#pragma mark - Reload
 
 - (void)reloadFromLayoutStore {
     [self reloadWithItems:[[self class] itemsForCurrentLayout]];
@@ -116,17 +294,38 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     for (NSView *view in [self.stackView.views copy]) {
         [self.stackView removeView:view];
     }
+    [self.moreMenuButton removeFromSuperview];
+    self.moreMenuButton = nil;
     [self.buttonsByID removeAllObjects];
+    [self.actionButtons removeAllObjects];
 
     self.items = [items copy] ?: @[];
     for (BrowserChromeActionItem *item in self.items) {
         BOOL on = [self.onStateByID[item.itemID] boolValue];
         BrowserTabStripChromeActionButton *button = [self makeButtonForItem:item on:on];
         self.buttonsByID[item.itemID] = button;
-        [self.stackView addArrangedSubview:button];
+        [self.actionButtons addObject:button];
+        if ([item.itemID isEqualToString:BrowserChromeActionMoreMenuID]) {
+            self.moreMenuButton = button;
+            [self addSubview:button];
+            [NSLayoutConstraint activateConstraints:@[
+                [button.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+                [button.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+            ]];
+        } else {
+            [self.stackView addArrangedSubview:button];
+        }
     }
 
-    [self invalidateIntrinsicContentSize];
+    CGFloat full = [self fullContentWidth];
+    CGFloat saved = [BrowserChromeActionLayoutStore preferredToolbarWidth];
+    if (saved > 0.5) {
+        self.allocatedWidth = [self clampedAllocatedWidth:saved];
+    } else {
+        self.allocatedWidth = full;
+    }
+
+    [self notifyPreferredWidthDidChange];
     [self setNeedsLayout:YES];
 }
 
@@ -220,6 +419,83 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         return NO;
     }
     return [self.onStateByID[itemID] boolValue];
+}
+
+#pragma mark - Width resize
+
+- (void)beginWidthResizeWithEvent:(NSEvent *)event {
+    self.isResizingWidth = YES;
+    // 冻结 trailing 窗口坐标：宽度变化时右缘不动，左缘（拖柄）跟着鼠标
+    NSRect frameInWindow = [self convertRect:self.bounds toView:nil];
+    self.resizeTrailingXInWindow = NSMaxX(frameInWindow);
+    self.resizeGrabOffsetInWindow = event.locationInWindow.x - NSMinX(frameInWindow);
+    [self applyWidthToWindowX:event.locationInWindow.x];
+}
+
+- (void)endWidthResize {
+    self.isResizingWidth = NO;
+    self.allocatedWidth = [self clampedAllocatedWidth:self.allocatedWidth];
+    [BrowserChromeActionLayoutStore setPreferredToolbarWidth:self.allocatedWidth];
+    [self notifyPreferredWidthDidChange];
+}
+
+- (void)applyWidthToWindowX:(CGFloat)windowX {
+    // leading = mouseX - grabOffset；width = trailing - leading
+    CGFloat newLeading = windowX - self.resizeGrabOffsetInWindow;
+    CGFloat next = [self clampedAllocatedWidth:self.resizeTrailingXInWindow - newLeading];
+    if (fabs(next - self.allocatedWidth) < 0.05) {
+        return;
+    }
+    self.allocatedWidth = next;
+    [self notifyPreferredWidthDidChange];
+}
+
+#pragma mark - Overflow
+
+- (NSInteger)customButtonCount {
+    return MAX(0, (NSInteger)self.actionButtons.count - 1); // 末尾固定 moreMenu
+}
+
+- (NSInteger)visibleCustomCountForWidth:(CGFloat)groupWidth {
+    NSInteger customTotal = [self customButtonCount];
+    if (customTotal <= 0) {
+        return 0;
+    }
+    CGFloat full = [self widthForCustomButtonCount:customTotal];
+    if (groupWidth >= full - 0.5) {
+        return customTotal;
+    }
+    NSInteger best = 0;
+    for (NSInteger n = 0; n <= customTotal; n++) {
+        if ([self widthForCustomButtonCount:n] <= groupWidth + 0.5) {
+            best = n;
+        } else {
+            break;
+        }
+    }
+    return MAX(0, MIN(best, customTotal));
+}
+
+- (BOOL)isCustomButtonVisibleOnStrip:(BrowserTabStripChromeActionButton *)button {
+    if (!button || button.hidden || !self.clipView) {
+        return NO;
+    }
+    NSRect buttonInClip = [button convertRect:button.bounds toView:self.clipView];
+    // 按钮右缘仍在裁剪区内才算可见（可点）
+    return NSMaxX(buttonInClip) <= NSWidth(self.clipView.bounds) + 0.5;
+}
+
+- (NSArray<NSString *> *)widthOverflowedActionIDs {
+    NSInteger visible = [self visibleCustomCountForWidth:self.allocatedWidth];
+    NSInteger customTotal = [self customButtonCount];
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (NSInteger i = visible; i < customTotal; i++) {
+        NSString *itemID = self.actionButtons[i].itemID;
+        if (itemID.length > 0) {
+            [ids addObject:itemID];
+        }
+    }
+    return [ids copy];
 }
 
 #pragma mark - Reorder / drop on ⋯
@@ -317,16 +593,10 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     [self.dragGhostPanel setFrame:frame display:YES];
 }
 
-- (NSInteger)customButtonCount {
-    NSInteger count = (NSInteger)self.stackView.arrangedSubviews.count;
-    return MAX(0, count - 1); // 末尾固定 moreMenu
-}
-
 - (NSInteger)indexOfCustomButton:(BrowserTabStripChromeActionButton *)button {
-    NSArray<NSView *> *arranged = self.stackView.arrangedSubviews;
     NSInteger customCount = [self customButtonCount];
     for (NSInteger i = 0; i < customCount; i++) {
-        if (arranged[(NSUInteger)i] == button) {
+        if (self.actionButtons[i] == button) {
             return i;
         }
     }
@@ -335,7 +605,7 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
 
 - (BOOL)isWindowPointOverMoreMenu:(NSPoint)windowPoint {
     NSButton *more = [self buttonForItemID:BrowserChromeActionMoreMenuID];
-    if (!more) {
+    if (!more || more.hidden) {
         return NO;
     }
     NSPoint local = [more convertPoint:windowPoint fromView:nil];
@@ -372,11 +642,13 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     if (customCount <= 0) {
         return currentIndex;
     }
-    NSArray<NSView *> *arranged = self.stackView.arrangedSubviews;
     NSInteger bestIndex = currentIndex;
     CGFloat bestDistance = CGFLOAT_MAX;
     for (NSInteger i = 0; i < customCount; i++) {
-        NSView *candidate = arranged[(NSUInteger)i];
+        BrowserTabStripChromeActionButton *candidate = self.actionButtons[i];
+        if (![self isCustomButtonVisibleOnStrip:candidate]) {
+            continue;
+        }
         CGFloat midX = NSMidX(candidate.frame);
         CGFloat distance = fabs(point.x - midX);
         if (distance < bestDistance) {
@@ -387,6 +659,27 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     return bestIndex;
 }
 
+- (void)rebuildStackFromActionButtons {
+    for (NSView *view in [self.stackView.arrangedSubviews copy]) {
+        [self.stackView removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+    for (BrowserTabStripChromeActionButton *button in self.actionButtons) {
+        if ([button.itemID isEqualToString:BrowserChromeActionMoreMenuID]) {
+            continue;
+        }
+        [self.stackView addArrangedSubview:button];
+    }
+
+    NSMutableArray<BrowserChromeActionItem *> *newItems = [NSMutableArray array];
+    for (BrowserTabStripChromeActionButton *button in self.actionButtons) {
+        if (button.actionItem) {
+            [newItems addObject:button.actionItem];
+        }
+    }
+    self.items = [newItems copy];
+}
+
 - (void)swapCustomButtonAtIndex:(NSInteger)indexA withIndex:(NSInteger)indexB {
     NSInteger customCount = [self customButtonCount];
     if (indexA == indexB ||
@@ -394,41 +687,20 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         indexA >= customCount || indexB >= customCount) {
         return;
     }
-
-    NSMutableArray<NSView *> *arranged = [self.stackView.arrangedSubviews mutableCopy];
-    [arranged exchangeObjectAtIndex:(NSUInteger)indexA withObjectAtIndex:(NSUInteger)indexB];
-
-    for (NSView *view in [self.stackView.arrangedSubviews copy]) {
-        [self.stackView removeArrangedSubview:view];
-        [view removeFromSuperview];
-    }
-    for (NSView *view in arranged) {
-        [self.stackView addArrangedSubview:view];
+    if (![self isCustomButtonVisibleOnStrip:self.actionButtons[indexA]] ||
+        ![self isCustomButtonVisibleOnStrip:self.actionButtons[indexB]]) {
+        return;
     }
 
-    NSMutableArray<BrowserChromeActionItem *> *newItems = [NSMutableArray array];
-    for (NSView *view in arranged) {
-        if (![view isKindOfClass:[BrowserTabStripChromeActionButton class]]) {
-            continue;
-        }
-        BrowserChromeActionItem *item = ((BrowserTabStripChromeActionButton *)view).actionItem;
-        if (item) {
-            [newItems addObject:item];
-        }
-    }
-    self.items = [newItems copy];
+    [self.actionButtons exchangeObjectAtIndex:(NSUInteger)indexA withObjectAtIndex:(NSUInteger)indexB];
+    [self rebuildStackFromActionButtons];
 }
 
-- (NSArray<NSString *> *)visibleCustomActionIDsFromStack {
+- (NSArray<NSString *> *)orderedCustomActionIDsFromButtons {
     NSMutableArray<NSString *> *ids = [NSMutableArray array];
     NSInteger customCount = [self customButtonCount];
-    NSArray<NSView *> *arranged = self.stackView.arrangedSubviews;
     for (NSInteger i = 0; i < customCount; i++) {
-        NSView *view = arranged[(NSUInteger)i];
-        if (![view isKindOfClass:[BrowserTabStripChromeActionButton class]]) {
-            continue;
-        }
-        NSString *itemID = ((BrowserTabStripChromeActionButton *)view).itemID;
+        NSString *itemID = self.actionButtons[i].itemID;
         if (itemID.length > 0) {
             [ids addObject:itemID];
         }
@@ -440,7 +712,11 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     if (!button || [button.itemID isEqualToString:BrowserChromeActionMoreMenuID]) {
         return;
     }
-    if (!self.window) {
+    if (self.isResizingWidth || !self.window) {
+        return;
+    }
+    // 被宽度裁掉的图标不参与条上点击/改序（应从 ⋯ 菜单操作）
+    if (![self isCustomButtonVisibleOnStrip:button]) {
         return;
     }
 
@@ -521,7 +797,7 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         return;
     }
 
-    NSArray<NSString *> *visibleIDs = [self visibleCustomActionIDsFromStack];
+    NSArray<NSString *> *visibleIDs = [self orderedCustomActionIDsFromButtons];
     NSArray<NSString *> *merged =
         [BrowserChromeActionLayoutStore orderedIDsByReplacingVisibleSubsequence:visibleIDs];
     [BrowserChromeActionLayoutStore setOrderedCustomActionIDs:merged];

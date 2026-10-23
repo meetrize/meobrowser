@@ -29,6 +29,10 @@ FOUNDATION_EXPORT NSNotificationName const BrowserChromeActionLayoutDidChangeNot
 /// 将旧地址栏 order/hidden 迁入 Chrome LayoutStore（一次性）。
 + (void)migrateFromAddressBarPreferencesIfNeeded;
 
+/// 用户拖拽设定的工具栏宽度；≤0 表示尚未设定（用内容全宽）。
++ (CGFloat)preferredToolbarWidth;
++ (void)setPreferredToolbarWidth:(CGFloat)width;
+
 @end
 
 NS_ASSUME_NONNULL_END
