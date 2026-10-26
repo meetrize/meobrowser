@@ -93,6 +93,121 @@ static NSString *MeoScrollToFragmentJS(void) {
                                                   forMainFrameOnly:YES]];
 }
 
++ (void)installCaretFallbackScriptOnContentController:(WKUserContentController *)controller {
+    if (controller == nil) {
+        return;
+    }
+    // AppKit 已让 WKWebView 成为 firstResponder，但未对 WebContent 发 SetFocused 时，
+    // document.hasFocus() 为 false，原生 caret 不画。用轻量软件光标补视觉，避免 sync IPC。
+    NSString *js =
+        @"(function(){"
+         "if(window.__meoCaretFallback)return;"
+         "window.__meoCaretFallback=1;"
+         "var caret=null,raf=0,target=null;"
+         "function ensure(){"
+         "if(caret&&caret.isConnected)return caret;"
+         "caret=document.createElement('div');"
+         "caret.id='__meo_caret';"
+         "caret.setAttribute('aria-hidden','true');"
+         "caret.style.cssText='position:absolute;width:1.5px;pointer-events:none;z-index:2147483647;"
+         "background:Highlight;animation:__meoCaretBlink 1s step-end infinite;display:none;';"
+         "if(!document.getElementById('__meoCaretStyle')){"
+         "var s=document.createElement('style');s.id='__meoCaretStyle';"
+         "s.textContent='@keyframes __meoCaretBlink{50%{opacity:0}}';"
+         "(document.documentElement||document.head).appendChild(s);"
+         "}"
+         "(document.documentElement||document.body).appendChild(caret);"
+         "return caret;"
+         "}"
+         "function hide(){if(caret)caret.style.display='none';target=null;}"
+         "function isEditable(el){"
+         "if(!el||el.nodeType!==1)return false;"
+         "var t=el.tagName;"
+         "if(t==='TEXTAREA')return !el.disabled&&!el.readOnly;"
+         "if(t==='INPUT'){"
+         "var ty=(el.type||'text').toLowerCase();"
+         "if(el.disabled||el.readOnly)return false;"
+         "return 'text search tel url email password number'.split(' ').indexOf(ty)>=0;"
+         "}"
+         "return !!el.isContentEditable;"
+         "}"
+         "function mirrorCaretRect(el){"
+         "try{"
+         "var cs=getComputedStyle(el);"
+         "var mir=document.createElement('div');"
+         "var props=['direction','boxSizing','width','height','overflowX','overflowY',"
+         "'borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderStyle',"
+         "'paddingTop','paddingRight','paddingBottom','paddingLeft',"
+         "'fontStyle','fontVariant','fontWeight','fontStretch','fontSize','fontSizeAdjust',"
+         "'lineHeight','fontFamily','textAlign','textTransform','textIndent',"
+         "'letterSpacing','wordSpacing','whiteSpace','wordBreak','overflowWrap'];"
+         "for(var i=0;i<props.length;i++)mir.style[props[i]]=cs[props[i]];"
+         "mir.style.position='absolute';"
+         "mir.style.visibility='hidden';"
+         "mir.style.whiteSpace=(el.tagName==='INPUT')?'pre':cs.whiteSpace;"
+         "mir.style.overflow='hidden';"
+         "mir.style.top='0';mir.style.left='-9999px';"
+         "var v=el.value||'';"
+         "var pos=typeof el.selectionStart==='number'?el.selectionStart:v.length;"
+         "mir.textContent=v.substring(0,pos);"
+         "var mark=document.createElement('span');"
+         "mark.textContent=v.substring(pos)||'.';"
+         "mir.appendChild(mark);"
+         "document.body.appendChild(mir);"
+         "var er=el.getBoundingClientRect();"
+         "var mr=mark.getBoundingClientRect();"
+         "var br=mir.getBoundingClientRect();"
+         "var x=er.left+(mr.left-br.left)-el.scrollLeft;"
+         "var y=er.top+(mr.top-br.top)-el.scrollTop;"
+         "var h=mr.height||parseFloat(cs.lineHeight)||er.height;"
+         "mir.remove();"
+         "return {x:x+window.scrollX,y:y+window.scrollY,h:h,color:cs.color};"
+         "}catch(e){return null;}"
+         "}"
+         "function contentCaretRect(el){"
+         "try{"
+         "var sel=window.getSelection();"
+         "if(!sel||!sel.rangeCount)return null;"
+         "var r=sel.getRangeAt(0);"
+         "if(!el.contains(r.commonAncestorContainer))return null;"
+         "var rects=r.getClientRects();"
+         "var rc=rects.length?rects[rects.length-1]:r.getBoundingClientRect();"
+         "if(!rc||(!rc.width&&!rc.height&&!r.collapsed))return null;"
+         "var cs=getComputedStyle(el);"
+         "var h=rc.height||parseFloat(cs.lineHeight)||16;"
+         "return {x:rc.left+window.scrollX,y:rc.top+window.scrollY,h:h,color:cs.color};"
+         "}catch(e){return null;}"
+         "}"
+         "function place(){"
+         "raf=0;"
+         "if(document.hasFocus()){hide();return;}"
+         "var el=document.activeElement;"
+         "if(!isEditable(el)){hide();return;}"
+         "target=el;"
+         "var info=(el.tagName==='INPUT'||el.tagName==='TEXTAREA')?mirrorCaretRect(el):contentCaretRect(el);"
+         "if(!info){hide();return;}"
+         "var c=ensure();"
+         "c.style.display='block';"
+         "c.style.left=info.x+'px';"
+         "c.style.top=info.y+'px';"
+         "c.style.height=info.h+'px';"
+         "c.style.background=info.color||'Highlight';"
+         "}"
+         "function schedule(){if(!raf)raf=requestAnimationFrame(place);}"
+         "document.addEventListener('focusin',schedule,true);"
+         "document.addEventListener('focusout',function(){setTimeout(schedule,0);},true);"
+         "document.addEventListener('selectionchange',schedule,true);"
+         "document.addEventListener('input',schedule,true);"
+         "document.addEventListener('keyup',schedule,true);"
+         "document.addEventListener('click',schedule,true);"
+         "window.addEventListener('scroll',schedule,true);"
+         "window.addEventListener('resize',schedule,true);"
+         "})();";
+    [controller addUserScript:[[WKUserScript alloc] initWithSource:js
+                                                     injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                  forMainFrameOnly:NO]];
+}
+
 /// 页面 commit 后清掉残留 __meo_hf；写回 hash 只用 replaceState，避免触发联网导航。
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView {
     [self cleanupHashRestoreQueryInWebView:webView completion:nil];
@@ -1117,18 +1232,17 @@ static NSString *MeoScrollToFragmentJS(void) {
 #pragma mark - First responder（避开 WebKit 同步 SetFocused IPC）
 
 /// 直接调用 NSView 的实现，跳过 WKWebView 里对 WebContent 的 sync IPC。
-/// 该 IPC 在重页/直播等场景下会阻塞主线程约 3s，导致点标签/地址栏完全无响应。
+/// objc_msgSendSuper 的 super_class 表示从其父类开始查找，故传 WKWebView → 落到 NSView。
+/// 该 IPC 在重页/直播等场景下会阻塞主线程约 3s；表单光标改由软件 caret 脚本补上。
 static BOOL MeoCallNSViewFocusMethod(BrowserWebView *view, SEL selector) {
     struct objc_super superNSView = {
         .receiver = view,
-        .super_class = [NSView class],
+        .super_class = [WKWebView class],
     };
     return ((BOOL (*)(struct objc_super *, SEL))objc_msgSendSuper)(&superNSView, selector);
 }
 
 - (BOOL)becomeFirstResponder {
-    // 不调用 [super becomeFirstResponder]：WKWebView 会对 WebContent 发 SetFocused sync IPC，
-    // 内容进程繁忙时主线程会卡死约 3s（tab-ui 里 endEdit≈3000ms）。
     return MeoCallNSViewFocusMethod(self, _cmd);
 }
 

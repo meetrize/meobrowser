@@ -7,8 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// 选中文本含 http(s):// 时补充「在新标签中打开」；
 /// 选中超链文字时合并文本项（搜索 / 拷贝）与链接项。
 ///
-/// 焦点：故意绕开 WKWebView 的 become/resignFirstResponder 同步 IPC。
-/// WebContent 繁忙时该 IPC 会卡死 UI 进程约 3 秒（见 tab-ui.log endEdit≈3000ms）。
+/// 焦点：绕开 WKWebView 的 SetFocused sync IPC（重页可卡 UI ~3s，见 tab-ui.log endEdit）。
+/// 表单闪烁光标改由 installCaretFallbackScript 在 !document.hasFocus() 时用页面内软件光标补上。
 @interface BrowserWebView : WKWebView
 
 /// 在应用内打开 URL（通常为新标签）。未设置时回退为当前 WebView 加载。
@@ -35,6 +35,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// 系统 HTTP 代理下，WKWebView 可能把 URL fragment 以 %23 打进请求路径导致 404。
 /// 对 http: 主文档导航应剥离 fragment，经查询参数在 document-start 写回 hash。
 + (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller;
+/// 绕开 SetFocused 后原生 caret 不绘制；在页面未 hasFocus 时画闪烁软件光标（不打 sync IPC）。
++ (void)installCaretFallbackScriptOnContentController:(WKUserContentController *)controller;
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView;
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView
                               completion:(void (^ _Nullable)(NSString * _Nullable href))completion;

@@ -545,6 +545,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
     MeoDisableProcessSwapOnNavigationIfAvailable(configuration.preferences);
     // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
+    [BrowserWebView installCaretFallbackScriptOnContentController:configuration.userContentController];
     [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
     [BrowserGeolocationBridge installOnConfiguration:configuration];
     [BrowserPageNotificationBridge installOnConfiguration:configuration];
