@@ -218,7 +218,8 @@ static const NSUInteger kSelectionFillMaxLength = 200;
         self.findBarView.alphaValue = 1;
         // 停用贴边约束，避免隐藏态仍参与窗口最小宽度计算
         [self setFindBarLayoutActive:NO];
-        [self.windowController.window makeFirstResponder:webView];
+        // 勿 makeFirstResponder:webView：重页上会触发 SetFocused sync IPC ≈3s
+        [self.windowController.window makeFirstResponder:self.windowController.window];
     };
 
     if (clearHighlights && webView) {

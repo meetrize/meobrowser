@@ -140,10 +140,8 @@
         self.overviewView.alphaValue = 1.0;
         self.overviewView.layer.transform = CATransform3DIdentity;
         [self setOverviewLayoutActive:NO];
-        WKWebView *webView = self.windowController.webView;
-        if (webView) {
-            [self.windowController.window makeFirstResponder:webView];
-        }
+        // 勿 makeFirstResponder:webView：重页上会触发 SetFocused sync IPC ≈3s
+        [self.windowController.window makeFirstResponder:self.windowController.window];
     };
 
     if (reduceMotion) {
