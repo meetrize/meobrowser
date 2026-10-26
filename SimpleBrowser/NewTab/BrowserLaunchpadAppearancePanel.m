@@ -1,6 +1,8 @@
 #import "BrowserLaunchpadAppearancePanel.h"
 #import "BrowserLaunchpadAppearance.h"
+#import "BrowserLaunchpadBackgroundPreset.h"
 #import "BrowserWallpaperStore.h"
+#import <QuartzCore/QuartzCore.h>
 
 @interface BrowserLaunchpadAppearancePanel ()
 @property (nonatomic, strong) NSSegmentedControl *presetControl;
@@ -10,6 +12,8 @@
 @property (nonatomic, strong) NSTextField *iconSizeValueLabel;
 @property (nonatomic, strong) NSTextField *horizontalSpacingValueLabel;
 @property (nonatomic, strong) NSTextField *verticalSpacingValueLabel;
+@property (nonatomic, strong) NSStackView *backgroundSwatchStack;
+@property (nonatomic, strong) NSMutableArray<NSView *> *backgroundSwatchViews;
 @property (nonatomic, strong) NSButton *wallpaperEnabledCheckbox;
 @property (nonatomic, strong) NSButton *chooseWallpaperButton;
 @property (nonatomic, strong) NSButton *clearWallpaperButton;
@@ -57,7 +61,7 @@
 }
 
 + (NSSize)preferredPanelSize {
-    return NSMakeSize(288, 392);
+    return NSMakeSize(300, 470);
 }
 
 - (NSSize)preferredContentSize {
@@ -177,7 +181,47 @@
     [resetButton setContentHuggingPriority:NSLayoutPriorityRequired
                              forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSTextField *backgroundCaption = [self makeCaption:@"背景"];
+    NSTextField *backgroundCaption = [self makeCaption:@"背景颜色"];
+
+    self.backgroundSwatchViews = [NSMutableArray array];
+    NSMutableArray<NSView *> *swatchViews = [NSMutableArray array];
+    NSInteger presetCount = [BrowserLaunchpadBackgroundPreset count];
+    static const CGFloat kSwatchW = 38.0;
+    static const CGFloat kSwatchH = 30.0;
+    for (NSInteger i = 0; i < presetCount; i++) {
+        NSView *swatch = [[NSView alloc] initWithFrame:NSZeroRect];
+        swatch.wantsLayer = YES;
+        swatch.layer.cornerRadius = 7.0;
+        swatch.layer.masksToBounds = YES;
+        swatch.layer.borderWidth = 1.5;
+        swatch.layer.borderColor = [NSColor colorWithCalibratedWhite:0.55 alpha:0.4].CGColor;
+        swatch.toolTip = [BrowserLaunchpadBackgroundPreset nameAtIndex:i];
+        swatch.identifier = [NSString stringWithFormat:@"bg-preset-%ld", (long)i];
+        swatch.translatesAutoresizingMaskIntoConstraints = NO;
+
+        CAGradientLayer *gradient = [CAGradientLayer layer];
+        gradient.name = @"launchpad.background.swatch.gradient";
+        gradient.frame = CGRectMake(0, 0, kSwatchW, kSwatchH);
+        gradient.cornerRadius = 7.0;
+        [BrowserLaunchpadBackgroundPreset applyIndex:i toGradientLayer:gradient];
+        [swatch.layer addSublayer:gradient];
+
+        NSClickGestureRecognizer *click =
+            [[NSClickGestureRecognizer alloc] initWithTarget:self
+                                                      action:@selector(backgroundSwatchClicked:)];
+        [swatch addGestureRecognizer:click];
+
+        [swatch.widthAnchor constraintEqualToConstant:kSwatchW].active = YES;
+        [swatch.heightAnchor constraintEqualToConstant:kSwatchH].active = YES;
+        [self.backgroundSwatchViews addObject:swatch];
+        [swatchViews addObject:swatch];
+    }
+    self.backgroundSwatchStack = [NSStackView stackViewWithViews:swatchViews];
+    self.backgroundSwatchStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.backgroundSwatchStack.spacing = 6;
+    self.backgroundSwatchStack.alignment = NSLayoutAttributeCenterY;
+    self.backgroundSwatchStack.distribution = NSStackViewDistributionFill;
+    self.backgroundSwatchStack.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.wallpaperEnabledCheckbox = [NSButton checkboxWithTitle:@"使用背景图片"
                                                          target:self
@@ -220,6 +264,7 @@
     [content addSubview:vRow];
     [content addSubview:resetButton];
     [content addSubview:backgroundCaption];
+    [content addSubview:self.backgroundSwatchStack];
     [content addSubview:self.wallpaperEnabledCheckbox];
     [content addSubview:self.chooseWallpaperButton];
     [content addSubview:self.clearWallpaperButton];
@@ -260,7 +305,12 @@
         [backgroundCaption.topAnchor constraintEqualToAnchor:resetButton.bottomAnchor constant:kGap + 2],
         [backgroundCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
 
-        [self.wallpaperEnabledCheckbox.topAnchor constraintEqualToAnchor:backgroundCaption.bottomAnchor constant:6],
+        [self.backgroundSwatchStack.topAnchor constraintEqualToAnchor:backgroundCaption.bottomAnchor constant:8],
+        [self.backgroundSwatchStack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [self.backgroundSwatchStack.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor],
+        [self.backgroundSwatchStack.heightAnchor constraintEqualToConstant:30],
+
+        [self.wallpaperEnabledCheckbox.topAnchor constraintEqualToAnchor:self.backgroundSwatchStack.bottomAnchor constant:10],
         [self.wallpaperEnabledCheckbox.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
 
         [self.chooseWallpaperButton.topAnchor constraintEqualToAnchor:self.wallpaperEnabledCheckbox.bottomAnchor constant:8],
@@ -287,6 +337,43 @@
         return;
     }
     [self reloadWallpaperControls];
+}
+
+- (NSInteger)presetIndexForSwatch:(NSView *)swatch {
+    NSString *identifier = swatch.identifier;
+    if (![identifier hasPrefix:@"bg-preset-"]) {
+        return 0;
+    }
+    return [[identifier substringFromIndex:@"bg-preset-".length] integerValue];
+}
+
+- (void)backgroundSwatchClicked:(NSClickGestureRecognizer *)gesture {
+    if (self.updatingUI) {
+        return;
+    }
+    NSView *swatch = gesture.view;
+    if (swatch == nil) {
+        return;
+    }
+    [BrowserLaunchpadBackgroundPreset setSelectedIndex:[self presetIndexForSwatch:swatch]];
+    BrowserWallpaperStore *store = [BrowserWallpaperStore sharedStore];
+    if (store.enabledFlag && store.hasDisplayFile) {
+        [store setWallpaperEnabled:NO];
+    }
+    [self reloadBackgroundSwatchSelection];
+    [self reloadWallpaperControls];
+}
+
+- (void)reloadBackgroundSwatchSelection {
+    NSInteger selected = [BrowserLaunchpadBackgroundPreset selectedIndex];
+    BOOL imageActive = [BrowserWallpaperStore sharedStore].isWallpaperEnabled;
+    NSColor *selectedBorder = NSColor.controlAccentColor;
+    NSColor *idleBorder = [NSColor colorWithCalibratedWhite:0.55 alpha:0.4];
+    for (NSView *swatch in self.backgroundSwatchViews) {
+        BOOL isSelected = (!imageActive && [self presetIndexForSwatch:swatch] == selected);
+        swatch.layer.borderColor = (isSelected ? selectedBorder : idleBorder).CGColor;
+        swatch.layer.borderWidth = isSelected ? 2.5 : 1.5;
+    }
 }
 
 - (void)reloadFromAppearance {
@@ -324,6 +411,7 @@
         self.wallpaperFileLabel.stringValue = @"未选择图片";
     }
     self.updatingUI = NO;
+    [self reloadBackgroundSwatchSelection];
 }
 
 - (void)updateValueLabels {
@@ -422,6 +510,7 @@
     } else {
         [store setWallpaperEnabled:NO];
     }
+    [self reloadBackgroundSwatchSelection];
 }
 
 - (void)chooseWallpaper:(id)sender {

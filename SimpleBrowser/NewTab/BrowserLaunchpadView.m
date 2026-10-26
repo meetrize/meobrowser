@@ -7,6 +7,7 @@
 #import "BrowserLaunchpadAppearance.h"
 #import "BrowserLaunchpadAppearancePanel.h"
 #import "BrowserWallpaperStore.h"
+#import "BrowserLaunchpadBackgroundPreset.h"
 #import <QuartzCore/QuartzCore.h>
 
 static NSPasteboardType const kBrowserShortcutDragType = @"com.meobrowser.shortcut-item-id";
@@ -300,6 +301,8 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 
 @interface BrowserLaunchpadView () <NSCollectionViewDataSource, NSCollectionViewDelegate, NSPopoverDelegate, BrowserShortcutFolderOverlayDelegate, NSDraggingSource>
 @property (nonatomic, strong) NSView *wallpaperView;
+@property (nonatomic, strong) NSView *gradientView;
+@property (nonatomic, strong) CAGradientLayer *backgroundGradientLayer;
 @property (nonatomic, strong) NSView *scrimView;
 @property (nonatomic, strong) NSVisualEffectView *effectView;
 @property (nonatomic, assign) BOOL wallpaperAcquired;
@@ -345,6 +348,10 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(wallpaperDidChange:)
                                                      name:BrowserWallpaperDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(backgroundPresetDidChange:)
+                                                     name:BrowserLaunchpadBackgroundPresetDidChangeNotification
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(shortcutStoreDidChange:)
@@ -470,6 +477,17 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     _wallpaperView.hidden = YES;
     [self addSubview:_wallpaperView];
 
+    _gradientView = [[NSView alloc] initWithFrame:NSZeroRect];
+    _gradientView.wantsLayer = YES;
+    _gradientView.layer.masksToBounds = YES;
+    _gradientView.translatesAutoresizingMaskIntoConstraints = NO;
+    _backgroundGradientLayer = [CAGradientLayer layer];
+    _backgroundGradientLayer.needsDisplayOnBoundsChange = YES;
+    [_gradientView.layer addSublayer:_backgroundGradientLayer];
+    [BrowserLaunchpadBackgroundPreset applyIndex:[BrowserLaunchpadBackgroundPreset selectedIndex]
+                                 toGradientLayer:_backgroundGradientLayer];
+    [self addSubview:_gradientView];
+
     _scrimView = [[NSView alloc] initWithFrame:NSZeroRect];
     _scrimView.wantsLayer = YES;
     _scrimView.layer.masksToBounds = YES;
@@ -482,6 +500,7 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     _effectView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     _effectView.state = NSVisualEffectStateActive;
     _effectView.translatesAutoresizingMaskIntoConstraints = NO;
+    _effectView.hidden = YES;
     [self addSubview:_effectView];
 
     CGFloat cellWidth = [BrowserLaunchpadAppearance cellWidthForIconSize:self.cachedIconSize];
@@ -582,6 +601,11 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
         [_wallpaperView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_wallpaperView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
 
+        [_gradientView.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_gradientView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_gradientView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+        [_gradientView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+
         [_scrimView.topAnchor constraintEqualToAnchor:self.topAnchor],
         [_scrimView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [_scrimView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
@@ -629,6 +653,11 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     [self refreshWallpaperPresentation];
 }
 
+- (void)backgroundPresetDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self refreshWallpaperPresentation];
+}
+
 - (void)shortcutStoreDidChange:(NSNotification *)notification {
     (void)notification;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -642,6 +671,7 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     if (showWallpaper) {
         self.wallpaperView.layer.contents = store.displayImage;
         self.wallpaperView.hidden = NO;
+        self.gradientView.hidden = YES;
         self.scrimView.hidden = NO;
         self.scrimView.layer.backgroundColor =
             [[NSColor blackColor] colorWithAlphaComponent:store.scrimAlpha].CGColor;
@@ -650,13 +680,25 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
         self.wallpaperView.layer.contents = nil;
         self.wallpaperView.hidden = YES;
         self.scrimView.hidden = YES;
-        self.effectView.hidden = NO;
+        self.effectView.hidden = YES;
+        self.gradientView.hidden = NO;
+        [BrowserLaunchpadBackgroundPreset applyIndex:[BrowserLaunchpadBackgroundPreset selectedIndex]
+                                     toGradientLayer:self.backgroundGradientLayer];
+        self.backgroundGradientLayer.frame = self.gradientView.bounds;
+    }
+    // 预置渐变与壁纸均为深色底，齿轮用浅色以保证可读。
+    if (@available(macOS 10.14, *)) {
+        self.settingsButton.contentTintColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.72];
     }
     [self applyShortcutTitleColors];
 }
 
 - (void)applyShortcutTitleColors {
-    NSColor *color = [[BrowserWallpaperStore sharedStore] shortcutTitleColor];
+    BrowserWallpaperStore *store = [BrowserWallpaperStore sharedStore];
+    BOOL showWallpaper = store.isWallpaperEnabled && store.displayImage != nil;
+    NSColor *color = showWallpaper
+        ? store.shortcutTitleColor
+        : [BrowserLaunchpadBackgroundPreset selectedShortcutTitleColor];
     for (NSCollectionViewItem *item in self.collectionView.visibleItems) {
         if ([item isKindOfClass:[BrowserShortcutCellView class]]) {
             [(BrowserShortcutCellView *)item applyTitleColor:color];
@@ -666,6 +708,9 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 
 - (void)layout {
     [super layout];
+    if (!self.gradientView.hidden) {
+        self.backgroundGradientLayer.frame = self.gradientView.bounds;
+    }
     [self updateCollectionViewDocumentSize];
 }
 
@@ -1471,9 +1516,16 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     BrowserShortcutCellView *cell = [collectionView makeItemWithIdentifier:@"ShortcutCell" forIndexPath:indexPath];
     [cell applyIconSize:self.cachedIconSize];
 
+    BrowserWallpaperStore *wallpaperStore = [BrowserWallpaperStore sharedStore];
+    BOOL showWallpaper = wallpaperStore.isWallpaperEnabled && wallpaperStore.displayImage != nil;
+    NSColor *titleColor = showWallpaper
+        ? wallpaperStore.shortcutTitleColor
+        : [BrowserLaunchpadBackgroundPreset selectedShortcutTitleColor];
+
     __weak typeof(self) weakSelf = self;
     if ([self isAddIndexPath:indexPath]) {
         [cell configureAsAddCell];
+        [cell applyTitleColor:titleColor];
         cell.onAddTapped = ^{
             [weakSelf presentAddShortcutSheet];
         };
@@ -1485,6 +1537,7 @@ sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
         ? [BrowserShortcutStore childrenOfFolderID:shortcut.itemID inShortcuts:self.mutableShortcuts]
         : @[];
     [cell configureWithShortcut:shortcut children:children];
+    [cell applyTitleColor:titleColor];
     cell.mergeHighlighted = [shortcut.itemID isEqualToString:self.mergeTargetItemID];
     cell.onActivate = ^(BrowserShortcutItem *item, BOOL openInNewTab) {
         [weakSelf openShortcut:item inNewTab:openInNewTab];

@@ -74,6 +74,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserLaunchpadAppearance.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserLaunchpadAppearancePanel.m \
                    $(BROWSER_SRC_DIR)/NewTab/BrowserWallpaperStore.m \
+                   $(BROWSER_SRC_DIR)/NewTab/BrowserLaunchpadBackgroundPreset.m \
                    $(BROWSER_SRC_DIR)/Favicon/BrowserFaviconUtil.m \
                    $(BROWSER_SRC_DIR)/Favicon/BrowserFaviconCache.m \
                    $(BROWSER_SRC_DIR)/Favicon/BrowserFaviconHTMLParser.m \
