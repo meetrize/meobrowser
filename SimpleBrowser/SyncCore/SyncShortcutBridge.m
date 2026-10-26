@@ -89,7 +89,7 @@ static NSString * const kSyncShortcutMetaKey = @"meo.sync.shortcutMeta";
         tomb.deviceId = [obj[@"deviceId"] isKindOfClass:[NSString class]] ? obj[@"deviceId"] : [SyncDevice deviceId];
         tomb.deleted = YES;
         tomb.schemaVersion = 1;
-        tomb.payload = @{};
+        tomb.payload = @{@"_tombstone": @YES};
         [out addObject:tomb];
     }];
     return out;

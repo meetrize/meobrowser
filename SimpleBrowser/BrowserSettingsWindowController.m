@@ -78,7 +78,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) SBTextField *serverURLField;
 @property (nonatomic, strong) SBTextField *serverEmailField;
 @property (nonatomic, strong) SBSecureTextField *serverPasswordField;
-@property (nonatomic, strong) NSBox *serverLoginBadge;
+@property (nonatomic, strong) NSView *serverLoginBadge;
 @property (nonatomic, strong) NSTextField *serverLoginBadgeLabel;
 @property (nonatomic, strong) NSTextField *serverStatusLabel;
 @property (nonatomic, strong) NSButton *serverRegisterButton;
@@ -87,6 +87,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSButton *serverEnabledCheckbox;
 @property (nonatomic, strong) NSButton *serverShortcutCheckbox;
 @property (nonatomic, strong) NSButton *serverFormMemoCheckbox;
+@property (nonatomic, strong) NSPopUpButton *serverDirectionPopUp;
 @property (nonatomic, strong) NSTextField *serverLastSyncLabel;
 @property (nonatomic, strong) NSButton *serverSyncNowButton;
 @property (nonatomic, strong) NSTextField *serverHintLabel;
@@ -165,7 +166,9 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 10;
-    stack.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
+    // 边距由 addTabNamed 钉在 content 上，避免 edgeInsets + width=stack-32 冲突，
+    // 登录等刷新触发布局时整页表单会向右下「爬移」出窗口。
+    stack.edgeInsets = NSEdgeInsetsZero;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     return stack;
 }
@@ -181,14 +184,15 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     content.translatesAutoresizingMaskIntoConstraints = NO;
     NSStackView *stack = [self makeVerticalStackWithViews:views];
     [content addSubview:stack];
+    const CGFloat inset = 16.0;
     NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray arrayWithArray:@[
-        [stack.topAnchor constraintEqualToAnchor:content.topAnchor],
-        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
-        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor],
+        [stack.topAnchor constraintEqualToAnchor:content.topAnchor constant:inset],
+        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:inset],
+        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-inset],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-inset],
     ]];
     for (NSView *view in widthViews) {
-        [constraints addObject:[view.widthAnchor constraintEqualToAnchor:stack.widthAnchor constant:-32]];
+        [constraints addObject:[view.widthAnchor constraintEqualToAnchor:stack.widthAnchor]];
     }
     [NSLayoutConstraint activateConstraints:constraints];
     item.view = content;
@@ -372,22 +376,22 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self refreshAutoScrollSpeedUI];
 
     // —— 云同步 ——
-    self.serverLoginBadge = [[NSBox alloc] initWithFrame:NSZeroRect];
-    self.serverLoginBadge.boxType = NSBoxCustom;
-    self.serverLoginBadge.borderWidth = 1;
-    self.serverLoginBadge.cornerRadius = 8;
-    self.serverLoginBadge.titlePosition = NSNoTitle;
+    // 用普通 NSView + layer 做徽标，避免 NSBox contentViewMargins 在反复改色时搅乱 Auto Layout。
+    self.serverLoginBadge = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.serverLoginBadge.wantsLayer = YES;
+    self.serverLoginBadge.layer.cornerRadius = 8.0;
+    self.serverLoginBadge.layer.borderWidth = 1.0;
     self.serverLoginBadge.translatesAutoresizingMaskIntoConstraints = NO;
     self.serverLoginBadgeLabel = [NSTextField labelWithString:@""];
     self.serverLoginBadgeLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     self.serverLoginBadgeLabel.alignment = NSTextAlignmentCenter;
     self.serverLoginBadgeLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.serverLoginBadge.contentView addSubview:self.serverLoginBadgeLabel];
+    [self.serverLoginBadge addSubview:self.serverLoginBadgeLabel];
     [NSLayoutConstraint activateConstraints:@[
         [self.serverLoginBadge.heightAnchor constraintEqualToConstant:36],
-        [self.serverLoginBadgeLabel.centerYAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.centerYAnchor],
-        [self.serverLoginBadgeLabel.leadingAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.leadingAnchor constant:12],
-        [self.serverLoginBadgeLabel.trailingAnchor constraintEqualToAnchor:self.serverLoginBadge.contentView.trailingAnchor constant:-12],
+        [self.serverLoginBadgeLabel.centerYAnchor constraintEqualToAnchor:self.serverLoginBadge.centerYAnchor],
+        [self.serverLoginBadgeLabel.leadingAnchor constraintEqualToAnchor:self.serverLoginBadge.leadingAnchor constant:12],
+        [self.serverLoginBadgeLabel.trailingAnchor constraintEqualToAnchor:self.serverLoginBadge.trailingAnchor constant:-12],
     ]];
 
     self.serverStatusLabel = [NSTextField labelWithString:@""];
@@ -426,6 +430,26 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.serverEnabledCheckbox = [NSButton checkboxWithTitle:@"启用云同步" target:self action:@selector(serverEnabledToggled:)];
     self.serverShortcutCheckbox = [NSButton checkboxWithTitle:@"快捷方式（Launchpad）" target:self action:@selector(serverShortcutToggled:)];
     self.serverFormMemoCheckbox = [NSButton checkboxWithTitle:@"站点表单备忘" target:self action:@selector(serverFormMemoToggled:)];
+
+    NSTextField *directionCaption = [self makeCaption:@"同步方向"];
+    self.serverDirectionPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.serverDirectionPopUp.translatesAutoresizingMaskIntoConstraints = NO;
+    self.serverDirectionPopUp.target = self;
+    self.serverDirectionPopUp.action = @selector(serverDirectionChanged:);
+    NSArray *directions = @[
+        @(ServerSyncDirectionBidirectional),
+        @(ServerSyncDirectionUploadOnly),
+        @(ServerSyncDirectionDownloadOnly),
+    ];
+    for (NSNumber *dirNum in directions) {
+        ServerSyncDirection dir = (ServerSyncDirection)dirNum.integerValue;
+        [self.serverDirectionPopUp addItemWithTitle:[ServerSyncSettings displayNameForSyncDirection:dir]];
+        self.serverDirectionPopUp.lastItem.tag = dir;
+    }
+    NSGridView *directionGrid = [NSGridView gridViewWithViews:@[@[directionCaption, self.serverDirectionPopUp]]];
+    directionGrid.columnSpacing = 12;
+    [directionGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
+
     self.serverLastSyncLabel = [NSTextField labelWithString:@""];
     self.serverLastSyncLabel.font = [NSFont systemFontOfSize:11];
     self.serverLastSyncLabel.textColor = [NSColor secondaryLabelColor];
@@ -434,7 +458,8 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 
     self.serverHintLabel = [self makeHint:
         @"数据保存在你自己的 PocketBase 服务器，无需 Apple 开发者账号。"
-        @"密码、Cookie、Companion 通知不会上传。表单备忘字段为明文。"];
+        @"密码、Cookie、Companion 通知不会上传。表单备忘字段为明文。\n"
+        @"同步方向：双向=拉取合并再上传；仅上传=本机覆盖云端对应记录；仅下载=云端合并进本机且不上传。"];
 
     // —— 键盘 ——
     self.reloadShortcutEnabledCheckbox = [NSButton checkboxWithTitle:@"启用刷新快捷键"
@@ -539,6 +564,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                 views:@[
                     self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
                     self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
+                    directionGrid,
                     self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel,
                 ]
             toTabView:self.tabView
@@ -724,17 +750,18 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     }
 
     // 登录徽标
+    self.serverLoginBadge.wantsLayer = YES;
     if (loggedIn) {
         NSString *email = settings.email.length ? settings.email : @"已登录";
         self.serverLoginBadgeLabel.stringValue = [NSString stringWithFormat:@"● 已登录  ·  %@", email];
         self.serverLoginBadgeLabel.textColor = [NSColor colorWithCalibratedRed:0.10 green:0.45 blue:0.20 alpha:1.0];
-        self.serverLoginBadge.fillColor = [NSColor colorWithCalibratedRed:0.82 green:0.94 blue:0.86 alpha:1.0];
-        self.serverLoginBadge.borderColor = [NSColor colorWithCalibratedRed:0.35 green:0.70 blue:0.45 alpha:1.0];
+        self.serverLoginBadge.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.82 green:0.94 blue:0.86 alpha:1.0].CGColor;
+        self.serverLoginBadge.layer.borderColor = [NSColor colorWithCalibratedRed:0.35 green:0.70 blue:0.45 alpha:1.0].CGColor;
     } else {
         self.serverLoginBadgeLabel.stringValue = @"○ 未登录  ·  请先注册或登录";
         self.serverLoginBadgeLabel.textColor = [NSColor colorWithCalibratedRed:0.55 green:0.25 blue:0.10 alpha:1.0];
-        self.serverLoginBadge.fillColor = [NSColor colorWithCalibratedRed:0.98 green:0.92 blue:0.86 alpha:1.0];
-        self.serverLoginBadge.borderColor = [NSColor colorWithCalibratedRed:0.85 green:0.55 blue:0.30 alpha:1.0];
+        self.serverLoginBadge.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.98 green:0.92 blue:0.86 alpha:1.0].CGColor;
+        self.serverLoginBadge.layer.borderColor = [NSColor colorWithCalibratedRed:0.85 green:0.55 blue:0.30 alpha:1.0].CGColor;
     }
 
     NSString *status = engine.statusText.length ? engine.statusText : (loggedIn ? @"就绪" : @"等待登录");
@@ -746,13 +773,22 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.serverEnabledCheckbox.state = settings.enabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.serverShortcutCheckbox.state = settings.shortcutEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.serverFormMemoCheckbox.state = settings.formMemoEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [self.serverDirectionPopUp selectItemWithTag:settings.syncDirection];
 
     // 未登录时仍可勾选「启用」，但会提示先登录；分项随总开关
     self.serverEnabledCheckbox.enabled = YES;
     self.serverEnabledCheckbox.toolTip = loggedIn ? nil : @"勾选后需登录才会开始同步";
     self.serverShortcutCheckbox.enabled = settings.enabled;
     self.serverFormMemoCheckbox.enabled = settings.enabled;
+    self.serverDirectionPopUp.enabled = settings.enabled;
     self.serverSyncNowButton.enabled = settings.enabled && loggedIn;
+    NSString *syncTitle = @"立即同步";
+    if (settings.syncDirection == ServerSyncDirectionUploadOnly) {
+        syncTitle = @"立即上传";
+    } else if (settings.syncDirection == ServerSyncDirectionDownloadOnly) {
+        syncTitle = @"立即下载";
+    }
+    self.serverSyncNowButton.title = syncTitle;
     self.serverLogoutButton.enabled = loggedIn;
     self.serverRegisterButton.enabled = !loggedIn;
     self.serverLoginButton.enabled = !loggedIn;
@@ -845,6 +881,13 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 - (void)serverFormMemoToggled:(id)sender {
     (void)sender;
     ServerSyncSettings.sharedSettings.formMemoEnabled = (self.serverFormMemoCheckbox.state == NSControlStateValueOn);
+}
+
+- (void)serverDirectionChanged:(id)sender {
+    (void)sender;
+    NSInteger tag = self.serverDirectionPopUp.selectedItem.tag;
+    ServerSyncSettings.sharedSettings.syncDirection = (ServerSyncDirection)tag;
+    [self refreshServerSyncUI];
 }
 
 - (void)serverSyncNowClicked:(id)sender {

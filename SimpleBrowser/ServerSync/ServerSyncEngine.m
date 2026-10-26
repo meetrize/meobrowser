@@ -101,6 +101,10 @@
     if (!self.started || !ServerSyncSettings.sharedSettings.enabled || self.applyingRemote) {
         return;
     }
+    // 仅下载：本地改动不应触发自动同步（否则会把刚改的内容又用云端盖掉）。
+    if (ServerSyncSettings.sharedSettings.syncDirection == ServerSyncDirectionDownloadOnly) {
+        return;
+    }
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(syncNow) object:nil];
     [self performSelector:@selector(syncNow) withObject:nil afterDelay:3.0];
 }
@@ -153,24 +157,64 @@
     }
 
     self.syncInFlight = YES;
-    [self setState:ServerSyncEngineStateSyncing text:@"同步中…"];
+    ServerSyncDirection direction = ServerSyncSettings.sharedSettings.syncDirection;
+    NSString *phase = @"同步中…";
+    if (direction == ServerSyncDirectionUploadOnly) {
+        phase = @"上传中…";
+    } else if (direction == ServerSyncDirectionDownloadOnly) {
+        phase = @"下载中…";
+    }
+    [self setState:ServerSyncEngineStateSyncing text:phase];
 
     __weak typeof(self) weakSelf = self;
+
+    void (^finishWithError)(NSError *) = ^(NSError *error) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) {
+            return;
+        }
+        self.syncInFlight = NO;
+        if (error) {
+            ServerSyncSettings.sharedSettings.lastErrorMessage = error.localizedDescription;
+            [self setState:ServerSyncEngineStateError text:error.localizedDescription ?: @"同步失败"];
+        } else {
+            ServerSyncSettings.sharedSettings.lastErrorMessage = nil;
+            ServerSyncSettings.sharedSettings.lastSyncAt = [NSDate date].timeIntervalSince1970;
+            [self setState:ServerSyncEngineStateIdle text:@"已同步"];
+        }
+    };
+
+    // 仅上传：不拉云端、不改本地，直接推本地导出。
+    if (direction == ServerSyncDirectionUploadOnly) {
+        ServerSyncSettings *settings = ServerSyncSettings.sharedSettings;
+        NSMutableArray<SyncRecord *> *toUpload = [NSMutableArray array];
+        long long now = (long long)[[NSDate date] timeIntervalSince1970];
+        if (settings.shortcutEnabled) {
+            NSArray<SyncRecord *> *local = [[SyncShortcutBridge sharedBridge] exportRecords];
+            [toUpload addObjectsFromArray:[SyncMerger purgeExpiredTombstones:local now:now]];
+        }
+        if (settings.formMemoEnabled) {
+            NSArray<SyncRecord *> *local = [[SyncFormMemoBridge sharedBridge] exportRecords];
+            [toUpload addObjectsFromArray:[SyncMerger purgeExpiredTombstones:local now:now]];
+        }
+        [[ServerSyncTransport sharedTransport] upsertRecords:toUpload completion:finishWithError];
+        return;
+    }
+
     [[ServerSyncTransport sharedTransport] fetchAllRecordsWithCompletion:^(NSArray<SyncRecord *> *remote, NSError *fetchError) {
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) {
             return;
         }
         if (fetchError) {
-            self.syncInFlight = NO;
-            ServerSyncSettings.sharedSettings.lastErrorMessage = fetchError.localizedDescription;
-            [self setState:ServerSyncEngineStateError text:fetchError.localizedDescription ?: @"同步失败"];
+            finishWithError(fetchError);
             return;
         }
 
         ServerSyncSettings *settings = ServerSyncSettings.sharedSettings;
         NSMutableArray<SyncRecord *> *toUpload = [NSMutableArray array];
         long long now = (long long)[[NSDate date] timeIntervalSince1970];
+        BOOL upload = (direction != ServerSyncDirectionDownloadOnly);
 
         if (settings.shortcutEnabled) {
             NSArray<SyncRecord *> *local = [[SyncShortcutBridge sharedBridge] exportRecords];
@@ -185,7 +229,9 @@
             self.applyingRemote = YES;
             [[SyncShortcutBridge sharedBridge] applyMergedRecords:merged];
             self.applyingRemote = NO;
-            [toUpload addObjectsFromArray:merged];
+            if (upload) {
+                [toUpload addObjectsFromArray:merged];
+            }
         }
 
         if (settings.formMemoEnabled) {
@@ -201,24 +247,16 @@
             self.applyingRemote = YES;
             [[SyncFormMemoBridge sharedBridge] applyMergedRecords:merged];
             self.applyingRemote = NO;
-            [toUpload addObjectsFromArray:merged];
+            if (upload) {
+                [toUpload addObjectsFromArray:merged];
+            }
         }
 
-        [[ServerSyncTransport sharedTransport] upsertRecords:toUpload completion:^(NSError *saveError) {
-            __strong typeof(weakSelf) self2 = weakSelf;
-            if (!self2) {
-                return;
-            }
-            self2.syncInFlight = NO;
-            if (saveError) {
-                ServerSyncSettings.sharedSettings.lastErrorMessage = saveError.localizedDescription;
-                [self2 setState:ServerSyncEngineStateError text:saveError.localizedDescription ?: @"上传失败"];
-            } else {
-                ServerSyncSettings.sharedSettings.lastErrorMessage = nil;
-                ServerSyncSettings.sharedSettings.lastSyncAt = [NSDate date].timeIntervalSince1970;
-                [self2 setState:ServerSyncEngineStateIdle text:@"已同步"];
-            }
-        }];
+        if (!upload) {
+            finishWithError(nil);
+            return;
+        }
+        [[ServerSyncTransport sharedTransport] upsertRecords:toUpload completion:finishWithError];
     }];
 }
 

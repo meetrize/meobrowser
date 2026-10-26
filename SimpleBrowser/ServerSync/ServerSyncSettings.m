@@ -9,6 +9,7 @@ static NSString * const kEmailKey = @"meo.serverSync.email";
 static NSString * const kEnabledKey = @"meo.serverSync.enabled";
 static NSString * const kShortcutKey = @"meo.serverSync.shortcutEnabled";
 static NSString * const kFormMemoKey = @"meo.serverSync.formMemoEnabled";
+static NSString * const kDirectionKey = @"meo.serverSync.syncDirection";
 static NSString * const kLastSyncKey = @"meo.serverSync.lastSyncAt";
 static NSString * const kLastErrorKey = @"meo.serverSync.lastErrorMessage";
 static NSString * const kDidApplyDefaultsKey = @"meo.serverSync.didApplyDefaultKinds";
@@ -95,6 +96,37 @@ static NSString * const kUserIdKey = @"meo.serverSync.userId";
 - (void)setFormMemoEnabled:(BOOL)formMemoEnabled {
     [self.defaults setBool:formMemoEnabled forKey:kFormMemoKey];
     [self postChange];
+}
+
+- (ServerSyncDirection)syncDirection {
+    if (![self.defaults objectForKey:kDirectionKey]) {
+        return ServerSyncDirectionBidirectional;
+    }
+    NSInteger raw = [self.defaults integerForKey:kDirectionKey];
+    if (raw < ServerSyncDirectionBidirectional || raw > ServerSyncDirectionDownloadOnly) {
+        return ServerSyncDirectionBidirectional;
+    }
+    return (ServerSyncDirection)raw;
+}
+
+- (void)setSyncDirection:(ServerSyncDirection)syncDirection {
+    if (self.syncDirection == syncDirection) {
+        return;
+    }
+    [self.defaults setInteger:syncDirection forKey:kDirectionKey];
+    [self postChange];
+}
+
++ (NSString *)displayNameForSyncDirection:(ServerSyncDirection)direction {
+    switch (direction) {
+        case ServerSyncDirectionUploadOnly:
+            return @"仅上传（本机 → 云端）";
+        case ServerSyncDirectionDownloadOnly:
+            return @"仅下载（云端 → 本机）";
+        case ServerSyncDirectionBidirectional:
+        default:
+            return @"双向同步（合并）";
+    }
 }
 
 - (NSTimeInterval)lastSyncAt {

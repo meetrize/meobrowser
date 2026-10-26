@@ -4,6 +4,26 @@
 #import "ServerSyncKeychain.h"
 #import "SyncRecord.h"
 
+/// PocketBase filter 必须整段百分号编码。
+/// 不可用 URLQueryAllowedCharacterSet：它允许 `&`，`(a='x' && b='y')` 会被拆成多个 query 参数，
+/// 服务端返回 400「Something went wrong while processing your request.」。
+static NSString *MeoEncodePocketBaseFilter(NSString *filter) {
+    if (filter.length == 0) {
+        return @"";
+    }
+    NSMutableCharacterSet *allowed = [[NSCharacterSet alphanumericCharacterSet] mutableCopy];
+    [allowed addCharactersInString:@"-_.~"];
+    return [filter stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: @"";
+}
+
+/// PocketBase 将 required JSON 的 `{}` 视为空白；墓碑等空 payload 用占位对象。
+static id MeoNonEmptyPayload(NSDictionary *payload) {
+    if ([payload isKindOfClass:[NSDictionary class]] && payload.count > 0) {
+        return payload;
+    }
+    return @{@"_tombstone": @YES};
+}
+
 @implementation ServerSyncTransport
 
 + (instancetype)sharedTransport {
@@ -56,7 +76,7 @@
         @"device_id": rec.deviceId ?: @"",
         @"deleted": @(rec.deleted),
         @"schema_version": @(rec.schemaVersion > 0 ? rec.schemaVersion : 1),
-        @"payload": rec.payload ?: @{},
+        @"payload": MeoNonEmptyPayload(rec.payload),
     };
 }
 
@@ -65,7 +85,7 @@
             token:(NSString *)token
        completion:(void (^)(NSArray<SyncRecord *> *, NSError *))completion {
     NSString *filter = [NSString stringWithFormat:@"(app_id='%@')", ServerSyncAppId];
-    NSString *encoded = [filter stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    NSString *encoded = MeoEncodePocketBaseFilter(filter);
     NSString *path = [NSString stringWithFormat:@"/api/collections/sync_records/records?filter=%@&perPage=200&page=%ld&skipTotal=1",
                       encoded, (long)page];
     [[ServerSyncAPIClient sharedClient] getJSON:path token:token completion:^(NSDictionary *json, NSError *error) {
@@ -107,8 +127,11 @@
 - (void)lookupPBIdForRecordId:(NSString *)recordId
                         token:(NSString *)token
                    completion:(void (^)(NSString * _Nullable pbId, NSError * _Nullable error))completion {
-    NSString *filter = [NSString stringWithFormat:@"(app_id='%@' && record_id='%@')", ServerSyncAppId, recordId];
-    NSString *encoded = [filter stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    // record_id 含特殊字符时整段编码，且必须编码 &&，否则 lookup 必炸。
+    NSString *rawId = recordId.length > 0 ? recordId : @"";
+    NSString *safeRecordId = [rawId stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+    NSString *filter = [NSString stringWithFormat:@"(app_id='%@' && record_id='%@')", ServerSyncAppId, safeRecordId];
+    NSString *encoded = MeoEncodePocketBaseFilter(filter);
     NSString *path = [NSString stringWithFormat:@"/api/collections/sync_records/records?filter=%@&perPage=1", encoded];
     [[ServerSyncAPIClient sharedClient] getJSON:path token:token completion:^(NSDictionary *json, NSError *error) {
         if (error) {
