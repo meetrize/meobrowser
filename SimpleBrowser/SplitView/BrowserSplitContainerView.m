@@ -64,7 +64,8 @@ static const CGFloat kMinPane = 120.0;
     _layoutID = layout;
     NSArray *w = weights.count ? weights : [BrowserSplitLayout defaultWeightsForLayout:layout];
     _weights = [w copy];
-    for (NSView *v in [_panes arrayByAddingObjectsFromArray:_dividers]) [v removeFromSuperview];
+    for (NSView *v in _panes) [v removeFromSuperview];
+    for (NSView *v in _dividers) [v removeFromSuperview];
     [_panes removeAllObjects]; [_dividers removeAllObjects];
     NSInteger n = [BrowserSplitLayout paneCountForLayout:layout];
     for (NSInteger i = 0; i < n; i++) {
@@ -79,7 +80,7 @@ static const CGFloat kMinPane = 120.0;
         if (_pendingActiveHandler) p.becameActiveHandler = _pendingActiveHandler;
         [self addSubview:p];
         [_panes addObject:p];
-        id u = (i < urls.count) ? urls[i] : nil;
+        id u = (i < (NSInteger)urls.count) ? urls[i] : nil;
         NSURL *url = [u isKindOfClass:[NSURL class]] ? u : nil;
         [p setPlaceholderURL:url];
     }
@@ -147,7 +148,7 @@ static const CGFloat kMinPane = 120.0;
     }
     if (totalPx <= 0 || w.count < 2) return;
     NSInteger left = tag, right = tag + 1;
-    if (right >= w.count) return;
+    if (right >= (NSInteger)w.count) return;
     double total = 0; for (NSNumber *n in w) total += n.doubleValue;
     double dw = delta / totalPx * total;
     // 最小 120pt 约束
@@ -184,8 +185,8 @@ static const CGFloat kMinPane = 120.0;
 }
 
 - (void)loadURLs:(NSArray *)urls {
-    for (NSInteger i = 0; i < _panes.count; i++) {
-        id u = (i < urls.count) ? urls[i] : nil;
+    for (NSInteger i = 0; i < (NSInteger)_panes.count; i++) {
+        id u = (i < (NSInteger)urls.count) ? urls[i] : nil;
         NSURL *url = [u isKindOfClass:[NSURL class]] ? u : nil;
         if (url) [((BrowserPaneView *)_panes[i]) loadURL:url];
     }
@@ -241,7 +242,7 @@ static const CGFloat kMinPane = 120.0;
         BOOL vert = d.vertical;
         // 线性:前 tag+1 个 pane 累计占比
         double total = 0; for (NSNumber *x in _weights) total += x.doubleValue;
-        double acc = 0; for (NSInteger i = 0; i <= tag && i < _weights.count; i++) acc += _weights[i].doubleValue;
+        double acc = 0; for (NSInteger i = 0; i <= tag && i < (NSInteger)_weights.count; i++) acc += _weights[i].doubleValue;
         double frac = total > 0 ? acc / total : 0;
         if (vert) {
             CGFloat x = NSMinX(b) + NSWidth(b) * frac;
