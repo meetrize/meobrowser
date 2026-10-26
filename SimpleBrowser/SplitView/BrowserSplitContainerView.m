@@ -187,7 +187,7 @@ static const CGFloat kMinPane = 120.0;
     for (NSInteger i = 0; i < _panes.count; i++) {
         id u = (i < urls.count) ? urls[i] : nil;
         NSURL *url = [u isKindOfClass:[NSURL class]] ? u : nil;
-        if (url) [_panes[i] loadURL:url];
+        if (url) [((BrowserPaneView *)_panes[i]) loadURL:url];
     }
 }
 - (void)setChromeMode:(NSInteger)mode forPane:(NSInteger)paneIndex {

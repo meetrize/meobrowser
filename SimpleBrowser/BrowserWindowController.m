@@ -8706,10 +8706,10 @@ requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
                 store[owner] = [s copy];
             }
         }
-        id pane = c.panes[index];
+        BrowserPaneView *pane = c.panes[index];
         // 跳过自动重载的失败栏可能没有 webView（空壳），先补建再加载
-        if (![pane webView]) [self bindSplitContainerWebViews:c];
-        if ([pane webView]) [self startPaneLoadWatchdogForWebView:[pane webView] URL:url];
+        if (!pane.webView) [self bindSplitContainerWebViews:c];
+        if (pane.webView) [self startPaneLoadWatchdogForWebView:pane.webView URL:url];
         [pane loadURL:url];
         [pane updateAddressFieldWithURL:url];
     }
