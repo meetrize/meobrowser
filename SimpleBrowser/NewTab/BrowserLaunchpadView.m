@@ -483,6 +483,15 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
     _gradientView.translatesAutoresizingMaskIntoConstraints = NO;
     _backgroundGradientLayer = [CAGradientLayer layer];
     _backgroundGradientLayer.needsDisplayOnBoundsChange = YES;
+    // 关掉 bounds/position 隐式动画，避免切到新标签时背景从下往上滑入。
+    _backgroundGradientLayer.actions = @{
+        @"bounds": [NSNull null],
+        @"position": [NSNull null],
+        @"contents": [NSNull null],
+        @"colors": [NSNull null],
+        @"backgroundColor": [NSNull null],
+    };
+    _backgroundGradientLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
     [_gradientView.layer addSublayer:_backgroundGradientLayer];
     [BrowserLaunchpadBackgroundPreset applyIndex:[BrowserLaunchpadBackgroundPreset selectedIndex]
                                  toGradientLayer:_backgroundGradientLayer];
@@ -682,9 +691,12 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
         self.scrimView.hidden = YES;
         self.effectView.hidden = YES;
         self.gradientView.hidden = NO;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
         [BrowserLaunchpadBackgroundPreset applyIndex:[BrowserLaunchpadBackgroundPreset selectedIndex]
                                      toGradientLayer:self.backgroundGradientLayer];
         self.backgroundGradientLayer.frame = self.gradientView.bounds;
+        [CATransaction commit];
     }
     // 预置渐变与壁纸均为深色底，齿轮用浅色以保证可读。
     if (@available(macOS 10.14, *)) {
@@ -709,7 +721,10 @@ static const NSTimeInterval kLaunchpadIconRefreshAfterWindowKeyDelay = 0.5;
 - (void)layout {
     [super layout];
     if (!self.gradientView.hidden) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
         self.backgroundGradientLayer.frame = self.gradientView.bounds;
+        [CATransaction commit];
     }
     [self updateCollectionViewDocumentSize];
 }
