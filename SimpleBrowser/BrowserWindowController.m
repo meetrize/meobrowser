@@ -75,6 +75,7 @@
 #import "BrowserTabLoadIsolator.h"
 #import "BrowserNavigationDiagnostics.h"
 #import "BrowserTabUIDiagnostics.h"
+#import "BrowserRiskHostPolicy.h"
 #import "CompanionChannel.h"
 #import "CompanionLinkUI.h"
 #import "BrowserTransientToast.h"
@@ -438,10 +439,10 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
                               NSWindowStyleMaskClosable |
                               NSWindowStyleMaskMiniaturizable |
                               NSWindowStyleMaskResizable;
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
-                                                   styleMask:style
-                                                     backing:NSBackingStoreBuffered
-                                                       defer:NO];
+    NSWindow *window = [[BrowserChromeWindow alloc] initWithContentRect:frame
+                                                              styleMask:style
+                                                                backing:NSBackingStoreBuffered
+                                                                  defer:NO];
     window.title = BrowserAppDisplayName;
     window.releasedWhenClosed = NO;
     // 下限对齐标签条极窄可用布局（约 200）：
@@ -2526,10 +2527,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     NSResponder *first = self.window.firstResponder;
     NSText *editor = self.addressField.currentEditor;
     if (first == self.addressField || first == editor) {
-        // 切回窗口自身，勿强制 makeFirstResponder:webView。
-        // 即便 BrowserWebView 已绕开 sync IPC，把焦点还给重页仍可能触发昂贵布局。
-        [self.addressField abortEditing];
+        // 先交给 window：若先 abortEditing，AppKit 常把焦点还给「编辑前」的
+        // WK 内部视图 → SetFocused sync IPC，重页上 ≈3s（tab-ui endEdit≈3000）。
         [self.window makeFirstResponder:self.window];
+        if (self.addressField.currentEditor != nil) {
+            [self.addressField abortEditing];
+        }
     }
 }
 
@@ -2537,6 +2540,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     (void)sender;
     if (self.compactModeEnabled) {
         [self beginAddressBarPeek];
+    }
+    // 先离开 WK 子树再进地址栏，避免一次 makeFirstResponder 里对繁忙 WebContent resign ≈3s
+    NSResponder *fr = self.window.firstResponder;
+    if ([fr isKindOfClass:[NSView class]]) {
+        for (NSView *v = (NSView *)fr; v != nil; v = v.superview) {
+            if ([v isKindOfClass:[WKWebView class]]) {
+                [self.window makeFirstResponder:self.window];
+                break;
+            }
+        }
     }
     [self.window makeFirstResponder:self.addressField];
     [self.addressField selectText:nil];
@@ -3770,9 +3783,27 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             if (pane.webView) splitLiveCount++;
         }
     }
-    // 分栏 4 个重页（gemini/chatgpt 等 GPU+长轮询）常驻时，一律跳过缩略图快照：
-    // takeSnapshot 会跟重页抢 GPU，是切标签卡死的主凶之一。
-    BOOL skipSnapshotForPressure = (liveCount + splitLiveCount >= 5) || anySplitBG || splitLiveCount > 0;
+    // 分栏 / 多活页 / 正在播媒体时一律跳过缩略图：
+    // takeSnapshot 会跟 YouTube 等重页抢 GPU，开 NTP 后主线程易 HANG ≈3s（见 tab-ui）。
+    BOOL anyMediaPressure = NO;
+    BOOL anyEarlyHibernationLive = NO;
+    for (BrowserTab *t in self.tabController.tabs) {
+        if (t.webView == nil) {
+            continue;
+        }
+        if (t.mediaHeavy || t.isAudible) {
+            anyMediaPressure = YES;
+        }
+        NSURL *u = t.webView.URL ?: t.restorableURL;
+        if ([BrowserRiskHostPolicy URLPrefersEarlyHibernation:u]) {
+            anyEarlyHibernationLive = YES;
+        }
+    }
+    BOOL skipSnapshotForPressure = (liveCount + splitLiveCount >= 3)
+        || anySplitBG
+        || splitLiveCount > 0
+        || anyMediaPressure
+        || anyEarlyHibernationLive;
     // 先挂选中页（关键路径同步），再异步剥离后台页：切标签手感只取决于 attach，
     // detach（含重页 layout/shutdown）扔到下一拍，不挡点击响应。
     NSMutableArray<BrowserTab *> *tabsToDetach = [NSMutableArray array];
@@ -3786,8 +3817,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
             if (tab.isAudible) {
                 tab.mediaHeavy = YES;
             }
+            NSURL *snapURL = wv.URL ?: tab.restorableURL;
+            BOOL skipHeavyHost = [BrowserRiskHostPolicy URLPrefersEarlyHibernation:snapURL];
             // 活 WebView 已接近/超过预算时跳过快照：takeSnapshot 会与重页抢 GPU，易造成数秒主线程 HANG。
-            if (!(tab.mediaHeavy || tab.isAudible) && !skipSnapshotForPressure) {
+            if (!(tab.mediaHeavy || tab.isAudible || skipHeavyHost) && !skipSnapshotForPressure) {
                 scheduledSnapshot = YES;
                 __weak typeof(self) weakSelf = self;
                 __weak BrowserTab *weakTab = tab;
@@ -3809,6 +3842,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                     if (strongTab.mediaHeavy || strongTab.isAudible) {
                         return;
                     }
+                    NSURL *url = strongWebView.URL ?: strongTab.restorableURL;
+                    if ([BrowserRiskHostPolicy URLPrefersEarlyHibernation:url]) {
+                        return;
+                    }
                     CFTimeInterval tSnap = CACurrentMediaTime();
                     [strongSelf.tabOverviewController.thumbnailCache
                         captureFromWebView:strongWebView
@@ -3818,8 +3855,13 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                     (strongWebView.URL.host ?: @"?"),
                                     (CACurrentMediaTime() - tSnap) * 1000.0);
                 });
-            } else if (skipSnapshotForPressure && !(tab.mediaHeavy || tab.isAudible)) {
-                BrowserTabUILog(@"thumbnailCapture skipped (live=%lu pressure)",
+            } else if (tab.mediaHeavy || tab.isAudible || skipHeavyHost || skipSnapshotForPressure) {
+                BrowserTabUILog(@"thumbnailCapture skipped host=%@ heavy=%d audible=%d earlyHib=%d pressure=%d live=%lu",
+                                (snapURL.host ?: @"?"),
+                                tab.mediaHeavy ? 1 : 0,
+                                tab.isAudible ? 1 : 0,
+                                skipHeavyHost ? 1 : 0,
+                                skipSnapshotForPressure ? 1 : 0,
                                 (unsigned long)liveCount);
             }
         }
@@ -6564,10 +6606,13 @@ doCommandBySelector:(SEL)commandSelector {
     BOOL addressIsFocused = (firstResponder == self.addressField)
         || (editor != nil && firstResponder == editor);
     if (addressIsFocused) {
-        // abortEditing 结束 field editor，且避免 AppKit「恢复先前 firstResponder」
-        // 把焦点还回 WKWebView（旧路径 makeFirstResponder:nil 会触发约 3s sync IPC）。
-        [self.addressField abortEditing];
+        // 切标签时地址栏若在编辑：必须先 makeFirstResponder:window。
+        // 先 abortEditing 会恢复到编辑前的 WK 内容视图（非 BrowserWebView 子类），
+        // 绕不开我们在 BrowserWebView 上对 become/resign 的 IPC 绕过，重页 ≈3s。
         [window makeFirstResponder:window];
+        if (self.addressField.currentEditor != nil) {
+            [self.addressField abortEditing];
+        }
     }
     self.addressFieldIsEditing = NO;
 }
@@ -6585,6 +6630,20 @@ doCommandBySelector:(SEL)commandSelector {
         BrowserTab *tab = strongSelf.tabController.selectedTab;
         if (!tab.isNewTabPage) {
             return;
+        }
+        // YouTube 等仍存活时不要抢焦点：resign 繁忙 WebContent ≈3s，表现为「开新标签就卡」
+        for (BrowserTab *t in strongSelf.tabController.tabs) {
+            WKWebView *wv = t.webView;
+            if (wv == nil) {
+                continue;
+            }
+            NSURL *u = wv.URL ?: t.restorableURL;
+            if (t.mediaHeavy || t.isAudible || [BrowserRiskHostPolicy URLPrefersEarlyHibernation:u]) {
+                if (BrowserTabUIDiagnosticsEnabled()) {
+                    BrowserTabUILog(@"focusAddressBar skipped (live heavy host=%@)", u.host ?: @"?");
+                }
+                return;
+            }
         }
         [strongSelf focusAddressBar:nil];
     });

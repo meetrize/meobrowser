@@ -57,4 +57,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+/// 浏览器主窗口：禁止 WK 内部视图成为 firstResponder。
+/// 否则点地址栏/标签时对其 resign 仍走 SetFocused sync IPC（≈3s，且不进 refreshTabsUI 计时）。
+@interface BrowserChromeWindow : NSWindow
+@end
+
 NS_ASSUME_NONNULL_END

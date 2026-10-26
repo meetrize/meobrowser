@@ -2,6 +2,8 @@
 #import "BrowserTab.h"
 #import "BrowserRiskHostPolicy.h"
 
+#import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <os/log.h>
 #import <stdatomic.h>
@@ -201,7 +203,21 @@ static void MeoHangObserverCallback(CFRunLoopObserverRef observer,
     if (atomic_exchange_explicit(&sHangLogged, false, memory_order_relaxed)) {
         NSTimeInterval hangMs = sLoggedHangMs;
         sLoggedHangMs = 0;
-        BrowserTabUILog(@"HANG recovered (was %.0fms)", hangMs);
+        NSWindow *key = NSApp.keyWindow;
+        NSResponder *fr = key.firstResponder;
+        NSString *frClass = fr ? NSStringFromClass(fr.class) : @"(nil)";
+        NSString *host = @"-";
+        if ([fr isKindOfClass:[NSView class]]) {
+            for (NSView *v = (NSView *)fr; v != nil; v = v.superview) {
+                if ([v isKindOfClass:[WKWebView class]]) {
+                    NSURL *url = ((WKWebView *)v).URL;
+                    host = url.host.length > 0 ? url.host : (url.absoluteString ?: @"?");
+                    break;
+                }
+            }
+        }
+        BrowserTabUILog(@"HANG recovered (was %.0fms) firstResponder=%@ webHost=%@ title=%@",
+                        hangMs, frClass, host, key.title ?: @"");
     }
 }
 

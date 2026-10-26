@@ -1144,3 +1144,23 @@ static BOOL MeoCallNSViewFocusMethod(BrowserWebView *view, SEL selector) {
 }
 
 @end
+
+@implementation BrowserChromeWindow
+
+- (BOOL)makeFirstResponder:(NSResponder *)responder {
+    // WK 常把内部 NSView 设为 firstResponder；对该视图 resign/become 会 sync IPC。
+    // 一律改绑到外层 BrowserWebView，走上面的无 IPC 实现。
+    if ([responder isKindOfClass:[NSView class]]) {
+        for (NSView *v = (NSView *)responder; v != nil; v = v.superview) {
+            if ([v isKindOfClass:[BrowserWebView class]]) {
+                if (responder != v) {
+                    return [super makeFirstResponder:v];
+                }
+                break;
+            }
+        }
+    }
+    return [super makeFirstResponder:responder];
+}
+
+@end
