@@ -13,8 +13,6 @@ static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
 static NSString * const kPairedDeviceIdsKey = @"CompanionPairedDeviceIds";
 /// deviceId → SHA256(token) 指纹；hello 校验用。
 static NSString * const kPairedDeviceTokenFingerprintsKey = @"CompanionPairedDeviceTokenFingerprints";
-/// 历史钥匙串迁移标志（现已固定为文件存储，置位后不再触碰钥匙串）。
-static NSString * const kCompanionKeychainMigratedKey = @"CompanionPairedDevicesKeychainMigrated";
 
 static NSString *CompanionTokenFingerprint(NSString *token) {
     if (token.length == 0) {
@@ -200,8 +198,6 @@ static NSString *CompanionTokenFingerprint(NSString *token) {
     self.devicesLoaded = YES;
     NSString *path = [[self class] pairedDevicesFilePath];
     NSData *data = [NSData dataWithContentsOfFile:path];
-    // 权威来源仅为本地文件；不再读/删钥匙串（会弹 Mac 登录密码）。
-    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
     if (data.length > 0) {
         self.pairedDevicesStorage = [self devicesFromJSONData:data];
         [self syncPairedDeviceCountHint];
@@ -412,7 +408,6 @@ static NSString *CompanionTokenFingerprint(NSString *token) {
     self.pairedDevicesStorage = @[];
     [self persistDevices:nil];
     [NSUserDefaults.standardUserDefaults removeObjectForKey:kPairedDeviceTokenFingerprintsKey];
-    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
 }
 
 - (void)revokeDeviceToken:(NSString *)deviceToken {

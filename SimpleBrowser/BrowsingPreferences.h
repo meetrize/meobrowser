@@ -47,6 +47,8 @@ extern NSString * const BrowserWindowSessionSplitKey;
 
 + (BOOL)isDefaultBrowser;
 + (void)requestSetAsDefaultBrowserWithCompletion:(void (^)(NSError * _Nullable error))completion;
+/// 打开系统设置中「默认网页浏览器」所在面板（桌面与程序坞 / 旧版通用）。
++ (void)openDefaultBrowserSystemSettings;
 
 /// 清除 WebKit 网站数据与共享 URL 缓存；completion 在主线程。
 + (void)clearWebsiteDataWithCompletion:(void (^ _Nullable)(NSError * _Nullable error))completion;

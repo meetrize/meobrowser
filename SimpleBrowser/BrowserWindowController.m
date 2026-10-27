@@ -57,6 +57,7 @@
 #import "BrowserTabOverviewController.h"
 #import "BrowserTabThumbnailCache.h"
 #import "CallAlertBannerController.h"
+#import "BrowserDefaultBrowserTipBar.h"
 #import "PhonePolicyPanelController.h"
 #import "BrowserFaviconService.h"
 #import "BrowserLoadingProgressView.h"
@@ -209,6 +210,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, assign) BOOL transparentChromeStableLayoutPending;
 @property (nonatomic, assign) BOOL transparentModeChromeSetupPending;
 @property (nonatomic, strong) NSStackView *toolbar;
+@property (nonatomic, strong) BrowserDefaultBrowserTipBar *defaultBrowserTipBar;
 @property (nonatomic, strong) NSStackView *navButtons;
 @property (nonatomic, assign) BOOL addressBarPeekActive;
 @property (nonatomic, strong) NSView *contentContainer;
@@ -1248,16 +1250,19 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                  name:NSViewFrameDidChangeNotification
                                                object:self.tabStripView];
 
+    self.defaultBrowserTipBar = [[BrowserDefaultBrowserTipBar alloc] initWithFrame:NSZeroRect];
     self.rootStack = [NSStackView stackViewWithViews:@[
-        self.toolbar, self.contentRowStack
+        self.toolbar, self.defaultBrowserTipBar, self.contentRowStack
     ]];
     self.rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.rootStack.spacing = 0;
     self.rootStack.distribution = NSStackViewDistributionFill;
+    self.rootStack.detachesHiddenViews = YES;
 
     NSView *contentView = self.window.contentView;
     self.rootStack.translatesAutoresizingMaskIntoConstraints = NO;
     [contentView addSubview:self.rootStack];
+    [self.defaultBrowserTipBar refreshVisibility];
 
     // 对齐 contentLayoutGuide：内容紧贴 accessory 下方，避免重复留白
     NSLayoutGuide *contentGuide = (NSLayoutGuide *)self.window.contentLayoutGuide;

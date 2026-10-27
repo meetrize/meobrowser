@@ -23,6 +23,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/BrowserTrailingSidebarSlot.m \
                    $(BROWSER_SRC_DIR)/BrowserLoadingProgressView.m \
                    $(BROWSER_SRC_DIR)/BrowsingPreferences.m \
+                   $(BROWSER_SRC_DIR)/BrowserDefaultBrowserTipBar.m \
                    $(BROWSER_SRC_DIR)/BrowserKeyboardPreferences.m \
                    $(BROWSER_SRC_DIR)/BrowserLocalFileSupport.m \
                    $(BROWSER_SRC_DIR)/BrowserUserAgent.m \

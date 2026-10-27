@@ -345,20 +345,21 @@ NSString * const BrowserWindowSessionSplitKey = @"split";
         return NO;
     }
 
-    NSArray<NSURL *> *probes = @[
-        [NSURL URLWithString:@"http://example.com"],
-        [NSURL URLWithString:@"https://example.com"],
-    ];
-    for (NSURL *probe in probes) {
-        NSURL *handlerURL = [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:probe];
-        if (!handlerURL) {
+    // 只用 Launch Services 记录的默认 handler。
+    // URLForApplicationToOpenURL 在本应用已声明 http/https 时，可能误报为本应用。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    for (NSString *scheme in @[ @"http", @"https" ]) {
+        CFStringRef handler = LSCopyDefaultHandlerForURLScheme((__bridge CFStringRef)scheme);
+        if (!handler) {
             return NO;
         }
-        NSString *handlerID = [[NSBundle bundleWithURL:handlerURL] bundleIdentifier];
-        if (handlerID.length == 0 || ![handlerID isEqualToString:ourID]) {
+        NSString *handlerID = CFBridgingRelease(handler);
+        if (handlerID.length == 0 || ![handlerID.lowercaseString isEqualToString:ourID.lowercaseString]) {
             return NO;
         }
     }
+#pragma clang diagnostic pop
     return YES;
 }
 
@@ -412,6 +413,26 @@ NSString * const BrowserWindowSessionSplitKey = @"split";
         finish(nil);
     } else {
         finish([NSError errorWithDomain:NSOSStatusErrorDomain code:httpsStatus userInfo:nil]);
+    }
+}
+
++ (void)openDefaultBrowserSystemSettings {
+    NSArray<NSString *> *candidates = @[
+        // macOS Ventura+：桌面与程序坞（含「默认网页浏览器」）
+        @"x-apple.systempreferences:com.apple.Desktop-Settings.extension",
+        @"x-apple.systempreferences:com.apple.preference.dock",
+        // 更早系统：通用偏好设置
+        @"x-apple.systempreferences:com.apple.preference.general",
+    ];
+    for (NSString *raw in candidates) {
+        NSURL *url = [NSURL URLWithString:raw];
+        if (url != nil && [[NSWorkspace sharedWorkspace] openURL:url]) {
+            return;
+        }
+    }
+    NSURL *settingsApp = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:@"com.apple.systempreferences"];
+    if (settingsApp) {
+        [[NSWorkspace sharedWorkspace] openURL:settingsApp];
     }
 }
 
