@@ -214,4 +214,19 @@ NSNotificationName const LoginRecipeStoreDidChangeNotification = @"LoginRecipeSt
     return [self persist:error];
 }
 
+- (BOOL)replaceAllRecipes:(NSArray<LoginRecipe *> *)recipes error:(NSError **)error {
+    NSMutableArray<LoginRecipe *> *copied = [NSMutableArray array];
+    for (LoginRecipe *recipe in recipes) {
+        if (![recipe isKindOfClass:[LoginRecipe class]] || recipe.recipeID.length == 0 || recipe.host.length == 0) {
+            continue;
+        }
+        LoginRecipe *stored = [recipe copy];
+        stored.host = stored.host.lowercaseString;
+        [copied addObject:stored];
+    }
+    [self.recipes removeAllObjects];
+    [self.recipes addObjectsFromArray:copied];
+    return [self persist:error];
+}
+
 @end

@@ -9,6 +9,7 @@ static NSString * const kEmailKey = @"meo.serverSync.email";
 static NSString * const kEnabledKey = @"meo.serverSync.enabled";
 static NSString * const kShortcutKey = @"meo.serverSync.shortcutEnabled";
 static NSString * const kFormMemoKey = @"meo.serverSync.formMemoEnabled";
+static NSString * const kLoginCredentialKey = @"meo.serverSync.loginCredentialEnabled";
 static NSString * const kDirectionKey = @"meo.serverSync.syncDirection";
 static NSString * const kLastSyncKey = @"meo.serverSync.lastSyncAt";
 static NSString * const kLastErrorKey = @"meo.serverSync.lastErrorMessage";
@@ -98,6 +99,18 @@ static NSString * const kUserIdKey = @"meo.serverSync.userId";
     [self postChange];
 }
 
+- (BOOL)loginCredentialEnabled {
+    if (![self.defaults objectForKey:kLoginCredentialKey]) {
+        return YES;
+    }
+    return [self.defaults boolForKey:kLoginCredentialKey];
+}
+
+- (void)setLoginCredentialEnabled:(BOOL)loginCredentialEnabled {
+    [self.defaults setBool:loginCredentialEnabled forKey:kLoginCredentialKey];
+    [self postChange];
+}
+
 - (ServerSyncDirection)syncDirection {
     if (![self.defaults objectForKey:kDirectionKey]) {
         return ServerSyncDirectionBidirectional;
@@ -175,6 +188,7 @@ static NSString * const kUserIdKey = @"meo.serverSync.userId";
     }
     [self.defaults setBool:YES forKey:kShortcutKey];
     [self.defaults setBool:YES forKey:kFormMemoKey];
+    [self.defaults setBool:YES forKey:kLoginCredentialKey];
     self.didApplyDefaultKinds = YES;
 }
 

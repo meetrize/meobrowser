@@ -7,8 +7,11 @@
 #import "SyncKind.h"
 #import "SyncShortcutBridge.h"
 #import "SyncFormMemoBridge.h"
+#import "SyncLoginAssistBridge.h"
 #import "BrowserShortcutStore.h"
 #import "FormMemoStore.h"
+#import "LoginRecipeStore.h"
+#import "LoginCredentialStore.h"
 #import <AppKit/AppKit.h>
 
 @interface ServerSyncEngine ()
@@ -17,7 +20,7 @@
 @property (nonatomic, assign) BOOL started;
 @property (nonatomic, assign) BOOL applyingRemote;
 @property (nonatomic, assign) BOOL syncInFlight;
-/// 冷启动时刻；此前不因 DidBecomeActive 读钥匙串 token。
+/// 冷启动时刻；此前不因 DidBecomeActive 触发同步。
 @property (nonatomic, assign) NSTimeInterval coldStartAt;
 @end
 
@@ -41,6 +44,8 @@
         [nc addObserver:self selector:@selector(settingsDidChange:) name:ServerSyncSettingsDidChangeNotification object:nil];
         [nc addObserver:self selector:@selector(shortcutsDidChange:) name:BrowserShortcutStoreDidChangeNotification object:nil];
         [nc addObserver:self selector:@selector(formMemosDidChange:) name:FormMemoStoreDidChangeNotification object:nil];
+        [nc addObserver:self selector:@selector(loginAssistDidChange:) name:LoginRecipeStoreDidChangeNotification object:nil];
+        [nc addObserver:self selector:@selector(loginAssistDidChange:) name:LoginCredentialStoreDidChangeNotification object:nil];
         [nc addObserver:self selector:@selector(appDidBecomeActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
     }
     return self;
@@ -67,7 +72,6 @@
         [self setState:ServerSyncEngineStateIdle text:@"未启用"];
         return;
     }
-    // 冷启动只用 UserDefaults 的 userId 判断「可能已登录」，避免立刻读钥匙串 token 弹密码框。
     if (settings.userId.length == 0) {
         [self stop];
         [self setState:ServerSyncEngineStateUnavailable text:@"未登录"];
@@ -78,8 +82,6 @@
         self.coldStartAt = [NSDate date].timeIntervalSince1970;
     }
     [self setState:ServerSyncEngineStateIdle text:@"已登录"];
-    // 冷启动不自动 sync：读 auth token 会弹「登录钥匙串」密码框，易与 Companion / 自动登录叠弹。
-    // 本地数据变更、设置变更或稍后回到前台再同步。
 }
 
 - (void)stop {
@@ -101,7 +103,6 @@
     if (!self.started || !ServerSyncSettings.sharedSettings.enabled || self.applyingRemote) {
         return;
     }
-    // 仅下载：本地改动不应触发自动同步（否则会把刚改的内容又用云端盖掉）。
     if (ServerSyncSettings.sharedSettings.syncDirection == ServerSyncDirectionDownloadOnly) {
         return;
     }
@@ -127,17 +128,35 @@
     [self scheduleDebouncedSync];
 }
 
+- (void)loginAssistDidChange:(NSNotification *)note {
+    (void)note;
+    if (self.applyingRemote || !ServerSyncSettings.sharedSettings.loginCredentialEnabled) {
+        return;
+    }
+    [[SyncLoginAssistBridge sharedBridge] touchLocalRecordsForUpload];
+    [self scheduleDebouncedSync];
+}
+
 - (void)appDidBecomeActive:(NSNotification *)note {
     (void)note;
     if (!self.started || !ServerSyncSettings.sharedSettings.enabled || self.syncInFlight) {
         return;
     }
-    // 冷启动后 90 秒内忽略；避免与配对校验 / 会话恢复抢钥匙串。
     NSTimeInterval sinceCold = [NSDate date].timeIntervalSince1970 - self.coldStartAt;
     if (self.coldStartAt > 0 && sinceCold < 90.0) {
         return;
     }
     [self scheduleDebouncedSync];
+}
+
+- (NSArray<SyncRecord *> *)recordsOfKind:(NSString *)kind from:(NSArray<SyncRecord *> *)records {
+    NSMutableArray<SyncRecord *> *out = [NSMutableArray array];
+    for (SyncRecord *r in records) {
+        if ([r.kind isEqualToString:kind]) {
+            [out addObject:r];
+        }
+    }
+    return out;
 }
 
 - (void)syncNow {
@@ -184,7 +203,6 @@
         }
     };
 
-    // 仅上传：不拉云端、不改本地，直接推本地导出。
     if (direction == ServerSyncDirectionUploadOnly) {
         ServerSyncSettings *settings = ServerSyncSettings.sharedSettings;
         NSMutableArray<SyncRecord *> *toUpload = [NSMutableArray array];
@@ -195,6 +213,10 @@
         }
         if (settings.formMemoEnabled) {
             NSArray<SyncRecord *> *local = [[SyncFormMemoBridge sharedBridge] exportRecords];
+            [toUpload addObjectsFromArray:[SyncMerger purgeExpiredTombstones:local now:now]];
+        }
+        if (settings.loginCredentialEnabled) {
+            NSArray<SyncRecord *> *local = [[SyncLoginAssistBridge sharedBridge] exportRecords];
             [toUpload addObjectsFromArray:[SyncMerger purgeExpiredTombstones:local now:now]];
         }
         [[ServerSyncTransport sharedTransport] upsertRecords:toUpload completion:finishWithError];
@@ -218,12 +240,7 @@
 
         if (settings.shortcutEnabled) {
             NSArray<SyncRecord *> *local = [[SyncShortcutBridge sharedBridge] exportRecords];
-            NSMutableArray<SyncRecord *> *remoteShortcuts = [NSMutableArray array];
-            for (SyncRecord *r in remote) {
-                if ([r.kind isEqualToString:SyncKindShortcut]) {
-                    [remoteShortcuts addObject:r];
-                }
-            }
+            NSArray<SyncRecord *> *remoteShortcuts = [self recordsOfKind:SyncKindShortcut from:remote];
             NSArray<SyncRecord *> *merged = [SyncMerger mergeIncoming:remoteShortcuts intoLocal:local];
             merged = [SyncMerger purgeExpiredTombstones:merged now:now];
             self.applyingRemote = YES;
@@ -236,12 +253,7 @@
 
         if (settings.formMemoEnabled) {
             NSArray<SyncRecord *> *local = [[SyncFormMemoBridge sharedBridge] exportRecords];
-            NSMutableArray<SyncRecord *> *remoteMemos = [NSMutableArray array];
-            for (SyncRecord *r in remote) {
-                if ([r.kind isEqualToString:SyncKindFormMemo]) {
-                    [remoteMemos addObject:r];
-                }
-            }
+            NSArray<SyncRecord *> *remoteMemos = [self recordsOfKind:SyncKindFormMemo from:remote];
             NSArray<SyncRecord *> *merged = [SyncMerger mergeIncoming:remoteMemos intoLocal:local];
             merged = [SyncMerger purgeExpiredTombstones:merged now:now];
             self.applyingRemote = YES;
@@ -249,6 +261,25 @@
             self.applyingRemote = NO;
             if (upload) {
                 [toUpload addObjectsFromArray:merged];
+            }
+        }
+
+        if (settings.loginCredentialEnabled) {
+            NSArray<SyncRecord *> *localAll = [[SyncLoginAssistBridge sharedBridge] exportRecords];
+            NSArray<SyncRecord *> *localRecipes = [self recordsOfKind:SyncKindLoginRecipe from:localAll];
+            NSArray<SyncRecord *> *localCreds = [self recordsOfKind:SyncKindLoginCredential from:localAll];
+            NSArray<SyncRecord *> *remoteRecipes = [self recordsOfKind:SyncKindLoginRecipe from:remote];
+            NSArray<SyncRecord *> *remoteCreds = [self recordsOfKind:SyncKindLoginCredential from:remote];
+            NSArray<SyncRecord *> *mergedRecipes = [SyncMerger purgeExpiredTombstones:[SyncMerger mergeIncoming:remoteRecipes intoLocal:localRecipes] now:now];
+            NSArray<SyncRecord *> *mergedCreds = [SyncMerger purgeExpiredTombstones:[SyncMerger mergeIncoming:remoteCreds intoLocal:localCreds] now:now];
+            NSMutableArray<SyncRecord *> *mergedLogin = [NSMutableArray array];
+            [mergedLogin addObjectsFromArray:mergedRecipes];
+            [mergedLogin addObjectsFromArray:mergedCreds];
+            self.applyingRemote = YES;
+            [[SyncLoginAssistBridge sharedBridge] applyMergedRecords:mergedLogin];
+            self.applyingRemote = NO;
+            if (upload) {
+                [toUpload addObjectsFromArray:mergedLogin];
             }
         }
 

@@ -207,6 +207,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncMerger.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncShortcutBridge.m \
                    $(BROWSER_SRC_DIR)/SyncCore/SyncFormMemoBridge.m \
+                   $(BROWSER_SRC_DIR)/SyncCore/SyncLoginAssistBridge.m \
                    $(BROWSER_SRC_DIR)/ServerSync/ServerSyncSettings.m \
                    $(BROWSER_SRC_DIR)/ServerSync/ServerSyncKeychain.m \
                    $(BROWSER_SRC_DIR)/ServerSync/ServerSyncAPIClient.m \

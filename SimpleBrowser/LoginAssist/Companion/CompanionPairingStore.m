@@ -2,20 +2,18 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <Security/Security.h>
 
-static NSString * const kCompanionKeychainService = @"MeoBrowser.LoginAssist.Companion";
-static NSString * const kCompanionKeychainAccount = @"paired-devices";
 static NSString * const kPendingCodeKey = @"CompanionPendingPairingCode";
 static NSString * const kPendingExpiresKey = @"CompanionPendingPairingExpiresAt";
 static NSString * const kAuthModeKey = @"CompanionAuthMode";
 static NSString * const kSecurityCodeKey = @"CompanionSecurityCode";
 static NSString * const kStickyPortKey = @"CompanionStickyListeningPort";
-/// 启动态文案用；避免为「已配对 N 台」在冷启动就读钥匙串。
+/// 启动态文案用。
 static NSString * const kPairedDeviceCountKey = @"CompanionPairedDeviceCount";
-/// 非机密 deviceId 列表；启动邀请发现用，避免为白名单读钥匙串。
+/// 非机密 deviceId 列表；启动邀请发现用。
 static NSString * const kPairedDeviceIdsKey = @"CompanionPairedDeviceIds";
-/// deviceId → SHA256(token) 指纹；hello 校验用，冷启动不读钥匙串。
+/// deviceId → SHA256(token) 指纹；hello 校验用。
 static NSString * const kPairedDeviceTokenFingerprintsKey = @"CompanionPairedDeviceTokenFingerprints";
-/// 旧版钥匙串是否已尝试迁移（成功或确认无数据后置位，避免反复弹窗）。
+/// 历史钥匙串迁移标志（现已固定为文件存储，置位后不再触碰钥匙串）。
 static NSString * const kCompanionKeychainMigratedKey = @"CompanionPairedDevicesKeychainMigrated";
 
 static NSString *CompanionTokenFingerprint(NSString *token) {
@@ -32,15 +30,6 @@ static NSString *CompanionTokenFingerprint(NSString *token) {
     return hex;
 }
 
-static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
-    static dispatch_queue_t queue;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        queue = dispatch_queue_create("meobrowser.companion.keychain-migrate", DISPATCH_QUEUE_SERIAL);
-    });
-    return queue;
-}
-
 @implementation CompanionPairedDevice
 @end
 
@@ -50,7 +39,6 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
 @property (nonatomic, copy, readwrite, nullable) NSString *securityCode;
 @property (nonatomic, copy) NSArray<CompanionPairedDevice *> *pairedDevicesStorage;
 @property (nonatomic, assign) BOOL devicesLoaded;
-@property (nonatomic, assign) BOOL keychainMigrationInFlight;
 @end
 
 @implementation CompanionPairingStore
@@ -75,10 +63,9 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        // 冷启动只读本地文件 / UserDefaults；旧钥匙串迁移放到后台，避免卡住主线程。
+        // 冷启动只读本地文件 / UserDefaults。
         _pairedDevicesStorage = @[];
         _devicesLoaded = NO;
-        _keychainMigrationInFlight = NO;
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         _pendingPairingCode = [defaults stringForKey:kPendingCodeKey];
         _pendingPairingExpiresAt = [defaults doubleForKey:kPendingExpiresKey];
@@ -213,19 +200,11 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
     self.devicesLoaded = YES;
     NSString *path = [[self class] pairedDevicesFilePath];
     NSData *data = [NSData dataWithContentsOfFile:path];
+    // 权威来源仅为本地文件；不再读/删钥匙串（会弹 Mac 登录密码）。
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
     if (data.length > 0) {
         self.pairedDevicesStorage = [self devicesFromJSONData:data];
         [self syncPairedDeviceCountHint];
-        // 文件已是权威来源：标记迁移完成，并在后台静默删除旧钥匙串项。
-        [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
-        dispatch_async(CompanionKeychainMigrateQueue(), ^{
-            NSDictionary *del = @{
-                (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-                (__bridge id)kSecAttrService: kCompanionKeychainService,
-                (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-            };
-            SecItemDelete((__bridge CFDictionaryRef)del);
-        });
         return;
     }
     self.pairedDevicesStorage = @[];
@@ -285,89 +264,6 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
                                             error:nil];
     [self syncPairedDeviceCountHint];
     return YES;
-}
-
-#pragma mark - Legacy Keychain migration (background only)
-
-- (void)scheduleKeychainMigrationIfNeeded {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    if ([defaults boolForKey:kCompanionKeychainMigratedKey]) {
-        return;
-    }
-    if (self.keychainMigrationInFlight) {
-        return;
-    }
-    self.keychainMigrationInFlight = YES;
-    __weak typeof(self) weakSelf = self;
-    dispatch_async(CompanionKeychainMigrateQueue(), ^{
-        NSDictionary *query = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: kCompanionKeychainService,
-            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-            (__bridge id)kSecReturnData: @YES,
-            (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-        };
-        CFTypeRef result = NULL;
-        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-        NSData *data = nil;
-        if (status == errSecSuccess && result) {
-            data = CFBridgingRelease(result);
-        } else if (result) {
-            CFRelease(result);
-        }
-
-        // 删除旧项：成功读到、或不存在、或用户拒绝后也不再反复弹。
-        NSDictionary *del = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: kCompanionKeychainService,
-            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-        };
-        if (status == errSecSuccess || status == errSecItemNotFound) {
-            SecItemDelete((__bridge CFDictionaryRef)del);
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) self = weakSelf;
-            if (!self) {
-                return;
-            }
-            self.keychainMigrationInFlight = NO;
-            if (data.length > 0) {
-                NSArray<CompanionPairedDevice *> *migrated = [self devicesFromJSONData:data];
-                [self mergeMigratedDevices:migrated];
-            }
-            // 用户取消（interaction not allowed / auth failed）时不置位，下次还可再试；
-            // 无数据或已成功则置位，避免连接路径再碰钥匙串。
-            if (status == errSecSuccess || status == errSecItemNotFound) {
-                [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
-                // 已有文件权威数据时，再删一次钥匙串（后台）。
-                dispatch_async(CompanionKeychainMigrateQueue(), ^{
-                    SecItemDelete((__bridge CFDictionaryRef)del);
-                });
-            }
-        });
-    });
-}
-
-- (void)mergeMigratedDevices:(NSArray<CompanionPairedDevice *> *)migrated {
-    if (migrated.count == 0) {
-        return;
-    }
-    [self ensureDevicesLoaded];
-    NSMutableDictionary<NSString *, CompanionPairedDevice *> *byId = [NSMutableDictionary dictionary];
-    for (CompanionPairedDevice *device in migrated) {
-        if (device.deviceId.length > 0) {
-            byId[device.deviceId] = device;
-        }
-    }
-    // 内存/文件里已有的（例如迁移期间新配对）优先。
-    for (CompanionPairedDevice *device in self.pairedDevicesStorage) {
-        if (device.deviceId.length > 0) {
-            byId[device.deviceId] = device;
-        }
-    }
-    self.pairedDevicesStorage = byId.allValues ?: @[];
-    [self persistDevices:nil];
 }
 
 - (NSString *)refreshPendingPairingCode {
@@ -508,11 +404,6 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
         [self syncPairedDeviceCountHint];
         return YES;
     }
-    // 文件尚空且可能仍在后台迁移：触发迁移，本次先拒绝（手机可重试 hello）。
-    if (self.pairedDevicesStorage.count == 0 &&
-        ![NSUserDefaults.standardUserDefaults boolForKey:kCompanionKeychainMigratedKey]) {
-        [self scheduleKeychainMigrationIfNeeded];
-    }
     return NO;
 }
 
@@ -522,14 +413,6 @@ static dispatch_queue_t CompanionKeychainMigrateQueue(void) {
     [self persistDevices:nil];
     [NSUserDefaults.standardUserDefaults removeObjectForKey:kPairedDeviceTokenFingerprintsKey];
     [NSUserDefaults.standardUserDefaults setBool:YES forKey:kCompanionKeychainMigratedKey];
-    dispatch_async(CompanionKeychainMigrateQueue(), ^{
-        NSDictionary *del = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: kCompanionKeychainService,
-            (__bridge id)kSecAttrAccount: kCompanionKeychainAccount,
-        };
-        SecItemDelete((__bridge CFDictionaryRef)del);
-    });
 }
 
 - (void)revokeDeviceToken:(NSString *)deviceToken {

@@ -15,7 +15,6 @@
 }
 
 - (BOOL)isLoggedIn {
-    // 无 userId 时不必碰钥匙串（避免冷启动仅为判登录就弹密码框）。
     if (ServerSyncSettings.sharedSettings.userId.length == 0) {
         return NO;
     }

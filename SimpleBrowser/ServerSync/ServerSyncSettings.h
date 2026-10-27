@@ -25,6 +25,8 @@ typedef NS_ENUM(NSInteger, ServerSyncDirection) {
 @property (nonatomic, assign) BOOL enabled;
 @property (nonatomic, assign) BOOL shortcutEnabled;
 @property (nonatomic, assign) BOOL formMemoEnabled;
+/// 登录助手 Recipe + 帐号密码。
+@property (nonatomic, assign) BOOL loginCredentialEnabled;
 /// 默认同向双向。
 @property (nonatomic, assign) ServerSyncDirection syncDirection;
 @property (nonatomic, assign) NSTimeInterval lastSyncAt;

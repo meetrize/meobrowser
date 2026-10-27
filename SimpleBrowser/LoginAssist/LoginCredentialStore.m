@@ -1,20 +1,8 @@
 #import "LoginCredentialStore.h"
-#import <Security/Security.h>
 
 NSErrorDomain const LoginCredentialStoreErrorDomain = @"LoginCredentialStore";
 const NSInteger LoginCredentialStoreErrorBusy = 4;
-
-static NSString * const kLegacyKeychainService = @"MeoBrowser.LoginAssist";
-static NSString * const kKeychainMigratedKey = @"LoginAssistCredentialsKeychainMigrated";
-
-static dispatch_queue_t LoginCredentialMigrateQueue(void) {
-    static dispatch_queue_t queue;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        queue = dispatch_queue_create("meobrowser.login-credential.migrate", DISPATCH_QUEUE_SERIAL);
-    });
-    return queue;
-}
+NSNotificationName const LoginCredentialStoreDidChangeNotification = @"LoginCredentialStoreDidChangeNotification";
 
 @implementation LoginCredentials
 - (instancetype)init {
@@ -40,7 +28,6 @@ static dispatch_queue_t LoginCredentialMigrateQueue(void) {
 @interface LoginCredentialStore ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, LoginCredentials *> *credentialsByRecipeID;
 @property (nonatomic, copy) NSString *storePath;
-@property (nonatomic, assign) BOOL keychainMigrationInFlight;
 @end
 
 @implementation LoginCredentialStore
@@ -67,10 +54,8 @@ static dispatch_queue_t LoginCredentialMigrateQueue(void) {
     if (self) {
         _credentialsByRecipeID = [NSMutableDictionary dictionary];
         _storePath = [[self class] credentialsFilePath];
-        [self loadFromDisk];
-        // 热路径只走本地文件；旧钥匙串仅后台一次性迁移，避免登录页反复弹授权框。
-        [self scheduleKeychainMigrationIfNeeded];
     }
+    [self loadFromDisk];
     return self;
 }
 
@@ -144,10 +129,21 @@ static dispatch_queue_t LoginCredentialMigrateQueue(void) {
     [[NSFileManager defaultManager] setAttributes:@{NSFilePosixPermissions: @0600}
                                      ofItemAtPath:self.storePath
                                             error:nil];
+    [[NSNotificationCenter defaultCenter] postNotificationName:LoginCredentialStoreDidChangeNotification object:self];
     return YES;
 }
 
 #pragma mark - Public API
+
+- (NSDictionary<NSString *, LoginCredentials *> *)allCredentials {
+    @synchronized (self) {
+        NSMutableDictionary *copy = [NSMutableDictionary dictionaryWithCapacity:self.credentialsByRecipeID.count];
+        for (NSString *recipeID in self.credentialsByRecipeID) {
+            copy[recipeID] = [self.credentialsByRecipeID[recipeID] copy];
+        }
+        return copy;
+    }
+}
 
 - (BOOL)saveUsername:(NSString *)username
             password:(NSString *)password
@@ -202,7 +198,6 @@ static dispatch_queue_t LoginCredentialMigrateQueue(void) {
         if (cached) {
             return [cached copy];
         }
-        // 无记录视为空凭证（与旧钥匙串「item not found」语义一致）。
         LoginCredentials *empty = [[LoginCredentials alloc] init];
         return empty;
     }
@@ -247,99 +242,22 @@ static dispatch_queue_t LoginCredentialMigrateQueue(void) {
     }
 }
 
-#pragma mark - Legacy Keychain migration (background only)
-
-- (void)scheduleKeychainMigrationIfNeeded {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    if ([defaults boolForKey:kKeychainMigratedKey]) {
-        return;
-    }
-    if (self.keychainMigrationInFlight) {
-        return;
-    }
-    self.keychainMigrationInFlight = YES;
-
-    // 本地文件已是权威来源：直接置位，不再碰钥匙串（删项也可能弹授权框）。
-    BOOL hasFile = [[NSFileManager defaultManager] fileExistsAtPath:self.storePath];
-    if (hasFile && self.credentialsByRecipeID.count > 0) {
-        [defaults setBool:YES forKey:kKeychainMigratedKey];
-        self.keychainMigrationInFlight = NO;
-        return;
-    }
-
-    __weak typeof(self) weakSelf = self;
-    dispatch_async(LoginCredentialMigrateQueue(), ^{
-        __strong typeof(weakSelf) self = weakSelf;
-        if (!self) {
-            return;
-        }
-        NSDictionary *query = @{
-            (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-            (__bridge id)kSecAttrService: kLegacyKeychainService,
-            (__bridge id)kSecReturnData: @YES,
-            (__bridge id)kSecReturnAttributes: @YES,
-            (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll,
-        };
-        CFTypeRef result = NULL;
-        OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-
-        NSMutableDictionary<NSString *, LoginCredentials *> *migrated = [NSMutableDictionary dictionary];
-        if (status == errSecSuccess && result) {
-            NSArray *items = CFBridgingRelease(result);
-            if ([items isKindOfClass:[NSArray class]]) {
-                for (id item in items) {
-                    if (![item isKindOfClass:[NSDictionary class]]) {
-                        continue;
-                    }
-                    NSDictionary *dict = (NSDictionary *)item;
-                    NSString *account = dict[(__bridge id)kSecAttrAccount];
-                    NSData *data = dict[(__bridge id)kSecValueData];
-                    if (![account isKindOfClass:[NSString class]] || account.length == 0 || ![data isKindOfClass:[NSData class]]) {
-                        continue;
-                    }
-                    id payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    if (![payload isKindOfClass:[NSDictionary class]]) {
-                        continue;
-                    }
-                    migrated[account] = [self credentialsFromPayload:payload];
-                }
-            }
-        } else if (result) {
-            CFRelease(result);
-        }
-
-        if (status == errSecSuccess || status == errSecItemNotFound) {
-            [self deleteAllLegacyKeychainItems];
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) store = weakSelf;
-            if (!store) {
+- (BOOL)replaceAllCredentials:(NSDictionary<NSString *, LoginCredentials *> *)credentialsByRecipeID
+                        error:(NSError **)error {
+    @synchronized (self) {
+        [self.credentialsByRecipeID removeAllObjects];
+        [credentialsByRecipeID enumerateKeysAndObjectsUsingBlock:^(NSString *recipeID, LoginCredentials *credentials, BOOL *stop) {
+            (void)stop;
+            if (![recipeID isKindOfClass:[NSString class]] || recipeID.length == 0) {
                 return;
             }
-            store.keychainMigrationInFlight = NO;
-            if (migrated.count > 0) {
-                @synchronized (store) {
-                    for (NSString *recipeID in migrated) {
-                        if (!store.credentialsByRecipeID[recipeID]) {
-                            store.credentialsByRecipeID[recipeID] = migrated[recipeID];
-                        }
-                    }
-                    [store persist:nil];
-                }
+            if (![credentials isKindOfClass:[LoginCredentials class]]) {
+                return;
             }
-            // 成功、无数据、或用户取消：一律置位，热路径已不碰钥匙串，避免反复弹窗。
-            [NSUserDefaults.standardUserDefaults setBool:YES forKey:kKeychainMigratedKey];
-        });
-    });
-}
-
-- (void)deleteAllLegacyKeychainItems {
-    NSDictionary *del = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: kLegacyKeychainService,
-    };
-    SecItemDelete((__bridge CFDictionaryRef)del);
+            self.credentialsByRecipeID[recipeID] = [credentials copy];
+        }];
+        return [self persist:error];
+    }
 }
 
 @end

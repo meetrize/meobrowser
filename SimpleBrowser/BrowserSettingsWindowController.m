@@ -86,6 +86,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSButton *serverLogoutButton;
 @property (nonatomic, strong) NSButton *serverEnabledCheckbox;
 @property (nonatomic, strong) NSButton *serverShortcutCheckbox;
+@property (nonatomic, strong) NSButton *serverLoginCredentialCheckbox;
 @property (nonatomic, strong) NSButton *serverFormMemoCheckbox;
 @property (nonatomic, strong) NSPopUpButton *serverDirectionPopUp;
 @property (nonatomic, strong) NSTextField *serverLastSyncLabel;
@@ -428,7 +429,8 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     authRow.spacing = 8;
 
     self.serverEnabledCheckbox = [NSButton checkboxWithTitle:@"启用云同步" target:self action:@selector(serverEnabledToggled:)];
-    self.serverShortcutCheckbox = [NSButton checkboxWithTitle:@"快捷方式（Launchpad）" target:self action:@selector(serverShortcutToggled:)];
+    self.serverShortcutCheckbox = [NSButton checkboxWithTitle:@"新标签页快捷方式" target:self action:@selector(serverShortcutToggled:)];
+    self.serverLoginCredentialCheckbox = [NSButton checkboxWithTitle:@"登录帐号密码" target:self action:@selector(serverLoginCredentialToggled:)];
     self.serverFormMemoCheckbox = [NSButton checkboxWithTitle:@"站点表单备忘" target:self action:@selector(serverFormMemoToggled:)];
 
     NSTextField *directionCaption = [self makeCaption:@"同步方向"];
@@ -457,8 +459,8 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.serverSyncNowButton.bezelStyle = NSBezelStyleRounded;
 
     self.serverHintLabel = [self makeHint:
-        @"数据保存在你自己的 PocketBase 服务器，无需 Apple 开发者账号。"
-        @"密码、Cookie、Companion 通知不会上传。表单备忘字段为明文。\n"
+        @"数据保存在你自己的 PocketBase 服务器。勾选下方模块后才会同步对应数据；"
+        @"登录帐号密码与表单备忘为明文上传，请使用可信服务器。Cookie、Companion 通知不会上传。\n"
         @"同步方向：双向=拉取合并再上传；仅上传=本机覆盖云端对应记录；仅下载=云端合并进本机且不上传。"];
 
     // —— 键盘 ——
@@ -563,7 +565,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
            identifier:BrowserSettingsTabSync
                 views:@[
                     self.serverLoginBadge, self.serverStatusLabel, syncGrid, authRow,
-                    self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverFormMemoCheckbox,
+                    self.serverEnabledCheckbox, self.serverShortcutCheckbox, self.serverLoginCredentialCheckbox, self.serverFormMemoCheckbox,
                     directionGrid,
                     self.serverLastSyncLabel, self.serverSyncNowButton, self.serverHintLabel,
                 ]
@@ -772,6 +774,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 
     self.serverEnabledCheckbox.state = settings.enabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.serverShortcutCheckbox.state = settings.shortcutEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.serverLoginCredentialCheckbox.state = settings.loginCredentialEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.serverFormMemoCheckbox.state = settings.formMemoEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [self.serverDirectionPopUp selectItemWithTag:settings.syncDirection];
 
@@ -779,6 +782,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.serverEnabledCheckbox.enabled = YES;
     self.serverEnabledCheckbox.toolTip = loggedIn ? nil : @"勾选后需登录才会开始同步";
     self.serverShortcutCheckbox.enabled = settings.enabled;
+    self.serverLoginCredentialCheckbox.enabled = settings.enabled;
     self.serverFormMemoCheckbox.enabled = settings.enabled;
     self.serverDirectionPopUp.enabled = settings.enabled;
     self.serverSyncNowButton.enabled = settings.enabled && loggedIn;
@@ -876,6 +880,11 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 - (void)serverShortcutToggled:(id)sender {
     (void)sender;
     ServerSyncSettings.sharedSettings.shortcutEnabled = (self.serverShortcutCheckbox.state == NSControlStateValueOn);
+}
+
+- (void)serverLoginCredentialToggled:(id)sender {
+    (void)sender;
+    ServerSyncSettings.sharedSettings.loginCredentialEnabled = (self.serverLoginCredentialCheckbox.state == NSControlStateValueOn);
 }
 
 - (void)serverFormMemoToggled:(id)sender {
