@@ -52,10 +52,16 @@
 
 + (BOOL)isSystemLocationAuthorized {
     CLAuthorizationStatus status = [self currentAuthorizationStatus];
-    if (@available(macOS 11.0, *)) {
-        return status == kCLAuthorizationStatusAuthorizedAlways;
+    // macOS 上 Authorized / AuthorizedAlways 为同一枚举值；WhenInUse 在部分 SDK 另有定义。
+    if (status == kCLAuthorizationStatusAuthorizedAlways) {
+        return YES;
     }
-    return status == kCLAuthorizationStatusAuthorized;
+#ifdef kCLAuthorizationStatusAuthorizedWhenInUse
+    if (status == (CLAuthorizationStatus)kCLAuthorizationStatusAuthorizedWhenInUse) {
+        return YES;
+    }
+#endif
+    return NO;
 }
 
 + (NSString *)systemAuthorizationStatusDescription {
@@ -73,31 +79,38 @@
 }
 
 + (void)ensureSystemAuthorizationWithCompletion:(void (^)(BOOL granted))completion {
-    if ([self isSystemLocationAuthorized]) {
-        if (completion) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(YES);
-            });
-        }
-        return;
-    }
-    CLAuthorizationStatus status = [self currentAuthorizationStatus];
-    if (status == kCLAuthorizationStatusDenied || status == kCLAuthorizationStatusRestricted) {
-        if (completion) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(NO);
-            });
-        }
-        return;
-    }
-
-    BrowserLocationService *service = [self sharedService];
-    service.pendingAuthorizationCompletion = ^(BOOL granted) {
+    void (^finish)(BOOL) = ^(BOOL granted) {
         if (completion) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(granted);
             });
         }
+    };
+
+    if ([self isSystemLocationAuthorized]) {
+        finish(YES);
+        return;
+    }
+
+    CLAuthorizationStatus status = [self currentAuthorizationStatus];
+    // 系统已拒绝 / 受限：无法再弹系统授权框，直接打开「隐私与安全性 → 定位服务」。
+    if (status == kCLAuthorizationStatusDenied || status == kCLAuthorizationStatusRestricted) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self openSystemLocationSettings];
+        });
+        finish(NO);
+        return;
+    }
+
+    // NotDetermined：弹出系统授权框；用户拒绝后再打开设置页（与通知权限同策略）。
+    BrowserLocationService *service = [self sharedService];
+    service.pendingAuthorizationCompletion = ^(BOOL granted) {
+        if (!granted) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self openSystemLocationSettings];
+            });
+        }
+        finish(granted);
     };
     [service.locationManager requestWhenInUseAuthorization];
 }

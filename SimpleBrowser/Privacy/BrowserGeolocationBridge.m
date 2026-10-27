@@ -44,17 +44,18 @@ static NSString * const kMessageHandlerName = @"meoGeolocation";
     BrowserGeolocationBridge *bridge = [self sharedBridge];
     [ucc removeScriptMessageHandlerForName:kMessageHandlerName];
     [ucc addScriptMessageHandler:bridge.messageProxy name:kMessageHandlerName];
-    // 仅主框架 + DocumentEnd：Turnstile iframe 保持原生环境；业务域 interstitial 可用 DOM 启发式。
+    // 仅主框架 + DocumentStart：赶在闲鱼等站首屏 permissions.query 之前挂上桥；
+    // Turnstile iframe 非主框架，保持原生环境；风险主域由 meoShouldSkipGeolocationBridge 静默。
     WKUserScript *script = [[WKUserScript alloc] initWithSource:[self userScriptSource]
-                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:YES];
     [ucc addUserScript:script];
 }
 
 + (NSString *)userScriptSource {
     // Cloudflare Turnstile 对改写 geolocation / permissions.query 极敏感。
-    // 延迟安装：等 widget / interstitial 挂上后再判定；命中则永不改写原生 API。
-    // 不在安装时改写 permissions.query（Turnstile 常探测）；定位请求仍走桥接。
+    // 延迟安装：等 widget / interstitial 挂上后再判定；命中风险域则永不改写原生 API。
+    // 非风险域可改写 permissions.query（仅 geolocation），供闲鱼等站探测定位能力。
     NSString *suppressFn =
         [BrowserRiskHostPolicy javaScriptShouldSuppressPageAutomationFunctionNamed:@"meoShouldSkipGeolocationBridge"];
     NSString *body = @
@@ -126,8 +127,22 @@ static NSString * const kMessageHandlerName = @"meoGeolocation";
     "        post({ type: 'clearWatch', requestId: String(watchId), host: host() });\n"
     "      };\n"
     "    }\n"
+    "    // 延迟安装后才改写：风险域已在 tryInstall 入口跳过。闲鱼等站常先 query 再决定是否报错。\n"
+    "    if (navigator.permissions && typeof navigator.permissions.query === 'function') {\n"
+    "      var origQuery = navigator.permissions.query.bind(navigator.permissions);\n"
+    "      navigator.permissions.query = function(desc) {\n"
+    "        if (desc && desc.name === 'geolocation') {\n"
+    "          return new Promise(function(resolve, reject) {\n"
+    "            request('permissionQuery', String(Date.now()) + '-pq-' + Math.random(), resolve, reject, {});\n"
+    "          });\n"
+    "        }\n"
+    "        return origQuery(desc);\n"
+    "      };\n"
+    "    }\n"
     "  }\n"
-    "  setTimeout(tryInstall, 1800);\n";
+    "  // 风险域已在上方跳过。闲鱼会在首屏立刻 permissions.query，不能再拖 1.8s。\n"
+    "  tryInstall();\n"
+    "  setTimeout(tryInstall, 400);\n";
     return [NSString stringWithFormat:@"(function() {\n%@%@})();", suppressFn, body];
 }
 
@@ -155,46 +170,61 @@ static NSString * const kMessageHandlerName = @"meoGeolocation";
     if (decision == BrowserSitePermissionDecisionDeny) {
         return @"denied";
     }
-    if (![BrowserLocationService isSystemLocationAuthorized]) {
-        return @"denied";
-    }
-    // 主开关与系统定位均已开启时返回 granted，避免站点只查 permissions.query 就报错（如闲鱼按距离筛选）。
+    // 闲鱼等站常只查 permissions.query：浏览器开关已开且站点未拒绝即报 granted。
+    // 系统定位授权放到 getCurrentPosition / watchPosition 时再走，避免 query 阶段被当成「浏览器未开定位」。
     return @"granted";
 }
 
 + (void)resolveSitePermissionForHost:(NSString *)host
                           hostWindow:(nullable NSWindow *)hostWindow
                           completion:(void (^)(BOOL allowed))completion {
-    if (![BrowserLocationPreferences sharedPreferences].geolocationEnabled) {
-        completion(NO);
-        return;
-    }
-
-    BrowserSitePermissionStore *store = [BrowserSitePermissionStore sharedStore];
-    BrowserSitePermissionDecision existing = [store geolocationDecisionForHost:host];
-    if (existing == BrowserSitePermissionDecisionDeny) {
-        completion(NO);
-        return;
-    }
-    if (existing == BrowserSitePermissionDecisionAllow) {
-        [BrowserLocationService ensureSystemAuthorizationWithCompletion:completion];
-        return;
-    }
-
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:@"允许“%@”获取你的位置？", [self displayHost:host]];
-    alert.informativeText = @"网站将使用你的地理位置提供附近服务或地图功能。";
-    [alert addButtonWithTitle:@"允许"];
-    [alert addButtonWithTitle:@"拒绝"];
-    [self presentPanel:alert hostWindow:hostWindow completionHandler:^(NSModalResponse returnCode) {
-        if (returnCode == NSAlertFirstButtonReturn) {
-            [store setGeolocationDecision:BrowserSitePermissionDecisionAllow forHost:host];
-            [BrowserLocationService ensureSystemAuthorizationWithCompletion:completion];
-        } else {
-            [store setGeolocationDecision:BrowserSitePermissionDecisionDeny forHost:host];
+    void (^proceedWithSiteDecision)(void) = ^{
+        BrowserSitePermissionStore *store = [BrowserSitePermissionStore sharedStore];
+        BrowserSitePermissionDecision existing = [store geolocationDecisionForHost:host];
+        if (existing == BrowserSitePermissionDecisionDeny) {
             completion(NO);
+            return;
         }
-    }];
+        if (existing == BrowserSitePermissionDecisionAllow) {
+            [BrowserLocationService ensureSystemAuthorizationWithCompletion:completion];
+            return;
+        }
+
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [NSString stringWithFormat:@"允许“%@”获取你的位置？", [self displayHost:host]];
+        alert.informativeText = @"网站将使用你的地理位置提供附近服务或地图功能。";
+        [alert addButtonWithTitle:@"允许"];
+        [alert addButtonWithTitle:@"拒绝"];
+        [self presentPanel:alert hostWindow:hostWindow completionHandler:^(NSModalResponse returnCode) {
+            if (returnCode == NSAlertFirstButtonReturn) {
+                [store setGeolocationDecision:BrowserSitePermissionDecisionAllow forHost:host];
+                [BrowserLocationService ensureSystemAuthorizationWithCompletion:completion];
+            } else {
+                [store setGeolocationDecision:BrowserSitePermissionDecisionDeny forHost:host];
+                completion(NO);
+            }
+        }];
+    };
+
+    // 浏览器总开关关闭时，先引导开启，再走站点授权与系统定位设置。
+    if (![BrowserLocationPreferences sharedPreferences].geolocationEnabled) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"定位功能未开启";
+        alert.informativeText = @"需要先允许网站请求定位，随后可完成系统定位授权。";
+        [alert addButtonWithTitle:@"开启并继续"];
+        [alert addButtonWithTitle:@"取消"];
+        [self presentPanel:alert hostWindow:hostWindow completionHandler:^(NSModalResponse returnCode) {
+            if (returnCode != NSAlertFirstButtonReturn) {
+                completion(NO);
+                return;
+            }
+            [BrowserLocationPreferences sharedPreferences].geolocationEnabled = YES;
+            proceedWithSiteDecision();
+        }];
+        return;
+    }
+
+    proceedWithSiteDecision();
 }
 
 + (void)handleWebKitPermissionRequestForHost:(NSString *)host
@@ -228,6 +258,13 @@ static NSString * const kMessageHandlerName = @"meoGeolocation";
         [self deliverToWebView:webView
                     javaScript:[NSString stringWithFormat:@"window.__meoGeolocationPermissionDeliver(%@,%@);",
                                 [self jsQuoted:requestId], [self jsQuoted:state]]];
+        // 后台拉起系统定位授权 / 设置页，不阻塞 query 结果（站点已拿到 granted/denied）。
+        if ([state isEqualToString:@"granted"] &&
+            ![BrowserLocationService isSystemLocationAuthorized]) {
+            [BrowserLocationService ensureSystemAuthorizationWithCompletion:^(BOOL granted) {
+                (void)granted;
+            }];
+        }
         return;
     }
 

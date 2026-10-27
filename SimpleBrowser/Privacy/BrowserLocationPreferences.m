@@ -17,7 +17,12 @@ static NSString * const kGeolocationEnabledKey = @"MeoGeolocationEnabled";
 }
 
 - (BOOL)geolocationEnabled {
-    return [NSUserDefaults.standardUserDefaults boolForKey:kGeolocationEnabledKey];
+    NSNumber *value = [NSUserDefaults.standardUserDefaults objectForKey:kGeolocationEnabledKey];
+    // 未配置时默认开启，避免闲鱼等站只查 permissions.query 就提示「请开启地理位置」。
+    if (value == nil) {
+        return YES;
+    }
+    return value.boolValue;
 }
 
 - (void)setGeolocationEnabled:(BOOL)geolocationEnabled {

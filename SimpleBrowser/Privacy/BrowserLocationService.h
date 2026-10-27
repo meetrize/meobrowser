@@ -13,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)isSystemLocationAuthorized;
 + (NSString *)systemAuthorizationStatusDescription;
 
-/// 尚未授权时弹出系统定位授权对话框；已授权或已拒绝则立即回调。completion 在主线程。
+/// 尚未授权时弹出系统定位授权对话框；已拒绝 / 用户未同意则自动打开系统定位设置。completion 在主线程。
 + (void)ensureSystemAuthorizationWithCompletion:(void (^)(BOOL granted))completion;
 
 /// 获取当前坐标；watchRequestId 非空时持续回调同一 requestId（watchPosition）。
