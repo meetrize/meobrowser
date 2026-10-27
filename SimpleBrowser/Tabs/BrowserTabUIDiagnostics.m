@@ -54,12 +54,9 @@ static void MeoTabUIEnsureLogFile(void) {
 }
 
 BOOL BrowserTabUIDiagnosticsEnabled(void) {
-    // 未写过 key 时默认开（便于排查卡顿）；显式 NO 才关。
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    if ([defaults objectForKey:kMeoTabUIDiagnosticsKey] == nil) {
-        return YES;
-    }
-    return [defaults boolForKey:kMeoTabUIDiagnosticsKey];
+    // 默认关；排查卡顿时：
+    //   defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool YES
+    return [NSUserDefaults.standardUserDefaults boolForKey:kMeoTabUIDiagnosticsKey];
 }
 
 NSTimeInterval BrowserTabUISlowThresholdMs(void) {
@@ -236,7 +233,6 @@ void BrowserTabUIDiagnosticsStopHangWatchdog(void) {
 
 void BrowserTabUIDiagnosticsStartHangWatchdogIfNeeded(void) {
     if (!BrowserTabUIDiagnosticsEnabled()) {
-        NSLog(@"[MeoTabUI] diagnostics OFF. Enable: defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool YES");
         return;
     }
     if (sHangObserver != NULL) {

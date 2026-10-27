@@ -8,8 +8,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 标签控制器和窗口控制器监听此通知以回收资源。
 FOUNDATION_EXPORT NSNotificationName const BrowserMemoryPressureNotification;
 
-/// 标签 / 切页 UI 诊断。默认开启；关闭：
-/// `defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool NO`
+/// 标签 / 切页 UI 诊断。默认关闭；打开：
+/// `defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool YES`
+/// 关闭：`defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool NO`
 ///
 /// 查看日志（任选其一）：
 /// 1. `tail -f ~/Library/Logs/MeoBrowser/tab-ui.log`   ← 最稳

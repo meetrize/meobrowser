@@ -73,25 +73,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     }
 }
 
-static void SBTextFieldLog(NSString *msg, SBTextField *field) {
-    NSRange sel = field.currentEditor ? field.currentEditor.selectedRange : NSMakeRange(NSNotFound, 0);
-    NSString *line = [NSString stringWithFormat:
-                      @"%@ | needSelAll=%d editor=%p len=%lu sel=%@\n",
-                      msg,
-                      field.needsSelectAllOnMouseFocus,
-                      field.currentEditor,
-                      (unsigned long)(field.stringValue.length),
-                      sel.location == NSNotFound ? @"nil" : NSStringFromRange(sel)];
-    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:@"/tmp/meo-address-focus.log"]) {
-        [@"" writeToFile:@"/tmp/meo-address-focus.log" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    }
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/meo-address-focus.log"];
-    [fh seekToEndOfFile];
-    [fh writeData:data];
-    [fh closeFile];
-}
-
 @implementation SBStandardTextFieldCell
 
 - (NSRect)textAreaRectForBounds:(NSRect)theRect {
@@ -398,14 +379,12 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
         return;
     }
     self.needsSelectAllOnMouseFocus = YES;
-    SBTextFieldLog(@"endEditing → needSelAll=YES", self);
 }
 
 - (void)meo_applySelectAllOnMouseFocus {
     NSInteger generation = ++self.selectAllGeneration;
     self.needsSelectAllOnMouseFocus = NO;
     SBTextFieldSelectAllText(self);
-    SBTextFieldLog(@"applied selectAll", self);
 
     __weak SBTextField *weakSelf = self;
     void (^reassert)(void) = ^{
@@ -417,7 +396,6 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
             return;
         }
         SBTextFieldSelectAllText(strongSelf);
-        SBTextFieldLog(@"reassert selectAll", strongSelf);
     };
     dispatch_async(dispatch_get_main_queue(), reassert);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
@@ -437,8 +415,6 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
     // 已全选。鼠标聚焦：等 mouseDown 保持全选；⌘L：下次点击再落光标。
     self.needsSelectAllOnMouseFocus = NO;
     self.preserveSelectAllThroughFocusClick = fromMouse;
-    SBTextFieldLog(fromMouse ? @"selectText fromMouse → preserve" : @"selectText (key) → next click caret",
-                   self);
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -454,7 +430,6 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
 
     // 系统已在 mouseDown 前 selectText 全选：本拍点击必须保持全选，绝不能落光标。
     if (self.preserveSelectAllThroughFocusClick && event.clickCount < 2 && !extendMods) {
-        SBTextFieldLog(@"mouseDown KEEP selectAll (selectText raced ahead)", self);
         self.preserveSelectAllThroughFocusClick = NO;
         [self meo_applySelectAllOnMouseFocus];
         SBTextFieldConsumeMouseUpEvents();
@@ -464,8 +439,6 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
 
     // 失焦后的第一次点击（系统未抢先 selectText）：自行全选。
     if (self.needsSelectAllOnMouseFocus && event.clickCount < 2 && !extendMods) {
-        SBTextFieldLog(@"mouseDown SELECT ALL path", self);
-
         NSResponder *fr = self.window.firstResponder;
         if ([fr isKindOfClass:[NSView class]]) {
             for (NSView *v = (NSView *)fr; v != nil; v = v.superview) {
@@ -485,7 +458,6 @@ static void SBTextFieldLog(NSString *msg, SBTextField *field) {
     }
 
     // 已聚焦后再点：取消全选，光标落在点击处（可拖选）。
-    SBTextFieldLog(@"mouseDown CARET path", self);
     self.needsSelectAllOnMouseFocus = NO;
     self.preserveSelectAllThroughFocusClick = NO;
     self.selectAllGeneration += 1;

@@ -1,0 +1,55 @@
+---
+description: MeoBrowser 诊断日志开关（卡顿 tab-ui / 导航 nav）。用户说打开/关闭日志、排查卡顿、看 tab-ui.log 时遵循本规则并代跑 defaults。
+alwaysApply: false
+---
+
+# 诊断日志开关
+
+Bundle ID：`com.example.MeoBrowser`。默认**关闭**；改 `defaults` 后需**重启 App** 生效。
+
+## 用户意图 → 动作
+
+| 用户说 | Agent 执行 |
+|--------|------------|
+| 打开 / 开启卡顿日志、tab-ui、HANG | 打开 TabUI 诊断 |
+| 打开 / 开启导航日志、nav | 打开 Navigation 诊断 |
+| 打开诊断 / 打开全部日志 | 两个都打开 |
+| 关闭日志 / 关掉诊断 | 对应项或全部关闭 |
+| 看日志 / tail | 给出或执行 `tail -f` 路径 |
+
+## 命令（在 shell 中执行）
+
+```bash
+# —— 打开 ——
+defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool YES
+defaults write com.example.MeoBrowser MeoBrowserNavigationDiagnostics -bool YES
+
+# —— 关闭 ——
+defaults write com.example.MeoBrowser MeoBrowserTabUIDiagnostics -bool NO
+defaults write com.example.MeoBrowser MeoBrowserNavigationDiagnostics -bool NO
+
+# —— 查询当前 ——
+defaults read com.example.MeoBrowser MeoBrowserTabUIDiagnostics
+defaults read com.example.MeoBrowser MeoBrowserNavigationDiagnostics
+```
+
+可选阈值（毫秒）：
+
+```bash
+defaults write com.example.MeoBrowser MeoBrowserTabUISlowMs -float 50
+defaults write com.example.MeoBrowser MeoBrowserTabUIHangMs -float 120
+```
+
+## 日志位置
+
+| 开关 | 文件 | 说明 |
+|------|------|------|
+| TabUI | `~/Library/Logs/MeoBrowser/tab-ui.log` | 切标签/预算/主线程 HANG，前缀 `[MeoTabUI]` |
+| Nav | `~/Library/Logs/MeoBrowser/nav.log` | 导航诊断，前缀 `[MeoNav]` |
+
+```bash
+tail -f ~/Library/Logs/MeoBrowser/tab-ui.log
+tail -f ~/Library/Logs/MeoBrowser/nav.log
+```
+
+代码入口：`BrowserTabUIDiagnostics.*`、`BrowserNavigationDiagnostics.*`。

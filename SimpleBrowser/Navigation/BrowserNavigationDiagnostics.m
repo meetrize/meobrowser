@@ -6,8 +6,6 @@ static FILE *sNavLogFile = NULL;
 
 // 与 tab-ui.log 同目录，方便一起 tail -f、一起发排查：
 //   tail -f ~/Library/Logs/MeoBrowser/nav.log
-// 注意 Release 下默认关闭，需先执行：
-//   defaults write com.example.MeoBrowser MeoBrowserNavigationDiagnostics -bool YES
 static void MeoNavEnsureLogFile(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -27,15 +25,9 @@ static void MeoNavEnsureLogFile(void) {
 }
 
 BOOL BrowserNavigationDiagnosticsEnabled(void) {
-#if DEBUG
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    if ([defaults objectForKey:kMeoNavigationDiagnosticsKey] == nil) {
-        return YES;
-    }
-    return [defaults boolForKey:kMeoNavigationDiagnosticsKey];
-#else
+    // 默认关；排查导航时：
+    //   defaults write com.example.MeoBrowser MeoBrowserNavigationDiagnostics -bool YES
     return [NSUserDefaults.standardUserDefaults boolForKey:kMeoNavigationDiagnosticsKey];
-#endif
 }
 
 void BrowserNavigationLog(NSString *format, ...) {

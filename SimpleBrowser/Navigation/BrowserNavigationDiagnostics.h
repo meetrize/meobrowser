@@ -2,7 +2,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 导航诊断日志。Debug 默认开；Release 需 `defaults write … MeoBrowserNavigationDiagnostics -bool YES`。
+/// 导航诊断日志。默认关闭；打开：
+/// `defaults write com.example.MeoBrowser MeoBrowserNavigationDiagnostics -bool YES`
 FOUNDATION_EXPORT BOOL BrowserNavigationDiagnosticsEnabled(void);
 FOUNDATION_EXPORT void BrowserNavigationLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 
