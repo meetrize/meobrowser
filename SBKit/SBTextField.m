@@ -5,73 +5,94 @@
 @interface SBStandardTextFieldCell : NSTextFieldCell
 @end
 
-static BOOL SBTextFieldIsActivelyEditing(SBTextField *field) {
-    if (![field isKindOfClass:[SBTextField class]]) {
-        return NO;
+@interface SBTextField ()
+@property (nonatomic, assign) NSInteger selectAllGeneration;
+/// 失焦后下一次鼠标点击应全选；全选或已聚焦再点后清掉。
+@property (nonatomic, assign) BOOL needsSelectAllOnMouseFocus;
+/// 窗口常在 mouseDown 送达前就 makeFirstResponder→selectText；本次点击须保持全选。
+@property (nonatomic, assign) BOOL preserveSelectAllThroughFocusClick;
+@property (nonatomic, assign) BOOL ignoringSelectTextSideEffects;
+- (void)meo_noteEndedEditingForMouseFocusSelectAll;
+- (void)meo_applySelectAllOnMouseFocus;
+@end
+
+static void SBTextFieldSelectAllText(SBTextField *field) {
+    NSString *value = field.stringValue ?: @"";
+    if (value.length == 0) {
+        return;
     }
     NSText *editor = field.currentEditor;
     if (!editor) {
-        return NO;
+        field.ignoringSelectTextSideEffects = YES;
+        [field selectText:nil];
+        field.ignoringSelectTextSideEffects = NO;
+        editor = field.currentEditor;
     }
-    id firstResponder = field.window.firstResponder;
-    return firstResponder == editor || firstResponder == field;
+    if (editor) {
+        [editor setSelectedRange:NSMakeRange(0, value.length)];
+    }
 }
 
-static void SBTextFieldSelectAllText(SBTextField *field) {
-    if (field.stringValue.length == 0) {
+static NSUInteger SBTextFieldInsertionIndex(NSTextView *editor, NSPoint windowPoint) {
+    NSPoint local = [editor convertPoint:windowPoint fromView:nil];
+    NSUInteger idx = [editor characterIndexForInsertionAtPoint:local];
+    NSUInteger len = editor.string.length;
+    return MIN(idx, len);
+}
+
+static void SBTextFieldTrackSelectionFromIndex(NSTextView *editor, NSUInteger anchorIndex) {
+    NSWindow *window = editor.window;
+    if (!window) {
         return;
     }
-    NSText *editor = field.currentEditor;
-    if (editor) {
-        [editor setSelectedRange:NSMakeRange(0, field.stringValue.length)];
-        return;
-    }
-    [field selectText:nil];
-    editor = field.currentEditor;
-    if (editor) {
-        [editor setSelectedRange:NSMakeRange(0, field.stringValue.length)];
+    while (YES) {
+        NSEvent *next = [window nextEventMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged)
+                                            untilDate:[NSDate distantFuture]
+                                               inMode:NSEventTrackingRunLoopMode
+                                              dequeue:YES];
+        if (next == nil || next.type == NSEventTypeLeftMouseUp) {
+            break;
+        }
+        NSUInteger idx = SBTextFieldInsertionIndex(editor, next.locationInWindow);
+        NSUInteger start = MIN(anchorIndex, idx);
+        NSUInteger end = MAX(anchorIndex, idx);
+        [editor setSelectedRange:NSMakeRange(start, end - start)];
     }
 }
 
 static void SBTextFieldConsumeMouseUpEvents(void) {
-    // 硬限：若 makeFirstResponder 期间内部泵过 runloop 已吃掉 mouseUp，
-    // distantFuture 会永远等下一次抬起 → 地址栏点击后整窗假死。
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:0.45];
     while (YES) {
         NSEvent *next = [NSApp nextEventMatchingMask:(NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged)
                                            untilDate:deadline
                                               inMode:NSEventTrackingRunLoopMode
                                              dequeue:YES];
-        if (next == nil) {
-            break;
-        }
-        if (next.type == NSEventTypeLeftMouseUp) {
+        if (next == nil || next.type == NSEventTypeLeftMouseUp) {
             break;
         }
     }
+}
+
+static void SBTextFieldLog(NSString *msg, SBTextField *field) {
+    NSRange sel = field.currentEditor ? field.currentEditor.selectedRange : NSMakeRange(NSNotFound, 0);
+    NSString *line = [NSString stringWithFormat:
+                      @"%@ | needSelAll=%d editor=%p len=%lu sel=%@\n",
+                      msg,
+                      field.needsSelectAllOnMouseFocus,
+                      field.currentEditor,
+                      (unsigned long)(field.stringValue.length),
+                      sel.location == NSNotFound ? @"nil" : NSStringFromRange(sel)];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:@"/tmp/meo-address-focus.log"]) {
+        [@"" writeToFile:@"/tmp/meo-address-focus.log" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/meo-address-focus.log"];
+    [fh seekToEndOfFile];
+    [fh writeData:data];
+    [fh closeFile];
 }
 
 @implementation SBStandardTextFieldCell
-
-- (BOOL)trackMouse:(NSEvent *)event
-            inRect:(NSRect)cellFrame
-            ofView:(NSView *)controlView
-      untilMouseUp:(BOOL)untilMouseUp {
-    SBTextField *field = ([controlView isKindOfClass:[SBTextField class]] ? (SBTextField *)controlView : nil);
-    if (field && field.selectsAllOnMouseFocus && !SBTextFieldIsActivelyEditing(field)) {
-        [field.window makeFirstResponder:field];
-        SBTextFieldSelectAllText(field);
-        __weak SBTextField *weakField = field;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SBTextFieldSelectAllText(weakField);
-        });
-        if (untilMouseUp) {
-            SBTextFieldConsumeMouseUpEvents();
-        }
-        return YES;
-    }
-    return [super trackMouse:event inRect:cellFrame ofView:controlView untilMouseUp:untilMouseUp];
-}
 
 - (NSRect)textAreaRectForBounds:(NSRect)theRect {
     NSRect area = theRect;
@@ -100,7 +121,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     }
     SBTextField *field = (SBTextField *)controlView;
     area = SBTextFieldApplyCompactInsets(area);
-    // 先下扩文字区（外框不变），再应用上边距，避免字底下移后被裁。
     area = SBTextFieldApplyBottomExtend(area, field.compactTextBottomExtend, controlView);
     area = SBTextFieldApplyTopInsetWithUpwardBias(area,
                                                  field.compactTextTopInset,
@@ -123,7 +143,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         lineHeight = NSHeight(area);
     }
     NSRect centered = SBTextFieldVerticallyCenteredRect(area, lineHeight);
-    // 居中后再上移（光学微调；地址栏可用 compactTextUpwardBiasWhenEditing）。
     return SBTextFieldApplyUpwardBias(centered, [self editingUpwardBias], controlView);
 }
 
@@ -168,7 +187,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
 
 - (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
     if ([self usesCapsuleBezel]) {
-        // 胶囊外框由 sibling chrome 画；文字按完整 bounds 计算 inset。
         [self drawInteriorWithFrame:controlView.bounds inView:controlView];
         return;
     }
@@ -186,12 +204,10 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return;
     }
 
-    // 编辑中只显示 field editor，禁止 cell 再画一遍（否则会上下错 1pt 重影）。
     if (field.currentEditor != nil) {
         return;
     }
 
-    // 自己画文字：与编辑态共用同一套水平 inset（见 compactTextRect / leadingContentInset）。
     NSRect titleRect = [self idleTitleRectForControlView:controlView];
     if (NSIsEmptyRect(titleRect) || NSWidth(titleRect) < 1.0) {
         return;
@@ -228,7 +244,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
         SBTextField *field = (SBTextField *)controlView;
         if (field.usesCapsuleBezel) {
-            // 与非编辑 titleRect 一致，避免 syncFieldEditor 又改回居中矩形。
             return [self idleTitleRectForControlView:controlView];
         }
         if (field.currentEditor && [self centersWhenEditing]) {
@@ -259,7 +274,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     [self prepareFieldEditor:textObj];
     [super editWithFrame:adjusted inView:controlView editor:textObj delegate:delegate event:event];
     [self prepareFieldEditor:textObj];
-    // 系统有时会忽略传入 frame，再写一次，保证与非编辑态同一套 inset。
     if (!NSEqualRects(textObj.frame, adjusted)) {
         textObj.frame = adjusted;
     }
@@ -292,7 +306,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return [self drawingRectForBounds:controlView.bounds];
     }
     SBTextField *field = (SBTextField *)controlView;
-    // 胶囊地址栏：编辑框与非编辑 titleRect 完全重合，避免进入编辑时上下跳 1pt。
     if (field.usesCapsuleBezel) {
         return [self idleTitleRectForControlView:controlView];
     }
@@ -307,7 +320,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
 }
 
 - (NSRect)idleTitleRectForControlView:(NSView *)controlView {
-    // 与 editingFrame 共用水平 inset（leading/trailing + compact H），只在垂直方向用非编辑 bias。
     if (![controlView isKindOfClass:[SBTextField class]] ||
         !((SBTextField *)controlView).usesCompactVerticalTextInsets) {
         return [self titleRectForBounds:controlView.bounds];
@@ -335,8 +347,159 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     self = [super initWithFrame:frameRect];
     if (self) {
         [SBTextInputConfiguration configureSingleLineTextField:self];
+        _needsSelectAllOnMouseFocus = YES;
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:self
+               selector:@selector(meo_controlTextDidEndEditing:)
+                   name:NSControlTextDidEndEditingNotification
+                 object:self];
+        // 网页获焦时地址栏未必立刻收到 EndEditing；用此通知保证下次点击会全选。
+        [nc addObserver:self
+               selector:@selector(meo_webViewDidBecomeFirstResponder:)
+                   name:@"BrowserWebViewDidBecomeFirstResponder"
+                 object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)meo_webViewDidBecomeFirstResponder:(NSNotification *)notification {
+    if (!self.selectsAllOnMouseFocus) {
+        return;
+    }
+    id obj = notification.object;
+    if ([obj isKindOfClass:[NSView class]] && ((NSView *)obj).window != self.window) {
+        return;
+    }
+    // 确保结束编辑，否则下次点击会打到 field editor，mouseDown 全选路径进不去。
+    if (self.currentEditor != nil) {
+        [self.window endEditingFor:self];
+    }
+    [self meo_noteEndedEditingForMouseFocusSelectAll];
+}
+
+- (void)setSelectsAllOnMouseFocus:(BOOL)selectsAllOnMouseFocus {
+    _selectsAllOnMouseFocus = selectsAllOnMouseFocus;
+    if (selectsAllOnMouseFocus) {
+        self.needsSelectAllOnMouseFocus = YES;
+    }
+}
+
+- (void)meo_controlTextDidEndEditing:(NSNotification *)notification {
+    (void)notification;
+    [self meo_noteEndedEditingForMouseFocusSelectAll];
+}
+
+- (void)meo_noteEndedEditingForMouseFocusSelectAll {
+    if (!self.selectsAllOnMouseFocus) {
+        return;
+    }
+    self.needsSelectAllOnMouseFocus = YES;
+    SBTextFieldLog(@"endEditing → needSelAll=YES", self);
+}
+
+- (void)meo_applySelectAllOnMouseFocus {
+    NSInteger generation = ++self.selectAllGeneration;
+    self.needsSelectAllOnMouseFocus = NO;
+    SBTextFieldSelectAllText(self);
+    SBTextFieldLog(@"applied selectAll", self);
+
+    __weak SBTextField *weakSelf = self;
+    void (^reassert)(void) = ^{
+        SBTextField *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.selectAllGeneration != generation) {
+            return;
+        }
+        if (!strongSelf.currentEditor) {
+            return;
+        }
+        SBTextFieldSelectAllText(strongSelf);
+        SBTextFieldLog(@"reassert selectAll", strongSelf);
+    };
+    dispatch_async(dispatch_get_main_queue(), reassert);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), reassert);
+}
+
+- (void)selectText:(id)sender {
+    [super selectText:sender];
+    if (!self.selectsAllOnMouseFocus || self.ignoringSelectTextSideEffects) {
+        return;
+    }
+    NSEvent *e = NSApp.currentEvent;
+    BOOL fromMouse = (e != nil &&
+                      (e.type == NSEventTypeLeftMouseDown ||
+                       e.type == NSEventTypeLeftMouseUp ||
+                       e.type == NSEventTypeLeftMouseDragged));
+    // 已全选。鼠标聚焦：等 mouseDown 保持全选；⌘L：下次点击再落光标。
+    self.needsSelectAllOnMouseFocus = NO;
+    self.preserveSelectAllThroughFocusClick = fromMouse;
+    SBTextFieldLog(fromMouse ? @"selectText fromMouse → preserve" : @"selectText (key) → next click caret",
+                   self);
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (!self.selectsAllOnMouseFocus) {
+        [super mouseDown:event];
+        return;
+    }
+
+    NSEventModifierFlags mods =
+        event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL extendMods = (mods & (NSEventModifierFlagShift | NSEventModifierFlagCommand |
+                               NSEventModifierFlagOption | NSEventModifierFlagControl)) != 0;
+
+    // 系统已在 mouseDown 前 selectText 全选：本拍点击必须保持全选，绝不能落光标。
+    if (self.preserveSelectAllThroughFocusClick && event.clickCount < 2 && !extendMods) {
+        SBTextFieldLog(@"mouseDown KEEP selectAll (selectText raced ahead)", self);
+        self.preserveSelectAllThroughFocusClick = NO;
+        [self meo_applySelectAllOnMouseFocus];
+        SBTextFieldConsumeMouseUpEvents();
+        [self meo_applySelectAllOnMouseFocus];
+        return;
+    }
+
+    // 失焦后的第一次点击（系统未抢先 selectText）：自行全选。
+    if (self.needsSelectAllOnMouseFocus && event.clickCount < 2 && !extendMods) {
+        SBTextFieldLog(@"mouseDown SELECT ALL path", self);
+
+        NSResponder *fr = self.window.firstResponder;
+        if ([fr isKindOfClass:[NSView class]]) {
+            for (NSView *v = (NSView *)fr; v != nil; v = v.superview) {
+                if ([v isKindOfClass:NSClassFromString(@"WKWebView")]) {
+                    [self.window makeFirstResponder:self.window];
+                    break;
+                }
+            }
+        }
+
+        self.preserveSelectAllThroughFocusClick = NO;
+        [self.window makeFirstResponder:self];
+        [self meo_applySelectAllOnMouseFocus];
+        SBTextFieldConsumeMouseUpEvents();
+        [self meo_applySelectAllOnMouseFocus];
+        return;
+    }
+
+    // 已聚焦后再点：取消全选，光标落在点击处（可拖选）。
+    SBTextFieldLog(@"mouseDown CARET path", self);
+    self.needsSelectAllOnMouseFocus = NO;
+    self.preserveSelectAllThroughFocusClick = NO;
+    self.selectAllGeneration += 1;
+
+    NSText *editor = self.currentEditor;
+    if ([editor isKindOfClass:[NSTextView class]] && event.clickCount < 2 && !extendMods) {
+        NSTextView *tv = (NSTextView *)editor;
+        NSUInteger idx = SBTextFieldInsertionIndex(tv, event.locationInWindow);
+        [tv setSelectedRange:NSMakeRange(idx, 0)];
+        SBTextFieldTrackSelectionFromIndex(tv, idx);
+        return;
+    }
+
+    [super mouseDown:event];
 }
 
 - (void)setLeadingContentInset:(CGFloat)leadingContentInset {
@@ -433,7 +596,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
 
 - (void)setBezelStyle:(NSTextFieldBezelStyle)bezelStyle {
     if (_usesCapsuleBezel) {
-        // 忽略 SquareBezel 回写；外框改由 drawRect 画胶囊。
         [super setBezelStyle:NSTextFieldSquareBezel];
         [super setBezeled:NO];
         [super setBordered:NO];
@@ -454,8 +616,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         return;
     }
 
-    // 系统 bezel 关掉；半圆描边由 BrowserAddressBarCapsuleChromeView（sibling）绘制。
-    // 新系统 RoundedBezel ≈ SquareBezel，不能当胶囊用。
     self.wantsLayer = NO;
     if (self.layer) {
         self.layer = nil;
@@ -487,8 +647,6 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         [super drawRect:dirtyRect];
         return;
     }
-    // 外框由 RowView chrome 画。必须传完整 bounds，让 cell 的
-    // drawingRect/titleRect（含 leadingContentInset）只计算一次。
     NSTextFieldCell *cell = (NSTextFieldCell *)self.cell;
     [cell drawInteriorWithFrame:self.bounds inView:self];
 }

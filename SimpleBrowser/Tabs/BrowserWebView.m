@@ -1243,7 +1243,14 @@ static BOOL MeoCallNSViewFocusMethod(BrowserWebView *view, SEL selector) {
 }
 
 - (BOOL)becomeFirstResponder {
-    return MeoCallNSViewFocusMethod(self, _cmd);
+    BOOL ok = MeoCallNSViewFocusMethod(self, _cmd);
+    if (ok) {
+        // 通知地址栏：网页重新获焦后，下次点击地址栏应全选 URL。
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:@"BrowserWebViewDidBecomeFirstResponder"
+                          object:self];
+    }
+    return ok;
 }
 
 - (BOOL)resignFirstResponder {

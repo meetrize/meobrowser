@@ -41,7 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 内容 inset 变更后，同步正在编辑的 field editor 外框（避免残留左侧留白）。
 - (void)syncFieldEditorFrameWithContentInsets;
 
-/// 鼠标点击获得焦点时全选文字（再次点击已聚焦时不全选，便于移动光标）。
+/// 鼠标点击获得焦点时全选文字；已聚焦时再点击则走系统落点光标（地址栏 omnibox 行为）。
 @property (nonatomic) BOOL selectsAllOnMouseFocus;
 
 @end
