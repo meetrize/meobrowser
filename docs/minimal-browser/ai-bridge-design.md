@@ -216,6 +216,63 @@ Native 优先调用 `sendAndWait`（避免短回复竞态）。完成亦可用 `
 
 DeepSeek 选择器已于 2026-10-28 登录态实测修订（见 Spike/`adapters/deepseek.js`）。
 
+```json
+{
+  "id": "iwencai",
+  "displayName": "问财 网页",
+  "modelId": "bridge__iwencai",
+  "matchHosts": ["www.iwencai.com", "iwencai.com"],
+  "inputSelector": "#footInput .ql-editor",
+  "sendSelector": ".chat-input-bottom-right-button.send-button",
+  "assistantSelector": ".chat-response-message-container .rich-text-container.aime-markdown",
+  "busySelector": null,
+  "completeWhen": "「模型答案生成完成」+ markdown 稳定",
+  "stableMs": 1000,
+  "defaultTimeoutMs": 180000,
+  "notes": "Quill；有字才出 send；完成态「问财 模型答案生成完成」；勿把残留的 .chat-thinking-loading.chat-thinking-summary-icon 当 busy"
+}
+```
+
+问财选择器已于 2026-10-28 登录态实测；同日修复完成后 loading 图标残留导致 API 一直等待的问题（见 Spike/`adapters/iwencai.js`）。
+
+```json
+{
+  "id": "doubao",
+  "displayName": "豆包 网页",
+  "modelId": "bridge__doubao",
+  "matchHosts": ["www.doubao.com", "doubao.com"],
+  "inputSelector": ".tiptap.ProseMirror / [data-testid=chat_input_input]",
+  "sendSelector": "[data-testid=chat_input_send_button] / #flow-end-msg-send",
+  "assistantSelector": "[data-testid=receive_message] [data-testid=message_text_content]",
+  "busySelector": null,
+  "completeWhen": "末条 receive_message 出现 message_action_regenerate + 正文稳定",
+  "stableMs": 1000,
+  "defaultTimeoutMs": 180000,
+  "notes": "TipTap；有字才出 send；生成中 send-btn-wrapper 带 !hidden；新对话 aria-label=新对话"
+}
+```
+
+豆包选择器已于 2026-10-28 登录态实测（见 Spike/`adapters/doubao.js`）。
+
+```json
+{
+  "id": "gemini",
+  "displayName": "Gemini 网页",
+  "modelId": "bridge__gemini",
+  "matchHosts": ["gemini.google.com", "bard.google.com"],
+  "inputSelector": "rich-textarea .ql-editor",
+  "sendSelector": "button[aria-label=发送] / gem-icon-button.send-button",
+  "assistantSelector": "model-response .markdown-main-panel",
+  "busySelector": "button[aria-label=停止回答]",
+  "completeWhen": "停止消失 + regenerate-button + 正文稳定",
+  "stableMs": 1000,
+  "defaultTimeoutMs": 180000,
+  "notes": "Quill；游客/登录均可用；登录态实测 meetrice；正文取 .markdown-main-panel；新对话=发起新对话/reset-button"
+}
+```
+
+Gemini 选择器已于 2026-10-28 游客 + 登录态实测（见 Spike/`adapters/gemini.js`）。
+
 ---
 
 ## 7. API 约定

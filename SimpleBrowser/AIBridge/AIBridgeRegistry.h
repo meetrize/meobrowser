@@ -7,8 +7,8 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT NSNotificationName const AIBridgeRegistryDidChangeNotification;
 
 @interface AIBridgeBinding : NSObject
-@property (nonatomic, copy) NSString *providerId;  // deepseek | mock
-@property (nonatomic, copy) NSString *modelId;     // bridge__deepseek
+@property (nonatomic, copy) NSString *providerId;  // deepseek | kimi | iwencai | doubao | gemini | mock
+@property (nonatomic, copy) NSString *modelId;     // bridge__deepseek 等
 @property (nonatomic, copy) NSString *displayName;
 @property (nonatomic, weak, nullable) BrowserTab *tab;
 @property (nonatomic, copy, nullable) NSString *tabTitle;

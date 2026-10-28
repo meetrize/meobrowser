@@ -107,6 +107,12 @@
         adapterName = @"mock.js";
     } else if ([providerId isEqualToString:@"kimi"]) {
         adapterName = @"kimi.js";
+    } else if ([providerId isEqualToString:@"iwencai"]) {
+        adapterName = @"iwencai.js";
+    } else if ([providerId isEqualToString:@"doubao"]) {
+        adapterName = @"doubao.js";
+    } else if ([providerId isEqualToString:@"gemini"]) {
+        adapterName = @"gemini.js";
     } else if ([providerId isEqualToString:@"deepseek"]) {
         adapterName = @"deepseek.js";
     }

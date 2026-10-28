@@ -127,6 +127,12 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         name = @"DeepSeek 网页";
     } else if ([pid isEqualToString:@"kimi"]) {
         name = @"Kimi 网页";
+    } else if ([pid isEqualToString:@"iwencai"]) {
+        name = @"问财 网页";
+    } else if ([pid isEqualToString:@"doubao"]) {
+        name = @"豆包 网页";
+    } else if ([pid isEqualToString:@"gemini"]) {
+        name = @"Gemini 网页";
     }
     [[AIBridgeRegistry sharedRegistry] bindTab:tab
                                     providerId:pid

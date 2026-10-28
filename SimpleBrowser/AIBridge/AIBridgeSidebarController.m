@@ -131,6 +131,12 @@ static const CGFloat kSidebarWidth = 320.0;
     self.providerPopup.lastItem.representedObject = @"deepseek";
     [self.providerPopup addItemWithTitle:@"Kimi 网页"];
     self.providerPopup.lastItem.representedObject = @"kimi";
+    [self.providerPopup addItemWithTitle:@"问财 网页"];
+    self.providerPopup.lastItem.representedObject = @"iwencai";
+    [self.providerPopup addItemWithTitle:@"豆包 网页"];
+    self.providerPopup.lastItem.representedObject = @"doubao";
+    [self.providerPopup addItemWithTitle:@"Gemini 网页"];
+    self.providerPopup.lastItem.representedObject = @"gemini";
     [self.providerPopup addItemWithTitle:@"Mock 对话页"];
     self.providerPopup.lastItem.representedObject = @"mock";
 

@@ -56,6 +56,9 @@
 - [x] **2.5** 请求前 probe → **409**  
 - [x] **2.6** 侧栏：新对话、取消、复制 Base URL  
 - [x] **2.7** Makefile 拷贝 kimi  
+- [x] **2.8** `adapters/iwencai.js`（问财）+ 侧栏 Provider + Makefile  
+- [x] **2.9** `adapters/doubao.js`（豆包）+ 侧栏 Provider + Makefile  
+- [x] **2.10** `adapters/gemini.js`（Gemini）+ 侧栏 Provider + Makefile  
 
 ---
 
@@ -90,10 +93,22 @@ TOKEN=...   # 侧栏复制
 # 健康
 curl -s http://127.0.0.1:3921/health
 
-# 非流式（已验证 DeepSeek）
+# 非流式（DeepSeek / Kimi / 问财）
 curl -s http://127.0.0.1:3921/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"model":"bridge__deepseek","messages":[{"role":"user","content":"ping"}]}'
+
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"bridge__iwencai","messages":[{"role":"user","content":"今天上证指数怎么样"}]}'
+
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"bridge__doubao","messages":[{"role":"user","content":"用一句话介绍你自己"}]}'
+
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"bridge__gemini","messages":[{"role":"user","content":"用一句话介绍你自己"}]}'
 
 # 假流式
 curl -N http://127.0.0.1:3921/v1/chat/completions \
