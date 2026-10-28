@@ -53,7 +53,7 @@ static void *kBrowserTabWebViewTitleContext = &kBrowserTabWebViewTitleContext;
 }
 
 - (BOOL)resistsHibernation {
-    return self.relatedPopupRetainCount > 0 || self.relatedOpenerTab != nil;
+    return self.bridgeKeepsAlive || self.relatedPopupRetainCount > 0 || self.relatedOpenerTab != nil;
 }
 
 - (void)detachRelatedPopupOpener {

@@ -47,6 +47,8 @@ typedef NS_ENUM(NSInteger, BrowserConnectionSecurityState) {
 @property (nonatomic, strong, nullable) BrowserFindSession *findSession;
 /// window.open / OAuth 弹窗等 related browsing context：勿休眠，以免打断 opener / postMessage。
 @property (nonatomic, assign, readonly) BOOL resistsHibernation;
+/// AI Bridge 绑定标签：禁止休眠，以免会话/WebView 被回收。
+@property (nonatomic, assign) BOOL bridgeKeepsAlive;
 /// 本标签作为 opener 时，仍存活的 related 弹窗数量。
 @property (nonatomic, assign) NSInteger relatedPopupRetainCount;
 /// 若本标签由 createWebView 创建，指向发起 window.open 的标签。

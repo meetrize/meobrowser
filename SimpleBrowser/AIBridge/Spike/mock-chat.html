@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meo AI Bridge — Mock Chat</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --border: #2a3542;
+      --text: #e7eef6;
+      --muted: #8b9aab;
+      --accent: #3d9cf0;
+      --assistant: #243041;
+      --user: #1e3a2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0;
+      flex: 1;
+    }
+    header button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #meo-bridge-busy {
+      display: none;
+      color: var(--accent);
+      font-size: 12px;
+    }
+    #meo-bridge-busy[data-on="1"] { display: inline; }
+    #log {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .meo-bridge-msg {
+      max-width: 720px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .meo-bridge-msg.user { align-self: flex-end; background: var(--user); }
+    .meo-bridge-msg.assistant { align-self: flex-start; background: var(--assistant); }
+    .meo-bridge-msg .role {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .composer {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px 16px;
+      background: var(--panel);
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    #meo-bridge-input {
+      flex: 1;
+      min-height: 44px;
+      max-height: 120px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }
+    #meo-bridge-send {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #meo-bridge-send:disabled { opacity: 0.45; cursor: default; }
+    .hint {
+      padding: 0 16px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mock AI Chat（AI Bridge Spike）</h1>
+    <span id="meo-bridge-busy" data-on="0">生成中…</span>
+    <button type="button" id="meo-bridge-new">新对话</button>
+  </header>
+  <div id="log" aria-live="polite"></div>
+  <p class="hint">在控制台加载 <code>runtime.js</code> + <code>adapters/mock.js</code> 后调用 <code>__MeoAIBridge</code>。本页也可手动发送。</p>
+  <div class="composer">
+    <textarea id="meo-bridge-input" placeholder="输入提示词…" rows="2"></textarea>
+    <button type="button" id="meo-bridge-send">发送</button>
+  </div>
+
+  <script>
+    (function () {
+      var log = document.getElementById('log');
+      var input = document.getElementById('meo-bridge-input');
+      var sendBtn = document.getElementById('meo-bridge-send');
+      var busy = document.getElementById('meo-bridge-busy');
+      var newBtn = document.getElementById('meo-bridge-new');
+      var generating = false;
+      var timer = null;
+
+      function setBusy(on) {
+        generating = on;
+        busy.setAttribute('data-on', on ? '1' : '0');
+        sendBtn.disabled = on;
+      }
+
+      function addMsg(role, text) {
+        var wrap = document.createElement('div');
+        wrap.className = 'meo-bridge-msg ' + role;
+        wrap.innerHTML = '<div class="role">' + (role === 'user' ? '你' : '助手') + '</div><div class="body"></div>';
+        wrap.querySelector('.body').textContent = text;
+        log.appendChild(wrap);
+        log.scrollTop = log.scrollHeight;
+        return wrap.querySelector('.body');
+      }
+
+      function replyFor(prompt) {
+        var p = (prompt || '').trim();
+        if (!p) return '（空提示）';
+        return '【Mock 回复】收到：' + p + '\n\n这是一段模拟流式输出，用于验证 AI Bridge 的完成检测（busy 消失 + 文本稳定）。';
+      }
+
+      function runGenerate(prompt) {
+        if (generating) return;
+        addMsg('user', prompt);
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        setBusy(true);
+        var body = addMsg('assistant', '');
+        var full = replyFor(prompt);
+        var i = 0;
+        timer = setInterval(function () {
+          i += 2;
+          body.textContent = full.slice(0, i);
+          log.scrollTop = log.scrollHeight;
+          if (i >= full.length) {
+            clearInterval(timer);
+            timer = null;
+            setBusy(false);
+          }
+        }, 40);
+      }
+
+      sendBtn.addEventListener('click', function () {
+        var t = input.value;
+        if (!t.trim() || generating) return;
+        runGenerate(t);
+      });
+
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendBtn.click();
+        }
+      });
+
+      // Bridge may set value + dispatch input then click send — listen to programmatic click only.
+      // Also observe value changes followed by Enter from runtime.
+
+      newBtn.addEventListener('click', function () {
+        if (timer) clearInterval(timer);
+        setBusy(false);
+        log.innerHTML = '';
+      });
+
+      // Expose for manual debug
+      window.__MeoMockChat = {
+        runGenerate: runGenerate,
+        setBusy: setBusy
+      };
+    })();
+  </script>
+  <!-- Optional auto-load when opened via relative paths from Spike dir -->
+  <script src="runtime.js"></script>
+  <script src="adapters/mock.js"></script>
+</body>
+</html>

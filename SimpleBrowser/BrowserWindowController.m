@@ -52,6 +52,7 @@
 #import "PagePackInjector.h"
 #import "BrowserScraperSidebarController.h"
 #import "BrowserScraperMessageHub.h"
+#import "AIBridgeSidebarController.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
 #import "BrowserTabOverviewController.h"
@@ -183,7 +184,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @implementation BrowserPendingNavigationError
 @end
 
-@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, PagePackSidebarControllerDelegate, BrowserScraperSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
+@interface BrowserWindowController () <BrowserTabControllerDelegate, BrowserTabStripViewDelegate, BrowserLaunchpadViewDelegate, BrowserAddressBarAutocompleteControllerDelegate, BrowserDownloadManagerObserver, BrowserDownloadPanelDelegate, BrowserHistorySidebarControllerDelegate, BrowserCertificateWarningViewDelegate, BrowserNavigationErrorViewDelegate, PhoneNotificationSidebarControllerDelegate, AssistSidebarControllerDelegate, PagePackSidebarControllerDelegate, BrowserScraperSidebarControllerDelegate, AIBridgeSidebarControllerDelegate, NSWindowDelegate, NSMenuItemValidation>
 - (instancetype)initWithSessionDictionary:(nullable NSDictionary *)session loadTabs:(BOOL)loadTabs;
 @property (nonatomic, strong) BrowserTabController *tabController;
 @property (nonatomic, strong) BrowserTabStripView *tabStripView;
@@ -220,6 +221,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) BrowserHistorySidebarController *historySidebarController;
 @property (nonatomic, strong) PagePackSidebarController *pagePackSidebarController;
 @property (nonatomic, strong) BrowserScraperSidebarController *scraperSidebarController;
+@property (nonatomic, strong) AIBridgeSidebarController *aiBridgeSidebarController;
 @property (nonatomic, strong) BrowserTrailingSidebarSlot *trailingSidebarSlot;
 @property (nonatomic, strong, nullable) NSView *notificationInboxBadgeView;
 @property (nonatomic, strong) BrowserLaunchpadView *launchpadView;
@@ -1143,12 +1145,21 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.scraperSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
                                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.aiBridgeSidebarController = [[AIBridgeSidebarController alloc] init];
+    self.aiBridgeSidebarController.delegate = self;
+    self.aiBridgeSidebarController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.aiBridgeSidebarController.view setContentHuggingPriority:NSLayoutPriorityRequired
+                                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.aiBridgeSidebarController.view setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.trailingSidebarSlot = [[BrowserTrailingSidebarSlot alloc] init];
     self.trailingSidebarSlot.notificationSidebar = self.notificationSidebarController;
     self.trailingSidebarSlot.assistSidebar = self.assistSidebarController;
     self.trailingSidebarSlot.historySidebar = self.historySidebarController;
     self.trailingSidebarSlot.pagePackSidebar = self.pagePackSidebarController;
     self.trailingSidebarSlot.scraperSidebar = self.scraperSidebarController;
+    self.trailingSidebarSlot.aiBridgeSidebar = self.aiBridgeSidebarController;
 
     self.contentRowStack = [NSStackView stackViewWithViews:@[
         self.contentContainer,
@@ -1156,7 +1167,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         self.assistSidebarController.view,
         self.historySidebarController.view,
         self.pagePackSidebarController.view,
-        self.scraperSidebarController.view
+        self.scraperSidebarController.view,
+        self.aiBridgeSidebarController.view
     ]];
     self.contentRowStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.contentRowStack.spacing = 0;
@@ -1428,6 +1440,7 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self wireChromeButton:BrowserChromeActionScreenshotID action:@selector(showChromePlaceholderTool:)];
     [self wireChromeButton:BrowserChromeActionExtensionID action:@selector(togglePagePackSidebar:)];
     [self wireChromeButton:BrowserChromeActionPageScraperID action:@selector(togglePageScraperSidebar:)];
+    [self wireChromeButton:BrowserChromeActionAIBridgeID action:@selector(toggleAIBridgeSidebar:)];
     [self wireChromeButton:BrowserChromeActionDOMInspectorID action:@selector(toggleDOMInspector:)];
     [self wireChromeButton:BrowserChromeActionPaneSyncID action:@selector(togglePaneSync:)];
 }
@@ -1575,6 +1588,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
         return self.scraperSidebarController.visible;
     }
+    if ([itemID isEqualToString:BrowserChromeActionAIBridgeID]) {
+        return self.aiBridgeSidebarController.visible;
+    }
     if ([itemID isEqualToString:BrowserChromeActionDOMInspectorID]) {
         return self.domInspectorController.active;
     }
@@ -1685,6 +1701,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if ([itemID isEqualToString:BrowserChromeActionPageScraperID]) {
         [self togglePageScraperSidebar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionAIBridgeID]) {
+        [self toggleAIBridgeSidebar:nil];
         return;
     }
     if ([itemID isEqualToString:BrowserChromeActionDOMInspectorID]) {
@@ -3002,6 +3022,69 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
     }
     [self.chromeActionsView setOn:visible forItemID:BrowserChromeActionPageScraperID];
+}
+
+#pragma mark - AI Bridge Sidebar
+
+- (void)toggleAIBridgeSidebar:(id)sender {
+    (void)sender;
+    BOOL open = !self.aiBridgeSidebarController.visible;
+    [self.trailingSidebarSlot setAIBridgeVisible:open animated:YES];
+    if (open) {
+        [self.aiBridgeSidebarController reloadUI];
+    }
+    [self updateAIBridgeButtonAppearance];
+    [self updatePageScraperButtonAppearance];
+    [self updatePagePackButtonAppearance];
+    [self updateHistoryButtonAppearance];
+    [self updateNotificationInboxButtonAppearance];
+    [self.chromeActionsView setOn:open forItemID:BrowserChromeActionAIBridgeID];
+}
+
+- (void)aiBridgeSidebarDidRequestClose:(AIBridgeSidebarController *)controller {
+    (void)controller;
+    [self.trailingSidebarSlot setAIBridgeVisible:NO animated:YES];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionAIBridgeID];
+}
+
+- (BrowserTab *)aiBridgeSidebarCurrentTab:(AIBridgeSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return tab;
+}
+
+- (NSURL *)aiBridgeSidebarCurrentURL:(AIBridgeSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return [BrowserWebView publicURLFromInternalURL:self.webView.URL] ?: self.webView.URL;
+}
+
+- (WKWebView *)aiBridgeSidebarCurrentWebView:(AIBridgeSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return self.webView;
+}
+
+- (void)updateAIBridgeButtonAppearance {
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionAIBridgeID];
+    if (!button) {
+        return;
+    }
+    BOOL visible = self.aiBridgeSidebarController.visible;
+    if (@available(macOS 10.14, *)) {
+        button.contentTintColor = visible ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    }
+    [self.chromeActionsView setOn:visible forItemID:BrowserChromeActionAIBridgeID];
 }
 
 - (void)pagePackSidebarDidRequestClose:(PagePackSidebarController *)controller {
@@ -5720,6 +5803,9 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         return YES;
     }
     if (action == @selector(togglePageScraperSidebar:)) {
+        return YES;
+    }
+    if (action == @selector(toggleAIBridgeSidebar:)) {
         return YES;
     }
     return YES;

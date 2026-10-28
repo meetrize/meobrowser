@@ -23,6 +23,7 @@ NSString * const BrowserChromeActionShareID = @"share";
 NSString * const BrowserChromeActionScreenshotID = @"screenshot";
 NSString * const BrowserChromeActionExtensionID = @"extension";
 NSString * const BrowserChromeActionPageScraperID = @"pageScraper";
+NSString * const BrowserChromeActionAIBridgeID = @"aiBridge";
 NSString * const BrowserChromeActionDOMInspectorID = @"domInspector";
 NSString * const BrowserChromeActionPaneSyncID = @"paneSync";
 
@@ -197,6 +198,12 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                  symbolName:@"doc.text.magnifyingglass"
                                onSymbolName:nil
                                     toolTip:@"页面爬虫"
+                                  onToolTip:nil
+                                    toggles:YES],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionAIBridgeID
+                                 symbolName:@"arrow.left.arrow.right.circle"
+                               onSymbolName:nil
+                                    toolTip:@"AI Bridge"
                                   onToolTip:nil
                                     toggles:YES],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionDOMInspectorID

@@ -154,6 +154,13 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperEngine.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperScheduleManager.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperSidebarController.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgePreferences.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeRegistry.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeDOMProvider.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeJobQueue.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeHTTPServer.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeService.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeSidebarController.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarView.m \
@@ -265,7 +272,7 @@ BROWSER_INJECT_CFLAGS := -DMEO_ENABLE_INJECTION=1
 BROWSER_INJECT_LDFLAGS := -Xlinker -interposable
 endif
 
-BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/SplitView -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/Scraper -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/SplitView -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/Scraper -I$(BROWSER_SRC_DIR)/AIBridge -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation $(BROWSER_INJECT_LDFLAGS)
 
@@ -384,6 +391,10 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/TransparentMode/Resources/transparent-mode-style.js \
 		$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json \
 		$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/runtime.js \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/mock.js \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/deepseek.js \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js \
@@ -407,6 +418,11 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/Resources/PhoneRules/simple_rules.json" "$(BROWSER_RES_DIR)/PhoneRules/simple_rules.json"
 	mkdir -p "$(BROWSER_RES_DIR)/CaptchaAssist/helpers"
 	cp "$(BROWSER_SRC_DIR)/CaptchaAssist/helpers/captcha_helper.py" "$(BROWSER_RES_DIR)/CaptchaAssist/helpers/captcha_helper.py"
+	mkdir -p "$(BROWSER_RES_DIR)/AIBridge/Adapters"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/runtime.js" "$(BROWSER_RES_DIR)/AIBridge/runtime.js"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/mock.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/mock.js"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/deepseek.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/deepseek.js"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html" "$(BROWSER_RES_DIR)/AIBridge/mock-chat.html"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/pack-identity.js"

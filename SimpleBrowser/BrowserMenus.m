@@ -270,6 +270,23 @@
             }
         }
 
+        // 工具：插在「窗口」之前
+        if (![self menuExistsWithTitle:@"工具"]) {
+            NSMenuItem *toolsItem = [[NSMenuItem alloc] init];
+            NSMenu *tools = [[NSMenu alloc] initWithTitle:@"工具"];
+            NSMenuItem *aiBridge = [tools addItemWithTitle:@"AI Bridge…"
+                                                     action:@selector(toggleAIBridgeSidebar:)
+                                              keyEquivalent:@""];
+            aiBridge.target = nil;
+            toolsItem.submenu = tools;
+            NSInteger windowIndex = [self indexOfMenuTitled:@"窗口"];
+            if (windowIndex == NSNotFound) {
+                [mainMenu addItem:toolsItem];
+            } else {
+                [mainMenu insertItem:toolsItem atIndex:windowIndex];
+            }
+        }
+
         // 历史：插在「窗口」之前（查看之后）
         if (![self menuExistsWithTitle:@"历史"]) {
             NSMenuItem *historyMenuItem = [[NSMenuItem alloc] init];

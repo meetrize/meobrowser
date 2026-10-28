@@ -5,6 +5,7 @@
 #import "BrowsingPreferences.h"
 #import "BrowserTabUIDiagnostics.h"
 #import "BrowserUserActivityMonitor.h"
+#import "AIBridgeRegistry.h"
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -575,6 +576,7 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
     }
 
     BOOL closingSelected = (tab == self.selectedTab);
+    [[AIBridgeRegistry sharedRegistry] unbindTab:tab];
     [tab prepareForClose];
     [self.mutableTabs removeObjectAtIndex:index];
 
