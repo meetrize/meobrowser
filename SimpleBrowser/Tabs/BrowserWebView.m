@@ -571,7 +571,7 @@ static NSString *MeoScrollToFragmentJS(void) {
         [self meo_insertOpenSelectionURLItemInMenu:menu nearItem:searchWebItem];
     }
 
-    // 有选区时插入 AI 子菜单（问问 / 解释 / 总结 / 翻译）。
+    // 「问问 AI」：有选区针对选区；无选区用当前页 URL/标题作上下文。
     [self meo_insertAIAssistantMenuInMenu:menu nearItem:searchWebItem ?: copySelectionItem];
 
     if (downloadItem) {
@@ -773,12 +773,13 @@ static NSString *MeoScrollToFragmentJS(void) {
     if (!menu) {
         return;
     }
-    NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"AI"];
+    // 菜单名：「问问 AI」——有选区针对选区，无选区针对当前页。
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"问问 AI"];
     NSArray<NSDictionary *> *actions = @[
-        @{@"title": @"直接问问 AI", @"key": BrowserAIAssistantActionAsk},
+        @{@"title": @"直接问问", @"key": BrowserAIAssistantActionAsk},
         @{@"title": @"解释", @"key": BrowserAIAssistantActionExplain},
         @{@"title": @"总结", @"key": BrowserAIAssistantActionSummarize},
-        @{@"title": @"翻译成中文", @"key": BrowserAIAssistantActionTranslate},
+        @{@"title": @"翻译 / 说明", @"key": BrowserAIAssistantActionTranslate},
     ];
     for (NSDictionary *a in actions) {
         NSMenuItem *child = [[NSMenuItem alloc] initWithTitle:a[@"title"]
@@ -788,9 +789,8 @@ static NSString *MeoScrollToFragmentJS(void) {
         child.representedObject = a[@"key"];
         [submenu addItem:child];
     }
-    NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"AI" action:nil keyEquivalent:@""];
+    NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"问问 AI" action:nil keyEquivalent:@""];
     aiItem.submenu = submenu;
-    aiItem.hidden = YES;
 
     NSInteger insertIndex = 0;
     if (nearItem) {
@@ -800,33 +800,23 @@ static NSString *MeoScrollToFragmentJS(void) {
         }
     }
     [menu insertItem:aiItem atIndex:insertIndex];
+}
 
-    __weak typeof(self) weakSelf = self;
-    __weak NSMenu *weakMenu = menu;
-    __weak NSMenuItem *weakItem = aiItem;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
-           completionHandler:^(id result, NSError *error) {
-        typeof(self) strongSelf = weakSelf;
-        NSMenu *strongMenu = weakMenu;
-        NSMenuItem *strongItem = weakItem;
-        if (!strongSelf || !strongMenu || !strongItem) {
-            return;
-        }
-        BOOL hasSelection = NO;
-        if (!error && [result isKindOfClass:[NSString class]]) {
-            NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
-                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            hasSelection = trimmed.length > 0;
-        }
-        if (![strongMenu.itemArray containsObject:strongItem]) {
-            return;
-        }
-        if (hasSelection) {
-            strongItem.hidden = NO;
-        } else {
-            [strongMenu removeItem:strongItem];
-        }
-    }];
+- (nullable NSString *)meo_pageContextString {
+    NSURL *url = [BrowserWebView publicURLFromInternalURL:self.URL] ?: self.URL;
+    NSString *urlStr = url.absoluteString ?: @"";
+    NSString *title = self.title ?: @"";
+    title = [title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (title.length > 0 && urlStr.length > 0) {
+        return [NSString stringWithFormat:@"标题：%@\n地址：%@", title, urlStr];
+    }
+    if (urlStr.length > 0) {
+        return [NSString stringWithFormat:@"地址：%@", urlStr];
+    }
+    if (title.length > 0) {
+        return [NSString stringWithFormat:@"标题：%@", title];
+    }
+    return nil;
 }
 
 - (void)meo_aiAssistantAction:(id)sender {
@@ -836,17 +826,27 @@ static NSString *MeoScrollToFragmentJS(void) {
     [self evaluateJavaScript:@"window.getSelection().toString()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
-        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+        if (!strongSelf) {
             return;
         }
-        NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
-                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (trimmed.length == 0) {
-            return;
+        NSString *trimmed = @"";
+        if (!error && [result isKindOfClass:[NSString class]]) {
+            trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
+        BOOL pageContext = trimmed.length == 0;
+        NSString *context = trimmed;
+        if (pageContext) {
+            context = [strongSelf meo_pageContextString] ?: @"";
+            if (context.length == 0) {
+                return;
+            }
         }
         id wc = strongSelf.window.windowController;
         if ([wc isKindOfClass:[BrowserWindowController class]]) {
-            [(BrowserWindowController *)wc openAIAssistantWithAction:actionKey selection:trimmed];
+            [(BrowserWindowController *)wc openAIAssistantWithAction:actionKey
+                                                             context:context
+                                                         pageContext:pageContext];
         }
     }];
 }

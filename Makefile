@@ -165,6 +165,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantPreferences.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantPrompts.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantClient.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantChatPanel.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantSidebarController.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
@@ -405,6 +406,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/gemini.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/chatgpt.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html \
+		$(BROWSER_SRC_DIR)/AIAssistant/Resources/chat.html \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js \
@@ -438,6 +440,8 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/gemini.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/gemini.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/chatgpt.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/chatgpt.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html" "$(BROWSER_RES_DIR)/AIBridge/mock-chat.html"
+	mkdir -p "$(BROWSER_RES_DIR)/AIAssistant"
+	cp "$(BROWSER_SRC_DIR)/AIAssistant/Resources/chat.html" "$(BROWSER_RES_DIR)/AIAssistant/chat.html"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/pack-identity.js"

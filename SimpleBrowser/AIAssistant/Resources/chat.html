@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: transparent;
+    --user-bg: #007AFF;
+    --user-fg: #fff;
+    --assistant-fg: #1d1d1f;
+    --muted: #8e8e93;
+    --code-bg: rgba(127,127,127,0.14);
+    --pre-bg: rgba(127,127,127,0.1);
+    --border: rgba(127,127,127,0.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --user-bg: #0A84FF;
+      --assistant-fg: #f5f5f7;
+      --muted: #98989d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--assistant-fg);
+  }
+  #log {
+    padding: 10px 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 100%;
+  }
+  .row { display: flex; width: 100%; }
+  .row.user { justify-content: flex-end; }
+  .row.assistant, .row.system { justify-content: flex-start; }
+  .bubble {
+    max-width: 88%;
+    padding: 8px 12px;
+    border-radius: 16px 16px 4px 16px;
+    background: var(--user-bg);
+    color: var(--user-fg);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .assistant-body {
+    max-width: 100%;
+    color: var(--assistant-fg);
+    word-break: break-word;
+  }
+  .assistant-body > *:first-child { margin-top: 0; }
+  .assistant-body > *:last-child { margin-bottom: 0; }
+  .assistant-body h1 { font-size: 1.25em; margin: 0.75em 0 0.4em; font-weight: 700; }
+  .assistant-body h2 { font-size: 1.15em; margin: 0.7em 0 0.35em; font-weight: 650; }
+  .assistant-body h3,
+  .assistant-body h4 { font-size: 1.05em; margin: 0.6em 0 0.3em; font-weight: 600; }
+  .assistant-body p { margin: 0.5em 0; white-space: pre-wrap; }
+  .assistant-body ul, .assistant-body ol { margin: 0.45em 0; padding-left: 1.4em; }
+  .assistant-body li { margin: 0.2em 0; }
+  .assistant-body li > p { margin: 0.15em 0; }
+  .assistant-body strong { font-weight: 700; }
+  .assistant-body em { font-style: italic; }
+  .assistant-body code {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    padding: 0.12em 0.4em;
+    border-radius: 4px;
+  }
+  .assistant-body pre {
+    background: var(--pre-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    margin: 0.55em 0;
+  }
+  .assistant-body pre code {
+    background: none; padding: 0; border-radius: 0;
+    white-space: pre;
+  }
+  .assistant-body blockquote {
+    margin: 0.5em 0; padding: 0.15em 0 0.15em 0.8em;
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+  }
+  .assistant-body a { color: var(--user-bg); }
+  .assistant-body hr {
+    border: none; border-top: 1px solid var(--border); margin: 0.8em 0;
+  }
+  .assistant-body table {
+    border-collapse: collapse;
+    margin: 0.55em 0;
+    width: 100%;
+    font-size: 0.95em;
+  }
+  .assistant-body th, .assistant-body td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+  }
+  .assistant-body th { background: var(--code-bg); font-weight: 600; }
+  .system-body {
+    max-width: 100%;
+    color: var(--muted);
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .empty {
+    color: var(--muted);
+    text-align: center;
+    padding: 24px 12px;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div id="log"><div class="empty" id="empty">开始对话吧</div></div>
+<script>
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Markdown → HTML
+   * 顺序：保护 code fence / 行内 code → 块级解析 → 行内格式 → 还原占位符
+   * 避免先插入 HTML 再 esc() 导致格式丢失。
+   */
+  function mdToHtml(src) {
+    var raw = String(src == null ? '' : src).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!raw.length) return '<p></p>';
+
+    var slots = [];
+    function park(html) {
+      var i = slots.length;
+      slots.push(html);
+      return '%%MEO' + i + '%%';
+    }
+    function unpark(s) {
+      return String(s).replace(/%%MEO(\d+)%%/g, function (_, n) {
+        return slots[Number(n)] || '';
+      });
+    }
+
+    // 1) fenced code ```
+    raw = raw.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, function (_, lang, code) {
+      return park('<pre><code>' + esc(String(code).replace(/\n$/, '')) + '</code></pre>');
+    });
+    // ~~~ fences
+    raw = raw.replace(/~~~([^\n]*)\n?([\s\S]*?)~~~/g, function (_, lang, code) {
+      return park('<pre><code>' + esc(String(code).replace(/\n$/, '')) + '</code></pre>');
+    });
+    // 2) inline code — 占位，稍后不经 esc 破坏
+    raw = raw.replace(/`([^`\n]+)`/g, function (_, code) {
+      return park('<code>' + esc(code) + '</code>');
+    });
+
+    function inlineFormat(s) {
+      // 此时仍可能含 %%MEO%% 占位；先 esc 普通文本，再套格式，最后 unpark
+      var parts = String(s).split(/(%%MEO\d+%%)/g);
+      for (var i = 0; i < parts.length; i++) {
+        if (/^%%MEO\d+%%$/.test(parts[i])) continue;
+        var t = esc(parts[i]);
+        // 图片 ![alt](url)
+        t = t.replace(/!\[([^\]]*)\]\((https?:[^)\s]+)\)/g, '<img alt="$1" src="$2" style="max-width:100%;border-radius:6px" />');
+        // 链接
+        t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+        // 粗体 ** ** __ __
+        t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        // 删除线
+        t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+        // 斜体 * * _ _（避免吃掉已处理的 **）
+        t = t.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+        t = t.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+        parts[i] = t;
+      }
+      return unpark(parts.join(''));
+    }
+
+    var lines = raw.split('\n');
+    var out = [];
+    var i = 0;
+
+    function isTableSep(line) {
+      return /^\s*\|?[\s:|-]+\|[\s:|-]+\|?\s*$/.test(line) && /\|/.test(line) && /-/.test(line);
+    }
+    function splitRow(line) {
+      var s = line.trim();
+      if (s.charAt(0) === '|') s = s.slice(1);
+      if (s.charAt(s.length - 1) === '|') s = s.slice(0, -1);
+      return s.split('|').map(function (c) { return c.trim(); });
+    }
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      // 已保护的整块（fence）
+      if (/^\s*%%MEO\d+%%\s*$/.test(line)) {
+        out.push(unpark(line.trim()));
+        i++;
+        continue;
+      }
+
+      if (/^\s*$/.test(line)) {
+        i++;
+        continue;
+      }
+
+      if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) {
+        out.push('<hr/>');
+        i++;
+        continue;
+      }
+
+      var hm = line.match(/^\s*(#{1,6})\s*(.+?)\s*$/);
+      if (hm) {
+        var lvl = Math.min(hm[1].length, 4);
+        out.push('<h' + lvl + '>' + inlineFormat(hm[2]) + '</h' + lvl + '>');
+        i++;
+        continue;
+      }
+
+      // GFM table
+      if (i + 1 < lines.length && /\|/.test(line) && isTableSep(lines[i + 1])) {
+        var heads = splitRow(line);
+        i += 2;
+        var bodyRows = [];
+        while (i < lines.length && /\|/.test(lines[i]) && !/^\s*$/.test(lines[i])) {
+          bodyRows.push(splitRow(lines[i]));
+          i++;
+        }
+        var html = '<table><thead><tr>';
+        heads.forEach(function (h) { html += '<th>' + inlineFormat(h) + '</th>'; });
+        html += '</tr></thead><tbody>';
+        bodyRows.forEach(function (row) {
+          html += '<tr>';
+          for (var c = 0; c < heads.length; c++) {
+            html += '<td>' + inlineFormat(row[c] || '') + '</td>';
+          }
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        out.push(html);
+        continue;
+      }
+
+      var bq = line.match(/^\s{0,3}>\s?(.*)$/);
+      if (bq) {
+        var bqlines = [bq[1]];
+        i++;
+        while (i < lines.length) {
+          var bm = lines[i].match(/^\s{0,3}>\s?(.*)$/);
+          if (!bm) break;
+          bqlines.push(bm[1]);
+          i++;
+        }
+        out.push('<blockquote><p>' + inlineFormat(bqlines.join('\n')) + '</p></blockquote>');
+        continue;
+      }
+
+      // 无序：- * + • · －
+      var ul = line.match(/^\s{0,3}([-*+•·－])\s+(.+)$/);
+      if (ul) {
+        var items = [ul[2]];
+        i++;
+        while (i < lines.length) {
+          var um = lines[i].match(/^\s{0,3}([-*+•·－])\s+(.+)$/);
+          if (!um) break;
+          items.push(um[2]);
+          i++;
+        }
+        out.push('<ul>' + items.map(function (it) {
+          return '<li>' + inlineFormat(it) + '</li>';
+        }).join('') + '</ul>');
+        continue;
+      }
+
+      // 有序：1. 1、 1)
+      var ol = line.match(/^\s{0,3}(\d+)([.、)])\s+(.+)$/);
+      if (ol) {
+        var oitems = [ol[3]];
+        i++;
+        while (i < lines.length) {
+          var om = lines[i].match(/^\s{0,3}(\d+)([.、)])\s+(.+)$/);
+          if (!om) break;
+          oitems.push(om[3]);
+          i++;
+        }
+        out.push('<ol>' + oitems.map(function (it) {
+          return '<li>' + inlineFormat(it) + '</li>';
+        }).join('') + '</ol>');
+        continue;
+      }
+
+      // 段落：吃到空行或下一块
+      var para = [line];
+      i++;
+      while (i < lines.length) {
+        var n = lines[i];
+        if (/^\s*$/.test(n)) break;
+        if (/^\s*%%MEO\d+%%\s*$/.test(n)) break;
+        if (/^\s*(#{1,6})\s*/.test(n)) break;
+        if (/^\s{0,3}>\s?/.test(n)) break;
+        if (/^\s{0,3}([-*+•·－])\s+/.test(n)) break;
+        if (/^\s{0,3}\d+[.、)]\s+/.test(n)) break;
+        if (/^\s*(?:---|\*\*\*|___)\s*$/.test(n)) break;
+        if (i + 1 < lines.length && /\|/.test(n) && isTableSep(lines[i + 1])) break;
+        para.push(n);
+        i++;
+      }
+      out.push('<p>' + inlineFormat(para.join('\n')) + '</p>');
+    }
+
+    return out.join('') || '<p></p>';
+  }
+
+  function looksLikeHtml(s) {
+    var t = String(s || '').trim();
+    return (
+      t.charAt(0) === '<' &&
+      /<\/?[a-z][\s\S]*>/i.test(t) &&
+      /<(p|div|h[1-6]|table|ul|ol|li|br|pre|blockquote|span|strong)\b/i.test(t)
+    );
+  }
+
+  function sanitizeHtml(html) {
+    var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    doc.querySelectorAll('script,style,iframe,object,embed,link,meta').forEach(function (n) {
+      n.remove();
+    });
+    doc.querySelectorAll('*').forEach(function (el) {
+      Array.prototype.slice.call(el.attributes || []).forEach(function (a) {
+        var name = a.name || '';
+        var val = a.value || '';
+        if (/^on/i.test(name) || (name === 'href' && /^\s*javascript:/i.test(val))) {
+          el.removeAttribute(name);
+        }
+      });
+    });
+    return doc.body ? doc.body.innerHTML : '';
+  }
+
+  function ensureLog() {
+    var empty = document.getElementById('empty');
+    if (empty) empty.remove();
+    return document.getElementById('log');
+  }
+
+  function scrollBottom() {
+    requestAnimationFrame(function () {
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+  }
+
+  window.MeoAIChat = {
+    clear: function () {
+      var log = document.getElementById('log');
+      log.innerHTML = '<div class="empty" id="empty">开始对话吧</div>';
+    },
+    appendUser: function (text) {
+      var log = ensureLog();
+      var row = document.createElement('div');
+      row.className = 'row user';
+      var bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text == null ? '' : String(text);
+      row.appendChild(bubble);
+      log.appendChild(row);
+      scrollBottom();
+    },
+    appendAssistant: function (markdown) {
+      var log = ensureLog();
+      var row = document.createElement('div');
+      row.className = 'row assistant';
+      var body = document.createElement('div');
+      body.className = 'assistant-body';
+      var src = markdown == null ? '' : String(markdown);
+      try {
+        if (looksLikeHtml(src)) {
+          body.innerHTML = sanitizeHtml(src);
+        } else {
+          body.innerHTML = mdToHtml(src);
+        }
+      } catch (e) {
+        body.textContent = src;
+      }
+      row.appendChild(body);
+      log.appendChild(row);
+      scrollBottom();
+    },
+    appendSystem: function (text) {
+      var log = ensureLog();
+      var row = document.createElement('div');
+      row.className = 'row system';
+      var body = document.createElement('div');
+      body.className = 'system-body';
+      body.textContent = text == null ? '' : String(text);
+      row.appendChild(body);
+      log.appendChild(row);
+      scrollBottom();
+    },
+    /** 供原生侧自检：返回解析后的 HTML 片段 */
+    debugRender: function (markdown) {
+      return mdToHtml(markdown);
+    }
+  };
+})();
+</script>
+</body>
+</html>

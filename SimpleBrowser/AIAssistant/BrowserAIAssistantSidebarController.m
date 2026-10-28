@@ -2,6 +2,7 @@
 #import "BrowserAIAssistantPreferences.h"
 #import "BrowserAIAssistantPrompts.h"
 #import "BrowserAIAssistantClient.h"
+#import "BrowserAIAssistantChatPanel.h"
 #import "AIBridgeRegistry.h"
 #import "AIBridgeService.h"
 #import "SBTextView.h"
@@ -9,12 +10,6 @@
 static const CGFloat kSidebarDefaultWidth = 360.0;
 static const CGFloat kSidebarMinWidth = 280.0;
 static const CGFloat kSidebarMaxWidth = 560.0;
-
-@interface BrowserAIAssistantFlippedView : NSView
-@end
-@implementation BrowserAIAssistantFlippedView
-- (BOOL)isFlipped { return YES; }
-@end
 
 @interface BrowserAIAssistantResizeView : NSView
 @property (nonatomic, copy, nullable) void (^onDragBegan)(void);
@@ -60,7 +55,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 }
 @end
 
-@interface BrowserAIAssistantSidebarController ()
+@interface BrowserAIAssistantSidebarController () <NSTextViewDelegate>
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
 @property (nonatomic, assign, readwrite) BOOL visible;
@@ -71,13 +66,12 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
 @property (nonatomic, strong) NSPopUpButton *modelPopup;
 @property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSTextView *transcriptView;
+@property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
 @property (nonatomic, strong) SBTextView *inputView;
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
 @property (nonatomic, strong) NSButton *bridgeButton;
 @property (nonatomic, assign) BOOL inFlight;
-@property (nonatomic, strong) NSMutableString *transcriptBuffer;
 
 @property (nonatomic, strong, nullable) id registryObserver;
 @property (nonatomic, strong, nullable) id serviceObserver;
@@ -91,7 +85,6 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         CGFloat w = BrowserAIAssistantPreferences.sharedPreferences.sidebarWidth;
         if (w < kSidebarMinWidth || w > kSidebarMaxWidth) w = kSidebarDefaultWidth;
         _currentWidth = w;
-        _transcriptBuffer = [NSMutableString string];
         [self buildUI];
         __weak typeof(self) weakSelf = self;
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -186,34 +179,23 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.bridgeButton.controlSize = NSControlSizeSmall;
 
     NSTextField *chatCaption = [self makeCaption:@"对话"];
-    NSScrollView *transcriptScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    transcriptScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    transcriptScroll.hasVerticalScroller = YES;
-    transcriptScroll.borderType = NSBezelBorder;
-    transcriptScroll.drawsBackground = YES;
-    NSTextView *transcript = [[NSTextView alloc] initWithFrame:NSZeroRect];
-    transcript.editable = NO;
-    transcript.selectable = YES;
-    transcript.font = [NSFont systemFontOfSize:12];
-    transcript.textContainerInset = NSMakeSize(6, 6);
-    transcript.string = @"";
-    transcriptScroll.documentView = transcript;
-    self.transcriptView = transcript;
+    self.chatPanel = [[BrowserAIAssistantChatPanel alloc] initWithFrame:NSZeroRect];
+    self.chatPanel.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSTextField *inputCaption = [self makeCaption:@"输入"];
+    NSTextField *inputCaption = [self makeCaption:@"输入（回车发送 · Shift+回车换行）"];
     NSScrollView *inputScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     inputScroll.translatesAutoresizingMaskIntoConstraints = NO;
     inputScroll.hasVerticalScroller = YES;
     inputScroll.borderType = NSBezelBorder;
     SBTextView *input = [SBTextView standardTextView];
     input.font = [NSFont systemFontOfSize:12];
+    input.delegate = self;
     inputScroll.documentView = input;
     self.inputView = input;
 
     self.sendButton = [NSButton buttonWithTitle:@"发送" target:self action:@selector(sendClicked:)];
     self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.sendButton.bezelStyle = NSBezelStyleRounded;
-    self.sendButton.keyEquivalent = @"\r";
 
     self.cancelButton = [NSButton buttonWithTitle:@"取消" target:self action:@selector(cancelClicked:)];
     self.cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -227,7 +209,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
     NSArray *views = @[
         title, closeBtn, modelCaption, self.modelPopup, self.statusLabel, self.bridgeButton,
-        chatCaption, transcriptScroll, inputCaption, inputScroll,
+        chatCaption, self.chatPanel, inputCaption, inputScroll,
         self.sendButton, self.cancelButton, clearBtn
     ];
     for (NSView *v in views) {
@@ -270,11 +252,11 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [chatCaption.topAnchor constraintEqualToAnchor:self.bridgeButton.bottomAnchor constant:12],
         [chatCaption.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
 
-        [transcriptScroll.topAnchor constraintEqualToAnchor:chatCaption.bottomAnchor constant:4],
-        [transcriptScroll.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
-        [transcriptScroll.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-14],
+        [self.chatPanel.topAnchor constraintEqualToAnchor:chatCaption.bottomAnchor constant:4],
+        [self.chatPanel.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
+        [self.chatPanel.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-14],
 
-        [inputCaption.topAnchor constraintEqualToAnchor:transcriptScroll.bottomAnchor constant:10],
+        [inputCaption.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:10],
         [inputCaption.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:14],
 
         [inputScroll.topAnchor constraintEqualToAnchor:inputCaption.bottomAnchor constant:4],
@@ -292,8 +274,8 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [clearBtn.centerYAnchor constraintEqualToAnchor:self.sendButton.centerYAnchor],
         [clearBtn.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-14],
 
-        [transcriptScroll.bottomAnchor constraintEqualToAnchor:inputCaption.topAnchor constant:-10],
-        [transcriptScroll.heightAnchor constraintGreaterThanOrEqualToConstant:160],
+        [self.chatPanel.bottomAnchor constraintEqualToAnchor:inputCaption.topAnchor constant:-10],
+        [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:180],
     ]];
 
     self.view = root;
@@ -399,15 +381,24 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.modelPopup.enabled = !self.inFlight;
 }
 
-#pragma mark - Transcript
+#pragma mark - NSTextViewDelegate（回车发送）
 
-- (void)appendTranscriptRole:(NSString *)role text:(NSString *)text {
-    if (self.transcriptBuffer.length > 0) {
-        [self.transcriptBuffer appendString:@"\n\n"];
+- (BOOL)textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
+    if (textView != self.inputView) {
+        return NO;
     }
-    [self.transcriptBuffer appendFormat:@"【%@】\n%@", role, text ?: @""];
-    self.transcriptView.string = self.transcriptBuffer;
-    [self.transcriptView scrollRangeToVisible:NSMakeRange(self.transcriptView.string.length, 0)];
+    if (commandSelector == @selector(insertNewline:)) {
+        NSEvent *e = NSApp.currentEvent;
+        BOOL shift = (e.modifierFlags & NSEventModifierFlagShift) != 0;
+        if (shift) {
+            return NO; // Shift+Enter 换行
+        }
+        if (!self.inFlight && self.sendButton.enabled) {
+            [self sendClicked:nil];
+        }
+        return YES;
+    }
+    return NO;
 }
 
 #pragma mark - Actions
@@ -430,15 +421,14 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
 - (void)clearClicked:(id)sender {
     (void)sender;
-    [self.transcriptBuffer setString:@""];
-    self.transcriptView.string = @"";
+    [self.chatPanel clear];
 }
 
 - (void)cancelClicked:(id)sender {
     (void)sender;
     [[BrowserAIAssistantClient sharedClient] cancelInFlight];
     self.inFlight = NO;
-    [self appendTranscriptRole:@"系统" text:@"已取消"];
+    [self.chatPanel appendSystemText:@"已取消"];
     [self reloadUI];
 }
 
@@ -466,7 +456,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
     NSString *model = [self selectedModelId];
     BrowserAIAssistantPreferences.sharedPreferences.lastModelId = model;
-    [self appendTranscriptRole:@"你" text:text];
+    [self.chatPanel appendUserText:text];
     if (clearInput) {
         self.inputView.string = @"";
     }
@@ -479,11 +469,11 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     [[BrowserAIAssistantClient sharedClient] chatWithModel:model prompt:text completion:^(NSInteger httpStatus, NSString *assistantText, NSString *errorMessage) {
         weakSelf.inFlight = NO;
         if (errorMessage.length) {
-            [weakSelf appendTranscriptRole:@"错误" text:[NSString stringWithFormat:@"HTTP %ld · %@", (long)httpStatus, errorMessage]];
+            [weakSelf.chatPanel appendSystemText:[NSString stringWithFormat:@"HTTP %ld · %@", (long)httpStatus, errorMessage]];
             weakSelf.statusLabel.stringValue = errorMessage;
             weakSelf.statusLabel.textColor = NSColor.systemRedColor;
         } else {
-            [weakSelf appendTranscriptRole:@"助手" text:assistantText ?: @""];
+            [weakSelf.chatPanel appendAssistantMarkdown:assistantText ?: @""];
             weakSelf.statusLabel.stringValue = [NSString stringWithFormat:@"完成 · HTTP %ld", (long)httpStatus];
             weakSelf.statusLabel.textColor = NSColor.systemGreenColor;
         }
@@ -491,8 +481,13 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     }];
 }
 
-- (void)presentAction:(NSString *)actionKey selection:(NSString *)selection autoSend:(BOOL)autoSend {
-    NSString *prompt = [BrowserAIAssistantPrompts promptForAction:actionKey selection:selection ?: @""];
+- (void)presentAction:(NSString *)actionKey
+              context:(NSString *)context
+          pageContext:(BOOL)pageContext
+             autoSend:(BOOL)autoSend {
+    NSString *prompt = [BrowserAIAssistantPrompts promptForAction:actionKey
+                                                          context:context ?: @""
+                                                      pageContext:pageContext];
     self.inputView.string = prompt;
     [self reloadUI];
     BOOL bound = [self isProviderBound:[self selectedProviderId]];
@@ -502,7 +497,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         self.statusLabel.stringValue = @"未绑定，无法使用。请在 AI Bridge 侧栏绑定对应网页标签。";
         self.statusLabel.textColor = NSColor.systemOrangeColor;
     } else {
-        NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey];
+        NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey pageContext:pageContext];
         self.statusLabel.stringValue = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title];
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
     }

@@ -266,10 +266,184 @@
     return api;
   }
 
+  /**
+   * 从已渲染的 Markdown DOM（如 DeepSeek .ds-markdown）还原 Markdown 文本。
+   * 避免 innerText 把表格/标题压成纯文本，导致侧栏无法排版。
+   */
+  function richMarkdownFromElement(root) {
+    if (!root) return '';
+
+    function cellText(el) {
+      return String((el && (el.innerText || el.textContent)) || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\|/g, '\\|')
+        .trim();
+    }
+
+    function tableToMd(table) {
+      var trs = qsa('tr', table);
+      if (!trs.length) return '';
+      var rows = trs.map(function (tr) {
+        return qsa('th,td', tr).map(cellText);
+      }).filter(function (r) {
+        return r.length > 0;
+      });
+      if (!rows.length) return '';
+      var width = 0;
+      rows.forEach(function (r) {
+        if (r.length > width) width = r.length;
+      });
+      rows = rows.map(function (r) {
+        var copy = r.slice();
+        while (copy.length < width) copy.push('');
+        return copy;
+      });
+      var lines = [];
+      lines.push('| ' + rows[0].join(' | ') + ' |');
+      lines.push('| ' + rows[0].map(function () { return '---'; }).join(' | ') + ' |');
+      for (var i = 1; i < rows.length; i++) {
+        lines.push('| ' + rows[i].join(' | ') + ' |');
+      }
+      return lines.join('\n') + '\n\n';
+    }
+
+    function walk(node, acc) {
+      if (!node) return;
+      var type = node.nodeType;
+      if (type === 3) {
+        // TEXT
+        var t = String(node.nodeValue || '').replace(/\u00a0/g, ' ');
+        if (t) acc.push(t);
+        return;
+      }
+      if (type !== 1) return; // ELEMENT
+      var tag = (node.tagName || '').toLowerCase();
+      if (tag === 'script' || tag === 'style' || tag === 'svg' || tag === 'noscript' ||
+          tag === 'button' || tag === 'textarea' || tag === 'input') {
+        return;
+      }
+      // 常见「引用/复制」工具条
+      var cls = String(node.className || '');
+      if (/ds-icon-button|copy-button|toolbar|citation/i.test(cls) && tag !== 'table') {
+        // 仍允许内含正文的容器继续；纯工具条跳过
+        if (!qsa('p,h1,h2,h3,h4,li,table,pre', node).length) return;
+      }
+
+      if (/^h[1-6]$/.test(tag)) {
+        var level = Number(tag.charAt(1)) || 1;
+        var hashes = '######'.slice(0, level);
+        var title = cellText(node);
+        if (title) acc.push('\n\n' + hashes + ' ' + title + '\n\n');
+        return;
+      }
+      if (tag === 'br') {
+        acc.push('\n');
+        return;
+      }
+      if (tag === 'hr') {
+        acc.push('\n\n---\n\n');
+        return;
+      }
+      if (tag === 'table') {
+        acc.push('\n\n' + tableToMd(node));
+        return;
+      }
+      if (tag === 'pre') {
+        var codeEl = qs('code', node) || node;
+        var code = String(codeEl.textContent || '').replace(/\n$/, '');
+        acc.push('\n\n```\n' + code + '\n```\n\n');
+        return;
+      }
+      if (tag === 'code') {
+        // 行内 code（pre>code 已在 pre 处理）
+        if (node.parentElement && (node.parentElement.tagName || '').toLowerCase() === 'pre') return;
+        acc.push('`' + String(node.textContent || '').replace(/`/g, '\\`') + '`');
+        return;
+      }
+      if (tag === 'strong' || tag === 'b') {
+        acc.push('**');
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, acc); });
+        acc.push('**');
+        return;
+      }
+      if (tag === 'em' || tag === 'i') {
+        acc.push('*');
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, acc); });
+        acc.push('*');
+        return;
+      }
+      if (tag === 'a') {
+        var href = node.getAttribute('href') || '';
+        var labelAcc = [];
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, labelAcc); });
+        var label = labelAcc.join('').trim() || href;
+        if (href && /^https?:/i.test(href)) {
+          acc.push('[' + label + '](' + href + ')');
+        } else {
+          acc.push(label);
+        }
+        return;
+      }
+      if (tag === 'blockquote') {
+        var bq = [];
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, bq); });
+        var bqt = bq.join('').trim().split(/\n/).map(function (ln) {
+          return '> ' + ln;
+        }).join('\n');
+        if (bqt) acc.push('\n\n' + bqt + '\n\n');
+        return;
+      }
+      if (tag === 'ul' || tag === 'ol') {
+        var ordered = tag === 'ol';
+        var items = Array.prototype.filter.call(node.children || [], function (c) {
+          return (c.tagName || '').toLowerCase() === 'li';
+        });
+        if (!items.length) items = qsa('li', node);
+        var lines = [];
+        items.forEach(function (li, idx) {
+          var ia = [];
+          Array.prototype.forEach.call(li.childNodes, function (c) { walk(c, ia); });
+          var it = ia.join('').replace(/\s+/g, ' ').trim();
+          if (!it) return;
+          lines.push((ordered ? idx + 1 + '. ' : '- ') + it);
+        });
+        if (lines.length) acc.push('\n\n' + lines.join('\n') + '\n\n');
+        return;
+      }
+      if (tag === 'li') {
+        // 由 ul/ol 处理
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, acc); });
+        return;
+      }
+      if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'article') {
+        var before = acc.length;
+        Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, acc); });
+        if (acc.length > before) {
+          // 块级后补空行
+          var last = acc[acc.length - 1];
+          if (last && !/\n\n$/.test(last)) acc.push('\n\n');
+        }
+        return;
+      }
+
+      Array.prototype.forEach.call(node.childNodes, function (c) { walk(c, acc); });
+    }
+
+    var parts = [];
+    walk(root, parts);
+    return parts
+      .join('')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   global.AIBridgeRuntime = {
     install: install,
     nativeSetValue: nativeSetValue,
     qs: qs,
-    qsa: qsa
+    qsa: qsa,
+    richMarkdownFromElement: richMarkdownFromElement
   };
 })(typeof window !== 'undefined' ? window : this);

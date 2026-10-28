@@ -3105,10 +3105,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionAIAssistantID];
 }
 
-- (void)openAIAssistantWithAction:(NSString *)actionKey selection:(NSString *)selection {
+- (void)openAIAssistantWithAction:(NSString *)actionKey
+                          context:(NSString *)context
+                      pageContext:(BOOL)pageContext {
     [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
     [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentAction:actionKey selection:selection ?: @"" autoSend:YES];
+    [self.aiAssistantSidebarController presentAction:actionKey
+                                             context:context ?: @""
+                                         pageContext:pageContext
+                                            autoSend:YES];
     [self updateAIAssistantButtonAppearance];
     [self updateAIBridgeButtonAppearance];
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];

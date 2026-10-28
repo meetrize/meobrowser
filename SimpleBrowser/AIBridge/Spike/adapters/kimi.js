@@ -416,6 +416,14 @@
    *   .markdown-container:not(.toolcall-content-text) .markdown → 真正回复
    * 切勿用 [class*="tool"] 删除节点：会误伤 toolcall / markdown-container。
    */
+  function richFrom(el) {
+    if (!el) return '';
+    var rich =
+      (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(el)) || '';
+    if (rich && rich.trim()) return rich.trim();
+    return stripStatusLines(el.innerText || el.textContent || '');
+  }
+
   function extractAnswerFromItem(item) {
     if (!item) return '';
 
@@ -426,7 +434,7 @@
       var c = containers[i];
       if (c.classList && c.classList.contains('toolcall-content-text')) continue;
       if (isInsideThinkingChrome(c)) continue;
-      var ct = stripStatusLines(c.innerText || c.textContent || '');
+      var ct = stripStatusLines(richFrom(c));
       if (ct && !isStatusOnlyText(ct)) best = ct;
     }
     if (best) return best;
@@ -437,7 +445,7 @@
       var md = marks[m];
       if (isInsideThinkingChrome(md)) continue;
       if (md.closest && md.closest('.toolcall-content-text')) continue;
-      var mt = stripStatusLines(md.innerText || md.textContent || '');
+      var mt = stripStatusLines(richFrom(md));
       if (mt && !isStatusOnlyText(mt)) best = mt;
     }
     if (best) return best;

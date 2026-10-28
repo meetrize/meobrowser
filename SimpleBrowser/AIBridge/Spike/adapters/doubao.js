@@ -157,6 +157,9 @@
       item.querySelector('[data-testid="message_text_content"]') ||
       item.querySelector('.md-box-root');
     if (!md) return '';
+    var rich =
+      (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(md)) || '';
+    if (rich && rich.trim()) return rich.trim();
     return normalizeText(md.innerText || md.textContent || '');
   }
 

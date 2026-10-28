@@ -180,6 +180,9 @@
 
   function extractAnswerFromItem(item) {
     if (!item) return '';
+    var rich =
+      (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(item)) || '';
+    if (rich && rich.trim()) return rich.trim();
     return normalizeText(item.innerText || item.textContent || '');
   }
 

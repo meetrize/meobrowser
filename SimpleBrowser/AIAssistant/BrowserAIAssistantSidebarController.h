@@ -18,9 +18,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated;
 - (void)reloadUI;
 
-/// 划词 / 外部入口：填入 prompt；autoSend 且模型已绑定时自动发送。
+/// 划词 / 页面入口。pageContext=YES 时 context 为页面信息（标题+URL）。
 - (void)presentAction:(NSString *)actionKey
-            selection:(NSString *)selection
+              context:(NSString *)context
+          pageContext:(BOOL)pageContext
              autoSend:(BOOL)autoSend;
 
 @end

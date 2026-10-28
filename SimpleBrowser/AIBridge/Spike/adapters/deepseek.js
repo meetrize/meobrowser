@@ -88,11 +88,20 @@
     });
   }
 
+  function extractAssistantMarkdown(el) {
+    if (!el) return '';
+    var md =
+      (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(el)) ||
+      '';
+    if (md && md.trim()) return md.trim();
+    return ((el.innerText || el.textContent || '') + '').trim();
+  }
+
   function readLastAssistant() {
     var list = assistantNodes();
     var el = list.length ? list[list.length - 1] : null;
     return {
-      text: el ? (el.innerText || '').trim() : '',
+      text: extractAssistantMarkdown(el),
       count: list.length,
       messageId: null
     };

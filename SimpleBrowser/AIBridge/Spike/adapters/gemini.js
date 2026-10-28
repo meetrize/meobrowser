@@ -200,9 +200,16 @@
       item.querySelector('.markdown') ||
       item.querySelector('message-content') ||
       item.querySelector('.model-response-text');
-    var raw = md
-      ? md.innerText || md.textContent || ''
-      : item.innerText || item.textContent || '';
+    var raw = '';
+    if (md) {
+      raw =
+        (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(md)) ||
+        md.innerText ||
+        md.textContent ||
+        '';
+    } else {
+      raw = item.innerText || item.textContent || '';
+    }
     raw = String(raw)
       .replace(/\n?登录即可关联到[^\n]*/g, '')
       .replace(/\n?Sign in to[^\n]*/gi, '');

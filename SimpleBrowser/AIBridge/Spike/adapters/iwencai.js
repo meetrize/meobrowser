@@ -172,7 +172,9 @@
       item.querySelector('.aime-markdown') ||
       item.querySelector('.rich-text-container');
     if (!md) return '';
-    var text = normalizeText(md.innerText || md.textContent || '');
+    var rich =
+      (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(md)) || '';
+    var text = rich && rich.trim() ? rich.trim() : normalizeText(md.innerText || md.textContent || '');
     // strip status headers if leaked
     text = text
       .replace(/^问财\s*模型答案生成完成\s*/g, '')
