@@ -5,8 +5,10 @@
 #import "SBTextField.h"
 
 static const CGFloat kPanelWidth = 320.0;
+/// 与系统 NSPopover 圆角接近
+static const CGFloat kPopoverCornerRadius = 10.0;
 static const CGFloat kSearchTop = 10.0;
-static const CGFloat kSearchHeight = 24.0;
+static const CGFloat kSearchHeight = 28.0;
 static const CGFloat kSearchToList = 8.0;
 static const CGFloat kHeaderHeight = 24.0;
 static const CGFloat kRowHeight = 44.0;
@@ -24,6 +26,7 @@ static const CGFloat kMaxPopoverHeight = 520.0;
 @end
 
 @interface AIAssistantHistoryPanel () <NSTextFieldDelegate>
+@property (nonatomic, strong) NSView *searchChrome;
 @property (nonatomic, strong) SBTextField *searchField;
 @property (nonatomic, strong) NSScrollView *scroll;
 @property (nonatomic, strong) NSStackView *listStack;
@@ -162,12 +165,37 @@ static const CGFloat kMaxPopoverHeight = 520.0;
 }
 
 - (void)build {
+    // 圆角外壳与 Popover 一致；输入框本身无系统蓝焦点环
+    self.searchChrome = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.searchChrome.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchChrome.wantsLayer = YES;
+    self.searchChrome.layer.cornerRadius = kPopoverCornerRadius;
+    self.searchChrome.layer.masksToBounds = YES;
+    if (@available(macOS 10.14, *)) {
+        self.searchChrome.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+        self.searchChrome.layer.borderColor = NSColor.separatorColor.CGColor;
+    } else {
+        self.searchChrome.layer.backgroundColor = NSColor.textBackgroundColor.CGColor;
+        self.searchChrome.layer.borderColor = NSColor.gridColor.CGColor;
+    }
+    self.searchChrome.layer.borderWidth = 1.0;
+
     self.searchField = [SBTextField standardField];
     self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
     self.searchField.placeholderString = @"搜索会话";
     self.searchField.delegate = self;
     self.searchField.target = self;
     self.searchField.action = @selector(searchChanged:);
+    self.searchField.bezeled = NO;
+    self.searchField.bordered = NO;
+    self.searchField.drawsBackground = NO;
+    self.searchField.focusRingType = NSFocusRingTypeNone;
+    self.searchField.cell.focusRingType = NSFocusRingTypeNone;
+    // 紧凑区 + 空闲/编辑均垂直居中（占位符与输入文字）
+    self.searchField.usesCompactVerticalTextInsets = YES;
+    self.searchField.centersCompactTextWhenIdle = YES;
+    self.searchField.centersCompactTextWhenEditing = YES;
+    self.searchField.font = [NSFont systemFontOfSize:12];
 
     self.scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     self.scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -191,7 +219,8 @@ static const CGFloat kMaxPopoverHeight = 520.0;
     self.emptyLabel.textColor = NSColor.tertiaryLabelColor;
     self.emptyLabel.hidden = YES;
 
-    [self addSubview:self.searchField];
+    [self.searchChrome addSubview:self.searchField];
+    [self addSubview:self.searchChrome];
     [self addSubview:self.scroll];
     [self addSubview:self.emptyLabel];
 
@@ -199,12 +228,17 @@ static const CGFloat kMaxPopoverHeight = 520.0;
     self.scrollHeightConstraint.priority = NSLayoutPriorityRequired;
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.searchField.topAnchor constraintEqualToAnchor:self.topAnchor constant:kSearchTop],
-        [self.searchField.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
-        [self.searchField.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-10],
-        [self.searchField.heightAnchor constraintEqualToConstant:kSearchHeight],
+        [self.searchChrome.topAnchor constraintEqualToAnchor:self.topAnchor constant:kSearchTop],
+        [self.searchChrome.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:10],
+        [self.searchChrome.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-10],
+        [self.searchChrome.heightAnchor constraintEqualToConstant:kSearchHeight],
 
-        [self.scroll.topAnchor constraintEqualToAnchor:self.searchField.bottomAnchor constant:kSearchToList],
+        [self.searchField.topAnchor constraintEqualToAnchor:self.searchChrome.topAnchor],
+        [self.searchField.bottomAnchor constraintEqualToAnchor:self.searchChrome.bottomAnchor],
+        [self.searchField.leadingAnchor constraintEqualToAnchor:self.searchChrome.leadingAnchor constant:8],
+        [self.searchField.trailingAnchor constraintEqualToAnchor:self.searchChrome.trailingAnchor constant:-8],
+
+        [self.scroll.topAnchor constraintEqualToAnchor:self.searchChrome.bottomAnchor constant:kSearchToList],
         [self.scroll.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
         [self.scroll.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [self.scroll.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
@@ -219,6 +253,22 @@ static const CGFloat kMaxPopoverHeight = 520.0;
         [self.emptyLabel.centerXAnchor constraintEqualToAnchor:self.scroll.centerXAnchor],
         [self.emptyLabel.centerYAnchor constraintEqualToAnchor:self.scroll.centerYAnchor],
     ]];
+}
+
+- (void)updateSearchChromeAppearance {
+    if (!self.searchChrome.layer) return;
+    if (@available(macOS 10.14, *)) {
+        self.searchChrome.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+        self.searchChrome.layer.borderColor = NSColor.separatorColor.CGColor;
+    } else {
+        self.searchChrome.layer.backgroundColor = NSColor.textBackgroundColor.CGColor;
+        self.searchChrome.layer.borderColor = NSColor.gridColor.CGColor;
+    }
+}
+
+- (void)viewDidChangeEffectiveAppearance {
+    [super viewDidChangeEffectiveAppearance];
+    [self updateSearchChromeAppearance];
 }
 
 - (CGFloat)headerChromeHeight {

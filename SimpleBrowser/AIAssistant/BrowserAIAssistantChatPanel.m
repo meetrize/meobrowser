@@ -6,6 +6,9 @@
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, assign) BOOL pageReady;
 @property (nonatomic, strong) NSMutableArray<dispatch_block_t> *pending;
+/// 串行化所有 JS，避免 clear/append 交错导致消息顺序颠倒
+@property (nonatomic, strong) NSMutableArray<void (^)(void (^done)(void))> *jsQueue;
+@property (nonatomic, assign) BOOL jsBusy;
 @end
 
 @implementation BrowserAIAssistantChatPanel
@@ -14,6 +17,7 @@
     self = [super initWithFrame:frameRect];
     if (self) {
         _pending = [NSMutableArray array];
+        _jsQueue = [NSMutableArray array];
         self.wantsLayer = YES;
         self.layer.cornerRadius = 6;
         self.layer.masksToBounds = YES;
@@ -55,21 +59,45 @@
         [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
         return;
     }
-    // 兜底：内联极简页
     NSString *html = @"<!DOCTYPE html><meta charset=utf-8><body style='font:13px -apple-system'><div id=log></div>"
                       "<script>window.MeoAIChat={clear:function(){log.innerHTML=''},"
                       "appendUser:function(t){var d=document.createElement('div');d.textContent='我: '+t;log.appendChild(d);},"
                       "appendAssistant:function(t){var d=document.createElement('div');d.textContent=t;log.appendChild(d);},"
-                      "appendSystem:function(t){var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);}};</script>";
+                      "appendSystem:function(t){var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);},"
+                      "setMessages:function(items){log.innerHTML='';(items||[]).forEach(function(it){var r=it.role||'user';"
+                      "if(r==='assistant')MeoAIChat.appendAssistant(it.content||'');"
+                      "else if(r==='system')MeoAIChat.appendSystem(it.content||'');"
+                      "else MeoAIChat.appendUser(it.content||'');});}};</script>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
+- (void)enqueueJS:(void (^)(void (^done)(void)))work {
+    if (!work) return;
+    [self.jsQueue addObject:[work copy]];
+    [self drainJSQueue];
+}
+
+- (void)drainJSQueue {
+    if (self.jsBusy || self.jsQueue.count == 0 || !self.pageReady) {
+        return;
+    }
+    self.jsBusy = YES;
+    void (^work)(void (^)(void)) = self.jsQueue.firstObject;
+    [self.jsQueue removeObjectAtIndex:0];
+    __weak typeof(self) weakSelf = self;
+    work(^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.jsBusy = NO;
+            [weakSelf drainJSQueue];
+        });
+    });
+}
+
 /// 用 Base64 传文本，避免超长 / 特殊字符在 evaluateJavaScript 拼串时出问题。
-- (void)callChatMethod:(NSString *)methodName utf8Text:(NSString *)text {
+- (void)callChatMethod:(NSString *)methodName utf8Text:(NSString *)text done:(void (^)(void))done {
     NSString *s = text ?: @"";
     NSData *data = [s dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
     NSString *b64 = [data base64EncodedStringWithOptions:0] ?: @"";
-    // atob → 二进制串 → TextDecoder UTF-8
     NSString *js = [NSString stringWithFormat:
         @"(function(){try{"
          "if(!window.MeoAIChat||typeof window.MeoAIChat[%@]!=='function')return 'noapi';"
@@ -84,7 +112,9 @@
         [self jsQuote:methodName],
         [self jsQuote:b64],
         [self jsQuote:methodName]];
-    [self.webView evaluateJavaScript:js completionHandler:nil];
+    [self.webView evaluateJavaScript:js completionHandler:^(__unused id r, __unused NSError *e) {
+        if (done) done();
+    }];
 }
 
 - (NSString *)jsQuote:(NSString *)s {
@@ -109,46 +139,71 @@
 - (void)clear {
     __weak typeof(self) weakSelf = self;
     [self runWhenReady:^{
-        [weakSelf.webView evaluateJavaScript:@"window.MeoAIChat && MeoAIChat.clear()" completionHandler:nil];
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf.webView evaluateJavaScript:@"window.MeoAIChat && MeoAIChat.clear()"
+                               completionHandler:^(__unused id r, __unused NSError *e) {
+                if (done) done();
+            }];
+        }];
     }];
 }
 
 - (void)appendUserText:(NSString *)text {
     __weak typeof(self) weakSelf = self;
+    NSString *copy = [text copy] ?: @"";
     [self runWhenReady:^{
-        [weakSelf callChatMethod:@"appendUser" utf8Text:text];
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf callChatMethod:@"appendUser" utf8Text:copy done:done];
+        }];
     }];
 }
 
 - (void)appendAssistantMarkdown:(NSString *)markdown {
     __weak typeof(self) weakSelf = self;
+    NSString *copy = [markdown copy] ?: @"";
     [self runWhenReady:^{
-        [weakSelf callChatMethod:@"appendAssistant" utf8Text:markdown];
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf callChatMethod:@"appendAssistant" utf8Text:copy done:done];
+        }];
     }];
 }
 
 - (void)appendSystemText:(NSString *)text {
     __weak typeof(self) weakSelf = self;
+    NSString *copy = [text copy] ?: @"";
     [self runWhenReady:^{
-        [weakSelf callChatMethod:@"appendSystem" utf8Text:text];
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf callChatMethod:@"appendSystem" utf8Text:copy done:done];
+        }];
     }];
 }
 
 - (void)reloadMessages:(NSArray<AIAssistantMessage *> *)messages {
     __weak typeof(self) weakSelf = self;
-    NSArray *copy = [messages copy] ?: @[];
+    NSMutableArray *payload = [NSMutableArray arrayWithCapacity:messages.count];
+    for (AIAssistantMessage *m in messages ?: @[]) {
+        NSString *role = m.role.length ? m.role : @"user";
+        [payload addObject:@{
+            @"role": role,
+            @"content": m.content ?: @"",
+        }];
+    }
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"[]";
     [self runWhenReady:^{
-        [weakSelf.webView evaluateJavaScript:@"window.MeoAIChat && MeoAIChat.clear()" completionHandler:^(id r, NSError *e) {
-            (void)r; (void)e;
-            for (AIAssistantMessage *m in copy) {
-                if ([m.role isEqualToString:@"assistant"]) {
-                    [weakSelf callChatMethod:@"appendAssistant" utf8Text:m.content];
-                } else if ([m.role isEqualToString:@"system"]) {
-                    [weakSelf callChatMethod:@"appendSystem" utf8Text:m.content];
-                } else {
-                    [weakSelf callChatMethod:@"appendUser" utf8Text:m.content];
-                }
-            }
+        // 丢弃尚未执行的增量 append，避免与整表重载交错
+        [weakSelf.jsQueue removeAllObjects];
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            NSString *js = [NSString stringWithFormat:
+                @"(function(){try{"
+                 "if(!window.MeoAIChat||typeof window.MeoAIChat.setMessages!=='function')return 'noapi';"
+                 "window.MeoAIChat.setMessages(%@);"
+                 "return 'ok';"
+                 "}catch(e){return 'err:'+String(e);}})()",
+                json ?: @"[]"];
+            [weakSelf.webView evaluateJavaScript:js completionHandler:^(__unused id r, __unused NSError *e) {
+                if (done) done();
+            }];
         }];
     }];
 }
@@ -162,6 +217,7 @@
     for (dispatch_block_t b in queued) {
         b();
     }
+    [self drainJSQueue];
 }
 
 @end

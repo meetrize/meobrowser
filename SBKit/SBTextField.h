@@ -31,6 +31,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 编辑态将 field editor 垂直居中（地址栏推荐）。默认 NO。
 @property (nonatomic) BOOL centersCompactTextWhenEditing;
 
+/// 非编辑态（含占位符）在紧凑区内垂直居中。默认 NO；弹层搜索框等矮框可开。
+@property (nonatomic) BOOL centersCompactTextWhenIdle;
+
 /// 在控件外框不变的前提下，将文字绘制区向下多扩若干 pt（吃掉底部 bezel 内边距）。
 /// 用于非编辑态下移文字后字底被裁；默认 0。
 @property (nonatomic) CGFloat compactTextBottomExtend;

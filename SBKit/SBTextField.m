@@ -149,6 +149,20 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         && ((SBTextField *)controlView).centersCompactTextWhenEditing;
 }
 
+- (BOOL)centersWhenIdle {
+    NSView *controlView = self.controlView;
+    return [controlView isKindOfClass:[SBTextField class]]
+        && ((SBTextField *)controlView).centersCompactTextWhenIdle;
+}
+
+- (NSRect)centeredIdleTitleRectInCompactArea:(NSRect)compact {
+    CGFloat lineHeight = SBTextFieldLineHeight(self.font);
+    if (lineHeight < 1.0) {
+        lineHeight = NSHeight(compact);
+    }
+    return SBTextFieldVerticallyCenteredRect(compact, lineHeight);
+}
+
 - (void)prepareFieldEditor:(NSText *)textObj {
     if (![textObj isKindOfClass:[NSTextView class]]) {
         return;
@@ -230,6 +244,9 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
         if (field.currentEditor && [self centersWhenEditing]) {
             return [self verticallyCenteredEditingRectForBounds:theRect];
         }
+        if (!field.currentEditor && [self centersWhenIdle]) {
+            return [self idleTitleRectForControlView:controlView];
+        }
         CGFloat bias = field.currentEditor ? [self editingUpwardBias] : [self idleUpwardBias];
         return [self compactTextRectForBounds:theRect upwardBias:bias];
     }
@@ -241,6 +258,9 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     if ([controlView isKindOfClass:[SBTextField class]] &&
         ((SBTextField *)controlView).usesCompactVerticalTextInsets) {
         NSRect compact = [self compactTextRectForBounds:theRect upwardBias:[self idleUpwardBias]];
+        if ([self centersWhenIdle]) {
+            return [self centeredIdleTitleRectInCompactArea:compact];
+        }
         return SBTextFieldTopAlignedTitleRect(compact, self.font, controlView);
     }
     return [super titleRectForBounds:[self textAreaRectForBounds:theRect]];
@@ -307,6 +327,9 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     }
     NSRect compact = [self compactTextRectForBounds:controlView.bounds
                                         upwardBias:[self idleUpwardBias]];
+    if ([self centersWhenIdle]) {
+        return [self centeredIdleTitleRectInCompactArea:compact];
+    }
     return SBTextFieldTopAlignedTitleRect(compact, self.font, controlView);
 }
 
@@ -538,6 +561,14 @@ static void SBTextFieldConsumeMouseUpEvents(void) {
     _centersCompactTextWhenEditing = centersCompactTextWhenEditing;
     [self setNeedsDisplay:YES];
     [self syncFieldEditorFrameWithContentInsets];
+}
+
+- (void)setCentersCompactTextWhenIdle:(BOOL)centersCompactTextWhenIdle {
+    if (_centersCompactTextWhenIdle == centersCompactTextWhenIdle) {
+        return;
+    }
+    _centersCompactTextWhenIdle = centersCompactTextWhenIdle;
+    [self setNeedsDisplay:YES];
 }
 
 - (void)setCompactTextBottomExtend:(CGFloat)compactTextBottomExtend {

@@ -599,8 +599,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (void)refreshConnectionState {
     for (AIAssistantSession *s in AIAssistantSessionStore.sharedStore.allSessionsSorted) {
+        // 打开网页过程中不要改写状态，否则会变成 Detached 并被 prune 误删
+        if (s.connection == AIAssistantSessionConnectionOpening) {
+            continue;
+        }
         if (s.bindingId.length == 0) {
-            s.connection = AIAssistantSessionConnectionDetached;
+            if (s.connection != AIAssistantSessionConnectionError) {
+                s.connection = AIAssistantSessionConnectionDetached;
+            }
             continue;
         }
         AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForId:s.bindingId];
@@ -885,6 +891,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     (void)sender;
     AIAssistantSession *s = [self currentSession];
     if (!s) return;
+    // 清掉失效 binding，避免 Opening 期间被 prune 当成「标签已死」删掉
+    s.bindingId = nil;
+    s.modelId = nil;
     s.connection = AIAssistantSessionConnectionOpening;
     [AIAssistantSessionStore.sharedStore saveSession:s];
     [self reloadUI];

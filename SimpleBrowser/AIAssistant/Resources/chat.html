@@ -25,6 +25,7 @@
   * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
+    height: 100%;
     background: var(--bg);
     font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
     color: var(--assistant-fg);
@@ -32,9 +33,11 @@
   #log {
     padding: 10px 10px 16px;
     display: flex;
-    flex-direction: column;
+    flex-direction: column; /* 旧→新从上往下；禁止 column-reverse */
+    justify-content: flex-start;
     gap: 12px;
     min-height: 100%;
+    box-sizing: border-box;
   }
   .row { display: flex; width: 100%; }
   .row.user { justify-content: flex-end; }
@@ -359,33 +362,27 @@
 
   function scrollBottom() {
     requestAnimationFrame(function () {
-      window.scrollTo(0, document.body.scrollHeight);
+      var log = document.getElementById('log');
+      var last = log && log.lastElementChild;
+      if (last && typeof last.scrollIntoView === 'function') {
+        last.scrollIntoView({ block: 'end', inline: 'nearest' });
+      }
+      var h = Math.max(
+        document.body ? document.body.scrollHeight : 0,
+        document.documentElement ? document.documentElement.scrollHeight : 0
+      );
+      window.scrollTo(0, h);
     });
   }
 
-  window.MeoAIChat = {
-    clear: function () {
-      var log = document.getElementById('log');
-      log.innerHTML = '<div class="empty" id="empty">开始对话吧</div>';
-    },
-    appendUser: function (text) {
-      var log = ensureLog();
-      var row = document.createElement('div');
-      row.className = 'row user';
-      var bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = text == null ? '' : String(text);
-      row.appendChild(bubble);
-      log.appendChild(row);
-      scrollBottom();
-    },
-    appendAssistant: function (markdown) {
-      var log = ensureLog();
-      var row = document.createElement('div');
+  function appendRow(role, text) {
+    var log = ensureLog();
+    var row = document.createElement('div');
+    var src = text == null ? '' : String(text);
+    if (role === 'assistant') {
       row.className = 'row assistant';
       var body = document.createElement('div');
       body.className = 'assistant-body';
-      var src = markdown == null ? '' : String(markdown);
       try {
         if (looksLikeHtml(src)) {
           body.innerHTML = sanitizeHtml(src);
@@ -396,18 +393,45 @@
         body.textContent = src;
       }
       row.appendChild(body);
-      log.appendChild(row);
-      scrollBottom();
-    },
-    appendSystem: function (text) {
-      var log = ensureLog();
-      var row = document.createElement('div');
+    } else if (role === 'system') {
       row.className = 'row system';
-      var body = document.createElement('div');
-      body.className = 'system-body';
-      body.textContent = text == null ? '' : String(text);
-      row.appendChild(body);
-      log.appendChild(row);
+      var sys = document.createElement('div');
+      sys.className = 'system-body';
+      sys.textContent = src;
+      row.appendChild(sys);
+    } else {
+      row.className = 'row user';
+      var bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = src;
+      row.appendChild(bubble);
+    }
+    // 始终追加到末尾（最新在下）
+    log.appendChild(row);
+    scrollBottom();
+  }
+
+  window.MeoAIChat = {
+    clear: function () {
+      var log = document.getElementById('log');
+      log.innerHTML = '<div class="empty" id="empty">开始对话吧</div>';
+    },
+    appendUser: function (text) { appendRow('user', text); },
+    appendAssistant: function (markdown) { appendRow('assistant', markdown); },
+    appendSystem: function (text) { appendRow('system', text); },
+    /** 原子重载：按数组顺序一次画完，避免多次 evaluateJavaScript 乱序 */
+    setMessages: function (items) {
+      var log = document.getElementById('log');
+      log.innerHTML = '';
+      var list = Array.isArray(items) ? items : [];
+      if (list.length === 0) {
+        log.innerHTML = '<div class="empty" id="empty">开始对话吧</div>';
+        return;
+      }
+      for (var i = 0; i < list.length; i++) {
+        var it = list[i] || {};
+        appendRow(it.role || 'user', it.content || '');
+      }
       scrollBottom();
     },
     /** 供原生侧自检：返回解析后的 HTML 片段 */
