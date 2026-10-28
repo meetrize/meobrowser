@@ -3,10 +3,26 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class BrowserAIAssistantSidebarController;
+@class AIAssistantSession;
+@class AIBridgeBinding;
 
 @protocol BrowserAIAssistantSidebarControllerDelegate <NSObject>
 - (void)aiAssistantSidebarDidRequestClose:(BrowserAIAssistantSidebarController *)controller;
 - (void)aiAssistantSidebarDidRequestOpenBridge:(BrowserAIAssistantSidebarController *)controller;
+
+/// 始终新开平台首页并绑定，供新建会话
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+openAndBindProviderId:(NSString *)providerId
+            sessionId:(NSString *)sessionId
+           completion:(void (^)(AIBridgeBinding *_Nullable binding, NSString *_Nullable errorDetail))completion;
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+     focusTabForBindingId:(NSString *)bindingId;
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+reopenAndBindProviderId:(NSString *)providerId
+              sessionId:(NSString *)sessionId
+             completion:(void (^)(AIBridgeBinding *_Nullable binding, NSString *_Nullable errorDetail))completion;
 @end
 
 @interface BrowserAIAssistantSidebarController : NSObject

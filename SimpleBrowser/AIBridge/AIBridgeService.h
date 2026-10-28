@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 
 @class BrowserTab;
+@class AIBridgeBinding;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -26,15 +27,24 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
 - (BOOL)startServer:(NSError *_Nullable *_Nullable)error;
 - (void)stopServer;
 
-- (void)bindCurrentTab:(BrowserTab *)tab
-             pageURL:(nullable NSURL *)url
-          providerId:(NSString *)providerId
-               error:(NSError *_Nullable *_Nullable)error;
+/// 新建 binding（多实例）。成功时 *outBinding 非空。
+- (nullable AIBridgeBinding *)bindCurrentTab:(BrowserTab *)tab
+                                     pageURL:(nullable NSURL *)url
+                                  providerId:(NSString *)providerId
+                                   sessionId:(nullable NSString *)sessionId
+                                       error:(NSError *_Nullable *_Nullable)error;
+
+- (void)unbindBindingId:(NSString *)bindingId;
 - (void)unbindProviderId:(NSString *)providerId;
 - (void)unbindAllProviders;
 
 - (void)cancelAllJobs;
 - (void)newChatForProviderId:(NSString *)providerId completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion;
+- (void)newChatForBindingId:(NSString *)bindingId completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion;
+
+/// 解析 model；多短名绑定时返回 nil 且 error 说明 ambiguous
+- (nullable AIBridgeBinding *)resolveBindingForModelId:(NSString *)modelId
+                                                 error:(NSError *_Nullable *_Nullable)error;
 
 - (NSString *)baseURLString;
 - (NSString *)curlExampleForModel:(NSString *)modelId;

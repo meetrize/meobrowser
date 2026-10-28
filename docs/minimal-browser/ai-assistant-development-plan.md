@@ -23,7 +23,7 @@
 |----|-----|------|
 | B1 | 整页摘要 | 计划中 |
 | B2 | 问答本页（标题+URL+正文摘录） | 计划中 |
-| B3 | 多轮会话 + 新对话 | 计划中 |
+| B3 | 多轮会话 + 新对话 | **已完成（多会话）**，见 [ai-multi-session-redesign.md](ai-multi-session-redesign.md) · [ai-multi-session-development-plan.md](ai-multi-session-development-plan.md) |
 | B4 | `stream:true` 假 SSE 边显 | 计划中 |
 | B5 | 划词：润色 / 更简洁 / 列表化 | 计划中 |
 | B6 | 未绑定「去绑定」预选 Provider | 计划中 |

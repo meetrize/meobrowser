@@ -3,6 +3,7 @@
 > 目标：把 MeoBrowser **已登录的 AI 对话网页标签**绑定成本机可调用的 OpenAI 兼容端点；客户端提交提示词后，由浏览器在绑定标签内自动输入、发送、等待回复结束，再把文本返回 API。  
 > 状态：**设计已定；BR-0/BR-1 已落地（2026-10-28）**  
 > 开发计划：[ai-bridge-development-plan.md](ai-bridge-development-plan.md)  
+> **多会话 / 多绑定改造（待实施）**：[ai-multi-session-redesign.md](ai-multi-session-redesign.md) — 1 会话 = 1 绑定；同平台多实例；由 AI 助手自动开页绑定。  
 > 关联：[page-scraper-design.md](page-scraper-design.md) · [page-pack-design.md](page-pack-design.md) · [auto-login-design.md](auto-login-design.md) · [captcha-assist-design.md](captcha-assist-design.md)（ModelGateway）· [companion-protocol.md](companion-protocol.md) · [professional-features-roadmap.md](professional-features-roadmap.md) · [anti-bot-session-design.md](anti-bot-session-design.md)
 
 ---

@@ -173,7 +173,7 @@ MeoBrowser 不是 Chrome 的替代品，而是 **「日常浏览 + 专业工作�
 | **站点表单备忘（多字段填入）** | P2 | 按 URL 关联常用文本，普通表单一键填入；与登录 Recipe 平行。见 [site-form-memo-design.md](site-form-memo-design.md) |
 | **页面爬虫（可视化抽取）** | P2 | 侧栏点选 DOM、表格/单一数据、翻页、配方；导出 Excel/CSV/JSON 与 MySQL；定时用独立 helper。见 [page-scraper-design.md](page-scraper-design.md) · [page-scraper-development-plan.md](page-scraper-development-plan.md) |
 | **AI Bridge（网页对话 → 本机 API）** | P2 | 绑定已登录 AI 标签，本机 OpenAI 兼容 `/v1/chat/completions`；DOM 适配器驱动。见 [ai-bridge-design.md](ai-bridge-design.md) · [ai-bridge-development-plan.md](ai-bridge-development-plan.md) |
-| **AI 助手侧栏** | P2 | 浏览场景对话 UI（选模型/划词问问·解释·总结·翻译）；消费本机 Bridge API。见 [ai-assistant-design.md](ai-assistant-design.md) · [ai-assistant-development-plan.md](ai-assistant-development-plan.md) |
+| **AI 助手侧栏** | P2 | 浏览场景对话 UI（选模型/划词问问·解释·总结·翻译）；消费本机 Bridge API。见 [ai-assistant-design.md](ai-assistant-design.md) · [ai-assistant-development-plan.md](ai-assistant-development-plan.md) · **多会话改造** [ai-multi-session-redesign.md](ai-multi-session-redesign.md) |
 | **与终端联动** | P3 | 「在 iTerm 打开当前目录」类集成（偏 niche） |
 
 ### 3.10 质量与可观测 — 贯穿各阶段

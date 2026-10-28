@@ -1,7 +1,8 @@
 # AI 助手侧栏 — 设计
 
 > 面向浏览场景的对话 UI；后端为本机 [AI Bridge](ai-bridge-design.md) OpenAI 兼容 API。  
-> 与 **AI Bridge 管理侧栏**职责分离。
+> 与 **AI Bridge 管理侧栏**职责分离。  
+> **多会话改造（待实施）**：[ai-multi-session-redesign.md](ai-multi-session-redesign.md) — 会话驱动自动开页绑定；Bridge 不再作为手动绑定主路径。
 
 ---
 

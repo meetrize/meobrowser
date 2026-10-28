@@ -1,12 +1,14 @@
 #import "BrowserAIAssistantPreferences.h"
+#import "AIBridgeRegistry.h"
 
 NSNotificationName const BrowserAIAssistantPreferencesDidChangeNotification =
     @"BrowserAIAssistantPreferencesDidChangeNotification";
 
 static NSString * const kWidthKey = @"AIAssistant.sidebarWidth";
 static NSString * const kModelKey = @"AIAssistant.lastModelId";
-static const CGFloat kDefaultWidth = 360.0;
-static const CGFloat kMinWidth = 280.0;
+static NSString * const kProviderKey = @"AIAssistant.lastProviderId";
+static const CGFloat kDefaultWidth = 380.0;
+static const CGFloat kMinWidth = 300.0;
 static const CGFloat kMaxWidth = 560.0;
 
 @implementation BrowserAIAssistantPreferences
@@ -31,6 +33,11 @@ static const CGFloat kMaxWidth = 560.0;
         _sidebarWidth = w;
         NSString *model = [ud stringForKey:kModelKey];
         _lastModelId = model.length ? model : @"bridge__deepseek";
+        NSString *pid = [ud stringForKey:kProviderKey];
+        if (pid.length == 0) {
+            pid = [AIBridgeRegistry providerIdFromModelId:_lastModelId] ?: @"deepseek";
+        }
+        _lastProviderId = pid;
     }
     return self;
 }
@@ -59,6 +66,21 @@ static const CGFloat kMaxWidth = 560.0;
     }
     _lastModelId = [m copy];
     [NSUserDefaults.standardUserDefaults setObject:_lastModelId forKey:kModelKey];
+    NSString *pid = [AIBridgeRegistry providerIdFromModelId:m];
+    if (pid.length) {
+        _lastProviderId = pid;
+        [NSUserDefaults.standardUserDefaults setObject:pid forKey:kProviderKey];
+    }
+    [self notify];
+}
+
+- (void)setLastProviderId:(NSString *)lastProviderId {
+    NSString *p = lastProviderId.length ? lastProviderId : @"deepseek";
+    if ([_lastProviderId isEqualToString:p]) {
+        return;
+    }
+    _lastProviderId = [p copy];
+    [NSUserDefaults.standardUserDefaults setObject:_lastProviderId forKey:kProviderKey];
     [self notify];
 }
 

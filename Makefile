@@ -162,6 +162,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeUpstreamClient.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeService.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeSidebarController.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/AIAssistantSession.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/AIAssistantSessionStore.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantPreferences.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantPrompts.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantClient.m \

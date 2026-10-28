@@ -3,6 +3,7 @@
 #import "AIBridgePreferences.h"
 #import "AIBridgeRegistry.h"
 #import "AIBridgeDOMProvider.h"
+#import "AIBridgeJobQueue.h"
 #import "SBTextField.h"
 #import "SBTextView.h"
 #import "BrowserTab.h"
@@ -548,9 +549,12 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     return [obj isKindOfClass:[NSString class]] ? obj : @"deepseek";
 }
 
-- (BOOL)isProviderBound:(NSString *)pid {
-    AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:pid];
-    return b && b.tab != nil;
+- (NSUInteger)liveBindingCountForProviderId:(NSString *)pid {
+    NSUInteger n = 0;
+    for (AIBridgeBinding *b in [AIBridgeRegistry.sharedRegistry bindingsForProviderId:pid]) {
+        if (b.tab) n++;
+    }
+    return n;
 }
 
 - (void)refreshProviderPopupTitles {
@@ -559,8 +563,8 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     [self.providerPopup removeAllItems];
     for (NSDictionary *p in [self providerCatalog]) {
         NSString *pid = p[@"id"];
-        BOOL bound = [self isProviderBound:pid];
-        NSString *mark = bound ? @"●" : @"○";
+        NSUInteger n = [self liveBindingCountForProviderId:pid];
+        NSString *mark = n > 0 ? [NSString stringWithFormat:@"●%lu", (unsigned long)n] : @"○";
         NSString *title = [NSString stringWithFormat:@"%@ %@", mark, p[@"title"]];
         [self.providerPopup addItemWithTitle:title];
         self.providerPopup.lastItem.representedObject = pid;
@@ -591,30 +595,41 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     [self refreshProviderPopupTitles];
 
     NSString *pid = [self selectedProviderId];
-    AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:pid];
-    if (b && b.tab) {
-        self.bindLabel.stringValue = [NSString stringWithFormat:@"当前 ● 已绑定 %@ → %@\n%@",
-                                      b.modelId, b.tabTitle ?: @"标签", b.pageURL ?: @""];
+    NSUInteger nPid = [self liveBindingCountForProviderId:pid];
+    if (nPid > 0) {
+        AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:pid];
+        self.bindLabel.stringValue = [NSString stringWithFormat:
+            @"该平台 ● %lu 个绑定（最新 %@）\n主路径请用 AI 助手新建会话自动绑定；此处为高级手动绑定。",
+            (unsigned long)nPid, b.modelId ?: @""];
         self.bindLabel.textColor = NSColor.systemGreenColor;
     } else {
-        self.bindLabel.stringValue = @"当前 ○ 未绑定（点「绑定」自动找标签或打开首页）";
+        self.bindLabel.stringValue = @"该平台 ○ 无绑定。推荐在 AI 助手点「＋」新建会话自动开页绑定。";
         self.bindLabel.textColor = NSColor.secondaryLabelColor;
     }
 
     NSArray<AIBridgeBinding *> *all = AIBridgeRegistry.sharedRegistry.allBindings;
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    AIBridgeJobQueue *q = AIBridgeJobQueue.sharedQueue;
     for (AIBridgeBinding *item in all) {
         if (!item.tab) continue;
-        [lines addObject:[NSString stringWithFormat:@"● %@（%@）",
+        NSString *sess = item.sessionId.length ? [item.sessionId substringToIndex:MIN(8, item.sessionId.length)] : @"—";
+        [lines addObject:[NSString stringWithFormat:@"● %@ · %@\n   model %@ · session %@…",
                           item.displayName ?: item.providerId,
-                          item.modelId ?: @""]];
+                          item.tabTitle ?: @"标签",
+                          item.modelId ?: @"",
+                          sess]];
     }
     if (lines.count == 0) {
-        self.bindingsSummaryLabel.stringValue = @"全部已绑定：无";
+        self.bindingsSummaryLabel.stringValue = [NSString stringWithFormat:
+            @"活动绑定：无\n队列：%@ · pending %lu",
+            q.isBusy ? @"忙碌" : @"空闲", (unsigned long)q.pendingCount];
     } else {
         self.bindingsSummaryLabel.stringValue =
-            [NSString stringWithFormat:@"全部已绑定（%lu）：\n%@",
-             (unsigned long)lines.count, [lines componentsJoinedByString:@"\n"]];
+            [NSString stringWithFormat:@"活动绑定（%lu）· 队列 %@ pending %lu：\n%@",
+             (unsigned long)lines.count,
+             q.isBusy ? @"忙碌" : @"空闲",
+             (unsigned long)q.pendingCount,
+             [lines componentsJoinedByString:@"\n"]];
     }
 
     NSMutableString *log = [NSMutableString string];
@@ -821,7 +836,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     }
 
     NSString *pid = [self selectedProviderId];
-    if (![self isProviderBound:pid]) {
+    if ([self liveBindingCountForProviderId:pid] == 0) {
         self.testStatusLabel.stringValue = @"当前 Provider 未绑定";
         self.testStatusLabel.textColor = NSColor.systemOrangeColor;
         return;

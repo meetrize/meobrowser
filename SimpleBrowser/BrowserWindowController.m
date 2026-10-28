@@ -54,6 +54,9 @@
 #import "BrowserScraperMessageHub.h"
 #import "AIBridgeSidebarController.h"
 #import "AIBridgeService.h"
+#import "AIBridgeRegistry.h"
+#import "AIAssistantSession.h"
+#import "AIAssistantSessionStore.h"
 #import "BrowserAIAssistantSidebarController.h"
 #import "BrowserAIAssistantPrompts.h"
 #import "BrowserFindBarController.h"
@@ -3232,8 +3235,8 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         }
         NSURL *url = [self aiBridgeResolvedURLForTab:match];
         NSError *err = nil;
-        [svc bindCurrentTab:match pageURL:url providerId:providerId error:&err];
-        finish(err == nil, err.localizedDescription);
+        AIBridgeBinding *b = [svc bindCurrentTab:match pageURL:url providerId:providerId sessionId:nil error:&err];
+        finish(b != nil && err == nil, err.localizedDescription);
         return;
     }
     NSURL *home = [svc homeURLForProviderId:providerId];
@@ -3244,8 +3247,73 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BrowserTab *tab = [self.tabController addTabWithURL:home];
     NSURL *url = [self aiBridgeResolvedURLForTab:tab] ?: home;
     NSError *err = nil;
-    [svc bindCurrentTab:tab pageURL:url providerId:providerId error:&err];
-    finish(err == nil, err.localizedDescription);
+    AIBridgeBinding *b = [svc bindCurrentTab:tab pageURL:url providerId:providerId sessionId:nil error:&err];
+    finish(b != nil && err == nil, err.localizedDescription);
+}
+
+#pragma mark - AI Assistant Session (open / focus / reopen)
+
+- (void)aiAssistantOpenHomeAndBindProviderId:(NSString *)providerId
+                                  sessionId:(NSString *)sessionId
+                                 completion:(void (^)(AIBridgeBinding *_Nullable, NSString *_Nullable))completion {
+    void (^finish)(AIBridgeBinding *, NSString *) = ^(AIBridgeBinding *b, NSString *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) completion(b, err);
+        });
+    };
+    AIBridgeService *svc = AIBridgeService.sharedService;
+    if (!svc.isListening) {
+        NSError *startErr = nil;
+        if (![svc startServer:&startErr]) {
+            finish(nil, startErr.localizedDescription ?: @"无法启动 AI Bridge");
+            return;
+        }
+    }
+    NSURL *home = [svc homeURLForProviderId:providerId];
+    if (!home) {
+        finish(nil, @"无法确定该平台首页");
+        return;
+    }
+    BrowserTab *tab = [self.tabController addTabWithURL:home];
+    NSURL *url = [self aiBridgeResolvedURLForTab:tab] ?: home;
+    NSError *err = nil;
+    AIBridgeBinding *binding = [svc bindCurrentTab:tab
+                                           pageURL:url
+                                        providerId:providerId
+                                         sessionId:sessionId
+                                             error:&err];
+    finish(binding, err.localizedDescription);
+}
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+    openAndBindProviderId:(NSString *)providerId
+                sessionId:(NSString *)sessionId
+               completion:(void (^)(AIBridgeBinding *_Nullable, NSString *_Nullable))completion {
+    (void)controller;
+    [self aiAssistantOpenHomeAndBindProviderId:providerId sessionId:sessionId completion:completion];
+}
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+  reopenAndBindProviderId:(NSString *)providerId
+                sessionId:(NSString *)sessionId
+               completion:(void (^)(AIBridgeBinding *_Nullable, NSString *_Nullable))completion {
+    (void)controller;
+    // 重新打开：始终新标签（与新建一致）
+    [self aiAssistantOpenHomeAndBindProviderId:providerId sessionId:sessionId completion:completion];
+}
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+     focusTabForBindingId:(NSString *)bindingId {
+    (void)controller;
+    AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForId:bindingId];
+    if (!b.tab) {
+        return;
+    }
+    [self.tabController selectTab:b.tab];
+    [b.tab wakeFromHibernationIfNeeded];
+    if (b.tab.pendingRestorableLoad) {
+        [b.tab loadPendingRestorableURLIfNeeded];
+    }
 }
 
 - (void)updateAIBridgeButtonAppearance {

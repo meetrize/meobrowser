@@ -233,41 +233,82 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     [self notify];
 }
 
-- (void)bindCurrentTab:(BrowserTab *)tab
-               pageURL:(NSURL *)url
-            providerId:(NSString *)providerId
-                 error:(NSError **)error {
+- (AIBridgeBinding *)bindCurrentTab:(BrowserTab *)tab
+                            pageURL:(NSURL *)url
+                         providerId:(NSString *)providerId
+                          sessionId:(NSString *)sessionId
+                              error:(NSError **)error {
     if (!tab) {
         if (error) {
             *error = [NSError errorWithDomain:@"AIBridgeService" code:1
                                     userInfo:@{NSLocalizedDescriptionKey: @"无当前标签"}];
         }
-        return;
+        return nil;
     }
     NSString *pid = providerId.length ? providerId : @"deepseek";
     NSURL *resolved = [self resolvedURLForTab:tab fallback:url];
     NSString *host = resolved.host ?: @"";
-    if (![self host:host matchesProviderId:pid]) {
+    // mock / file：host 可空
+    NSArray *expectHosts = [self matchHostsForProviderId:pid];
+    if (expectHosts.count > 0 && ![self host:host matchesProviderId:pid]) {
         if (error) {
             *error = [NSError errorWithDomain:@"AIBridgeService" code:2
                                     userInfo:@{NSLocalizedDescriptionKey:
                                                    [self hostMismatchMessageForProviderId:pid actualHost:host]}];
         }
-        return;
+        return nil;
     }
-    NSString *modelId = [NSString stringWithFormat:@"bridge__%@", pid];
     NSString *name = [self displayNameForProviderId:pid];
-    [[AIBridgeRegistry sharedRegistry] bindTab:tab
-                                    providerId:pid
-                                       modelId:modelId
-                                   displayName:name
-                                       pageURL:resolved.absoluteString ?: url.absoluteString];
+    AIBridgeBinding *binding = [[AIBridgeRegistry sharedRegistry] bindTab:tab
+                                                               providerId:pid
+                                                              displayName:name
+                                                                  pageURL:resolved.absoluteString ?: url.absoluteString
+                                                                sessionId:sessionId];
+    [self notify];
+    return binding;
+}
+
+- (void)unbindBindingId:(NSString *)bindingId {
+    [[AIBridgeRegistry sharedRegistry] unbindBindingId:bindingId];
     [self notify];
 }
 
 - (void)unbindProviderId:(NSString *)providerId {
     [[AIBridgeRegistry sharedRegistry] unbindProviderId:providerId];
     [self notify];
+}
+
+- (AIBridgeBinding *)resolveBindingForModelId:(NSString *)modelId error:(NSError **)error {
+    AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForModelId:modelId];
+    if (b) {
+        return b;
+    }
+    if (![modelId hasPrefix:@"bridge__"]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"AIBridgeService" code:404
+                                    userInfo:@{NSLocalizedDescriptionKey: @"model not bound"}];
+        }
+        return nil;
+    }
+    NSString *rest = [modelId substringFromIndex:@"bridge__".length];
+    if (![rest containsString:@"__"]) {
+        NSArray *list = [AIBridgeRegistry.sharedRegistry bindingsForProviderId:rest];
+        if (list.count > 1) {
+            if (error) {
+                *error = [NSError errorWithDomain:@"AIBridgeService" code:409
+                                        userInfo:@{NSLocalizedDescriptionKey:
+                                                       [NSString stringWithFormat:
+                                                        @"model %@ 对应 %lu 个绑定，请使用完整 modelId（bridge__%@__xxxxxx）",
+                                                        modelId, (unsigned long)list.count, rest]}];
+            }
+            return nil;
+        }
+    }
+    if (error) {
+        *error = [NSError errorWithDomain:@"AIBridgeService" code:404
+                                userInfo:@{NSLocalizedDescriptionKey: @"model not bound"}];
+    }
+    return nil;
 }
 
 - (void)unbindAllProviders {
@@ -280,6 +321,18 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     [self notify];
 }
 
+- (void)newChatForBindingId:(NSString *)bindingId
+                 completion:(void (^)(BOOL, NSString *_Nullable))completion {
+    AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForId:bindingId];
+    if (!b || !b.tab) {
+        if (completion) {
+            completion(NO, @"未绑定");
+        }
+        return;
+    }
+    [self newChatOnBinding:b completion:completion];
+}
+
 - (void)newChatForProviderId:(NSString *)providerId
                   completion:(void (^)(BOOL, NSString *_Nullable))completion {
     AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:providerId];
@@ -289,6 +342,12 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         }
         return;
     }
+    [self newChatOnBinding:b completion:completion];
+}
+
+- (void)newChatOnBinding:(AIBridgeBinding *)b
+              completion:(void (^)(BOOL, NSString *_Nullable))completion {
+    NSString *providerId = b.providerId ?: @"";
     [b.tab wakeFromHibernationIfNeeded];
     WKWebView *wv = b.tab.webView ?: [b.tab ensureWebView];
     if (!wv) {
@@ -298,7 +357,7 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
     [[AIBridgeDOMProvider sharedProvider] newChatOnWebView:wv
-                                                providerId:b.providerId ?: providerId
+                                                providerId:providerId
                                                 completion:^(NSDictionary *result, NSError *error) {
         if (error) {
             if (completion) {
@@ -403,8 +462,10 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     NSMutableArray *bindings = [NSMutableArray array];
     for (AIBridgeBinding *b in AIBridgeRegistry.sharedRegistry.allBindings) {
         [bindings addObject:@{
+            @"id": b.bindingId ?: @"",
             @"model": b.modelId ?: @"",
             @"provider": b.providerId ?: @"",
+            @"session_id": b.sessionId ?: @"",
             @"url": b.pageURL ?: @"",
             @"hasTab": @(b.tab != nil)
         }];
@@ -446,7 +507,9 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
             @"id": b.modelId ?: @"",
             @"object": @"model",
             @"owned_by": @"meo-bridge",
-            @"provider": b.providerId ?: @""
+            @"provider": b.providerId ?: @"",
+            @"binding_id": b.bindingId ?: @"",
+            @"session_id": b.sessionId ?: @""
         }];
     }
     // 静态提示条目，便于客户端发现前缀约定
@@ -569,9 +632,16 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
 
-    AIBridgeBinding *binding = [AIBridgeRegistry.sharedRegistry bindingForModelId:model];
+    NSError *resolveErr = nil;
+    AIBridgeBinding *binding = [self resolveBindingForModelId:model error:&resolveErr];
     if (!binding || !binding.tab) {
-        [self respondJSON:respond status:404 object:@{@"error": @{@"message": @"model not bound", @"type": @"invalid_request"}}];
+        NSInteger code = resolveErr.code == 409 ? 409 : 404;
+        [self respondJSON:respond status:code object:@{
+            @"error": @{
+                @"message": resolveErr.localizedDescription ?: @"model not bound",
+                @"type": code == 409 ? @"ambiguous_model" : @"invalid_request"
+            }
+        }];
         return;
     }
     NSString *prompt = [self extractUserPrompt:json];

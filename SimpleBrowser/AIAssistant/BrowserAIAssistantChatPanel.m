@@ -1,4 +1,5 @@
 #import "BrowserAIAssistantChatPanel.h"
+#import "AIAssistantSession.h"
 #import <WebKit/WebKit.h>
 
 @interface BrowserAIAssistantChatPanel () <WKNavigationDelegate>
@@ -130,6 +131,25 @@
     __weak typeof(self) weakSelf = self;
     [self runWhenReady:^{
         [weakSelf callChatMethod:@"appendSystem" utf8Text:text];
+    }];
+}
+
+- (void)reloadMessages:(NSArray<AIAssistantMessage *> *)messages {
+    __weak typeof(self) weakSelf = self;
+    NSArray *copy = [messages copy] ?: @[];
+    [self runWhenReady:^{
+        [weakSelf.webView evaluateJavaScript:@"window.MeoAIChat && MeoAIChat.clear()" completionHandler:^(id r, NSError *e) {
+            (void)r; (void)e;
+            for (AIAssistantMessage *m in copy) {
+                if ([m.role isEqualToString:@"assistant"]) {
+                    [weakSelf callChatMethod:@"appendAssistant" utf8Text:m.content];
+                } else if ([m.role isEqualToString:@"system"]) {
+                    [weakSelf callChatMethod:@"appendSystem" utf8Text:m.content];
+                } else {
+                    [weakSelf callChatMethod:@"appendUser" utf8Text:m.content];
+                }
+            }
+        }];
     }];
 }
 
