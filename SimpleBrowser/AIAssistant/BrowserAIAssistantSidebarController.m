@@ -1124,12 +1124,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     } else if (self.citations.count > 0) {
         displayText = [NSString stringWithFormat:@"📎 %lu 条引用", (unsigned long)self.citations.count];
     }
+    NSArray<NSString *> *citationImages = [self jpegDataURLsFromImageCitations:self.citations];
 
     BOOL firstUser = YES;
     for (AIAssistantMessage *m in s.messages) {
         if ([m.role isEqualToString:@"user"]) { firstUser = NO; break; }
     }
     AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:apiPrompt];
+    userMsg.displayContent = displayText;
+    if (citationImages.count) userMsg.imageDataURLs = citationImages;
     [s.messages addObject:userMsg];
     if (firstUser && [s.title isEqualToString:@"新对话"]) {
         NSString *t = [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
@@ -1138,7 +1141,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.titleLabel.stringValue = t;
     }
     [AIAssistantSessionStore.sharedStore touchAndPersist:s];
-    [self.chatPanel appendUserText:displayText];
+    [self.chatPanel appendUserText:displayText imageDataURLs:citationImages];
     if (clearInput) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
@@ -1235,6 +1238,70 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         return nil;
     }
     return [[NSImage alloc] initWithData:data];
+}
+
+/// 对话气泡用 JPEG data URL；最长边限制，控制会话持久化体积。
+- (nullable NSString *)jpegDataURLFromImage:(NSImage *)image maxSide:(CGFloat)maxSide {
+    if (!image) return nil;
+    NSSize src = image.size;
+    if (src.width < 1 || src.height < 1) {
+        NSArray *reps = image.representations;
+        for (NSImageRep *rep in reps) {
+            if (rep.pixelsWide > 0 && rep.pixelsHigh > 0) {
+                src = NSMakeSize(rep.pixelsWide, rep.pixelsHigh);
+                break;
+            }
+        }
+    }
+    if (src.width < 1 || src.height < 1) return nil;
+    CGFloat longest = MAX(src.width, src.height);
+    CGFloat scale = longest > maxSide ? (maxSide / longest) : 1.0;
+    NSInteger w = MAX(1, (NSInteger)floor(src.width * scale));
+    NSInteger h = MAX(1, (NSInteger)floor(src.height * scale));
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL
+                      pixelsWide:w
+                      pixelsHigh:h
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSCalibratedRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (!rep) return nil;
+    NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!ctx) return nil;
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:ctx];
+    [[NSColor clearColor] set];
+    NSRectFill(NSMakeRect(0, 0, w, h));
+    [image drawInRect:NSMakeRect(0, 0, w, h)
+             fromRect:NSZeroRect
+            operation:NSCompositingOperationSourceOver
+             fraction:1.0
+       respectFlipped:YES
+                hints:@{ NSImageHintInterpolation: @(NSImageInterpolationHigh) }];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData *jpeg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                     properties:@{ NSImageCompressionFactor: @0.72 }];
+    if (jpeg.length == 0 || jpeg.length > 450 * 1024) return nil;
+    NSString *b64 = [jpeg base64EncodedStringWithOptions:0];
+    if (b64.length == 0) return nil;
+    return [NSString stringWithFormat:@"data:image/jpeg;base64,%@", b64];
+}
+
+- (NSArray<NSString *> *)jpegDataURLsFromImageCitations:(NSArray<AIAssistantCitation *> *)citations {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (AIAssistantCitation *c in citations ?: @[]) {
+        if (c.kind != AIAssistantCitationKindImage || !c.previewImage) continue;
+        NSString *dataURL = [self jpegDataURLFromImage:c.previewImage maxSide:280];
+        if (dataURL.length) {
+            [out addObject:dataURL];
+            if (out.count >= 6) break;
+        }
+    }
+    return out;
 }
 
 - (void)applyPreviewImage:(NSImage *)image forImageURLString:(NSString *)imageURL {

@@ -12,7 +12,12 @@ typedef NS_ENUM(NSInteger, AIAssistantSessionConnection) {
 
 @interface AIAssistantMessage : NSObject
 @property (nonatomic, copy) NSString *role; // user | assistant | system
+/// 发给模型的全文（含引用上下文）
 @property (nonatomic, copy) NSString *content;
+/// 对话气泡展示文案；空则回退 content
+@property (nonatomic, copy, nullable) NSString *displayContent;
+/// 用户气泡内联图（data:image/...;base64,...），仅展示用
+@property (nonatomic, copy, nullable) NSArray<NSString *> *imageDataURLs;
 @property (nonatomic, assign) NSTimeInterval createdAt;
 - (NSDictionary *)dictionaryRepresentation;
 + (instancetype)messageFromDictionary:(NSDictionary *)dict;

@@ -14,6 +14,17 @@
     AIAssistantMessage *m = [[AIAssistantMessage alloc] init];
     m.role = [dict[@"role"] isKindOfClass:[NSString class]] ? dict[@"role"] : @"user";
     m.content = [dict[@"content"] isKindOfClass:[NSString class]] ? dict[@"content"] : @"";
+    m.displayContent = [dict[@"displayContent"] isKindOfClass:[NSString class]] ? dict[@"displayContent"] : nil;
+    NSArray *imgs = dict[@"imageDataURLs"];
+    if ([imgs isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSString *> *safe = [NSMutableArray array];
+        for (id item in imgs) {
+            if ([item isKindOfClass:[NSString class]] && [(NSString *)item hasPrefix:@"data:image"]) {
+                [safe addObject:item];
+            }
+        }
+        if (safe.count) m.imageDataURLs = safe;
+    }
     m.createdAt = [dict[@"createdAt"] doubleValue];
     if (m.createdAt <= 0) {
         m.createdAt = [NSDate date].timeIntervalSince1970;
@@ -22,11 +33,14 @@
 }
 
 - (NSDictionary *)dictionaryRepresentation {
-    return @{
+    NSMutableDictionary *d = [@{
         @"role": self.role ?: @"user",
         @"content": self.content ?: @"",
         @"createdAt": @(self.createdAt),
-    };
+    } mutableCopy];
+    if (self.displayContent.length) d[@"displayContent"] = self.displayContent;
+    if (self.imageDataURLs.count) d[@"imageDataURLs"] = self.imageDataURLs;
+    return d;
 }
 
 @end
@@ -87,13 +101,15 @@
 - (NSString *)previewText {
     for (NSInteger i = (NSInteger)self.messages.count - 1; i >= 0; i--) {
         AIAssistantMessage *m = self.messages[(NSUInteger)i];
-        if ([m.role isEqualToString:@"user"] && m.content.length) {
-            NSString *t = [m.content stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-            if (t.length > 48) {
-                return [[t substringToIndex:48] stringByAppendingString:@"…"];
-            }
-            return t;
+        if (![m.role isEqualToString:@"user"]) continue;
+        NSString *src = m.displayContent.length ? m.displayContent : m.content;
+        if (src.length == 0 && m.imageDataURLs.count) return @"📎 图片引用";
+        if (src.length == 0) continue;
+        NSString *t = [src stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        if (t.length > 48) {
+            return [[t substringToIndex:48] stringByAppendingString:@"…"];
         }
+        return t;
     }
     return @"（空会话）";
 }

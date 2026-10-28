@@ -9,6 +9,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)clear;
 - (void)appendUserText:(NSString *)text;
+/// 用户气泡 + 可选引用图片（data URL）
+- (void)appendUserText:(NSString *)text imageDataURLs:(nullable NSArray<NSString *> *)imageDataURLs;
 - (void)appendAssistantMarkdown:(NSString *)markdown;
 - (void)appendSystemText:(NSString *)text;
 /// 切换会话时整表重载

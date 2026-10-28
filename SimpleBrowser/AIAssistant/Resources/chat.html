@@ -51,6 +51,25 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
+  .bubble-text { white-space: pre-wrap; word-break: break-word; }
+  .bubble-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .bubble-text + .bubble-images { margin-top: 8px; }
+  .bubble-images:first-child { margin-top: 0; }
+  .bubble-img {
+    display: block;
+    max-width: min(220px, 100%);
+    max-height: 180px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.18);
+  }
   .assistant-body {
     max-width: 100%;
     color: var(--assistant-fg);
@@ -375,7 +394,24 @@
     });
   }
 
-  function appendRow(role, text) {
+  function appendBubbleImages(bubble, images) {
+    var imgs = Array.isArray(images) ? images : [];
+    if (!imgs.length) return;
+    var gallery = document.createElement('div');
+    gallery.className = 'bubble-images';
+    imgs.forEach(function (u) {
+      var src = String(u || '');
+      if (src.indexOf('data:image') !== 0) return;
+      var img = document.createElement('img');
+      img.className = 'bubble-img';
+      img.src = src;
+      img.alt = '引用图片';
+      gallery.appendChild(img);
+    });
+    if (gallery.childNodes.length) bubble.appendChild(gallery);
+  }
+
+  function appendRow(role, text, images) {
     var log = ensureLog();
     var row = document.createElement('div');
     var src = text == null ? '' : String(text);
@@ -403,7 +439,19 @@
       row.className = 'row user';
       var bubble = document.createElement('div');
       bubble.className = 'bubble';
-      bubble.textContent = src;
+      if (src.length) {
+        var t = document.createElement('div');
+        t.className = 'bubble-text';
+        t.textContent = src;
+        bubble.appendChild(t);
+      }
+      appendBubbleImages(bubble, images);
+      if (!bubble.childNodes.length) {
+        var empty = document.createElement('div');
+        empty.className = 'bubble-text';
+        empty.textContent = '（图片引用）';
+        bubble.appendChild(empty);
+      }
       row.appendChild(bubble);
     }
     // 始终追加到末尾（最新在下）
@@ -417,6 +465,10 @@
       log.innerHTML = '<div class="empty" id="empty">开始对话吧</div>';
     },
     appendUser: function (text) { appendRow('user', text); },
+    appendUserPayload: function (obj) {
+      var o = obj || {};
+      appendRow('user', o.text || '', o.images || []);
+    },
     appendAssistant: function (markdown) { appendRow('assistant', markdown); },
     appendSystem: function (text) { appendRow('system', text); },
     /** 原子重载：按数组顺序一次画完，避免多次 evaluateJavaScript 乱序 */
@@ -430,7 +482,7 @@
       }
       for (var i = 0; i < list.length; i++) {
         var it = list[i] || {};
-        appendRow(it.role || 'user', it.content || '');
+        appendRow(it.role || 'user', it.content || '', it.images || []);
       }
       scrollBottom();
     },

@@ -62,12 +62,15 @@
     NSString *html = @"<!DOCTYPE html><meta charset=utf-8><body style='font:13px -apple-system'><div id=log></div>"
                       "<script>window.MeoAIChat={clear:function(){log.innerHTML=''},"
                       "appendUser:function(t){var d=document.createElement('div');d.textContent='我: '+t;log.appendChild(d);},"
+                      "appendUserPayload:function(o){MeoAIChat.appendUser((o&&o.text)||'');"
+                      "(o&&o.images||[]).forEach(function(u){if(!u||String(u).indexOf('data:image')!==0)return;"
+                      "var img=document.createElement('img');img.src=u;img.style.maxWidth='180px';log.appendChild(img);});},"
                       "appendAssistant:function(t){var d=document.createElement('div');d.textContent=t;log.appendChild(d);},"
                       "appendSystem:function(t){var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);},"
                       "setMessages:function(items){log.innerHTML='';(items||[]).forEach(function(it){var r=it.role||'user';"
                       "if(r==='assistant')MeoAIChat.appendAssistant(it.content||'');"
                       "else if(r==='system')MeoAIChat.appendSystem(it.content||'');"
-                      "else MeoAIChat.appendUser(it.content||'');});}};</script>";
+                      "else MeoAIChat.appendUserPayload({text:it.content||'',images:it.images||[]});});}};</script>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -149,11 +152,39 @@
 }
 
 - (void)appendUserText:(NSString *)text {
+    [self appendUserText:text imageDataURLs:nil];
+}
+
+- (void)appendUserText:(NSString *)text imageDataURLs:(NSArray<NSString *> *)imageDataURLs {
     __weak typeof(self) weakSelf = self;
-    NSString *copy = [text copy] ?: @"";
+    NSMutableArray<NSString *> *safeImgs = [NSMutableArray array];
+    for (NSString *u in imageDataURLs ?: @[]) {
+        if ([u isKindOfClass:[NSString class]] && [u hasPrefix:@"data:image"]) {
+            [safeImgs addObject:u];
+        }
+    }
+    NSDictionary *payload = @{
+        @"text": text ?: @"",
+        @"images": safeImgs,
+    };
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"{\"text\":\"\",\"images\":[]}";
     [self runWhenReady:^{
         [weakSelf enqueueJS:^(void (^done)(void)) {
-            [weakSelf callChatMethod:@"appendUser" utf8Text:copy done:done];
+            NSString *js = [NSString stringWithFormat:
+                @"(function(){try{"
+                 "if(!window.MeoAIChat||typeof window.MeoAIChat.appendUserPayload!=='function'){"
+                 "if(window.MeoAIChat&&typeof window.MeoAIChat.appendUser==='function'){"
+                 "var o=%@;window.MeoAIChat.appendUser((o&&o.text)||'');"
+                 "}return 'fallback';}"
+                 "window.MeoAIChat.appendUserPayload(%@);"
+                 "return 'ok';"
+                 "}catch(e){return 'err:'+String(e);}})()",
+                json ?: @"{}",
+                json ?: @"{}"];
+            [weakSelf.webView evaluateJavaScript:js completionHandler:^(__unused id r, __unused NSError *e) {
+                if (done) done();
+            }];
         }];
     }];
 }
@@ -183,10 +214,15 @@
     NSMutableArray *payload = [NSMutableArray arrayWithCapacity:messages.count];
     for (AIAssistantMessage *m in messages ?: @[]) {
         NSString *role = m.role.length ? m.role : @"user";
-        [payload addObject:@{
+        NSString *ui = m.displayContent.length ? m.displayContent : (m.content ?: @"");
+        NSMutableDictionary *item = [@{
             @"role": role,
-            @"content": m.content ?: @"",
-        }];
+            @"content": ui,
+        } mutableCopy];
+        if (m.imageDataURLs.count) {
+            item[@"images"] = m.imageDataURLs;
+        }
+        [payload addObject:item];
     }
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"[]";
