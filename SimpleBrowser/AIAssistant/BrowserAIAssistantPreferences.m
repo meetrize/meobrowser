@@ -9,7 +9,8 @@ static NSString * const kModelKey = @"AIAssistant.lastModelId";
 static NSString * const kProviderKey = @"AIAssistant.lastProviderId";
 static const CGFloat kDefaultWidth = 380.0;
 static const CGFloat kMinWidth = 300.0;
-static const CGFloat kMaxWidth = 560.0;
+/// 仅作持久化硬顶；运行时侧栏还会按窗口宽度 80% 再裁
+static const CGFloat kMaxWidth = 4000.0;
 
 @implementation BrowserAIAssistantPreferences
 

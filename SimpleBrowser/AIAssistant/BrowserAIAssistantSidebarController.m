@@ -13,9 +13,12 @@
 
 static const CGFloat kSidebarDefaultWidth = 400.0;
 static const CGFloat kSidebarMinWidth = 320.0;
-static const CGFloat kSidebarMaxWidth = 560.0;
+static const CGFloat kSidebarMaxWidthFraction = 0.80;
 static const CGFloat kRailWidth = 44.0;
-static const CGFloat kCitationStripHeight = 44.0;
+static const CGFloat kCitationChipRowHeight = 24.0;
+static const CGFloat kCitationChipSpacing = 4.0;
+static const CGFloat kCitationMaxVisibleRows = 3.0;
+static const CGFloat kInputCornerRadius = 12.0;
 
 typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneChat = 0,
@@ -102,6 +105,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) NSStackView *citationStack;
 @property (nonatomic, strong) NSLayoutConstraint *citationHeightConstraint;
 @property (nonatomic, strong) NSMutableArray<AIAssistantCitation *> *citations;
+@property (nonatomic, strong) NSBox *inputBox;
+@property (nonatomic, strong) NSScrollView *inputScroll;
 @property (nonatomic, strong) SBTextView *inputView;
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
@@ -126,7 +131,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self = [super init];
     if (self) {
         CGFloat w = BrowserAIAssistantPreferences.sharedPreferences.sidebarWidth;
-        if (w < kSidebarMinWidth || w > kSidebarMaxWidth) w = kSidebarDefaultWidth;
+        if (w < kSidebarMinWidth) w = kSidebarDefaultWidth;
         _currentWidth = w;
         _pane = AIAssistantPaneChat;
         _citations = [NSMutableArray array];
@@ -228,6 +233,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     handle.onDragEnded = ^{
         weakSelf.isResizingWidth = NO;
         [weakSelf persistWidth];
+        [weakSelf reloadCitationChips];
     };
     self.resizeHandle = handle;
 
@@ -431,30 +437,66 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
     self.citationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     self.citationScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    self.citationScroll.hasHorizontalScroller = YES;
-    self.citationScroll.hasVerticalScroller = NO;
+    self.citationScroll.hasHorizontalScroller = NO;
+    self.citationScroll.hasVerticalScroller = YES;
+    self.citationScroll.autohidesScrollers = YES;
     self.citationScroll.borderType = NSNoBorder;
     self.citationScroll.drawsBackground = NO;
-    self.citationScroll.horizontalScrollElasticity = NSScrollElasticityAllowed;
+    self.citationScroll.horizontalScrollElasticity = NSScrollElasticityNone;
     self.citationScroll.hidden = YES;
 
     self.citationStack = [NSStackView stackViewWithViews:@[]];
     self.citationStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.citationStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    self.citationStack.alignment = NSLayoutAttributeCenterY;
-    self.citationStack.spacing = 6;
-    self.citationStack.edgeInsets = NSEdgeInsetsMake(4, 0, 4, 0);
+    self.citationStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.citationStack.alignment = NSLayoutAttributeLeading;
+    self.citationStack.spacing = kCitationChipSpacing;
+    self.citationStack.edgeInsets = NSEdgeInsetsMake(2, 0, 2, 0);
     self.citationScroll.documentView = self.citationStack;
     self.citationHeightConstraint = [self.citationScroll.heightAnchor constraintEqualToConstant:0];
+
+    NSBox *inputBox = [[NSBox alloc] initWithFrame:NSZeroRect];
+    inputBox.translatesAutoresizingMaskIntoConstraints = NO;
+    inputBox.titlePosition = NSNoTitle;
+    inputBox.boxType = NSBoxCustom;
+    inputBox.borderType = NSLineBorder;
+    inputBox.borderWidth = 1.0;
+    inputBox.cornerRadius = kInputCornerRadius;
+    inputBox.contentViewMargins = NSZeroSize;
+    inputBox.fillColor = NSColor.textBackgroundColor;
+    if (@available(macOS 10.14, *)) {
+        inputBox.borderColor = [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
+            NSAppearanceName matched =
+                [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+            if ([matched isEqualToString:NSAppearanceNameDarkAqua]) {
+                return [NSColor colorWithCalibratedWhite:1.0 alpha:0.28];
+            }
+            return [NSColor colorWithCalibratedWhite:0.0 alpha:0.20];
+        }];
+    } else {
+        inputBox.borderColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.22];
+    }
 
     NSScrollView *inputScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     inputScroll.translatesAutoresizingMaskIntoConstraints = NO;
     inputScroll.hasVerticalScroller = YES;
-    inputScroll.borderType = NSBezelBorder;
+    inputScroll.autohidesScrollers = YES;
+    inputScroll.borderType = NSNoBorder;
+    inputScroll.drawsBackground = NO;
     SBTextView *input = [SBTextView standardTextView];
     input.font = [NSFont systemFontOfSize:12];
     input.delegate = self;
+    input.drawsBackground = NO;
+    input.textContainerInset = NSMakeSize(8, 8);
     inputScroll.documentView = input;
+    [inputBox.contentView addSubview:inputScroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [inputScroll.topAnchor constraintEqualToAnchor:inputBox.contentView.topAnchor],
+        [inputScroll.leadingAnchor constraintEqualToAnchor:inputBox.contentView.leadingAnchor],
+        [inputScroll.trailingAnchor constraintEqualToAnchor:inputBox.contentView.trailingAnchor],
+        [inputScroll.bottomAnchor constraintEqualToAnchor:inputBox.contentView.bottomAnchor],
+    ]];
+    self.inputBox = inputBox;
+    self.inputScroll = inputScroll;
     self.inputView = input;
 
     self.sendButton = [NSButton buttonWithTitle:@"发送" target:self action:@selector(sendClicked:)];
@@ -467,7 +509,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.cancelButton.enabled = NO;
 
     for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
-                        self.chatPanel, self.citationScroll, inputScroll, self.sendButton, self.cancelButton]) {
+                        self.chatPanel, self.citationScroll, inputBox, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
@@ -501,14 +543,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
         [self.citationStack.topAnchor constraintEqualToAnchor:self.citationScroll.contentView.topAnchor],
         [self.citationStack.leadingAnchor constraintEqualToAnchor:self.citationScroll.contentView.leadingAnchor],
-        [self.citationStack.heightAnchor constraintEqualToAnchor:self.citationScroll.contentView.heightAnchor],
+        [self.citationStack.widthAnchor constraintEqualToAnchor:self.citationScroll.contentView.widthAnchor],
 
-        [inputScroll.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor constant:6],
-        [inputScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [inputScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
-        [inputScroll.heightAnchor constraintEqualToConstant:80],
+        [inputBox.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor constant:6],
+        [inputBox.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [inputBox.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
+        [inputBox.heightAnchor constraintEqualToConstant:80],
 
-        [self.sendButton.topAnchor constraintEqualToAnchor:inputScroll.bottomAnchor constant:8],
+        [self.sendButton.topAnchor constraintEqualToAnchor:inputBox.bottomAnchor constant:8],
         [self.sendButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.sendButton.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
 
@@ -579,13 +621,33 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 #pragma mark - Width
 
+- (CGFloat)effectiveMaxWidth {
+    CGFloat hostW = 0;
+    NSView *host = self.view.superview;
+    if (host && NSWidth(host.bounds) > 1) {
+        hostW = NSWidth(host.bounds);
+    } else if (self.view.window.contentView) {
+        hostW = NSWidth(self.view.window.contentView.bounds);
+    } else if (self.view.window) {
+        hostW = NSWidth(self.view.window.frame);
+    }
+    if (hostW < kSidebarMinWidth) {
+        return 1200.0; // 尚未入窗时给较宽临时上限，真正拖拽时会再按窗口裁
+    }
+    return MAX(kSidebarMinWidth, floor(hostW * kSidebarMaxWidthFraction));
+}
+
 - (void)applyWidth:(CGFloat)width {
     CGFloat next = width;
     if (next < kSidebarMinWidth) next = kSidebarMinWidth;
-    if (next > kSidebarMaxWidth) next = kSidebarMaxWidth;
+    CGFloat maxW = [self effectiveMaxWidth];
+    if (next > maxW) next = maxW;
     self.currentWidth = next;
     if (self.visible) {
         self.widthConstraint.constant = next;
+    }
+    if (self.citations.count > 0 && !self.isResizingWidth) {
+        [self reloadCitationChips];
     }
 }
 
@@ -596,6 +658,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated {
     self.visible = visible;
     self.view.hidden = NO;
+    if (visible) {
+        [self applyWidth:self.currentWidth];
+    }
     CGFloat target = visible ? self.currentWidth : 0;
     if (!visible) {
         [self.historyPopover performClose:nil];
@@ -606,10 +671,12 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
             self.widthConstraint.animator.constant = target;
         } completionHandler:^{
             if (!visible) self.view.hidden = YES;
+            else [self reloadCitationChips];
         }];
     } else {
         self.widthConstraint.constant = target;
         if (!visible) self.view.hidden = YES;
+        else [self reloadCitationChips];
     }
     if (visible) {
         [self reloadUI];
@@ -1315,6 +1382,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
 }
 
+- (CGFloat)citationAvailableWidth {
+    CGFloat w = NSWidth(self.citationScroll.bounds);
+    if (w < 40) {
+        w = MAX(120.0, self.currentWidth - kRailWidth - 36.0);
+    }
+    return w;
+}
+
 - (void)reloadCitationChips {
     for (NSView *v in [self.citationStack.arrangedSubviews copy]) {
         [self.citationStack removeArrangedSubview:v];
@@ -1322,23 +1397,61 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
     BOOL has = self.citations.count > 0;
     self.citationScroll.hidden = !has;
-    self.citationHeightConstraint.constant = has ? kCitationStripHeight : 0;
-    for (AIAssistantCitation *c in self.citations) {
-        [self.citationStack addArrangedSubview:[self chipViewForCitation:c]];
+    if (!has) {
+        self.citationHeightConstraint.constant = 0;
+        return;
     }
+
+    CGFloat avail = [self citationAvailableWidth];
+    NSStackView *row = nil;
+    CGFloat rowUsed = 0;
+    NSInteger rowCount = 0;
+
+    for (AIAssistantCitation *c in self.citations) {
+        NSView *chip = [self chipViewForCitation:c];
+        [chip layoutSubtreeIfNeeded];
+        CGFloat chipW = chip.fittingSize.width;
+        if (chipW < 1) {
+            chipW = 72;
+        }
+        BOOL needNewRow = (row == nil) ||
+            (row.arrangedSubviews.count > 0 && rowUsed + kCitationChipSpacing + chipW > avail);
+        if (needNewRow) {
+            row = [NSStackView stackViewWithViews:@[]];
+            row.translatesAutoresizingMaskIntoConstraints = NO;
+            row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+            row.alignment = NSLayoutAttributeCenterY;
+            row.spacing = kCitationChipSpacing;
+            [row.heightAnchor constraintEqualToConstant:kCitationChipRowHeight].active = YES;
+            [self.citationStack addArrangedSubview:row];
+            rowUsed = 0;
+            rowCount += 1;
+        }
+        [row addArrangedSubview:chip];
+        rowUsed += (row.arrangedSubviews.count > 1 ? kCitationChipSpacing : 0) + chipW;
+    }
+
+    CGFloat contentH = rowCount * kCitationChipRowHeight
+        + MAX(0, rowCount - 1) * kCitationChipSpacing
+        + 4;
+    CGFloat maxH = kCitationMaxVisibleRows * kCitationChipRowHeight
+        + MAX(0, kCitationMaxVisibleRows - 1) * kCitationChipSpacing
+        + 4;
+    self.citationScroll.hasVerticalScroller = (contentH > maxH + 0.5);
+    self.citationHeightConstraint.constant = MIN(contentH, maxH);
 }
 
 - (NSView *)chipViewForCitation:(AIAssistantCitation *)citation {
     NSView *chip = [[NSView alloc] initWithFrame:NSZeroRect];
     chip.translatesAutoresizingMaskIntoConstraints = NO;
     chip.wantsLayer = YES;
-    chip.layer.cornerRadius = 8;
+    chip.layer.cornerRadius = 6;
     chip.layer.masksToBounds = YES;
     if (@available(macOS 10.14, *)) {
-        chip.layer.backgroundColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.12].CGColor;
-        chip.layer.borderColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.35].CGColor;
+        chip.layer.backgroundColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.10].CGColor;
+        chip.layer.borderColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.28].CGColor;
     } else {
-        chip.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.06].CGColor;
+        chip.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.05].CGColor;
         chip.layer.borderColor = NSColor.gridColor.CGColor;
     }
     chip.layer.borderWidth = 1.0;
@@ -1347,11 +1460,11 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     icon.translatesAutoresizingMaskIntoConstraints = NO;
     icon.imageScaling = NSImageScaleProportionallyUpOrDown;
     icon.wantsLayer = YES;
-    icon.layer.cornerRadius = 4;
+    icon.layer.cornerRadius = 3;
     icon.layer.masksToBounds = YES;
-    CGFloat iconSize = 20;
+    CGFloat iconSize = 14;
     if (citation.kind == AIAssistantCitationKindImage) {
-        iconSize = 28;
+        iconSize = 16;
         if (citation.previewImage) {
             citation.previewImage.template = NO;
             icon.image = citation.previewImage;
@@ -1360,9 +1473,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
             ph.template = YES;
             icon.image = ph;
         }
-        icon.imageScaling = NSImageScaleProportionallyUpOrDown;
-        icon.layer.cornerRadius = 5;
-        icon.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.06].CGColor;
+        icon.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.05].CGColor;
     } else if (citation.kind == AIAssistantCitationKindFile) {
         NSString *ext = citation.url.pathExtension.length ? citation.url.pathExtension : @"txt";
 #pragma clang diagnostic push
@@ -1378,7 +1489,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
     NSTextField *label = [NSTextField labelWithString:citation.chipLabel];
     label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.font = [NSFont systemFontOfSize:11];
+    label.font = [NSFont systemFontOfSize:10];
     label.textColor = NSColor.labelColor;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     if (citation.kind == AIAssistantCitationKindImage) {
@@ -1402,7 +1513,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     remove.translatesAutoresizingMaskIntoConstraints = NO;
     remove.bezelStyle = NSBezelStyleInline;
     remove.bordered = NO;
-    remove.font = [NSFont systemFontOfSize:11];
+    remove.font = [NSFont systemFontOfSize:9 weight:NSFontWeightMedium];
     remove.identifier = citation.citationId;
     remove.toolTip = @"移除引用";
 
@@ -1411,18 +1522,19 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [chip addSubview:remove];
 
     [NSLayoutConstraint activateConstraints:@[
-        [chip.heightAnchor constraintEqualToConstant:MAX(32, iconSize + 8)],
+        [chip.heightAnchor constraintEqualToConstant:kCitationChipRowHeight],
         [icon.leadingAnchor constraintEqualToAnchor:chip.leadingAnchor constant:4],
         [icon.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
         [icon.widthAnchor constraintEqualToConstant:iconSize],
         [icon.heightAnchor constraintEqualToConstant:iconSize],
-        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:4],
         [label.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
-        [label.trailingAnchor constraintEqualToAnchor:remove.leadingAnchor constant:-2],
-        [label.widthAnchor constraintLessThanOrEqualToConstant:140],
-        [remove.trailingAnchor constraintEqualToAnchor:chip.trailingAnchor constant:-4],
+        [label.trailingAnchor constraintEqualToAnchor:remove.leadingAnchor constant:-1],
+        [label.widthAnchor constraintLessThanOrEqualToConstant:96],
+        [remove.trailingAnchor constraintEqualToAnchor:chip.trailingAnchor constant:-2],
         [remove.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
-        [remove.widthAnchor constraintEqualToConstant:18],
+        [remove.widthAnchor constraintEqualToConstant:14],
+        [remove.heightAnchor constraintEqualToConstant:14],
     ]];
     return chip;
 }

@@ -188,15 +188,15 @@
         NSString *file = self.url.lastPathComponent ?: @"";
         NSString *t = file.length ? file : (host.length ? host : (self.title.length ? self.title : @"图片"));
         t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-        if (t.length > 28) {
-            t = [[t substringToIndex:28] stringByAppendingString:@"…"];
+        if (t.length > 18) {
+            t = [[t substringToIndex:18] stringByAppendingString:@"…"];
         }
-        return [NSString stringWithFormat:@"图片 · %@", t];
+        return [NSString stringWithFormat:@"图 · %@", t];
     }
     NSString *t = self.title.length ? self.title : self.body;
     t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-    if (t.length > 36) {
-        t = [[t substringToIndex:36] stringByAppendingString:@"…"];
+    if (t.length > 22) {
+        t = [[t substringToIndex:22] stringByAppendingString:@"…"];
     }
     return t.length ? t : [self kindDisplayName];
 }

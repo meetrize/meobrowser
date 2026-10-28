@@ -9,7 +9,7 @@ FOUNDATION_EXPORT NSNotificationName const BrowserAIAssistantPreferencesDidChang
 
 @property (class, readonly, strong) BrowserAIAssistantPreferences *sharedPreferences;
 
-/// 侧栏宽度，默认 360，范围 280～560
+/// 侧栏宽度，默认 380；持久化下限 300，上限由侧栏按窗口约 80% 裁剪
 @property (nonatomic, assign) CGFloat sidebarWidth;
 
 /// 上次选用的 modelId（兼容；优先 lastProviderId）
