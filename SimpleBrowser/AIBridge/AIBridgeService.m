@@ -133,6 +133,8 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         name = @"豆包 网页";
     } else if ([pid isEqualToString:@"gemini"]) {
         name = @"Gemini 网页";
+    } else if ([pid isEqualToString:@"chatgpt"]) {
+        name = @"ChatGPT 网页";
     }
     [[AIBridgeRegistry sharedRegistry] bindTab:tab
                                     providerId:pid

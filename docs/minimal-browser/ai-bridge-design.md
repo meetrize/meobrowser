@@ -273,6 +273,25 @@ DeepSeek 选择器已于 2026-10-28 登录态实测修订（见 Spike/`adapters/
 
 Gemini 选择器已于 2026-10-28 游客 + 登录态实测（见 Spike/`adapters/gemini.js`）。
 
+```json
+{
+  "id": "chatgpt",
+  "displayName": "ChatGPT 网页",
+  "modelId": "bridge__chatgpt",
+  "matchHosts": ["chatgpt.com", "chat.openai.com"],
+  "inputSelector": ".ProseMirror[contenteditable=true]",
+  "sendSelector": "button[aria-label=发送]",
+  "assistantSelector": "[data-markdown-text-style=assistant-message]",
+  "busySelector": "button[aria-label=停止]",
+  "completeWhen": "停止消失 + 重新生成回复 + 正文稳定",
+  "stableMs": 1000,
+  "defaultTimeoutMs": 180000,
+  "notes": "2026-10 新 UI：优先 data-markdown-text-style；旧 data-message-author-role 作 fallback"
+}
+```
+
+ChatGPT 选择器已于 2026-10-28 登录态实测（见 Spike/`adapters/chatgpt.js`）。
+
 ---
 
 ## 7. API 约定

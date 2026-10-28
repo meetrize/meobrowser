@@ -59,6 +59,7 @@
 - [x] **2.8** `adapters/iwencai.js`（问财）+ 侧栏 Provider + Makefile  
 - [x] **2.9** `adapters/doubao.js`（豆包）+ 侧栏 Provider + Makefile  
 - [x] **2.10** `adapters/gemini.js`（Gemini）+ 侧栏 Provider + Makefile  
+- [x] **2.11** `adapters/chatgpt.js`（ChatGPT）+ 侧栏 Provider + Makefile  
 
 ---
 
@@ -109,6 +110,10 @@ curl -s http://127.0.0.1:3921/v1/chat/completions \
 curl -s http://127.0.0.1:3921/v1/chat/completions \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"model":"bridge__gemini","messages":[{"role":"user","content":"用一句话介绍你自己"}]}'
+
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"model":"bridge__chatgpt","messages":[{"role":"user","content":"用一句话介绍你自己"}]}'
 
 # 假流式
 curl -N http://127.0.0.1:3921/v1/chat/completions \

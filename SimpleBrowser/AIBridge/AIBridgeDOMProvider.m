@@ -113,6 +113,8 @@
         adapterName = @"doubao.js";
     } else if ([providerId isEqualToString:@"gemini"]) {
         adapterName = @"gemini.js";
+    } else if ([providerId isEqualToString:@"chatgpt"]) {
+        adapterName = @"chatgpt.js";
     } else if ([providerId isEqualToString:@"deepseek"]) {
         adapterName = @"deepseek.js";
     }

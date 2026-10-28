@@ -399,6 +399,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/iwencai.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/doubao.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/gemini.js \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/chatgpt.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
@@ -431,6 +432,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/iwencai.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/iwencai.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/doubao.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/doubao.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/gemini.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/gemini.js"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/chatgpt.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/chatgpt.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html" "$(BROWSER_RES_DIR)/AIBridge/mock-chat.html"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"

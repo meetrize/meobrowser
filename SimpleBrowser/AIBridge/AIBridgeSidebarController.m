@@ -137,6 +137,8 @@ static const CGFloat kSidebarWidth = 320.0;
     self.providerPopup.lastItem.representedObject = @"doubao";
     [self.providerPopup addItemWithTitle:@"Gemini 网页"];
     self.providerPopup.lastItem.representedObject = @"gemini";
+    [self.providerPopup addItemWithTitle:@"ChatGPT 网页"];
+    self.providerPopup.lastItem.representedObject = @"chatgpt";
     [self.providerPopup addItemWithTitle:@"Mock 对话页"];
     self.providerPopup.lastItem.representedObject = @"mock";
 
