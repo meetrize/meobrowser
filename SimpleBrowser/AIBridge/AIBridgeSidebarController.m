@@ -70,8 +70,10 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 @property (nonatomic, assign) BOOL isResizingWidth;
 @property (nonatomic, strong) AIBridgeSidebarResizeView *resizeHandle;
 
+@property (nonatomic, strong) NSView *statusDot;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSTextField *urlLabel;
+@property (nonatomic, strong) NSButton *autoStartCheckbox;
 @property (nonatomic, strong) SBTextField *tokenField;
 @property (nonatomic, strong) NSPopUpButton *providerPopup;
 @property (nonatomic, strong) NSTextField *bindLabel;
@@ -83,6 +85,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 @property (nonatomic, strong) NSButton *testSendButton;
 @property (nonatomic, strong) NSTextField *testStatusLabel;
 @property (nonatomic, assign) BOOL testInFlight;
+@property (nonatomic, assign) BOOL bindInFlight;
 
 @property (nonatomic, strong) NSButton *startStopButton;
 @property (nonatomic, strong, nullable) id prefsObserver;
@@ -185,6 +188,12 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     close.bordered = NO;
     close.toolTip = @"关闭侧栏";
 
+    self.statusDot = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.statusDot.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusDot.wantsLayer = YES;
+    self.statusDot.layer.cornerRadius = 5.0;
+    self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
+
     self.statusLabel = [NSTextField labelWithString:@"服务未启动"];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.statusLabel.font = [NSFont systemFontOfSize:12];
@@ -198,6 +207,12 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.startStopButton = [NSButton buttonWithTitle:@"启动服务" target:self action:@selector(toggleServer:)];
     self.startStopButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.startStopButton.bezelStyle = NSBezelStyleRounded;
+
+    self.autoStartCheckbox = [NSButton checkboxWithTitle:@"随浏览器自动启动"
+                                                  target:self
+                                                  action:@selector(autoStartChanged:)];
+    self.autoStartCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.autoStartCheckbox.font = [NSFont systemFontOfSize:11];
 
     NSTextField *tokenCaption = [NSTextField labelWithString:@"Bearer Token"];
     tokenCaption.translatesAutoresizingMaskIntoConstraints = NO;
@@ -230,9 +245,10 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         self.providerPopup.lastItem.representedObject = p[@"id"];
     }
 
-    NSButton *bindBtn = [NSButton buttonWithTitle:@"绑定当前标签" target:self action:@selector(bindClicked:)];
+    NSButton *bindBtn = [NSButton buttonWithTitle:@"绑定" target:self action:@selector(bindClicked:)];
     bindBtn.translatesAutoresizingMaskIntoConstraints = NO;
     bindBtn.bezelStyle = NSBezelStyleRounded;
+    bindBtn.toolTip = @"已打开对应站点则自动选中绑定；否则打开首页再绑定";
 
     NSButton *unbindBtn = [NSButton buttonWithTitle:@"解绑当前" target:self action:@selector(unbindClicked:)];
     unbindBtn.translatesAutoresizingMaskIntoConstraints = NO;
@@ -336,7 +352,8 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     hint.textColor = NSColor.tertiaryLabelColor;
 
     NSArray *subs = @[
-        title, close, self.statusLabel, self.urlLabel, self.startStopButton,
+        title, close, self.statusDot, self.statusLabel, self.urlLabel,
+        self.startStopButton, self.autoStartCheckbox,
         tokenCaption, self.tokenField, copyToken, regen,
         bindCaption, self.providerPopup, bindBtn, unbindBtn, unbindAllBtn, probeBtn,
         self.bindLabel, self.bindingsSummaryLabel,
@@ -354,16 +371,25 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
         [close.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
 
-        [self.statusLabel.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
-        [self.statusLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.statusDot.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:14],
+        [self.statusDot.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.statusDot.widthAnchor constraintEqualToConstant:10],
+        [self.statusDot.heightAnchor constraintEqualToConstant:10],
+
+        [self.statusLabel.centerYAnchor constraintEqualToAnchor:self.statusDot.centerYAnchor],
+        [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.statusDot.trailingAnchor constant:8],
         [self.statusLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
-        [self.urlLabel.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor constant:4],
+        [self.urlLabel.topAnchor constraintEqualToAnchor:self.statusDot.bottomAnchor constant:8],
         [self.urlLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
         [self.urlLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
         [self.startStopButton.topAnchor constraintEqualToAnchor:self.urlLabel.bottomAnchor constant:8],
         [self.startStopButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+
+        [self.autoStartCheckbox.centerYAnchor constraintEqualToAnchor:self.startStopButton.centerYAnchor],
+        [self.autoStartCheckbox.leadingAnchor constraintEqualToAnchor:self.startStopButton.trailingAnchor constant:10],
+        [self.autoStartCheckbox.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-14],
 
         [tokenCaption.topAnchor constraintEqualToAnchor:self.startStopButton.bottomAnchor constant:14],
         [tokenCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
@@ -552,10 +578,15 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
     AIBridgeService *svc = AIBridgeService.sharedService;
     AIBridgePreferences *prefs = AIBridgePreferences.sharedPreferences;
+    BOOL listening = svc.isListening;
     self.statusLabel.stringValue = svc.statusText;
+    self.statusDot.layer.backgroundColor = (listening
+                                            ? NSColor.systemGreenColor
+                                            : NSColor.systemRedColor).CGColor;
     self.urlLabel.stringValue = svc.baseURLString;
     self.tokenField.stringValue = prefs.bearerToken ?: @"";
-    self.startStopButton.title = svc.isListening ? @"停止服务" : @"启动服务";
+    self.startStopButton.title = listening ? @"停止服务" : @"启动服务";
+    self.autoStartCheckbox.state = prefs.autoStartWithBrowser ? NSControlStateValueOn : NSControlStateValueOff;
 
     [self refreshProviderPopupTitles];
 
@@ -566,7 +597,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
                                       b.modelId, b.tabTitle ?: @"标签", b.pageURL ?: @""];
         self.bindLabel.textColor = NSColor.systemGreenColor;
     } else {
-        self.bindLabel.stringValue = @"当前 ○ 未绑定（打开对应 AI 页后点「绑定当前标签」）";
+        self.bindLabel.stringValue = @"当前 ○ 未绑定（点「绑定」自动找标签或打开首页）";
         self.bindLabel.textColor = NSColor.secondaryLabelColor;
     }
 
@@ -620,13 +651,23 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     AIBridgeService *svc = AIBridgeService.sharedService;
     if (svc.isListening) {
         [svc stopServer];
+        AIBridgePreferences.sharedPreferences.serverEnabled = NO;
     } else {
         NSError *err = nil;
         if (![svc startServer:&err]) {
             self.statusLabel.stringValue = err.localizedDescription ?: @"启动失败";
+            self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
+        } else {
+            AIBridgePreferences.sharedPreferences.serverEnabled = YES;
         }
     }
     [self reloadUI];
+}
+
+- (void)autoStartChanged:(id)sender {
+    (void)sender;
+    AIBridgePreferences.sharedPreferences.autoStartWithBrowser =
+        (self.autoStartCheckbox.state == NSControlStateValueOn);
 }
 
 - (void)copyToken:(id)sender {
@@ -644,18 +685,35 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
 - (void)bindClicked:(id)sender {
     (void)sender;
-    BrowserTab *tab = [self.delegate aiBridgeSidebarCurrentTab:self];
-    NSURL *url = [self.delegate aiBridgeSidebarCurrentURL:self];
-    NSError *err = nil;
-    [[AIBridgeService sharedService] bindCurrentTab:tab
-                                            pageURL:url
-                                         providerId:[self selectedProviderId]
-                                              error:&err];
-    if (err) {
-        self.bindLabel.stringValue = err.localizedDescription;
-        self.bindLabel.textColor = NSColor.systemRedColor;
+    if (self.bindInFlight) {
+        return;
     }
-    [self reloadUI];
+    NSString *pid = [self selectedProviderId];
+    if (pid.length == 0) {
+        return;
+    }
+    id<AIBridgeSidebarControllerDelegate> del = self.delegate;
+    if (![del respondsToSelector:@selector(aiBridgeSidebar:bindOrOpenProviderId:completion:)]) {
+        self.bindLabel.stringValue = @"绑定不可用";
+        self.bindLabel.textColor = NSColor.systemRedColor;
+        return;
+    }
+    self.bindInFlight = YES;
+    self.bindLabel.stringValue = @"正在绑定…";
+    self.bindLabel.textColor = NSColor.secondaryLabelColor;
+    __weak typeof(self) weakSelf = self;
+    [del aiBridgeSidebar:self bindOrOpenProviderId:pid completion:^(BOOL ok, NSString *detail) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.bindInFlight = NO;
+        if (!ok) {
+            strongSelf.bindLabel.stringValue = detail.length ? detail : @"绑定失败";
+            strongSelf.bindLabel.textColor = NSColor.systemRedColor;
+        }
+        [strongSelf reloadUI];
+    }];
 }
 
 - (void)unbindClicked:(id)sender {

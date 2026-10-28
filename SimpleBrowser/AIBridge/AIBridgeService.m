@@ -65,13 +65,13 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
 }
 
 - (BOOL)host:(NSString *)host matchesProviderId:(NSString *)providerId {
+    NSArray<NSString *> *hosts = [self matchHostsForProviderId:providerId];
+    if (hosts.count == 0) {
+        return YES; // mock / 未知：不拦（含 file:// 本地 mock）
+    }
     NSString *h = host.lowercaseString ?: @"";
     if (h.length == 0) {
         return NO;
-    }
-    NSArray<NSString *> *hosts = [self matchHostsForProviderId:providerId];
-    if (hosts.count == 0) {
-        return YES; // mock / 未知：不拦
     }
     for (NSString *needle in hosts) {
         NSString *n = needle.lowercaseString;
@@ -116,6 +116,36 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     return [NSString stringWithFormat:
             @"域名不匹配：当前标签是 %@，但选中的是 %@（期望 %@）。请先打开对应网站再绑定，或切换到已绑定的标签。",
             actual, name, expect];
+}
+
+- (NSURL *)homeURLForProviderId:(NSString *)providerId {
+    NSString *pid = providerId ?: @"";
+    if ([pid isEqualToString:@"deepseek"]) {
+        return [NSURL URLWithString:@"https://chat.deepseek.com/"];
+    }
+    if ([pid isEqualToString:@"kimi"]) {
+        return [NSURL URLWithString:@"https://www.kimi.com/"];
+    }
+    if ([pid isEqualToString:@"iwencai"]) {
+        return [NSURL URLWithString:@"https://www.iwencai.com/"];
+    }
+    if ([pid isEqualToString:@"doubao"]) {
+        return [NSURL URLWithString:@"https://www.doubao.com/chat/"];
+    }
+    if ([pid isEqualToString:@"gemini"]) {
+        return [NSURL URLWithString:@"https://gemini.google.com/app"];
+    }
+    if ([pid isEqualToString:@"chatgpt"]) {
+        return [NSURL URLWithString:@"https://chatgpt.com/"];
+    }
+    if ([pid isEqualToString:@"mock"]) {
+        NSString *path = [NSBundle.mainBundle pathForResource:@"mock-chat" ofType:@"html" inDirectory:@"AIBridge"];
+        if (!path) {
+            path = [NSBundle.mainBundle pathForResource:@"mock-chat" ofType:@"html"];
+        }
+        return path.length ? [NSURL fileURLWithPath:path] : nil;
+    }
+    return nil;
 }
 
 + (AIBridgeService *)sharedService {

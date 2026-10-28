@@ -53,6 +53,7 @@
 #import "BrowserScraperSidebarController.h"
 #import "BrowserScraperMessageHub.h"
 #import "AIBridgeSidebarController.h"
+#import "AIBridgeService.h"
 #import "BrowserAIAssistantSidebarController.h"
 #import "BrowserAIAssistantPrompts.h"
 #import "BrowserFindBarController.h"
@@ -3156,6 +3157,95 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
         return nil;
     }
     return self.webView;
+}
+
+- (nullable NSURL *)aiBridgeResolvedURLForTab:(BrowserTab *)tab {
+    if (!tab) {
+        return nil;
+    }
+    NSURL *live = nil;
+    if (tab.webView.URL) {
+        live = [BrowserWebView publicURLFromInternalURL:tab.webView.URL] ?: tab.webView.URL;
+    }
+    if (!live) {
+        live = tab.currentOrRestorableURL;
+    }
+    if (!live) {
+        live = tab.restorableURL;
+    }
+    return live;
+}
+
+- (BOOL)aiBridgeURL:(NSURL *)url matchesProviderId:(NSString *)providerId {
+    if (!url || providerId.length == 0) {
+        return NO;
+    }
+    // mock：仅匹配本地 mock-chat 页，避免「任意 host」误选其它标签
+    if ([providerId isEqualToString:@"mock"]) {
+        return url.isFileURL && [url.lastPathComponent.lowercaseString containsString:@"mock-chat"];
+    }
+    return [AIBridgeService.sharedService host:(url.host ?: @"") matchesProviderId:providerId];
+}
+
+- (nullable BrowserTab *)aiBridgeFindTabMatchingProviderId:(NSString *)providerId {
+    BrowserTab *selected = self.tabController.selectedTab;
+    if (selected && !selected.isNewTabPage) {
+        NSURL *url = [self aiBridgeResolvedURLForTab:selected];
+        if ([self aiBridgeURL:url matchesProviderId:providerId]) {
+            return selected;
+        }
+    }
+    for (BrowserTab *tab in self.tabController.tabs) {
+        if (tab.isNewTabPage || tab == selected) {
+            continue;
+        }
+        NSURL *url = [self aiBridgeResolvedURLForTab:tab];
+        if ([self aiBridgeURL:url matchesProviderId:providerId]) {
+            return tab;
+        }
+    }
+    return nil;
+}
+
+- (void)aiBridgeSidebar:(AIBridgeSidebarController *)controller
+  bindOrOpenProviderId:(NSString *)providerId
+            completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion {
+    (void)controller;
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *detail) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) {
+                completion(ok, detail);
+            }
+        });
+    };
+    if (providerId.length == 0) {
+        finish(NO, @"未选择平台");
+        return;
+    }
+    AIBridgeService *svc = AIBridgeService.sharedService;
+    BrowserTab *match = [self aiBridgeFindTabMatchingProviderId:providerId];
+    if (match) {
+        [self.tabController selectTab:match];
+        [match wakeFromHibernationIfNeeded];
+        if (match.pendingRestorableLoad) {
+            [match loadPendingRestorableURLIfNeeded];
+        }
+        NSURL *url = [self aiBridgeResolvedURLForTab:match];
+        NSError *err = nil;
+        [svc bindCurrentTab:match pageURL:url providerId:providerId error:&err];
+        finish(err == nil, err.localizedDescription);
+        return;
+    }
+    NSURL *home = [svc homeURLForProviderId:providerId];
+    if (!home) {
+        finish(NO, @"无法确定该平台首页");
+        return;
+    }
+    BrowserTab *tab = [self.tabController addTabWithURL:home];
+    NSURL *url = [self aiBridgeResolvedURLForTab:tab] ?: home;
+    NSError *err = nil;
+    [svc bindCurrentTab:tab pageURL:url providerId:providerId error:&err];
+    finish(err == nil, err.localizedDescription);
 }
 
 - (void)updateAIBridgeButtonAppearance {

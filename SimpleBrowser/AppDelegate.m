@@ -24,6 +24,8 @@
 #import "MeoApplication.h"
 #import "BrowserTabUIDiagnostics.h"
 #import "BrowserUserActivityMonitor.h"
+#import "AIBridgePreferences.h"
+#import "AIBridgeService.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -97,6 +99,12 @@
     }
     [self flushPendingExternalURLs];
     [[BrowserStatusItemController sharedController] install];
+    if (AIBridgePreferences.sharedPreferences.autoStartWithBrowser) {
+        NSError *err = nil;
+        if (![[AIBridgeService sharedService] startServer:&err]) {
+            NSLog(@"[AIBridge] 随浏览器自动启动失败: %@", err.localizedDescription);
+        }
+    }
 }
 
 - (void)warmUpLaunchpadFaviconsInBackground {

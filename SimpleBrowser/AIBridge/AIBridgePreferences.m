@@ -6,6 +6,7 @@ NSNotificationName const AIBridgePreferencesDidChangeNotification = @"AIBridgePr
 static NSString * const kPortKey = @"AIBridge.port";
 static NSString * const kTokenKey = @"AIBridge.bearerToken";
 static NSString * const kEnabledKey = @"AIBridge.serverEnabled";
+static NSString * const kAutoStartKey = @"AIBridge.autoStartWithBrowser";
 static NSString * const kOllamaKey = @"AIBridge.ollamaBaseURL";
 static NSString * const kOpenAIBaseKey = @"AIBridge.openaiBaseURL";
 static NSString * const kOpenAIKeyKey = @"AIBridge.openaiApiKey";
@@ -33,6 +34,12 @@ static const CGFloat kAIBridgeSidebarMaxWidth = 560.0;
         _port = (port > 0 && port <= 65535) ? port : 3921;
         _bearerToken = [ud stringForKey:kTokenKey] ?: @"";
         _serverEnabled = [ud boolForKey:kEnabledKey];
+        // 兼容：若从未写过 autoStart，沿用 serverEnabled 作为默认
+        if ([ud objectForKey:kAutoStartKey] != nil) {
+            _autoStartWithBrowser = [ud boolForKey:kAutoStartKey];
+        } else {
+            _autoStartWithBrowser = _serverEnabled;
+        }
         NSString *ollama = [ud stringForKey:kOllamaKey];
         _ollamaBaseURL = ollama.length ? ollama : @"http://127.0.0.1:11434/v1";
         _openaiBaseURL = [ud stringForKey:kOpenAIBaseKey] ?: @"";
@@ -79,6 +86,15 @@ static const CGFloat kAIBridgeSidebarMaxWidth = 560.0;
     }
     _serverEnabled = serverEnabled;
     [NSUserDefaults.standardUserDefaults setBool:serverEnabled forKey:kEnabledKey];
+    [self notify];
+}
+
+- (void)setAutoStartWithBrowser:(BOOL)autoStartWithBrowser {
+    if (_autoStartWithBrowser == autoStartWithBrowser) {
+        return;
+    }
+    _autoStartWithBrowser = autoStartWithBrowser;
+    [NSUserDefaults.standardUserDefaults setBool:autoStartWithBrowser forKey:kAutoStartKey];
     [self notify];
 }
 

@@ -39,6 +39,12 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
 - (NSString *)baseURLString;
 - (NSString *)curlExampleForModel:(NSString *)modelId;
 
+/// Provider 期望域名（绑定匹配 / 智能找标签）
+- (NSArray<NSString *> *)matchHostsForProviderId:(NSString *)providerId;
+- (BOOL)host:(NSString *)host matchesProviderId:(NSString *)providerId;
+/// 未打开标签时用于新建标签的首页
+- (nullable NSURL *)homeURLForProviderId:(NSString *)providerId;
+
 @end
 
 NS_ASSUME_NONNULL_END
