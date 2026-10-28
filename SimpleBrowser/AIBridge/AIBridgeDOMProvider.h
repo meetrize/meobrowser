@@ -24,6 +24,12 @@ typedef void (^AIBridgeDOMCompletion)(NSDictionary *_Nullable result, NSError *_
                 timeoutMs:(NSInteger)timeoutMs
                completion:(AIBridgeDOMCompletion)completion;
 
+- (void)abortOnWebView:(WKWebView *)webView;
+
+- (void)newChatOnWebView:(WKWebView *)webView
+              providerId:(NSString *)providerId
+              completion:(AIBridgeDOMCompletion)completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

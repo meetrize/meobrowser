@@ -102,7 +102,14 @@
     if (!runtime) {
         runtime = [self loadResourceNamed:@"runtime.js" subdirectory:nil];
     }
-    NSString *adapterName = [providerId isEqualToString:@"mock"] ? @"mock.js" : @"deepseek.js";
+    NSString *adapterName = @"deepseek.js";
+    if ([providerId isEqualToString:@"mock"]) {
+        adapterName = @"mock.js";
+    } else if ([providerId isEqualToString:@"kimi"]) {
+        adapterName = @"kimi.js";
+    } else if ([providerId isEqualToString:@"deepseek"]) {
+        adapterName = @"deepseek.js";
+    }
     NSString *adapter = [self loadResourceNamed:adapterName subdirectory:@"AIBridge/Adapters"];
     if (!adapter) {
         adapter = [self loadResourceNamed:adapterName subdirectory:@"Adapters"];
@@ -212,6 +219,52 @@
             }
             NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(ms / 1000.0) + 5.0];
             [strongSelf pollJobOnWebView:webView deadline:deadline completion:completion];
+        }];
+    }];
+}
+
+- (void)abortOnWebView:(WKWebView *)webView {
+    NSString *js =
+        @"(function(){"
+         "  try {"
+         "    if (window.__MeoAIBridge && typeof window.__MeoAIBridge.abort === 'function') {"
+         "      window.__MeoAIBridge.abort();"
+         "    }"
+         "    if (window.__MeoAIBridgeJob && window.__MeoAIBridgeJob.status === 'running') {"
+         "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'aborted', text:''}};"
+         "    }"
+         "    return 'ok';"
+         "  } catch(e) { return String(e); }"
+         "})()";
+    [self evaluate:js onWebView:webView completion:^(__unused id result, __unused NSError *error) {
+    }];
+}
+
+- (void)newChatOnWebView:(WKWebView *)webView
+              providerId:(NSString *)providerId
+              completion:(AIBridgeDOMCompletion)completion {
+    __weak typeof(self) weakSelf = self;
+    [self ensureReadyOnWebView:webView providerId:providerId completion:^(NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (error) {
+            if (completion) {
+                completion(nil, error);
+            }
+            return;
+        }
+        NSString *js =
+            @"(function(){ try {"
+             "  var r = window.__MeoAIBridge ? window.__MeoAIBridge.newChat() : {ok:false,error:'no api'};"
+             "  return JSON.stringify(r);"
+             "} catch(e){ return JSON.stringify({ok:false,error:String(e)}); } })()";
+        [strongSelf evaluate:js onWebView:webView completion:^(id result, NSError *evalErr) {
+            NSDictionary *dict = [strongSelf coerceDictionary:result];
+            if (completion) {
+                completion(dict, dict ? nil : evalErr);
+            }
         }];
     }];
 }

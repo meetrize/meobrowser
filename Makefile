@@ -159,6 +159,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeDOMProvider.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeJobQueue.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeHTTPServer.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeUpstreamClient.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeService.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeSidebarController.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
@@ -394,6 +395,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/runtime.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/mock.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/deepseek.js \
+		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/kimi.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
@@ -422,6 +424,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/runtime.js" "$(BROWSER_RES_DIR)/AIBridge/runtime.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/mock.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/mock.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/deepseek.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/deepseek.js"
+	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/kimi.js" "$(BROWSER_RES_DIR)/AIBridge/Adapters/kimi.js"
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html" "$(BROWSER_RES_DIR)/AIBridge/mock-chat.html"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"

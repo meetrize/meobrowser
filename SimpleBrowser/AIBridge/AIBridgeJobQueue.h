@@ -17,6 +17,9 @@ typedef void (^AIBridgeJobCompletion)(NSDictionary *_Nullable result, NSInteger 
            timeoutMs:(NSInteger)timeoutMs
           completion:(AIBridgeJobCompletion)completion;
 
+/// 中止当前任务并拒绝排队中的任务（499）。
+- (void)cancelAll;
+
 @end
 
 NS_ASSUME_NONNULL_END

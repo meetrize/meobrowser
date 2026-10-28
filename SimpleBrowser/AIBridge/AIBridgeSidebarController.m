@@ -76,7 +76,7 @@ static const CGFloat kSidebarWidth = 320.0;
     scroll.borderType = NSNoBorder;
     scroll.drawsBackground = NO;
 
-    AIBridgeFlippedView *content = [[AIBridgeFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kSidebarWidth, 640)];
+    AIBridgeFlippedView *content = [[AIBridgeFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kSidebarWidth, 760)];
     content.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSTextField *title = [NSTextField labelWithString:@"AI Bridge"];
@@ -129,6 +129,8 @@ static const CGFloat kSidebarWidth = 320.0;
     self.providerPopup.translatesAutoresizingMaskIntoConstraints = NO;
     [self.providerPopup addItemWithTitle:@"DeepSeek 网页"];
     self.providerPopup.lastItem.representedObject = @"deepseek";
+    [self.providerPopup addItemWithTitle:@"Kimi 网页"];
+    self.providerPopup.lastItem.representedObject = @"kimi";
     [self.providerPopup addItemWithTitle:@"Mock 对话页"];
     self.providerPopup.lastItem.representedObject = @"mock";
 
@@ -149,6 +151,18 @@ static const CGFloat kSidebarWidth = 320.0;
     self.bindLabel.font = [NSFont systemFontOfSize:11];
     self.bindLabel.textColor = NSColor.secondaryLabelColor;
 
+    NSButton *newChatBtn = [NSButton buttonWithTitle:@"新对话" target:self action:@selector(newChatClicked:)];
+    newChatBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    newChatBtn.bezelStyle = NSBezelStyleRounded;
+
+    NSButton *cancelBtn = [NSButton buttonWithTitle:@"取消任务" target:self action:@selector(cancelClicked:)];
+    cancelBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    cancelBtn.bezelStyle = NSBezelStyleRounded;
+
+    NSButton *copyURL = [NSButton buttonWithTitle:@"复制 Base URL" target:self action:@selector(copyBaseURL:)];
+    copyURL.translatesAutoresizingMaskIntoConstraints = NO;
+    copyURL.bezelStyle = NSBezelStyleRounded;
+
     NSButton *copyCurl = [NSButton buttonWithTitle:@"复制 curl 示例" target:self action:@selector(copyCurl:)];
     copyCurl.translatesAutoresizingMaskIntoConstraints = NO;
     copyCurl.bezelStyle = NSBezelStyleRounded;
@@ -167,7 +181,9 @@ static const CGFloat kSidebarWidth = 320.0;
     logScroll.documentView = log;
     self.logView = log;
 
-    NSTextField *hint = [NSTextField wrappingLabelWithString:@"仅本机 127.0.0.1。请遵守各 AI 平台条款，仅供个人实验。"];
+    NSTextField *hint = [NSTextField wrappingLabelWithString:
+        @"仅本机 127.0.0.1。model：bridge__*（网页）/ ollama__* / openai__*。"
+         "请遵守各 AI 平台条款，仅供个人实验。"];
     hint.translatesAutoresizingMaskIntoConstraints = NO;
     hint.font = [NSFont systemFontOfSize:10];
     hint.textColor = NSColor.tertiaryLabelColor;
@@ -187,6 +203,9 @@ static const CGFloat kSidebarWidth = 320.0;
     [content addSubview:unbindBtn];
     [content addSubview:probeBtn];
     [content addSubview:self.bindLabel];
+    [content addSubview:newChatBtn];
+    [content addSubview:cancelBtn];
+    [content addSubview:copyURL];
     [content addSubview:copyCurl];
     [content addSubview:logCaption];
     [content addSubview:logScroll];
@@ -240,10 +259,17 @@ static const CGFloat kSidebarWidth = 320.0;
         [self.bindLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
         [self.bindLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
-        [copyCurl.topAnchor constraintEqualToAnchor:self.bindLabel.bottomAnchor constant:10],
-        [copyCurl.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [newChatBtn.topAnchor constraintEqualToAnchor:self.bindLabel.bottomAnchor constant:10],
+        [newChatBtn.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [cancelBtn.centerYAnchor constraintEqualToAnchor:newChatBtn.centerYAnchor],
+        [cancelBtn.leadingAnchor constraintEqualToAnchor:newChatBtn.trailingAnchor constant:8],
 
-        [logCaption.topAnchor constraintEqualToAnchor:copyCurl.bottomAnchor constant:16],
+        [copyURL.topAnchor constraintEqualToAnchor:newChatBtn.bottomAnchor constant:8],
+        [copyURL.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [copyCurl.centerYAnchor constraintEqualToAnchor:copyURL.centerYAnchor],
+        [copyCurl.leadingAnchor constraintEqualToAnchor:copyURL.trailingAnchor constant:8],
+
+        [logCaption.topAnchor constraintEqualToAnchor:copyURL.bottomAnchor constant:16],
         [logCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
 
         [logScroll.topAnchor constraintEqualToAnchor:logCaption.bottomAnchor constant:6],
@@ -422,6 +448,30 @@ static const CGFloat kSidebarWidth = 320.0;
     NSPasteboard *pb = NSPasteboard.generalPasteboard;
     [pb clearContents];
     [pb setString:curl forType:NSPasteboardTypeString];
+}
+
+- (void)copyBaseURL:(id)sender {
+    (void)sender;
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    [pb clearContents];
+    [pb setString:AIBridgeService.sharedService.baseURLString forType:NSPasteboardTypeString];
+}
+
+- (void)newChatClicked:(id)sender {
+    (void)sender;
+    NSString *pid = [self selectedProviderId];
+    __weak typeof(self) weakSelf = self;
+    [[AIBridgeService sharedService] newChatForProviderId:pid completion:^(BOOL ok, NSString *detail) {
+        weakSelf.bindLabel.stringValue = ok ? @"已触发新对话" : (detail ?: @"新对话失败");
+        [weakSelf reloadUI];
+    }];
+}
+
+- (void)cancelClicked:(id)sender {
+    (void)sender;
+    [[AIBridgeService sharedService] cancelAllJobs];
+    self.bindLabel.stringValue = @"已取消排队/当前任务";
+    [self reloadUI];
 }
 
 @end

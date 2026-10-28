@@ -5,6 +5,9 @@ NSNotificationName const AIBridgePreferencesDidChangeNotification = @"AIBridgePr
 static NSString * const kPortKey = @"AIBridge.port";
 static NSString * const kTokenKey = @"AIBridge.bearerToken";
 static NSString * const kEnabledKey = @"AIBridge.serverEnabled";
+static NSString * const kOllamaKey = @"AIBridge.ollamaBaseURL";
+static NSString * const kOpenAIBaseKey = @"AIBridge.openaiBaseURL";
+static NSString * const kOpenAIKeyKey = @"AIBridge.openaiApiKey";
 
 @implementation AIBridgePreferences
 
@@ -25,6 +28,10 @@ static NSString * const kEnabledKey = @"AIBridge.serverEnabled";
         _port = (port > 0 && port <= 65535) ? port : 3921;
         _bearerToken = [ud stringForKey:kTokenKey] ?: @"";
         _serverEnabled = [ud boolForKey:kEnabledKey];
+        NSString *ollama = [ud stringForKey:kOllamaKey];
+        _ollamaBaseURL = ollama.length ? ollama : @"http://127.0.0.1:11434/v1";
+        _openaiBaseURL = [ud stringForKey:kOpenAIBaseKey] ?: @"";
+        _openaiApiKey = [ud stringForKey:kOpenAIKeyKey] ?: @"";
         [self ensureToken];
     }
     return self;
@@ -62,6 +69,36 @@ static NSString * const kEnabledKey = @"AIBridge.serverEnabled";
     }
     _serverEnabled = serverEnabled;
     [NSUserDefaults.standardUserDefaults setBool:serverEnabled forKey:kEnabledKey];
+    [self notify];
+}
+
+- (void)setOllamaBaseURL:(NSString *)ollamaBaseURL {
+    NSString *t = ollamaBaseURL ?: @"";
+    if ([_ollamaBaseURL isEqualToString:t]) {
+        return;
+    }
+    _ollamaBaseURL = [t copy];
+    [NSUserDefaults.standardUserDefaults setObject:_ollamaBaseURL forKey:kOllamaKey];
+    [self notify];
+}
+
+- (void)setOpenaiBaseURL:(NSString *)openaiBaseURL {
+    NSString *t = openaiBaseURL ?: @"";
+    if ([_openaiBaseURL isEqualToString:t]) {
+        return;
+    }
+    _openaiBaseURL = [t copy];
+    [NSUserDefaults.standardUserDefaults setObject:_openaiBaseURL forKey:kOpenAIBaseKey];
+    [self notify];
+}
+
+- (void)setOpenaiApiKey:(NSString *)openaiApiKey {
+    NSString *t = openaiApiKey ?: @"";
+    if ([_openaiApiKey isEqualToString:t]) {
+        return;
+    }
+    _openaiApiKey = [t copy];
+    [NSUserDefaults.standardUserDefaults setObject:_openaiApiKey forKey:kOpenAIKeyKey];
     [self notify];
 }
 
