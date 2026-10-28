@@ -42,6 +42,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)toggleNotificationInboxSidebar:(nullable id)sender;
 - (void)togglePagePackSidebar:(nullable id)sender;
 - (void)togglePageScraperSidebar:(nullable id)sender;
+- (void)toggleAIAssistantSidebar:(nullable id)sender;
+/// 划词 AI：打开助手侧栏并用模板填充选区（已绑定则自动发送）。
+- (void)openAIAssistantWithAction:(NSString *)actionKey selection:(nullable NSString *)selection;
 - (void)oneClickLogin:(nullable id)sender;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;

@@ -5,6 +5,7 @@
 #import "PagePackSidebarController.h"
 #import "BrowserScraperSidebarController.h"
 #import "AIBridgeSidebarController.h"
+#import "BrowserAIAssistantSidebarController.h"
 
 @implementation BrowserTrailingSidebarSlot
 
@@ -27,6 +28,9 @@
     if (self.aiBridgeSidebar.visible) {
         return BrowserTrailingSidebarKindAIBridge;
     }
+    if (self.aiAssistantSidebar.visible) {
+        return BrowserTrailingSidebarKindAIAssistant;
+    }
     return BrowserTrailingSidebarKindNone;
 }
 
@@ -48,6 +52,9 @@
     }
     if (kind != BrowserTrailingSidebarKindAIBridge && self.aiBridgeSidebar.visible) {
         [self.aiBridgeSidebar setVisible:NO animated:animated];
+    }
+    if (kind != BrowserTrailingSidebarKindAIAssistant && self.aiAssistantSidebar.visible) {
+        [self.aiAssistantSidebar setVisible:NO animated:animated];
     }
 }
 
@@ -105,6 +112,15 @@
     }
 }
 
+- (void)setAIAssistantVisible:(BOOL)visible animated:(BOOL)animated {
+    if (visible) {
+        [self hideOthersExcept:BrowserTrailingSidebarKindAIAssistant animated:animated];
+        [self.aiAssistantSidebar setVisible:YES animated:animated];
+    } else {
+        [self.aiAssistantSidebar setVisible:NO animated:animated];
+    }
+}
+
 - (void)hideAllAnimated:(BOOL)animated {
     if (self.notificationSidebar.visible) {
         [self.notificationSidebar setVisible:NO animated:animated];
@@ -123,6 +139,9 @@
     }
     if (self.aiBridgeSidebar.visible) {
         [self.aiBridgeSidebar setVisible:NO animated:animated];
+    }
+    if (self.aiAssistantSidebar.visible) {
+        [self.aiAssistantSidebar setVisible:NO animated:animated];
     }
 }
 

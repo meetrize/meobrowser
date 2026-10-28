@@ -24,6 +24,7 @@ NSString * const BrowserChromeActionScreenshotID = @"screenshot";
 NSString * const BrowserChromeActionExtensionID = @"extension";
 NSString * const BrowserChromeActionPageScraperID = @"pageScraper";
 NSString * const BrowserChromeActionAIBridgeID = @"aiBridge";
+NSString * const BrowserChromeActionAIAssistantID = @"aiAssistant";
 NSString * const BrowserChromeActionDOMInspectorID = @"domInspector";
 NSString * const BrowserChromeActionPaneSyncID = @"paneSync";
 
@@ -204,6 +205,12 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                  symbolName:@"arrow.left.arrow.right.circle"
                                onSymbolName:nil
                                     toolTip:@"AI Bridge"
+                                  onToolTip:nil
+                                    toggles:YES],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionAIAssistantID
+                                 symbolName:@"sparkles"
+                               onSymbolName:nil
+                                    toolTip:@"AI 助手"
                                   onToolTip:nil
                                     toggles:YES],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionDOMInspectorID

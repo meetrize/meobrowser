@@ -2,6 +2,7 @@
 #import "BrowsingPreferences.h"
 #import "MeoContextMenuLocalizer.h"
 #import "BrowserWindowController.h"
+#import "BrowserAIAssistantPrompts.h"
 
 #import <objc/message.h>
 
@@ -570,6 +571,9 @@ static NSString *MeoScrollToFragmentJS(void) {
         [self meo_insertOpenSelectionURLItemInMenu:menu nearItem:searchWebItem];
     }
 
+    // 有选区时插入 AI 子菜单（问问 / 解释 / 总结 / 翻译）。
+    [self meo_insertAIAssistantMenuInMenu:menu nearItem:searchWebItem ?: copySelectionItem];
+
     if (downloadItem) {
         // WebKit 系统「Download Image/Media」常不触发 WKDownload；改为劫持 Open*InNewWindow 取 URL。
         NSMenuItem *openItem = nil;
@@ -762,6 +766,88 @@ static NSString *MeoScrollToFragmentJS(void) {
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
         [pasteboard setString:text forType:NSPasteboardTypeString];
+    }];
+}
+
+- (void)meo_insertAIAssistantMenuInMenu:(NSMenu *)menu nearItem:(nullable NSMenuItem *)nearItem {
+    if (!menu) {
+        return;
+    }
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"AI"];
+    NSArray<NSDictionary *> *actions = @[
+        @{@"title": @"直接问问 AI", @"key": BrowserAIAssistantActionAsk},
+        @{@"title": @"解释", @"key": BrowserAIAssistantActionExplain},
+        @{@"title": @"总结", @"key": BrowserAIAssistantActionSummarize},
+        @{@"title": @"翻译成中文", @"key": BrowserAIAssistantActionTranslate},
+    ];
+    for (NSDictionary *a in actions) {
+        NSMenuItem *child = [[NSMenuItem alloc] initWithTitle:a[@"title"]
+                                                       action:@selector(meo_aiAssistantAction:)
+                                                keyEquivalent:@""];
+        child.target = self;
+        child.representedObject = a[@"key"];
+        [submenu addItem:child];
+    }
+    NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"AI" action:nil keyEquivalent:@""];
+    aiItem.submenu = submenu;
+    aiItem.hidden = YES;
+
+    NSInteger insertIndex = 0;
+    if (nearItem) {
+        NSInteger idx = [menu indexOfItem:nearItem];
+        if (idx != NSNotFound) {
+            insertIndex = idx;
+        }
+    }
+    [menu insertItem:aiItem atIndex:insertIndex];
+
+    __weak typeof(self) weakSelf = self;
+    __weak NSMenu *weakMenu = menu;
+    __weak NSMenuItem *weakItem = aiItem;
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        NSMenu *strongMenu = weakMenu;
+        NSMenuItem *strongItem = weakItem;
+        if (!strongSelf || !strongMenu || !strongItem) {
+            return;
+        }
+        BOOL hasSelection = NO;
+        if (!error && [result isKindOfClass:[NSString class]]) {
+            NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
+                                 [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            hasSelection = trimmed.length > 0;
+        }
+        if (![strongMenu.itemArray containsObject:strongItem]) {
+            return;
+        }
+        if (hasSelection) {
+            strongItem.hidden = NO;
+        } else {
+            [strongMenu removeItem:strongItem];
+        }
+    }];
+}
+
+- (void)meo_aiAssistantAction:(id)sender {
+    NSMenuItem *item = [sender isKindOfClass:[NSMenuItem class]] ? (NSMenuItem *)sender : nil;
+    NSString *actionKey = [item.representedObject isKindOfClass:[NSString class]] ? item.representedObject : BrowserAIAssistantActionAsk;
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:@"window.getSelection().toString()"
+           completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
+            return;
+        }
+        NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length == 0) {
+            return;
+        }
+        id wc = strongSelf.window.windowController;
+        if ([wc isKindOfClass:[BrowserWindowController class]]) {
+            [(BrowserWindowController *)wc openAIAssistantWithAction:actionKey selection:trimmed];
+        }
     }];
 }
 

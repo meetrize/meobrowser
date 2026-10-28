@@ -27,6 +27,7 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionScreenshotID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionExtensionID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionPageScraperID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionAIBridgeID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionAIAssistantID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionDOMInspectorID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionPaneSyncID;
 

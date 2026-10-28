@@ -274,6 +274,10 @@
         if (![self menuExistsWithTitle:@"工具"]) {
             NSMenuItem *toolsItem = [[NSMenuItem alloc] init];
             NSMenu *tools = [[NSMenu alloc] initWithTitle:@"工具"];
+            NSMenuItem *aiAssistant = [tools addItemWithTitle:@"AI 助手…"
+                                                       action:@selector(toggleAIAssistantSidebar:)
+                                                keyEquivalent:@""];
+            aiAssistant.target = nil;
             NSMenuItem *aiBridge = [tools addItemWithTitle:@"AI Bridge…"
                                                      action:@selector(toggleAIBridgeSidebar:)
                                               keyEquivalent:@""];
