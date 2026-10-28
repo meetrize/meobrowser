@@ -30,6 +30,10 @@ typedef void (^AIBridgeDOMCompletion)(NSDictionary *_Nullable result, NSError *_
               providerId:(NSString *)providerId
               completion:(AIBridgeDOMCompletion)completion;
 
+/// 调试：转储最后一条助手消息的 DOM 结构（class / 文本预览）。
+- (void)inspectAssistantDOMOnWebView:(WKWebView *)webView
+                          completion:(AIBridgeDOMCompletion)completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

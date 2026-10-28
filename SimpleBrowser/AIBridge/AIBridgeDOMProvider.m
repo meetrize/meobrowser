@@ -269,6 +269,84 @@
     }];
 }
 
+- (void)inspectAssistantDOMOnWebView:(WKWebView *)webView
+                          completion:(AIBridgeDOMCompletion)completion {
+    NSString *js =
+        @"(function(){"
+         "  function norm(s){ return String(s||'').replace(/\\s+/g,' ').trim(); }"
+         "  function preview(el,n){ n=n||120; var t=norm(el&& (el.innerText||el.textContent)); return t.slice(0,n); }"
+         "  var items = Array.prototype.slice.call(document.querySelectorAll('.chat-content-item-assistant'));"
+         "  var item = items.length ? items[items.length-1] : null;"
+         "  if (!item) {"
+         "    return JSON.stringify({ok:false, detail:'no assistant item', href:location.href||'',"
+         "      allThink: Array.prototype.slice.call(document.querySelectorAll('body *')).filter(function(el){"
+         "        var t=norm(el.innerText); return t.indexOf('思考')!==-1 && (el.children||[]).length<3;"
+         "      }).slice(0,8).map(function(el){ return {tag:el.tagName, class:String(el.className||'').slice(0,80), text:preview(el,60)}; })"
+         "    });"
+         "  }"
+         "  var kids = Array.prototype.slice.call(item.children||[]).map(function(el,i){"
+         "    return {i:i, tag:el.tagName, class:String(el.className||'').slice(0,100), text:preview(el,80), childCount:(el.children||[]).length};"
+         "  });"
+         "  var segs = Array.prototype.slice.call(item.querySelectorAll('.segment-content, [class*=\\\"segment\\\"], [class*=\\\"markdown\\\"], [class*=\\\"think\\\"], [class*=\\\"Think\\\"]')).slice(0,20).map(function(el){"
+         "    return {tag:el.tagName, class:String(el.className||'').slice(0,100), text:preview(el,100)};"
+         "  });"
+         "  var thinkNodes = Array.prototype.slice.call(item.querySelectorAll('*')).filter(function(el){"
+         "    var t=norm(el.childNodes && el.childNodes.length===1 ? (el.innerText||'') : '');"
+         "    if (!t) t = norm(el.innerText||'');"
+         "    return /思考已完成|思考完成|已深度思考|正在思考/.test(t) && t.length < 40;"
+         "  }).slice(0,10).map(function(el){"
+         "    var sib = el.nextElementSibling;"
+         "    var parent = el.parentElement;"
+         "    return {"
+         "      class:String(el.className||'').slice(0,100),"
+         "      text:preview(el,40),"
+         "      nextClass: sib ? String(sib.className||'').slice(0,100) : null,"
+         "      nextText: sib ? preview(sib,100) : null,"
+         "      parentClass: parent ? String(parent.className||'').slice(0,100) : null"
+         "    };"
+         "  });"
+         "  var extracted = '';"
+         "  var mds = item.querySelectorAll('.markdown-container');"
+         "  for (var mi=0; mi<mds.length; mi++) {"
+         "    var mc = mds[mi];"
+         "    if ((mc.className||'').indexOf('toolcall-content-text') !== -1) continue;"
+         "    if (mc.closest && (mc.closest('.thinking-container') || mc.closest('.toolcall-content-text'))) continue;"
+         "    var mtx = norm(mc.innerText||'');"
+         "    if (mtx && mtx.indexOf('思考已完成') !== 0) extracted = mtx;"
+         "    if (mtx) extracted = mtx.replace(/^思考已完成了?\\s*/, '');"
+         "  }"
+         "  if (!extracted) {"
+         "    var marks = item.querySelectorAll('.markdown');"
+         "    for (var mj=0; mj<marks.length; mj++) {"
+         "      var mk = marks[mj];"
+         "      if (mk.closest && (mk.closest('.thinking-container') || mk.closest('.toolcall-content-text'))) continue;"
+         "      var mkt = norm(mk.innerText||'');"
+         "      if (mkt) extracted = mkt;"
+         "    }"
+         "  }"
+         "  return JSON.stringify({"
+         "    ok:true,"
+         "    href: location.href||'',"
+         "    itemClass: String(item.className||'').slice(0,120),"
+         "    itemTextPreview: preview(item,200),"
+         "    extractedAnswer: extracted,"
+         "    thinkingDone: /思考已完成|思考完成/.test(item.innerText||''),"
+         "    childCount: (item.children||[]).length,"
+         "    kids: kids,"
+         "    segs: segs,"
+         "    thinkNodes: thinkNodes,"
+         "    hasCopy: !!(item.querySelector('[data-testid*=\\\"copy\\\"], [aria-label*=\\\"复制\\\"]')),"
+         "    hasStop: !!(document.querySelector('[aria-label*=\\\"停止\\\"], [data-testid*=\\\"stop\\\"], .stop___Cioqe'))"
+         "  });"
+         "})()";
+    [self evaluate:js onWebView:webView completion:^(id result, NSError *error) {
+        NSDictionary *dict = [self coerceDictionary:result];
+        if (completion) {
+            completion(dict, dict ? nil : error);
+        }
+    }];
+}
+
 - (void)pollJobOnWebView:(WKWebView *)webView
                 deadline:(NSDate *)deadline
               completion:(AIBridgeDOMCompletion)completion {

@@ -17,7 +17,7 @@
 | new_chat / cancel | ✅ HTTP + 侧栏 |
 | 409 登录态 | ✅ probe 失败 |
 | ollama__ / openai__ | ✅ Upstream 转发 |
-| Kimi 适配器 | ✅ 启发式（需登录页实测修订） |
+| Kimi 适配器 | ✅ 已实测（等「思考已完成」后取 `.markdown-container` 正文） |
 
 ---
 

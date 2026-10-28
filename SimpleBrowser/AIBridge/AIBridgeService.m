@@ -257,6 +257,11 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
 
+    if ([pathOnly isEqualToString:@"/v1/bridge/inspect"] && ([method isEqualToString:@"GET"] || [method isEqualToString:@"POST"])) {
+        [self handleInspect:body respond:respond];
+        return;
+    }
+
     [self respondJSON:respond status:404 object:@{@"error": @{@"message": @"not found", @"type": @"invalid_request"}}];
 }
 
@@ -529,6 +534,35 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         }
         NSString *ct = contentType.length ? contentType : @"application/json; charset=utf-8";
         respond(httpStatus, ct, respBody ?: [NSData data]);
+    }];
+}
+
+- (void)handleInspect:(NSData *)body respond:(AIBridgeHTTPRespondBlock)respond {
+    id obj = body.length ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : @{};
+    NSDictionary *json = [obj isKindOfClass:[NSDictionary class]] ? obj : @{};
+    NSString *model = [json[@"model"] isKindOfClass:[NSString class]] ? json[@"model"] : @"bridge__kimi";
+    AIBridgeBinding *binding = [AIBridgeRegistry.sharedRegistry bindingForModelId:model];
+    if (!binding) {
+        // try provider id
+        NSString *pid = [model hasPrefix:@"bridge__"] ? [model substringFromIndex:8] : model;
+        binding = [AIBridgeRegistry.sharedRegistry bindingForProviderId:pid];
+    }
+    if (!binding || !binding.tab) {
+        [self respondJSON:respond status:404 object:@{@"error": @{@"message": @"model not bound", @"type": @"invalid_request"}}];
+        return;
+    }
+    [binding.tab wakeFromHibernationIfNeeded];
+    WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
+    if (!wv) {
+        [self respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable"}}];
+        return;
+    }
+    [[AIBridgeDOMProvider sharedProvider] inspectAssistantDOMOnWebView:wv completion:^(NSDictionary *result, NSError *error) {
+        if (error) {
+            [self respondJSON:respond status:503 object:@{@"ok": @NO, @"error": error.localizedDescription ?: @"inspect failed"}];
+            return;
+        }
+        [self respondJSON:respond status:200 object:result ?: @{@"ok": @NO}];
     }];
 }
 
