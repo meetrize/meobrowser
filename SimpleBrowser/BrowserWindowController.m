@@ -558,6 +558,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
     // http:#hash 经系统代理可能变成 path 里的 %23 → 404；在 document-start 写回 hash。
     [BrowserWebView installFragmentRestoreScriptOnContentController:configuration.userContentController];
     [BrowserWebView installCaretFallbackScriptOnContentController:configuration.userContentController];
+    [BrowserWebView installSelectionCacheScriptOnContentController:configuration.userContentController];
     [BrowserDownloadManager installMediaCaptureScriptOnConfiguration:configuration];
     [BrowserGeolocationBridge installOnConfiguration:configuration];
     [BrowserPageNotificationBridge installOnConfiguration:configuration];
@@ -3118,6 +3119,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                              context:context ?: @""
                                          pageContext:pageContext
                                             autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (void)addAIAssistantCitation:(NSDictionary *)payload {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController addCitationFromPayload:payload ?: @{}];
     [self updateAIAssistantButtonAppearance];
     [self updateAIBridgeButtonAppearance];
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];

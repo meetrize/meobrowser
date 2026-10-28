@@ -5,6 +5,7 @@
 #import "BrowserAIAssistantChatPanel.h"
 #import "AIAssistantSession.h"
 #import "AIAssistantSessionStore.h"
+#import "AIAssistantCitation.h"
 #import "AIAssistantHistoryPanel.h"
 #import "AIBridgeRegistry.h"
 #import "AIBridgeService.h"
@@ -14,6 +15,7 @@ static const CGFloat kSidebarDefaultWidth = 400.0;
 static const CGFloat kSidebarMinWidth = 320.0;
 static const CGFloat kSidebarMaxWidth = 560.0;
 static const CGFloat kRailWidth = 44.0;
+static const CGFloat kCitationStripHeight = 44.0;
 
 typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneChat = 0,
@@ -96,6 +98,10 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) NSButton *reopenButton;
 @property (nonatomic, strong) NSButton *moreButton;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
+@property (nonatomic, strong) NSScrollView *citationScroll;
+@property (nonatomic, strong) NSStackView *citationStack;
+@property (nonatomic, strong) NSLayoutConstraint *citationHeightConstraint;
+@property (nonatomic, strong) NSMutableArray<AIAssistantCitation *> *citations;
 @property (nonatomic, strong) SBTextView *inputView;
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
@@ -123,6 +129,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         if (w < kSidebarMinWidth || w > kSidebarMaxWidth) w = kSidebarDefaultWidth;
         _currentWidth = w;
         _pane = AIAssistantPaneChat;
+        _citations = [NSMutableArray array];
         [self buildUI];
         __weak typeof(self) weakSelf = self;
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -422,6 +429,24 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.chatPanel = [[BrowserAIAssistantChatPanel alloc] initWithFrame:NSZeroRect];
     self.chatPanel.translatesAutoresizingMaskIntoConstraints = NO;
 
+    self.citationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    self.citationScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    self.citationScroll.hasHorizontalScroller = YES;
+    self.citationScroll.hasVerticalScroller = NO;
+    self.citationScroll.borderType = NSNoBorder;
+    self.citationScroll.drawsBackground = NO;
+    self.citationScroll.horizontalScrollElasticity = NSScrollElasticityAllowed;
+    self.citationScroll.hidden = YES;
+
+    self.citationStack = [NSStackView stackViewWithViews:@[]];
+    self.citationStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.citationStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.citationStack.alignment = NSLayoutAttributeCenterY;
+    self.citationStack.spacing = 6;
+    self.citationStack.edgeInsets = NSEdgeInsetsMake(4, 0, 4, 0);
+    self.citationScroll.documentView = self.citationStack;
+    self.citationHeightConstraint = [self.citationScroll.heightAnchor constraintEqualToConstant:0];
+
     NSScrollView *inputScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     inputScroll.translatesAutoresizingMaskIntoConstraints = NO;
     inputScroll.hasVerticalScroller = YES;
@@ -442,7 +467,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.cancelButton.enabled = NO;
 
     for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
-                        self.chatPanel, inputScroll, self.sendButton, self.cancelButton]) {
+                        self.chatPanel, self.citationScroll, inputScroll, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
@@ -469,7 +494,16 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         [self.chatPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:160],
 
-        [inputScroll.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:8],
+        [self.citationScroll.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
+        [self.citationScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.citationScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
+        self.citationHeightConstraint,
+
+        [self.citationStack.topAnchor constraintEqualToAnchor:self.citationScroll.contentView.topAnchor],
+        [self.citationStack.leadingAnchor constraintEqualToAnchor:self.citationScroll.contentView.leadingAnchor],
+        [self.citationStack.heightAnchor constraintEqualToAnchor:self.citationScroll.contentView.heightAnchor],
+
+        [inputScroll.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor constant:6],
         [inputScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [inputScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [inputScroll.heightAnchor constraintEqualToConstant:80],
@@ -976,11 +1010,28 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [self sendPrompt:prompt clearInput:YES];
 }
 
+- (NSString *)composePromptWithUserText:(NSString *)userText {
+    NSString *q = [userText stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if (self.citations.count == 0) {
+        return q;
+    }
+    NSMutableString *out = [NSMutableString string];
+    [out appendString:@"以下是用户提供的上下文引用，请结合它们回答后面的问题：\n\n"];
+    NSInteger i = 1;
+    for (AIAssistantCitation *c in self.citations) {
+        [out appendFormat:@"### 引用 %ld\n%@\n\n", (long)i, [c promptBlock]];
+        i += 1;
+    }
+    [out appendString:@"### 用户问题\n"];
+    [out appendString:q.length ? q : @"（请根据以上引用作答）"];
+    return out;
+}
+
 - (void)sendPrompt:(NSString *)prompt clearInput:(BOOL)clearInput {
     if (self.inFlight) return;
     NSString *text = [prompt stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (text.length == 0) {
-        self.statusLabel.stringValue = @"请输入提示词";
+    if (text.length == 0 && self.citations.count == 0) {
+        self.statusLabel.stringValue = @"请输入提示词或加入引用";
         self.statusLabel.textColor = NSColor.systemOrangeColor;
         return;
     }
@@ -998,21 +1049,34 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         return;
     }
 
+    NSString *apiPrompt = [self composePromptWithUserText:text];
+    NSString *displayText = text.length ? text : @"（引用上下文）";
+    if (self.citations.count > 0 && text.length > 0) {
+        displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
+                       (unsigned long)self.citations.count, text];
+    } else if (self.citations.count > 0) {
+        displayText = [NSString stringWithFormat:@"📎 %lu 条引用", (unsigned long)self.citations.count];
+    }
+
     BOOL firstUser = YES;
     for (AIAssistantMessage *m in s.messages) {
         if ([m.role isEqualToString:@"user"]) { firstUser = NO; break; }
     }
-    AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:text];
+    AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:apiPrompt];
     [s.messages addObject:userMsg];
     if (firstUser && [s.title isEqualToString:@"新对话"]) {
-        NSString *t = [text stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        NSString *t = [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         if (t.length > 24) t = [[t substringToIndex:24] stringByAppendingString:@"…"];
         s.title = t;
         self.titleLabel.stringValue = t;
     }
     [AIAssistantSessionStore.sharedStore touchAndPersist:s];
-    [self.chatPanel appendUserText:text];
-    if (clearInput) self.inputView.string = @"";
+    [self.chatPanel appendUserText:displayText];
+    if (clearInput) {
+        self.inputView.string = @"";
+        [self.citations removeAllObjects];
+        [self reloadCitationChips];
+    }
 
     NSString *model = s.modelId;
     NSString *sid = s.sessionId;
@@ -1023,7 +1087,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.statusLabel.stringValue = @"请求中…";
 
     __weak typeof(self) weakSelf = self;
-    [[BrowserAIAssistantClient sharedClient] chatWithModel:model prompt:text completion:^(NSInteger httpStatus, NSString *assistantText, NSString *errorMessage) {
+    [[BrowserAIAssistantClient sharedClient] chatWithModel:model prompt:apiPrompt completion:^(NSInteger httpStatus, NSString *assistantText, NSString *errorMessage) {
         weakSelf.inFlight = NO;
         weakSelf.inFlightSessionId = nil;
         AIAssistantSession *sess = [AIAssistantSessionStore.sharedStore sessionForId:sid];
@@ -1078,6 +1142,213 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey pageContext:pageContext];
         self.statusLabel.stringValue = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title];
     }
+}
+
+#pragma mark - Citations
+
+- (NSString *)stringValueFromPayload:(NSDictionary *)payload key:(NSString *)key {
+    id v = payload[key];
+    if ([v isKindOfClass:[NSString class]]) return v;
+    if ([v isKindOfClass:[NSNumber class]]) return [(NSNumber *)v stringValue];
+    return @"";
+}
+
+- (void)addCitationFromPayload:(NSDictionary *)payload {
+    [self showPane:AIAssistantPaneChat];
+    NSString *kind = [self stringValueFromPayload:payload key:@"kind"];
+    NSString *url = [self stringValueFromPayload:payload key:@"url"];
+    NSString *title = [self stringValueFromPayload:payload key:@"title"];
+    NSString *text = [self stringValueFromPayload:payload key:@"text"];
+
+    AIAssistantCitation *citation = nil;
+    if ([kind isEqualToString:@"text"] || (text.length > 0 && ![kind isEqualToString:@"url"]
+                                           && ![kind isEqualToString:@"image"]
+                                           && ![kind isEqualToString:@"file"]
+                                           && ![kind isEqualToString:@"link"]
+                                           && url.length == 0)) {
+        NSURL *sourceURL = url.length ? [NSURL URLWithString:url] : nil;
+        citation = [AIAssistantCitation textCitation:(text.length ? text : title)
+                                           sourceURL:sourceURL
+                                           pageTitle:title];
+    } else {
+        citation = [AIAssistantCitation citationWithURLString:url.length ? url : text
+                                                        title:title
+                                                         hint:kind];
+    }
+    if (!citation) {
+        self.statusLabel.stringValue = @"无法加入引用";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+
+    // 去重：同选区文本 / 同非文本 URL 不重复加（划词可与同页「网页」引用并存）
+    for (AIAssistantCitation *existing in self.citations) {
+        if (citation.kind == AIAssistantCitationKindText &&
+            existing.kind == AIAssistantCitationKindText &&
+            [existing.body isEqualToString:citation.body]) {
+            self.statusLabel.stringValue = @"该引用已在列表中";
+            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self focusAssistantInput];
+            return;
+        }
+        if (citation.kind != AIAssistantCitationKindText &&
+            existing.kind != AIAssistantCitationKindText &&
+            citation.url && existing.url &&
+            [existing.url.absoluteString isEqualToString:citation.url.absoluteString]) {
+            self.statusLabel.stringValue = @"该引用已在列表中";
+            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self focusAssistantInput];
+            return;
+        }
+    }
+
+    [self.citations addObject:citation];
+    [self reloadCitationChips];
+    if (citation.kind == AIAssistantCitationKindImage && citation.url) {
+        [self loadThumbnailForCitation:citation];
+    }
+    if (!self.currentSession) {
+        NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        [self createSessionWithProviderId:pid];
+    }
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"已加入引用 · %@", citation.kindDisplayName];
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self focusAssistantInput];
+}
+
+- (void)focusAssistantInput {
+    [self.view.window makeFirstResponder:self.inputView];
+}
+
+- (void)removeCitationId:(NSString *)citationId {
+    if (citationId.length == 0) return;
+    NSUInteger idx = [self.citations indexOfObjectPassingTest:^BOOL(AIAssistantCitation *obj, NSUInteger i, BOOL *stop) {
+        (void)i; (void)stop;
+        return [obj.citationId isEqualToString:citationId];
+    }];
+    if (idx != NSNotFound) {
+        [self.citations removeObjectAtIndex:idx];
+        [self reloadCitationChips];
+    }
+}
+
+- (void)reloadCitationChips {
+    for (NSView *v in [self.citationStack.arrangedSubviews copy]) {
+        [self.citationStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    BOOL has = self.citations.count > 0;
+    self.citationScroll.hidden = !has;
+    self.citationHeightConstraint.constant = has ? kCitationStripHeight : 0;
+    for (AIAssistantCitation *c in self.citations) {
+        [self.citationStack addArrangedSubview:[self chipViewForCitation:c]];
+    }
+}
+
+- (NSView *)chipViewForCitation:(AIAssistantCitation *)citation {
+    NSView *chip = [[NSView alloc] initWithFrame:NSZeroRect];
+    chip.translatesAutoresizingMaskIntoConstraints = NO;
+    chip.wantsLayer = YES;
+    chip.layer.cornerRadius = 8;
+    chip.layer.masksToBounds = YES;
+    if (@available(macOS 10.14, *)) {
+        chip.layer.backgroundColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.12].CGColor;
+        chip.layer.borderColor = [NSColor.controlAccentColor colorWithAlphaComponent:0.35].CGColor;
+    } else {
+        chip.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.06].CGColor;
+        chip.layer.borderColor = NSColor.gridColor.CGColor;
+    }
+    chip.layer.borderWidth = 1.0;
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    icon.imageScaling = NSImageScaleProportionallyUpOrDown;
+    icon.wantsLayer = YES;
+    icon.layer.cornerRadius = 4;
+    icon.layer.masksToBounds = YES;
+    if (citation.kind == AIAssistantCitationKindImage) {
+        icon.image = citation.previewImage ?: [NSImage imageNamed:NSImageNameIconViewTemplate];
+    } else if (citation.kind == AIAssistantCitationKindFile) {
+        NSString *ext = citation.url.pathExtension.length ? citation.url.pathExtension : @"txt";
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        icon.image = [[NSWorkspace sharedWorkspace] iconForFileType:ext]
+            ?: [NSImage imageNamed:NSImageNameMultipleDocuments];
+#pragma clang diagnostic pop
+    } else if (citation.kind == AIAssistantCitationKindText) {
+        icon.image = [NSImage imageNamed:NSImageNameFontPanel];
+    } else {
+        icon.image = [NSImage imageNamed:NSImageNameNetwork];
+    }
+
+    NSTextField *label = [NSTextField labelWithString:citation.chipLabel];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    label.font = [NSFont systemFontOfSize:11];
+    label.textColor = NSColor.labelColor;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    if (citation.kind == AIAssistantCitationKindText && citation.url.absoluteString.length) {
+        label.toolTip = [NSString stringWithFormat:@"%@\n%@",
+                         citation.url.absoluteString,
+                         citation.body.length ? citation.body : citation.title];
+    } else {
+        label.toolTip = citation.body.length ? citation.body : citation.title;
+    }
+
+    NSButton *remove = [NSButton buttonWithTitle:@"✕" target:self action:@selector(citationRemoveClicked:)];
+    remove.translatesAutoresizingMaskIntoConstraints = NO;
+    remove.bezelStyle = NSBezelStyleInline;
+    remove.bordered = NO;
+    remove.font = [NSFont systemFontOfSize:11];
+    remove.identifier = citation.citationId;
+    remove.toolTip = @"移除引用";
+
+    [chip addSubview:icon];
+    [chip addSubview:label];
+    [chip addSubview:remove];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [chip.heightAnchor constraintEqualToConstant:32],
+        [icon.leadingAnchor constraintEqualToAnchor:chip.leadingAnchor constant:6],
+        [icon.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:20],
+        [icon.heightAnchor constraintEqualToConstant:20],
+        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+        [label.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
+        [label.trailingAnchor constraintEqualToAnchor:remove.leadingAnchor constant:-2],
+        [label.widthAnchor constraintLessThanOrEqualToConstant:140],
+        [remove.trailingAnchor constraintEqualToAnchor:chip.trailingAnchor constant:-4],
+        [remove.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
+        [remove.widthAnchor constraintEqualToConstant:18],
+    ]];
+    return chip;
+}
+
+- (void)citationRemoveClicked:(NSButton *)sender {
+    [self removeCitationId:sender.identifier];
+}
+
+- (void)loadThumbnailForCitation:(AIAssistantCitation *)citation {
+    NSURL *url = citation.url;
+    if (!url) return;
+    NSString *cid = citation.citationId;
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:[NSURLRequest requestWithURL:url]
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)response;
+        if (error || data.length == 0) return;
+        NSImage *img = [[NSImage alloc] initWithData:data];
+        if (!img) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (AIAssistantCitation *c in weakSelf.citations) {
+                if ([c.citationId isEqualToString:cid]) {
+                    c.previewImage = img;
+                    [weakSelf reloadCitationChips];
+                    break;
+                }
+            }
+        });
+    }];
+    [task resume];
 }
 
 @end

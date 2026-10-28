@@ -47,6 +47,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openAIAssistantWithAction:(NSString *)actionKey
                           context:(nullable NSString *)context
                       pageContext:(BOOL)pageContext;
+/// 加入引用：打开助手侧栏，把 payload 加入输入区引用条（不自动发送）。
+/// payload: @{ @"kind": text|image|file|link|url, @"text"/"url"/"title": ... }
+- (void)addAIAssistantCitation:(NSDictionary *)payload;
 - (void)oneClickLogin:(nullable id)sender;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;

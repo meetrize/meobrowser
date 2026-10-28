@@ -40,6 +40,10 @@ reopenAndBindProviderId:(NSString *)providerId
           pageContext:(BOOL)pageContext
              autoSend:(BOOL)autoSend;
 
+/// 右键「加入引用」：只加入输入区引用条，不自动发送。
+/// payload: kind / text / url / title
+- (void)addCitationFromPayload:(NSDictionary *)payload;
+
 @end
 
 NS_ASSUME_NONNULL_END

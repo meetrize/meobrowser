@@ -37,6 +37,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)installFragmentRestoreScriptOnContentController:(WKUserContentController *)controller;
 /// 绕开 SetFocused 后原生 caret 不绘制；在页面未 hasFocus 时画闪烁软件光标（不打 sync IPC）。
 + (void)installCaretFallbackScriptOnContentController:(WKUserContentController *)controller;
+/// 缓存划词选区：在 contextmenu/selectionchange 时写入 window.__meoLastSelection，供「加入引用」使用。
++ (void)installSelectionCacheScriptOnContentController:(WKUserContentController *)controller;
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView;
 + (void)cleanupHashRestoreQueryInWebView:(WKWebView *)webView
                               completion:(void (^ _Nullable)(NSString * _Nullable href))completion;

@@ -15,6 +15,13 @@ static NSString * const kMeoHashRestoreQueryItem = @"__meo_hf";
 @property (nonatomic, weak) NSMenuItem *openResourceMenuItem;
 @property (nonatomic, weak) NSMenuItem *openLinkInNewWindowMenuItem;
 @property (nonatomic, strong, nullable) NSEvent *contextMenuEvent;
+/// 右键弹出瞬间缓存的选区（点子菜单后 selection 常被清空）
+@property (nonatomic, copy, nullable) NSString *contextMenuSelectedText;
+/// 划词过程中持续刷新；willOpenMenu 不得清空，否则 rightMouseDown 的缓存会丢
+@property (nonatomic, copy, nullable) NSString *meoStickySelectedText;
+/// 右键弹出瞬间解析的引用 payload（选区 / 图片 / 链接 / 页面）
+@property (nonatomic, copy, nullable) NSDictionary *contextMenuCitePayload;
+@property (nonatomic, assign) BOOL contextMenuCiteDelivered;
 @end
 
 @implementation BrowserWebView
@@ -205,6 +212,56 @@ static NSString *MeoScrollToFragmentJS(void) {
          "window.addEventListener('resize',schedule,true);"
          "})();";
     [controller addUserScript:[[WKUserScript alloc] initWithSource:js
+                                                     injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                  forMainFrameOnly:NO]];
+}
+
++ (NSString *)meo_selectionCacheInstallJavaScript {
+    return
+        @"(function(){"
+         "if(window.__meoSelectionCacheInstalled)return 'ok';"
+         "window.__meoSelectionCacheInstalled=1;"
+         "window.__meoLastSelection=window.__meoLastSelection||'';"
+         "function readSelection(){"
+         "  try{"
+         "    var ae=document.activeElement;"
+         "    if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')&&typeof ae.selectionStart==='number'){"
+         "      var a=ae.selectionStart,b=ae.selectionEnd;"
+         "      if(typeof a==='number'&&typeof b==='number'&&b>a){"
+         "        return String(ae.value||'').substring(a,b);"
+         "      }"
+         "    }"
+         "    var sel=window.getSelection&&window.getSelection();"
+         "    if(sel){var t=String(sel.toString()||''); if(t) return t;}"
+         "  }catch(e){}"
+         "  return '';"
+         "}"
+         "function cacheSelection(){"
+         "  var t=readSelection();"
+         "  if(t&&t.trim()){ window.__meoLastSelection=t; }"
+         "}"
+         "document.addEventListener('selectionchange',cacheSelection,true);"
+         "document.addEventListener('mouseup',cacheSelection,true);"
+         "document.addEventListener('keyup',cacheSelection,true);"
+         "document.addEventListener('pointerup',cacheSelection,true);"
+         // 右键按下瞬间：一定再抓一次（比原生 willOpenMenu 更早）
+         "document.addEventListener('contextmenu',function(){ cacheSelection(); },true);"
+         "window.__meoGetCachedSelection=function(){"
+         "  var live=readSelection();"
+         "  if(live&&live.trim()) return live;"
+         "  return window.__meoLastSelection||'';"
+         "};"
+         "cacheSelection();"
+         "return 'ok';"
+         "})();";
+}
+
++ (void)installSelectionCacheScriptOnContentController:(WKUserContentController *)controller {
+    if (controller == nil) {
+        return;
+    }
+    // 原生右键菜单弹出前，WebKit 常会清掉 selection；必须在页面 contextmenu 捕获阶段先存起来。
+    [controller addUserScript:[[WKUserScript alloc] initWithSource:[self meo_selectionCacheInstallJavaScript]
                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                   forMainFrameOnly:NO]];
 }
@@ -501,6 +558,35 @@ static NSString *MeoScrollToFragmentJS(void) {
     self.pendingContextMenuOpenInNewWindow = NO;
     self.openResourceMenuItem = nil;
     self.openLinkInNewWindowMenuItem = nil;
+    // 保留 rightMouseDown / sticky 划词，勿先清空再读（菜单弹出时 page selection 常已空）
+    NSString *preservedSel = [self.contextMenuSelectedText copy];
+    if (preservedSel.length == 0) {
+        preservedSel = [self.meoStickySelectedText copy];
+    }
+    NSDictionary *preservedPayload = [self.contextMenuCitePayload copy];
+    self.contextMenuCiteDelivered = NO;
+
+    // Accessibility 往往在 JS selection 被清掉后仍能读到高亮文本
+    NSString *axText = [self meo_accessibilitySelectedTextDeep];
+    if (axText.length > 0) {
+        [self meo_rememberSelectedText:axText];
+        self.contextMenuCitePayload = @{ @"kind": @"text", @"text": axText };
+    } else if (preservedSel.length > 0) {
+        self.contextMenuSelectedText = preservedSel;
+        self.meoStickySelectedText = preservedSel;
+        if ([preservedPayload isKindOfClass:[NSDictionary class]]) {
+            self.contextMenuCitePayload = preservedPayload;
+        } else {
+            self.contextMenuCitePayload = @{ @"kind": @"text", @"text": preservedSel };
+        }
+    } else {
+        self.contextMenuSelectedText = nil;
+        self.contextMenuCitePayload = nil;
+    }
+
+    // 立刻抓选区与命中元素，避免进入「问问 AI」子菜单后 selection 丢失
+    [self meo_ensureSelectionCacheInstalled];
+    [self meo_captureContextMenuAIContext];
 
     NSMenuItem *downloadItem = nil;
     NSMenuItem *openImageItem = nil;
@@ -789,6 +875,14 @@ static NSString *MeoScrollToFragmentJS(void) {
         child.representedObject = a[@"key"];
         [submenu addItem:child];
     }
+    [submenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *cite = [[NSMenuItem alloc] initWithTitle:@"加入引用"
+                                                  action:@selector(meo_aiAssistantAddCitation:)
+                                           keyEquivalent:@""];
+    cite.target = self;
+    cite.toolTip = @"加入 AI 助手对话框作为上下文，不直接发送";
+    [submenu addItem:cite];
+
     NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"问问 AI" action:nil keyEquivalent:@""];
     aiItem.submenu = submenu;
 
@@ -819,11 +913,339 @@ static NSString *MeoScrollToFragmentJS(void) {
     return nil;
 }
 
+- (NSString *)meo_contextMenuCiteScriptAtX:(CGFloat)x y:(CGFloat)y {
+    return [NSString stringWithFormat:
+        @"(function(x, y) {"
+         "  if (!window.__meoSelectionCacheInstalled) {"
+         "    window.__meoSelectionCacheInstalled = 1;"
+         "    window.__meoLastSelection = window.__meoLastSelection || '';"
+         "    function __meoReadSel(){"
+         "      try{"
+         "        var ae=document.activeElement;"
+         "        if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')&&typeof ae.selectionStart==='number'){"
+         "          var a=ae.selectionStart,b=ae.selectionEnd;"
+         "          if(b>a) return String(ae.value||'').substring(a,b);"
+         "        }"
+         "        var s=window.getSelection&&window.getSelection();"
+         "        if(s){var t=String(s.toString()||''); if(t) return t;}"
+         "      }catch(e){}"
+         "      return '';"
+         "    }"
+         "    function __meoCache(){ var t=__meoReadSel(); if(t&&t.trim()) window.__meoLastSelection=t; }"
+         "    document.addEventListener('selectionchange',__meoCache,true);"
+         "    document.addEventListener('mouseup',__meoCache,true);"
+         "    document.addEventListener('keyup',__meoCache,true);"
+         "    document.addEventListener('contextmenu',function(){__meoCache();},true);"
+         "    window.__meoGetCachedSelection=function(){ var live=__meoReadSel(); if(live&&live.trim()) return live; return window.__meoLastSelection||''; };"
+         "    __meoCache();"
+         "  }"
+         "  function absUrl(u) {"
+         "    try { return new URL(u, document.baseURI).href; } catch (e) { return u || ''; }"
+         "  }"
+         "  function readSel() {"
+         "    try {"
+         "      if (typeof window.__meoGetCachedSelection === 'function') {"
+         "        var c = window.__meoGetCachedSelection();"
+         "        if (c && String(c).trim()) return String(c);"
+         "      }"
+         "      if (window.__meoLastSelection && String(window.__meoLastSelection).trim()) {"
+         "        return String(window.__meoLastSelection);"
+         "      }"
+         "      var ae = document.activeElement;"
+         "      if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') && typeof ae.selectionStart === 'number') {"
+         "        var a = ae.selectionStart, b = ae.selectionEnd;"
+         "        if (b > a) return String(ae.value || '').substring(a, b);"
+         "      }"
+         "      var sel = window.getSelection && window.getSelection();"
+         "      if (sel) return String(sel.toString() || '');"
+         "    } catch (e) {}"
+         "    return '';"
+         "  }"
+         "  var sel = (readSel() || '').trim();"
+         "  if (sel) { return { kind: 'text', text: sel }; }"
+         "  var el = null;"
+         "  try { el = document.elementFromPoint(x, y); } catch (e) {}"
+         "  var n = el;"
+         "  while (n) {"
+         "    if (n.tagName === 'IMG') {"
+         "      return { kind: 'image', url: absUrl(n.currentSrc || n.src), title: (n.alt || '').trim() };"
+         "    }"
+         "    if (n.tagName === 'PICTURE') {"
+         "      var img = n.querySelector('img');"
+         "      if (img) {"
+         "        return { kind: 'image', url: absUrl(img.currentSrc || img.src), title: (img.alt || '').trim() };"
+         "      }"
+         "    }"
+         "    if (n.tagName === 'A' && n.href) {"
+         "      var href = absUrl(n.href);"
+         "      var label = (n.innerText || n.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80);"
+         "      var path = '';"
+         "      try { path = new URL(href).pathname || ''; } catch (e) {}"
+         "      var ext = (path.split('.').pop() || '').toLowerCase();"
+         "      var imgExt = {jpg:1,jpeg:1,png:1,gif:1,webp:1,svg:1,bmp:1,avif:1,ico:1};"
+         "      var fileExt = {pdf:1,zip:1,rar:1,7z:1,tar:1,gz:1,doc:1,docx:1,xls:1,xlsx:1,ppt:1,pptx:1,"
+         "        csv:1,json:1,xml:1,txt:1,md:1,dmg:1,pkg:1,mp3:1,mp4:1,mov:1,wav:1};"
+         "      if (imgExt[ext]) { return { kind: 'image', url: href, title: label }; }"
+         "      if (fileExt[ext]) { return { kind: 'file', url: href, title: label || path.split('/').pop() }; }"
+         "      return { kind: 'link', url: href, title: label };"
+         "    }"
+         "    n = n.parentElement;"
+         "  }"
+         "  n = el;"
+         "  while (n && n !== document.documentElement) {"
+         "    var bg = '';"
+         "    try { bg = getComputedStyle(n).backgroundImage || ''; } catch (e) {}"
+         "    var m = bg && bg.match(/url\\([\"']?([^\"')]+)[\"']?\\)/);"
+         "    if (m && m[1] && m[1] !== 'none') {"
+         "      return { kind: 'image', url: absUrl(m[1]), title: '' };"
+         "    }"
+         "    n = n.parentElement;"
+         "  }"
+         "  return { kind: 'url', url: absUrl(location.href), title: (document.title || '').trim() };"
+         "})(%f, %f)", x, y];
+}
+
+- (void)meo_rememberSelectedText:(NSString *)text {
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:
+                         NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmed.length == 0) {
+        return;
+    }
+    self.contextMenuSelectedText = trimmed;
+    self.meoStickySelectedText = trimmed;
+}
+
+- (void)meo_applyCapturedCitePayload:(NSDictionary *)payload {
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+    NSString *kind = [payload[@"kind"] isKindOfClass:[NSString class]] ? payload[@"kind"] : @"";
+    NSString *text = [payload[@"text"] isKindOfClass:[NSString class]] ? payload[@"text"] : @"";
+    // 已有选中文本时，不要被稍后的「页面 URL」结果覆盖
+    NSString *existingSel = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                             NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (existingSel.length == 0) {
+        existingSel = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                       NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (existingSel.length > 0 && ![kind isEqualToString:@"text"]) {
+        return;
+    }
+    self.contextMenuCitePayload = payload;
+    if ([kind isEqualToString:@"text"] && text.length > 0) {
+        [self meo_rememberSelectedText:text];
+    }
+}
+
+- (void)meo_ensureSelectionCacheInstalled {
+    [self evaluateJavaScript:[BrowserWebView meo_selectionCacheInstallJavaScript]
+           completionHandler:nil];
+}
+
+- (void)meo_syncStickySelectionFromPageClearIfEmpty:(BOOL)clearIfEmpty {
+    static NSString *const kRead =
+        @"(function(){try{"
+         "if(typeof window.__meoGetCachedSelection==='function'){"
+         "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+         "}"
+         "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+         "  return String(window.__meoLastSelection);"
+         "var s=window.getSelection&&window.getSelection();"
+         "return s?String(s.toString()||''):'';"
+         "}catch(e){return '';}})()";
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:kRead completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) return;
+        NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
+                             NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (trimmed.length > 0) {
+            [strongSelf meo_rememberSelectedText:trimmed];
+        } else if (clearIfEmpty) {
+            strongSelf.meoStickySelectedText = nil;
+        }
+    }];
+}
+
+/// 从 Accessibility 树读取当前高亮选区（JS selection 被清掉后仍可能可读）。
+- (nullable NSString *)meo_accessibilitySelectedTextDeep {
+    NSMutableArray *queue = [NSMutableArray array];
+    [queue addObject:self];
+    NSInteger budget = 80;
+    while (queue.count > 0 && budget-- > 0) {
+        id node = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        @try {
+            NSString *text = nil;
+            if ([node respondsToSelector:@selector(accessibilitySelectedText)]) {
+                text = [node accessibilitySelectedText];
+            }
+            if (![text isKindOfClass:[NSString class]] || text.length == 0) {
+                if ([node respondsToSelector:@selector(accessibilityAttributeValue:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                    id v = [node accessibilityAttributeValue:NSAccessibilitySelectedTextAttribute];
+#pragma clang diagnostic pop
+                    if ([v isKindOfClass:[NSString class]]) {
+                        text = v;
+                    }
+                }
+            }
+            if ([text isKindOfClass:[NSString class]]) {
+                NSString *trimmed = [text stringByTrimmingCharactersInSet:
+                                     NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                if (trimmed.length > 0) {
+                    return trimmed;
+                }
+            }
+            NSArray *children = nil;
+            if ([node respondsToSelector:@selector(accessibilityChildren)]) {
+                children = [node accessibilityChildren];
+            }
+            if ([children isKindOfClass:[NSArray class]] && children.count) {
+                NSUInteger limit = MIN(children.count, (NSUInteger)12);
+                for (NSUInteger i = 0; i < limit; i++) {
+                    [queue addObject:children[i]];
+                }
+            }
+        } @catch (__unused NSException *ex) {
+        }
+    }
+    return nil;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    [self meo_ensureSelectionCacheInstalled];
+    [super mouseDown:event];
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    [super mouseUp:event];
+    // 划词松手后立刻同步到原生 sticky；无选区则清掉旧 sticky
+    [self meo_syncStickySelectionFromPageClearIfEmpty:YES];
+}
+
+- (void)rightMouseDown:(NSEvent *)event {
+    [self meo_ensureSelectionCacheInstalled];
+    // 右键前再尽量同步读一次 AX（不等 JS）
+    NSString *axText = [self meo_accessibilitySelectedTextDeep];
+    if (axText.length > 0) {
+        [self meo_rememberSelectedText:axText];
+        self.contextMenuCitePayload = @{ @"kind": @"text", @"text": axText };
+    } else if (self.meoStickySelectedText.length > 0) {
+        self.contextMenuSelectedText = self.meoStickySelectedText;
+        self.contextMenuCitePayload = @{ @"kind": @"text", @"text": self.meoStickySelectedText };
+    }
+    // 右键时页面 selection 可能已被清：空结果不要抹掉 sticky
+    [self meo_syncStickySelectionFromPageClearIfEmpty:NO];
+    [super rightMouseDown:event];
+}
+
+- (void)meo_captureContextMenuAIContext {
+    NSEvent *event = self.contextMenuEvent;
+    CGFloat x = 0;
+    CGFloat y = 0;
+    if (event) {
+        NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+        x = locationInView.x;
+        y = NSHeight(self.bounds) - locationInView.y;
+    }
+    NSString *script = [self meo_contextMenuCiteScriptAtX:x y:y];
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || error) {
+            return;
+        }
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            [strongSelf meo_applyCapturedCitePayload:(NSDictionary *)result];
+        } else if ([result isKindOfClass:[NSString class]]) {
+            // 极少数桥接只返回选区字符串
+            NSString *sel = [(NSString *)result stringByTrimmingCharactersInSet:
+                             NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (sel.length) {
+                [strongSelf meo_applyCapturedCitePayload:@{ @"kind": @"text", @"text": sel }];
+            }
+        }
+    }];
+}
+
+- (NSDictionary *)meo_enrichCitePayload:(NSDictionary *)payload {
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        return payload;
+    }
+    NSString *kind = [payload[@"kind"] isKindOfClass:[NSString class]] ? payload[@"kind"] : @"";
+    if (![kind isEqualToString:@"text"]) {
+        return payload;
+    }
+    NSMutableDictionary *enriched = [payload mutableCopy];
+    NSString *existingURL = [enriched[@"url"] isKindOfClass:[NSString class]] ? enriched[@"url"] : @"";
+    NSString *existingTitle = [enriched[@"title"] isKindOfClass:[NSString class]] ? enriched[@"title"] : @"";
+    if (existingURL.length == 0) {
+        NSURL *pageURL = [BrowserWebView publicURLFromInternalURL:self.URL] ?: self.URL;
+        NSString *abs = pageURL.absoluteString ?: @"";
+        if (abs.length > 0) {
+            enriched[@"url"] = abs;
+        }
+    }
+    if (existingTitle.length == 0) {
+        NSString *pageTitle = [self.title stringByTrimmingCharactersInSet:
+                               NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+        if (pageTitle.length > 0) {
+            enriched[@"title"] = pageTitle;
+        }
+    }
+    return enriched;
+}
+
+- (void)meo_deliverCitePayload:(NSDictionary *)payload {
+    if (self.contextMenuCiteDelivered) return;
+    if (![payload isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary *finalPayload = [self meo_enrichCitePayload:payload];
+    NSString *kind = [finalPayload[@"kind"] isKindOfClass:[NSString class]] ? finalPayload[@"kind"] : @"";
+    NSString *url = [finalPayload[@"url"] isKindOfClass:[NSString class]] ? finalPayload[@"url"] : @"";
+    NSString *text = [finalPayload[@"text"] isKindOfClass:[NSString class]] ? finalPayload[@"text"] : @"";
+    if ([kind isEqualToString:@"text"] && text.length == 0) return;
+    if (![kind isEqualToString:@"text"] && url.length == 0 && text.length == 0) return;
+    self.contextMenuCiteDelivered = YES;
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc addAIAssistantCitation:finalPayload];
+    }
+}
+
 - (void)meo_aiAssistantAction:(id)sender {
     NSMenuItem *item = [sender isKindOfClass:[NSMenuItem class]] ? (NSMenuItem *)sender : nil;
     NSString *actionKey = [item.representedObject isKindOfClass:[NSString class]] ? item.representedObject : BrowserAIAssistantActionAsk;
+
+    // 优先用菜单弹出时缓存的选区
+    NSString *cached = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (cached.length == 0) {
+        cached = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                  NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (cached.length > 0) {
+        id wc = self.window.windowController;
+        if ([wc isKindOfClass:[BrowserWindowController class]]) {
+            [(BrowserWindowController *)wc openAIAssistantWithAction:actionKey
+                                                             context:cached
+                                                         pageContext:NO];
+        }
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+    NSString *selJS =
+        @"(function(){try{"
+         "if(typeof window.__meoGetCachedSelection==='function'){"
+         "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+         "}"
+         "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim()) return String(window.__meoLastSelection);"
+         "var sel=window.getSelection&&window.getSelection();"
+         "return sel?String(sel.toString()||''):'';"
+         "}catch(e){return '';}})()";
+    [self evaluateJavaScript:selJS
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -833,6 +1255,10 @@ static NSString *MeoScrollToFragmentJS(void) {
         if (!error && [result isKindOfClass:[NSString class]]) {
             trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
+        if (trimmed.length == 0) {
+            trimmed = [strongSelf.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                       NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
         }
         BOOL pageContext = trimmed.length == 0;
         NSString *context = trimmed;
@@ -849,6 +1275,104 @@ static NSString *MeoScrollToFragmentJS(void) {
                                                          pageContext:pageContext];
         }
     }];
+}
+
+- (nullable NSDictionary *)meo_readyCitePayloadFromCache {
+    NSString *cachedSel = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                           NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (cachedSel.length == 0) {
+        cachedSel = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                     NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (cachedSel.length > 0) {
+        return @{ @"kind": @"text", @"text": cachedSel };
+    }
+    if (![self.contextMenuCitePayload isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSDictionary *cached = self.contextMenuCitePayload;
+    NSString *kind = [cached[@"kind"] isKindOfClass:[NSString class]] ? cached[@"kind"] : @"";
+    NSString *text = [cached[@"text"] isKindOfClass:[NSString class]] ? cached[@"text"] : @"";
+    if ([kind isEqualToString:@"text"]) {
+        return text.length > 0 ? @{ @"kind": @"text", @"text": text } : nil;
+    }
+    return cached;
+}
+
+- (void)meo_fallbackLiveCiteCapture {
+    NSEvent *event = self.contextMenuEvent;
+    CGFloat x = 0;
+    CGFloat y = 0;
+    if (event) {
+        NSPoint locationInView = [self convertPoint:event.locationInWindow fromView:nil];
+        x = locationInView.x;
+        y = NSHeight(self.bounds) - locationInView.y;
+    }
+    NSString *script = [self meo_contextMenuCiteScriptAtX:x y:y];
+    __weak typeof(self) weakSelf = self;
+    [self evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSDictionary *ready = [strongSelf meo_readyCitePayloadFromCache];
+        if (ready) {
+            [strongSelf meo_deliverCitePayload:ready];
+            return;
+        }
+        NSDictionary *payload = nil;
+        if (!error && [result isKindOfClass:[NSDictionary class]]) {
+            payload = (NSDictionary *)result;
+        } else {
+            NSURL *u = [BrowserWebView publicURLFromInternalURL:strongSelf.URL] ?: strongSelf.URL;
+            payload = @{
+                @"kind": @"url",
+                @"url": u.absoluteString ?: @"",
+                @"title": strongSelf.title ?: @"",
+            };
+        }
+        [strongSelf meo_deliverCitePayload:payload];
+    }];
+}
+
+/// 解析右键位置上下文 → 引用 payload（优先选区，其次图片/链接，最后当前页）。
+- (void)meo_aiAssistantAddCitation:(id)sender {
+    (void)sender;
+
+    // 再扫一次 AX，避免缓存竞态
+    NSString *axText = [self meo_accessibilitySelectedTextDeep];
+    if (axText.length > 0) {
+        [self meo_deliverCitePayload:@{ @"kind": @"text", @"text": axText }];
+        return;
+    }
+
+    NSDictionary *ready = [self meo_readyCitePayloadFromCache];
+    if (ready) {
+        [self meo_deliverCitePayload:ready];
+        return;
+    }
+
+    // 菜单刚弹出时 capture 可能还在飞：短轮询等待，避免退化成「仅网页 URL」
+    __weak typeof(self) weakSelf = self;
+    for (NSInteger i = 0; i < 12; i++) {
+        NSInteger tryIndex = i;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * tryIndex * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.contextMenuCiteDelivered) return;
+            NSString *ax = [strongSelf meo_accessibilitySelectedTextDeep];
+            if (ax.length > 0) {
+                [strongSelf meo_deliverCitePayload:@{ @"kind": @"text", @"text": ax }];
+                return;
+            }
+            NSDictionary *payload = [strongSelf meo_readyCitePayloadFromCache];
+            if (payload) {
+                [strongSelf meo_deliverCitePayload:payload];
+                return;
+            }
+            if (tryIndex == 11) {
+                [strongSelf meo_fallbackLiveCiteCapture];
+            }
+        });
+    }
 }
 
 - (void)meo_insertOpenSelectionURLItemInMenu:(NSMenu *)menu nearItem:(NSMenuItem *)nearItem {
