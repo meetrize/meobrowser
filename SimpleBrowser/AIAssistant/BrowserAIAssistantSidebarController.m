@@ -1153,12 +1153,58 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     return @"";
 }
 
+- (nullable NSImage *)imageFromDataURLString:(NSString *)dataURL {
+    if (dataURL.length == 0 || ![dataURL hasPrefix:@"data:"]) {
+        return nil;
+    }
+    NSRange comma = [dataURL rangeOfString:@","];
+    if (comma.location == NSNotFound || comma.location + 1 >= dataURL.length) {
+        return nil;
+    }
+    NSString *b64 = [dataURL substringFromIndex:comma.location + 1];
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:b64
+                                                       options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if (data.length == 0) {
+        return nil;
+    }
+    return [[NSImage alloc] initWithData:data];
+}
+
+- (void)applyPreviewImage:(NSImage *)image forImageURLString:(NSString *)imageURL {
+    if (!image) return;
+    if (imageURL.length > 0) {
+        for (AIAssistantCitation *c in self.citations) {
+            if (c.kind == AIAssistantCitationKindImage &&
+                [c.url.absoluteString isEqualToString:imageURL]) {
+                c.previewImage = image;
+                [self reloadCitationChips];
+                return;
+            }
+        }
+    }
+    for (AIAssistantCitation *c in [self.citations reverseObjectEnumerator]) {
+        if (c.kind == AIAssistantCitationKindImage && !c.previewImage) {
+            c.previewImage = image;
+            [self reloadCitationChips];
+            return;
+        }
+    }
+}
+
+- (void)applyPreviewDataURL:(NSString *)dataURL forImageURLString:(NSString *)imageURL {
+    [self applyPreviewImage:[self imageFromDataURLString:dataURL] forImageURLString:imageURL];
+}
+
 - (void)addCitationFromPayload:(NSDictionary *)payload {
     [self showPane:AIAssistantPaneChat];
     NSString *kind = [self stringValueFromPayload:payload key:@"kind"];
     NSString *url = [self stringValueFromPayload:payload key:@"url"];
     NSString *title = [self stringValueFromPayload:payload key:@"title"];
     NSString *text = [self stringValueFromPayload:payload key:@"text"];
+    NSString *thumb = [self stringValueFromPayload:payload key:@"thumb"];
+
+    NSString *pageURL = [self stringValueFromPayload:payload key:@"pageURL"];
+    NSString *pageTitle = [self stringValueFromPayload:payload key:@"pageTitle"];
 
     AIAssistantCitation *citation = nil;
     if ([kind isEqualToString:@"text"] || (text.length > 0 && ![kind isEqualToString:@"url"]
@@ -1173,7 +1219,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     } else {
         citation = [AIAssistantCitation citationWithURLString:url.length ? url : text
                                                         title:title
-                                                         hint:kind];
+                                                         hint:kind
+                                                sourcePageURL:pageURL
+                                              sourcePageTitle:pageTitle];
     }
     if (!citation) {
         self.statusLabel.stringValue = @"无法加入引用";
@@ -1195,6 +1243,19 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
             existing.kind != AIAssistantCitationKindText &&
             citation.url && existing.url &&
             [existing.url.absoluteString isEqualToString:citation.url.absoluteString]) {
+            // 已有同图：若新 payload 带缩略图则补上
+            if (existing.kind == AIAssistantCitationKindImage && !existing.previewImage) {
+                NSImage *fromThumb = [self imageFromDataURLString:thumb];
+                if (!fromThumb && [url hasPrefix:@"data:image"]) {
+                    fromThumb = [self imageFromDataURLString:url];
+                }
+                if (fromThumb) {
+                    existing.previewImage = fromThumb;
+                    [self reloadCitationChips];
+                } else {
+                    [self loadThumbnailForCitation:existing];
+                }
+            }
             self.statusLabel.stringValue = @"该引用已在列表中";
             self.statusLabel.textColor = NSColor.secondaryLabelColor;
             [self focusAssistantInput];
@@ -1202,16 +1263,38 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         }
     }
 
+    if (citation.kind == AIAssistantCitationKindImage) {
+        NSImage *fromThumb = [self imageFromDataURLString:thumb];
+        if (!fromThumb && [url hasPrefix:@"data:image"]) {
+            fromThumb = [self imageFromDataURLString:url];
+        }
+        if (fromThumb) {
+            citation.previewImage = fromThumb;
+        }
+    }
+
     [self.citations addObject:citation];
     [self reloadCitationChips];
-    if (citation.kind == AIAssistantCitationKindImage && citation.url) {
+    if (citation.kind == AIAssistantCitationKindImage && citation.url && !citation.previewImage) {
         [self loadThumbnailForCitation:citation];
     }
     if (!self.currentSession) {
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         [self createSessionWithProviderId:pid];
     }
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"已加入引用 · %@", citation.kindDisplayName];
+    if (citation.kind == AIAssistantCitationKindImage) {
+        NSString *img = citation.url.absoluteString ?: @"";
+        NSString *page = citation.sourcePageURL.absoluteString ?: @"";
+        if (img.length && page.length) {
+            self.statusLabel.stringValue = @"已加入图片引用（含图片网址与网页地址）";
+        } else if (img.length) {
+            self.statusLabel.stringValue = @"已加入图片引用（含图片网址）";
+        } else {
+            self.statusLabel.stringValue = @"已加入引用 · 图片";
+        }
+    } else {
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已加入引用 · %@", citation.kindDisplayName];
+    }
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
     [self focusAssistantInput];
 }
@@ -1266,8 +1349,20 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     icon.wantsLayer = YES;
     icon.layer.cornerRadius = 4;
     icon.layer.masksToBounds = YES;
+    CGFloat iconSize = 20;
     if (citation.kind == AIAssistantCitationKindImage) {
-        icon.image = citation.previewImage ?: [NSImage imageNamed:NSImageNameIconViewTemplate];
+        iconSize = 28;
+        if (citation.previewImage) {
+            citation.previewImage.template = NO;
+            icon.image = citation.previewImage;
+        } else {
+            NSImage *ph = [NSImage imageNamed:NSImageNameIconViewTemplate];
+            ph.template = YES;
+            icon.image = ph;
+        }
+        icon.imageScaling = NSImageScaleProportionallyUpOrDown;
+        icon.layer.cornerRadius = 5;
+        icon.layer.backgroundColor = [[NSColor blackColor] colorWithAlphaComponent:0.06].CGColor;
     } else if (citation.kind == AIAssistantCitationKindFile) {
         NSString *ext = citation.url.pathExtension.length ? citation.url.pathExtension : @"txt";
 #pragma clang diagnostic push
@@ -1286,7 +1381,16 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     label.font = [NSFont systemFontOfSize:11];
     label.textColor = NSColor.labelColor;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
-    if (citation.kind == AIAssistantCitationKindText && citation.url.absoluteString.length) {
+    if (citation.kind == AIAssistantCitationKindImage) {
+        NSMutableString *tip = [NSMutableString string];
+        if (citation.url.absoluteString.length) {
+            [tip appendFormat:@"图片：%@\n", citation.url.absoluteString];
+        }
+        if (citation.sourcePageURL.absoluteString.length) {
+            [tip appendFormat:@"网页：%@", citation.sourcePageURL.absoluteString];
+        }
+        label.toolTip = tip.length ? tip : (citation.body.length ? citation.body : citation.title);
+    } else if (citation.kind == AIAssistantCitationKindText && citation.url.absoluteString.length) {
         label.toolTip = [NSString stringWithFormat:@"%@\n%@",
                          citation.url.absoluteString,
                          citation.body.length ? citation.body : citation.title];
@@ -1307,11 +1411,11 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [chip addSubview:remove];
 
     [NSLayoutConstraint activateConstraints:@[
-        [chip.heightAnchor constraintEqualToConstant:32],
-        [icon.leadingAnchor constraintEqualToAnchor:chip.leadingAnchor constant:6],
+        [chip.heightAnchor constraintEqualToConstant:MAX(32, iconSize + 8)],
+        [icon.leadingAnchor constraintEqualToAnchor:chip.leadingAnchor constant:4],
         [icon.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:20],
-        [icon.heightAnchor constraintEqualToConstant:20],
+        [icon.widthAnchor constraintEqualToConstant:iconSize],
+        [icon.heightAnchor constraintEqualToConstant:iconSize],
         [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
         [label.centerYAnchor constraintEqualToAnchor:chip.centerYAnchor],
         [label.trailingAnchor constraintEqualToAnchor:remove.leadingAnchor constant:-2],
@@ -1327,25 +1431,58 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [self removeCitationId:sender.identifier];
 }
 
+- (void)applyPreviewImage:(NSImage *)img forCitationId:(NSString *)cid {
+    if (!img || cid.length == 0) return;
+    for (AIAssistantCitation *c in self.citations) {
+        if ([c.citationId isEqualToString:cid]) {
+            c.previewImage = img;
+            [self reloadCitationChips];
+            break;
+        }
+    }
+}
+
 - (void)loadThumbnailForCitation:(AIAssistantCitation *)citation {
     NSURL *url = citation.url;
     if (!url) return;
     NSString *cid = citation.citationId;
     __weak typeof(self) weakSelf = self;
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:[NSURLRequest requestWithURL:url]
+
+    // data: / 本地 file: 直接解码
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if ([scheme isEqualToString:@"data"]) {
+        NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url
+                                                                completionHandler:^(NSData *data, NSURLResponse *r, NSError *error) {
+            (void)r;
+            if (error || data.length == 0) return;
+            NSImage *img = [[NSImage alloc] initWithData:data];
+            if (!img) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf applyPreviewImage:img forCitationId:cid];
+            });
+        }];
+        [task resume];
+        return;
+    }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 20;
+    // 部分站点防盗链：带上所在页 Referer
+    NSString *referer = citation.sourcePageURL.absoluteString;
+    if (referer.length > 0) {
+        [req setValue:referer forHTTPHeaderField:@"Referer"];
+    }
+    [req setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        forHTTPHeaderField:@"User-Agent"];
+
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
                                                                  completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         (void)response;
         if (error || data.length == 0) return;
         NSImage *img = [[NSImage alloc] initWithData:data];
         if (!img) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            for (AIAssistantCitation *c in weakSelf.citations) {
-                if ([c.citationId isEqualToString:cid]) {
-                    c.previewImage = img;
-                    [weakSelf reloadCitationChips];
-                    break;
-                }
-            }
+            [weakSelf applyPreviewImage:img forCitationId:cid];
         });
     }];
     [task resume];

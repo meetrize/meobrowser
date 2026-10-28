@@ -48,8 +48,11 @@ NS_ASSUME_NONNULL_BEGIN
                           context:(nullable NSString *)context
                       pageContext:(BOOL)pageContext;
 /// 加入引用：打开助手侧栏，把 payload 加入输入区引用条（不自动发送）。
-/// payload: @{ @"kind": text|image|file|link|url, @"text"/"url"/"title": ... }
+/// payload: @{ @"kind": text|image|file|link|url, @"text"/"url"/"title"/"thumb": ... }
 - (void)addAIAssistantCitation:(NSDictionary *)payload;
+/// 为已加入的图片引用补上缩略图（data:image/...;base64,...）
+- (void)updateAIAssistantCitationThumbnail:(NSString *)dataURL forImageURL:(NSString *)imageURL;
+- (void)updateAIAssistantCitationPreviewImage:(NSImage *)image forImageURL:(NSString *)imageURL;
 - (void)oneClickLogin:(nullable id)sender;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;

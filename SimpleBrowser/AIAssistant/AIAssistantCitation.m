@@ -6,6 +6,7 @@
 @property (nonatomic, copy, readwrite) NSString *title;
 @property (nonatomic, copy, readwrite) NSString *body;
 @property (nonatomic, copy, readwrite, nullable) NSURL *url;
+@property (nonatomic, copy, readwrite, nullable) NSURL *sourcePageURL;
 @property (nonatomic, copy, readwrite, nullable) NSString *sourcePageTitle;
 @end
 
@@ -89,6 +90,7 @@
                                               title:chipTitle
                                                body:t
                                                 url:sourceURL];
+    c.sourcePageURL = sourceURL;
     NSString *pt = [pageTitle stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     c.sourcePageTitle = pt.length ? pt : nil;
     return c;
@@ -100,8 +102,22 @@
 }
 
 + (instancetype)imageCitationWithURL:(NSURL *)url title:(NSString *)title {
+    return [self imageCitationWithURL:url title:title sourcePageURL:nil pageTitle:nil];
+}
+
++ (instancetype)imageCitationWithURL:(NSURL *)url
+                               title:(NSString *)title
+                       sourcePageURL:(NSURL *)sourcePageURL
+                           pageTitle:(NSString *)pageTitle {
     NSString *t = title.length ? title : (url.lastPathComponent.length ? url.lastPathComponent : @"图片");
-    return [self citationWithKind:AIAssistantCitationKindImage title:t body:url.absoluteString ?: @"" url:url];
+    AIAssistantCitation *c = [self citationWithKind:AIAssistantCitationKindImage
+                                              title:t
+                                               body:url.absoluteString ?: @""
+                                                url:url];
+    c.sourcePageURL = sourcePageURL;
+    NSString *pt = [pageTitle stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    c.sourcePageTitle = pt.length ? pt : nil;
+    return c;
 }
 
 + (instancetype)fileCitationWithURL:(NSURL *)url title:(NSString *)title {
@@ -117,27 +133,37 @@
 + (instancetype)citationWithURLString:(NSString *)urlString
                                 title:(NSString *)title
                                  hint:(NSString *)hint {
+    return [self citationWithURLString:urlString title:title hint:hint sourcePageURL:nil sourcePageTitle:nil];
+}
+
++ (instancetype)citationWithURLString:(NSString *)urlString
+                                title:(NSString *)title
+                                 hint:(NSString *)hint
+                        sourcePageURL:(NSString *)sourcePageURL
+                      sourcePageTitle:(NSString *)sourcePageTitle {
     NSString *raw = [urlString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
     if (raw.length == 0) {
         return nil;
     }
     if ([hint.lowercaseString isEqualToString:@"text"]) {
-        return [self textCitation:raw];
+        NSURL *page = sourcePageURL.length ? [NSURL URLWithString:sourcePageURL] : nil;
+        return [self textCitation:raw sourceURL:page pageTitle:sourcePageTitle];
     }
     NSURL *url = [NSURL URLWithString:raw];
     if (!url) {
         return [self textCitation:raw];
     }
+    NSURL *pageURL = sourcePageURL.length ? [NSURL URLWithString:sourcePageURL] : nil;
     AIAssistantCitationKind kind = [self kindForURL:url hint:hint];
     switch (kind) {
         case AIAssistantCitationKindImage:
-            return [self imageCitationWithURL:url title:title];
+            return [self imageCitationWithURL:url title:title sourcePageURL:pageURL pageTitle:sourcePageTitle];
         case AIAssistantCitationKindFile:
             return [self fileCitationWithURL:url title:title];
         case AIAssistantCitationKindLink:
             return [self linkCitationWithURL:url title:title];
         case AIAssistantCitationKindText:
-            return [self textCitation:raw];
+            return [self textCitation:raw sourceURL:pageURL pageTitle:sourcePageTitle];
         case AIAssistantCitationKindURL:
         default:
             return [self URLCitationWithURL:url title:title];
@@ -156,6 +182,17 @@
 }
 
 - (NSString *)chipLabel {
+    if (self.kind == AIAssistantCitationKindImage) {
+        // 无缩略图时也要能看出是图片引用：显示主机名或文件名
+        NSString *host = self.url.host ?: @"";
+        NSString *file = self.url.lastPathComponent ?: @"";
+        NSString *t = file.length ? file : (host.length ? host : (self.title.length ? self.title : @"图片"));
+        t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        if (t.length > 28) {
+            t = [[t substringToIndex:28] stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"图片 · %@", t];
+    }
     NSString *t = self.title.length ? self.title : self.body;
     t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
     if (t.length > 36) {
@@ -179,10 +216,25 @@
             [block appendString:self.body ?: @""];
             return block;
         }
-        case AIAssistantCitationKindImage:
-            return [NSString stringWithFormat:@"【引用 · 图片%@】\n%@",
-                    self.title.length ? [NSString stringWithFormat:@"（%@）", self.title] : @"",
-                    self.url.absoluteString ?: self.body ?: @""];
+        case AIAssistantCitationKindImage: {
+            NSMutableString *block = [NSMutableString stringWithString:@"【引用 · 图片】\n"];
+            if (self.title.length > 0) {
+                [block appendFormat:@"说明：%@\n", self.title];
+            }
+            NSString *imageURL = self.url.absoluteString ?: self.body ?: @"";
+            if (imageURL.length > 0) {
+                [block appendFormat:@"图片网址：%@\n", imageURL];
+            }
+            NSString *pageURL = self.sourcePageURL.absoluteString ?: @"";
+            if (self.sourcePageTitle.length > 0 && pageURL.length > 0) {
+                [block appendFormat:@"所在网页标题：%@\n所在网页地址：%@\n", self.sourcePageTitle, pageURL];
+            } else if (pageURL.length > 0) {
+                [block appendFormat:@"所在网页地址：%@\n", pageURL];
+            } else if (self.sourcePageTitle.length > 0) {
+                [block appendFormat:@"所在网页标题：%@\n", self.sourcePageTitle];
+            }
+            return block;
+        }
         case AIAssistantCitationKindFile:
             return [NSString stringWithFormat:@"【引用 · 文件%@】\n%@",
                     self.title.length ? [NSString stringWithFormat:@"（%@）", self.title] : @"",

@@ -41,8 +41,11 @@ reopenAndBindProviderId:(NSString *)providerId
              autoSend:(BOOL)autoSend;
 
 /// 右键「加入引用」：只加入输入区引用条，不自动发送。
-/// payload: kind / text / url / title
+/// payload: kind / text / url / title / thumb(data URL)
 - (void)addCitationFromPayload:(NSDictionary *)payload;
+/// 为图片引用补缩略图（data:image/...）
+- (void)applyPreviewDataURL:(nullable NSString *)dataURL forImageURLString:(nullable NSString *)imageURL;
+- (void)applyPreviewImage:(nullable NSImage *)image forImageURLString:(nullable NSString *)imageURL;
 
 @end
 

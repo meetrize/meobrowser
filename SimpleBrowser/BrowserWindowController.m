@@ -3133,6 +3133,14 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
 }
 
+- (void)updateAIAssistantCitationThumbnail:(NSString *)dataURL forImageURL:(NSString *)imageURL {
+    [self.aiAssistantSidebarController applyPreviewDataURL:dataURL forImageURLString:imageURL];
+}
+
+- (void)updateAIAssistantCitationPreviewImage:(NSImage *)image forImageURL:(NSString *)imageURL {
+    [self.aiAssistantSidebarController applyPreviewImage:image forImageURLString:imageURL];
+}
+
 - (void)updateAIAssistantButtonAppearance {
     NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionAIAssistantID];
     if (!button) {

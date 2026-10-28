@@ -18,7 +18,9 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
 /// 文本正文，或 URL 字符串
 @property (nonatomic, copy, readonly) NSString *body;
 @property (nonatomic, copy, readonly, nullable) NSURL *url;
-/// 划词引用的来源页标题（可选）
+/// 引用资源所在网页（划词=页本身；图片=所在页）
+@property (nonatomic, copy, readonly, nullable) NSURL *sourcePageURL;
+/// 来源页标题（可选）
 @property (nonatomic, copy, readonly, nullable) NSString *sourcePageTitle;
 @property (nonatomic, strong, nullable) NSImage *previewImage;
 
@@ -29,6 +31,10 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
                    pageTitle:(nullable NSString *)pageTitle;
 + (instancetype)URLCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
 + (instancetype)imageCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
++ (instancetype)imageCitationWithURL:(NSURL *)url
+                               title:(nullable NSString *)title
+                       sourcePageURL:(nullable NSURL *)sourcePageURL
+                           pageTitle:(nullable NSString *)pageTitle;
 + (instancetype)fileCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
 + (instancetype)linkCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
 
@@ -36,6 +42,11 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
 + (instancetype)citationWithURLString:(NSString *)urlString
                                 title:(nullable NSString *)title
                                  hint:(nullable NSString *)hint;
++ (instancetype)citationWithURLString:(NSString *)urlString
+                                title:(nullable NSString *)title
+                                 hint:(nullable NSString *)hint
+                        sourcePageURL:(nullable NSString *)sourcePageURL
+                        sourcePageTitle:(nullable NSString *)sourcePageTitle;
 
 - (NSString *)kindDisplayName;
 - (NSString *)chipLabel;
