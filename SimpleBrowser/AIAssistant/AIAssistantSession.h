@@ -28,6 +28,7 @@ typedef NS_ENUM(NSInteger, AIAssistantSessionConnection) {
 @property (nonatomic, strong) NSMutableArray<AIAssistantMessage *> *messages;
 @property (nonatomic, assign) NSTimeInterval createdAt;
 @property (nonatomic, assign) NSTimeInterval updatedAt;
+@property (nonatomic, assign) BOOL pinned;
 @property (nonatomic, assign) AIAssistantSessionConnection connection;
 
 - (NSDictionary *)dictionaryRepresentation;

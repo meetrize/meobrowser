@@ -24,9 +24,14 @@ FOUNDATION_EXPORT NSNotificationName const AIAssistantSessionStoreDidChangeNotif
 - (void)deleteSessionId:(NSString *)sessionId;
 - (void)deleteAllSessions;
 - (void)setCurrentSessionId:(nullable NSString *)currentSessionId;
+- (void)setPinned:(BOOL)pinned forSessionId:(NSString *)sessionId;
 
-/// 标题/预览模糊匹配
+/// 标题/预览模糊匹配（固定会话排前）
 - (NSArray<AIAssistantSession *> *)sessionsMatchingQuery:(NSString *)query;
+
+/// 按「已固定 / 今天 / 昨天 / 更早」分组；每组内固定优先再按更新时间
+- (NSArray<NSDictionary *> *)groupedSessionsMatchingQuery:(NSString *)query;
+/// 字典: @{ @"title": NSString, @"sessions": NSArray<AIAssistantSession *> }
 
 - (void)touchAndPersist:(AIAssistantSession *)session;
 

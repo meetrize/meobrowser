@@ -100,13 +100,28 @@ static NSString * const kCurrentSessionKey = @"AIAssistant.currentSessionId";
     [self notify];
 }
 
-- (NSArray<AIAssistantSession *> *)allSessionsSorted {
-    NSArray *all = self.byId.allValues;
-    return [all sortedArrayUsingComparator:^NSComparisonResult(AIAssistantSession *a, AIAssistantSession *b) {
+- (NSComparator)sessionComparator {
+    return ^NSComparisonResult(AIAssistantSession *a, AIAssistantSession *b) {
+        if (a.pinned != b.pinned) {
+            return a.pinned ? NSOrderedAscending : NSOrderedDescending;
+        }
         if (a.updatedAt > b.updatedAt) return NSOrderedAscending;
         if (a.updatedAt < b.updatedAt) return NSOrderedDescending;
         return NSOrderedSame;
-    }];
+    };
+}
+
+- (NSArray<AIAssistantSession *> *)allSessionsSorted {
+    return [self.byId.allValues sortedArrayUsingComparator:[self sessionComparator]];
+}
+
+- (void)setPinned:(BOOL)pinned forSessionId:(NSString *)sessionId {
+    AIAssistantSession *s = [self sessionForId:sessionId];
+    if (!s || s.pinned == pinned) {
+        return;
+    }
+    s.pinned = pinned;
+    [self touchAndPersist:s];
 }
 
 - (AIAssistantSession *)sessionForId:(NSString *)sessionId {
@@ -191,6 +206,47 @@ static NSString * const kCurrentSessionKey = @"AIAssistant.currentSessionId";
         }
     }
     return out;
+}
+
+- (NSInteger)dayBucketForTimestamp:(NSTimeInterval)ts {
+    // 0=今天 1=昨天 2=更早
+    NSCalendar *cal = NSCalendar.currentCalendar;
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
+    if ([cal isDateInToday:date]) return 0;
+    if ([cal isDateInYesterday:date]) return 1;
+    return 2;
+}
+
+- (NSArray<NSDictionary *> *)groupedSessionsMatchingQuery:(NSString *)query {
+    NSArray<AIAssistantSession *> *list = [self sessionsMatchingQuery:query];
+    NSMutableArray<AIAssistantSession *> *pinned = [NSMutableArray array];
+    NSMutableArray<AIAssistantSession *> *today = [NSMutableArray array];
+    NSMutableArray<AIAssistantSession *> *yesterday = [NSMutableArray array];
+    NSMutableArray<AIAssistantSession *> *earlier = [NSMutableArray array];
+    for (AIAssistantSession *s in list) {
+        if (s.pinned) {
+            [pinned addObject:s];
+            continue;
+        }
+        NSInteger bucket = [self dayBucketForTimestamp:s.updatedAt > 0 ? s.updatedAt : s.createdAt];
+        if (bucket == 0) [today addObject:s];
+        else if (bucket == 1) [yesterday addObject:s];
+        else [earlier addObject:s];
+    }
+    NSMutableArray *groups = [NSMutableArray array];
+    if (pinned.count) {
+        [groups addObject:@{ @"title": @"已固定", @"sessions": pinned }];
+    }
+    if (today.count) {
+        [groups addObject:@{ @"title": @"今天", @"sessions": today }];
+    }
+    if (yesterday.count) {
+        [groups addObject:@{ @"title": @"昨天", @"sessions": yesterday }];
+    }
+    if (earlier.count) {
+        [groups addObject:@{ @"title": @"更早", @"sessions": earlier }];
+    }
+    return groups;
 }
 
 @end

@@ -5,18 +5,18 @@
 #import "BrowserAIAssistantChatPanel.h"
 #import "AIAssistantSession.h"
 #import "AIAssistantSessionStore.h"
+#import "AIAssistantHistoryPanel.h"
 #import "AIBridgeRegistry.h"
 #import "AIBridgeService.h"
-#import "SBTextField.h"
 #import "SBTextView.h"
 
-static const CGFloat kSidebarDefaultWidth = 380.0;
-static const CGFloat kSidebarMinWidth = 300.0;
+static const CGFloat kSidebarDefaultWidth = 400.0;
+static const CGFloat kSidebarMinWidth = 320.0;
 static const CGFloat kSidebarMaxWidth = 560.0;
+static const CGFloat kRailWidth = 44.0;
 
 typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneChat = 0,
-    AIAssistantPaneHistory,
     AIAssistantPaneNewSession,
 };
 
@@ -64,7 +64,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 }
 @end
 
-@interface BrowserAIAssistantSidebarController () <NSTextViewDelegate, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@interface BrowserAIAssistantSidebarController () <NSTextViewDelegate, NSTextFieldDelegate, NSPopoverDelegate>
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, strong) NSLayoutConstraint *widthConstraint;
 @property (nonatomic, assign, readwrite) BOOL visible;
@@ -74,13 +74,21 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) BrowserAIAssistantResizeView *resizeHandle;
 
 @property (nonatomic, assign) AIAssistantPane pane;
+@property (nonatomic, strong) NSView *leftRail;
+@property (nonatomic, strong) NSView *mainColumn;
 @property (nonatomic, strong) NSView *chatPane;
-@property (nonatomic, strong) NSView *historyPane;
 @property (nonatomic, strong) NSView *createSessionPane;
 
-@property (nonatomic, strong) NSButton *historyButton;
-@property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *plusButton;
+@property (nonatomic, strong) NSButton *historyButton;
+@property (nonatomic, strong) NSButton *skillsButton;
+@property (nonatomic, strong) NSButton *pluginsButton;
+@property (nonatomic, strong) NSButton *tasksButton;
+@property (nonatomic, strong) NSButton *displayButton;
+@property (nonatomic, strong) NSButton *bridgeRailButton;
+@property (nonatomic, strong) NSButton *settingsButton;
+
+@property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *closeBtn;
 @property (nonatomic, strong) NSView *statusDot;
 @property (nonatomic, strong) NSTextField *statusLabel;
@@ -92,12 +100,11 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
 
-@property (nonatomic, strong) SBTextField *searchField;
-@property (nonatomic, strong) NSTableView *historyTable;
-@property (nonatomic, strong) NSArray<AIAssistantSession *> *historyRows;
-
 @property (nonatomic, strong) NSStackView *providerStack;
 @property (nonatomic, copy, nullable) NSString *pendingProviderId;
+
+@property (nonatomic, strong, nullable) NSPopover *historyPopover;
+@property (nonatomic, strong, nullable) AIAssistantHistoryPanel *historyPanel;
 
 @property (nonatomic, assign) BOOL inFlight;
 @property (nonatomic, copy, nullable) NSString *inFlightSessionId;
@@ -116,7 +123,6 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         if (w < kSidebarMinWidth || w > kSidebarMaxWidth) w = kSidebarDefaultWidth;
         _currentWidth = w;
         _pane = AIAssistantPaneChat;
-        _historyRows = @[];
         [self buildUI];
         __weak typeof(self) weakSelf = self;
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -137,6 +143,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
                                           object:nil
                                            queue:NSOperationQueue.mainQueue
                                       usingBlock:^(__unused NSNotification *n) {
+            [weakSelf.historyPanel reload];
             [weakSelf reloadUI];
         }];
         [self refreshConnectionState];
@@ -151,17 +158,45 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     if (self.storeObserver) [nc removeObserver:self.storeObserver];
 }
 
-#pragma mark - UI
+#pragma mark - Symbols / rail buttons
 
-- (NSButton *)iconButton:(NSString *)title action:(SEL)action tooltip:(NSString *)tip {
-    NSButton *b = [NSButton buttonWithTitle:title target:self action:action];
+- (NSImage *)symbolNamed:(NSString *)name {
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *cfg =
+            [NSImageSymbolConfiguration configurationWithPointSize:14
+                                                            weight:NSFontWeightMedium
+                                                             scale:NSImageSymbolScaleMedium];
+        NSImage *img = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
+        return [img imageWithSymbolConfiguration:cfg] ?: img;
+    }
+    return nil;
+}
+
+- (NSButton *)railButtonSymbol:(NSString *)symbol
+                       tooltip:(NSString *)tip
+                        action:(SEL)action
+                     enabled:(BOOL)enabled {
+    NSImage *img = [self symbolNamed:symbol];
+    NSButton *b = img ? [NSButton buttonWithImage:img target:self action:action]
+                      : [NSButton buttonWithTitle:@"·" target:self action:action];
     b.translatesAutoresizingMaskIntoConstraints = NO;
     b.bezelStyle = NSBezelStyleInline;
     b.bordered = NO;
+    b.imagePosition = NSImageOnly;
+    b.imageScaling = NSImageScaleProportionallyDown;
     b.toolTip = tip;
-    b.font = [NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
+    b.enabled = enabled;
+    if (@available(macOS 10.14, *)) {
+        b.contentTintColor = enabled ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [b.widthAnchor constraintEqualToConstant:32],
+        [b.heightAnchor constraintEqualToConstant:32],
+    ]];
     return b;
 }
+
+#pragma mark - UI
 
 - (void)buildUI {
     NSView *root = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -194,29 +229,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     edgeSeparator.wantsLayer = YES;
     edgeSeparator.layer.backgroundColor = NSColor.separatorColor.CGColor;
 
-    // —— 顶栏 ——
-    self.historyButton = [self iconButton:@"☰" action:@selector(historyClicked:) tooltip:@"会话历史"];
-    self.titleLabel = [NSTextField labelWithString:@"AI 助手"];
-    self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.titleLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-    self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    self.titleLabel.editable = YES;
-    self.titleLabel.selectable = YES;
-    self.titleLabel.bezeled = NO;
-    self.titleLabel.drawsBackground = NO;
-    self.titleLabel.delegate = self;
-    self.plusButton = [self iconButton:@"＋" action:@selector(newClicked:) tooltip:@"新建会话"];
-    self.closeBtn = [NSButton buttonWithTitle:@"关闭" target:self action:@selector(closeClicked:)];
-    self.closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    self.closeBtn.bezelStyle = NSBezelStyleRounded;
-    self.closeBtn.controlSize = NSControlSizeSmall;
+    self.leftRail = [self buildLeftRail];
+    self.mainColumn = [self buildMainColumn];
 
-    self.chatPane = [self buildChatPane];
-    self.historyPane = [self buildHistoryPane];
-    self.createSessionPane = [self buildCreateSessionPane];
+    NSView *railSep = [[NSView alloc] initWithFrame:NSZeroRect];
+    railSep.translatesAutoresizingMaskIntoConstraints = NO;
+    railSep.wantsLayer = YES;
+    railSep.layer.backgroundColor = NSColor.separatorColor.CGColor;
 
-    for (NSView *v in @[self.historyButton, self.titleLabel, self.plusButton, self.closeBtn,
-                        self.chatPane, self.historyPane, self.createSessionPane, handle, edgeSeparator]) {
+    for (NSView *v in @[handle, edgeSeparator, self.leftRail, railSep, self.mainColumn]) {
         [root addSubview:v];
     }
 
@@ -230,40 +251,139 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         [edgeSeparator.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
         [edgeSeparator.widthAnchor constraintEqualToConstant:1],
 
-        [self.historyButton.topAnchor constraintEqualToAnchor:root.topAnchor constant:10],
-        [self.historyButton.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:12],
-        [self.historyButton.widthAnchor constraintEqualToConstant:28],
+        [self.leftRail.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [self.leftRail.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [self.leftRail.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:6],
+        [self.leftRail.widthAnchor constraintEqualToConstant:kRailWidth],
 
-        [self.plusButton.centerYAnchor constraintEqualToAnchor:self.historyButton.centerYAnchor],
-        [self.plusButton.trailingAnchor constraintEqualToAnchor:self.closeBtn.leadingAnchor constant:-6],
-        [self.plusButton.widthAnchor constraintEqualToConstant:28],
+        [railSep.topAnchor constraintEqualToAnchor:root.topAnchor constant:8],
+        [railSep.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-8],
+        [railSep.leadingAnchor constraintEqualToAnchor:self.leftRail.trailingAnchor],
+        [railSep.widthAnchor constraintEqualToConstant:1],
 
-        [self.closeBtn.centerYAnchor constraintEqualToAnchor:self.historyButton.centerYAnchor],
-        [self.closeBtn.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-12],
+        [self.mainColumn.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [self.mainColumn.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [self.mainColumn.leadingAnchor constraintEqualToAnchor:railSep.trailingAnchor],
+        [self.mainColumn.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+    ]];
 
-        [self.titleLabel.centerYAnchor constraintEqualToAnchor:self.historyButton.centerYAnchor],
-        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.historyButton.trailingAnchor constant:6],
-        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.plusButton.leadingAnchor constant:-6],
+    self.view = root;
+    [self showPane:AIAssistantPaneChat];
+    [self reloadUI];
+}
 
-        [self.chatPane.topAnchor constraintEqualToAnchor:self.historyButton.bottomAnchor constant:8],
-        [self.chatPane.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
-        [self.chatPane.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
-        [self.chatPane.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+- (NSView *)buildLeftRail {
+    NSView *rail = [[NSView alloc] initWithFrame:NSZeroRect];
+    rail.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 10.14, *)) {
+        rail.wantsLayer = YES;
+        rail.layer.backgroundColor = NSColor.controlBackgroundColor.CGColor;
+    }
 
-        [self.historyPane.topAnchor constraintEqualToAnchor:self.chatPane.topAnchor],
-        [self.historyPane.leadingAnchor constraintEqualToAnchor:self.chatPane.leadingAnchor],
-        [self.historyPane.trailingAnchor constraintEqualToAnchor:self.chatPane.trailingAnchor],
-        [self.historyPane.bottomAnchor constraintEqualToAnchor:self.chatPane.bottomAnchor],
+    self.plusButton = [self railButtonSymbol:@"plus"
+                                     tooltip:@"新建会话"
+                                      action:@selector(newClicked:)
+                                     enabled:YES];
+    self.historyButton = [self railButtonSymbol:@"clock"
+                                         tooltip:@"会话历史"
+                                          action:@selector(historyClicked:)
+                                         enabled:YES];
+    self.skillsButton = [self railButtonSymbol:@"wand.and.stars"
+                                        tooltip:@"技能（即将推出）"
+                                         action:@selector(placeholderClicked:)
+                                        enabled:YES];
+    self.pluginsButton = [self railButtonSymbol:@"puzzlepiece.extension"
+                                         tooltip:@"插件（即将推出）"
+                                          action:@selector(placeholderClicked:)
+                                         enabled:YES];
+    self.tasksButton = [self railButtonSymbol:@"checklist"
+                                       tooltip:@"任务（即将推出）"
+                                        action:@selector(placeholderClicked:)
+                                       enabled:YES];
+    self.displayButton = [self railButtonSymbol:@"rectangle.split.3x3"
+                                         tooltip:@"大屏（即将推出）"
+                                          action:@selector(placeholderClicked:)
+                                         enabled:YES];
+    self.bridgeRailButton = [self railButtonSymbol:@"arrow.left.arrow.right.circle"
+                                            tooltip:@"AI Bridge 设置"
+                                             action:@selector(openBridgeClicked:)
+                                            enabled:YES];
+    self.settingsButton = [self railButtonSymbol:@"gearshape"
+                                          tooltip:@"设置（即将推出）"
+                                           action:@selector(placeholderClicked:)
+                                          enabled:YES];
+
+    NSStackView *top = [NSStackView stackViewWithViews:@[
+        self.plusButton, self.historyButton, self.skillsButton,
+        self.pluginsButton, self.tasksButton, self.displayButton
+    ]];
+    top.translatesAutoresizingMaskIntoConstraints = NO;
+    top.orientation = NSUserInterfaceLayoutOrientationVertical;
+    top.spacing = 4;
+    top.alignment = NSLayoutAttributeCenterX;
+
+    NSStackView *bottom = [NSStackView stackViewWithViews:@[ self.bridgeRailButton, self.settingsButton ]];
+    bottom.translatesAutoresizingMaskIntoConstraints = NO;
+    bottom.orientation = NSUserInterfaceLayoutOrientationVertical;
+    bottom.spacing = 4;
+    bottom.alignment = NSLayoutAttributeCenterX;
+
+    [rail addSubview:top];
+    [rail addSubview:bottom];
+    [NSLayoutConstraint activateConstraints:@[
+        [top.topAnchor constraintEqualToAnchor:rail.topAnchor constant:10],
+        [top.centerXAnchor constraintEqualToAnchor:rail.centerXAnchor],
+        [bottom.bottomAnchor constraintEqualToAnchor:rail.bottomAnchor constant:-12],
+        [bottom.centerXAnchor constraintEqualToAnchor:rail.centerXAnchor],
+    ]];
+    return rail;
+}
+
+- (NSView *)buildMainColumn {
+    NSView *col = [[NSView alloc] initWithFrame:NSZeroRect];
+    col.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.titleLabel = [NSTextField labelWithString:@"AI 助手"];
+    self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.titleLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.titleLabel.editable = YES;
+    self.titleLabel.selectable = YES;
+    self.titleLabel.bezeled = NO;
+    self.titleLabel.drawsBackground = NO;
+    self.titleLabel.delegate = self;
+
+    self.closeBtn = [NSButton buttonWithTitle:@"关闭" target:self action:@selector(closeClicked:)];
+    self.closeBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    self.closeBtn.bezelStyle = NSBezelStyleRounded;
+    self.closeBtn.controlSize = NSControlSizeSmall;
+
+    self.chatPane = [self buildChatPane];
+    self.createSessionPane = [self buildCreateSessionPane];
+
+    for (NSView *v in @[self.titleLabel, self.closeBtn, self.chatPane, self.createSessionPane]) {
+        [col addSubview:v];
+    }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.titleLabel.topAnchor constraintEqualToAnchor:col.topAnchor constant:12],
+        [self.titleLabel.leadingAnchor constraintEqualToAnchor:col.leadingAnchor constant:12],
+        [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.closeBtn.leadingAnchor constant:-8],
+
+        [self.closeBtn.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+        [self.closeBtn.trailingAnchor constraintEqualToAnchor:col.trailingAnchor constant:-12],
+
+        [self.chatPane.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:8],
+        [self.chatPane.leadingAnchor constraintEqualToAnchor:col.leadingAnchor],
+        [self.chatPane.trailingAnchor constraintEqualToAnchor:col.trailingAnchor],
+        [self.chatPane.bottomAnchor constraintEqualToAnchor:col.bottomAnchor],
 
         [self.createSessionPane.topAnchor constraintEqualToAnchor:self.chatPane.topAnchor],
         [self.createSessionPane.leadingAnchor constraintEqualToAnchor:self.chatPane.leadingAnchor],
         [self.createSessionPane.trailingAnchor constraintEqualToAnchor:self.chatPane.trailingAnchor],
         [self.createSessionPane.bottomAnchor constraintEqualToAnchor:self.chatPane.bottomAnchor],
     ]];
-
-    self.view = root;
-    [self showPane:AIAssistantPaneChat];
-    [self reloadUI];
+    return col;
 }
 
 - (NSView *)buildChatPane {
@@ -321,20 +441,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.cancelButton.bezelStyle = NSBezelStyleRounded;
     self.cancelButton.enabled = NO;
 
-    NSButton *bridgeBtn = [NSButton buttonWithTitle:@"Bridge" target:self action:@selector(openBridgeClicked:)];
-    bridgeBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    bridgeBtn.bezelStyle = NSBezelStyleRounded;
-    bridgeBtn.controlSize = NSControlSizeSmall;
-    bridgeBtn.toolTip = @"打开 AI Bridge 排障面板";
-
     for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
-                        self.chatPanel, inputScroll, self.sendButton, self.cancelButton, bridgeBtn]) {
+                        self.chatPanel, inputScroll, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
     [NSLayoutConstraint activateConstraints:@[
         [self.statusDot.topAnchor constraintEqualToAnchor:pane.topAnchor constant:4],
-        [self.statusDot.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
+        [self.statusDot.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.statusDot.widthAnchor constraintEqualToConstant:8],
         [self.statusDot.heightAnchor constraintEqualToConstant:8],
 
@@ -346,94 +460,26 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         [self.moreButton.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
 
         [self.focusTabButton.topAnchor constraintEqualToAnchor:self.statusDot.bottomAnchor constant:8],
-        [self.focusTabButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
+        [self.focusTabButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.reopenButton.centerYAnchor constraintEqualToAnchor:self.focusTabButton.centerYAnchor],
         [self.reopenButton.leadingAnchor constraintEqualToAnchor:self.focusTabButton.trailingAnchor constant:8],
 
         [self.chatPanel.topAnchor constraintEqualToAnchor:self.focusTabButton.bottomAnchor constant:8],
-        [self.chatPanel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [self.chatPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
+        [self.chatPanel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.chatPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:160],
 
         [inputScroll.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:8],
-        [inputScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [inputScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
+        [inputScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [inputScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [inputScroll.heightAnchor constraintEqualToConstant:80],
 
         [self.sendButton.topAnchor constraintEqualToAnchor:inputScroll.bottomAnchor constant:8],
-        [self.sendButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
+        [self.sendButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.sendButton.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
 
         [self.cancelButton.centerYAnchor constraintEqualToAnchor:self.sendButton.centerYAnchor],
         [self.cancelButton.leadingAnchor constraintEqualToAnchor:self.sendButton.trailingAnchor constant:8],
-
-        [bridgeBtn.centerYAnchor constraintEqualToAnchor:self.sendButton.centerYAnchor],
-        [bridgeBtn.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
-    ]];
-    return pane;
-}
-
-- (NSView *)buildHistoryPane {
-    NSView *pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    pane.translatesAutoresizingMaskIntoConstraints = NO;
-    pane.hidden = YES;
-
-    NSTextField *caption = [NSTextField labelWithString:@"会话历史"];
-    caption.translatesAutoresizingMaskIntoConstraints = NO;
-    caption.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
-
-    self.searchField = [SBTextField standardField];
-    self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.searchField.placeholderString = @"搜索标题或内容";
-    self.searchField.delegate = self;
-    ((NSTextField *)self.searchField).target = self;
-    ((NSTextField *)self.searchField).action = @selector(searchChanged:);
-
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    scroll.hasVerticalScroller = YES;
-    scroll.borderType = NSBezelBorder;
-    NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"session"];
-    col.width = 280;
-    [table addTableColumn:col];
-    table.headerView = nil;
-    table.delegate = self;
-    table.dataSource = self;
-    table.target = self;
-    table.action = @selector(historyRowClicked:);
-    table.doubleAction = @selector(historyRowClicked:);
-    scroll.documentView = table;
-    self.historyTable = table;
-
-    NSButton *clearAll = [NSButton buttonWithTitle:@"清空全部" target:self action:@selector(clearAllClicked:)];
-    clearAll.translatesAutoresizingMaskIntoConstraints = NO;
-    clearAll.bezelStyle = NSBezelStyleRounded;
-    clearAll.controlSize = NSControlSizeSmall;
-
-    NSButton *back = [NSButton buttonWithTitle:@"← 返回对话" target:self action:@selector(backToChatClicked:)];
-    back.translatesAutoresizingMaskIntoConstraints = NO;
-    back.bezelStyle = NSBezelStyleRounded;
-    back.controlSize = NSControlSizeSmall;
-
-    for (NSView *v in @[caption, self.searchField, scroll, clearAll, back]) {
-        [pane addSubview:v];
-    }
-    [NSLayoutConstraint activateConstraints:@[
-        [caption.topAnchor constraintEqualToAnchor:pane.topAnchor constant:4],
-        [caption.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [self.searchField.topAnchor constraintEqualToAnchor:caption.bottomAnchor constant:8],
-        [self.searchField.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [self.searchField.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
-        [self.searchField.heightAnchor constraintEqualToConstant:22],
-        [scroll.topAnchor constraintEqualToAnchor:self.searchField.bottomAnchor constant:8],
-        [scroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [scroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
-        [scroll.bottomAnchor constraintEqualToAnchor:back.topAnchor constant:-10],
-        [back.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [back.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
-        [clearAll.centerYAnchor constraintEqualToAnchor:back.centerYAnchor],
-        [clearAll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
     ]];
     return pane;
 }
@@ -474,12 +520,12 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [pane addSubview:cancel];
     [NSLayoutConstraint activateConstraints:@[
         [caption.topAnchor constraintEqualToAnchor:pane.topAnchor constant:8],
-        [caption.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
-        [caption.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-14],
+        [caption.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [caption.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [self.providerStack.topAnchor constraintEqualToAnchor:caption.bottomAnchor constant:14],
-        [self.providerStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
+        [self.providerStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [cancel.topAnchor constraintEqualToAnchor:self.providerStack.bottomAnchor constant:20],
-        [cancel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:14],
+        [cancel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
     ]];
     return pane;
 }
@@ -487,13 +533,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 - (void)showPane:(AIAssistantPane)pane {
     self.pane = pane;
     self.chatPane.hidden = (pane != AIAssistantPaneChat);
-    self.historyPane.hidden = (pane != AIAssistantPaneHistory);
     self.createSessionPane.hidden = (pane != AIAssistantPaneNewSession);
-    if (pane == AIAssistantPaneHistory) {
-        self.titleLabel.stringValue = @"会话历史";
-        self.titleLabel.editable = NO;
-        [self reloadHistoryTable];
-    } else if (pane == AIAssistantPaneNewSession) {
+    if (pane == AIAssistantPaneNewSession) {
         self.titleLabel.stringValue = @"新建会话";
         self.titleLabel.editable = NO;
     } else {
@@ -522,6 +563,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.visible = visible;
     self.view.hidden = NO;
     CGFloat target = visible ? self.currentWidth : 0;
+    if (!visible) {
+        [self.historyPopover performClose:nil];
+    }
     if (animated) {
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
             ctx.duration = 0.18;
@@ -583,10 +627,6 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 - (void)reloadUI {
     if (self.isResizingWidth) return;
     [self refreshConnectionState];
-    if (self.pane == AIAssistantPaneHistory) {
-        [self reloadHistoryTable];
-        return;
-    }
     if (self.pane == AIAssistantPaneNewSession) {
         return;
     }
@@ -594,7 +634,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         self.titleLabel.stringValue = @"AI 助手";
-        self.statusLabel.stringValue = @"还没有会话，点击 ＋ 开始";
+        self.statusLabel.stringValue = @"还没有会话，点击左侧 ＋ 开始";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = NO;
@@ -633,51 +673,66 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.cancelButton.enabled = self.inFlight;
 }
 
-- (void)reloadHistoryTable {
-    NSString *q = self.searchField.stringValue ?: @"";
-    self.historyRows = [AIAssistantSessionStore.sharedStore sessionsMatchingQuery:q];
-    [self.historyTable reloadData];
+#pragma mark - History popover
+
+- (void)ensureHistoryPopover {
+    if (self.historyPopover) return;
+    AIAssistantHistoryPanel *panel = [[AIAssistantHistoryPanel alloc] initWithFrame:NSMakeRect(0, 0, 320, 420)];
+    __weak typeof(self) weakSelf = self;
+    panel.onSelectSession = ^(AIAssistantSession *session) {
+        [weakSelf selectSessionFromHistory:session];
+    };
+    panel.onTogglePin = ^(AIAssistantSession *session) {
+        [AIAssistantSessionStore.sharedStore setPinned:!session.pinned forSessionId:session.sessionId];
+        [weakSelf.historyPanel reload];
+    };
+    panel.onDeleteSession = ^(AIAssistantSession *session) {
+        [weakSelf deleteSessionFromHistory:session];
+    };
+    self.historyPanel = panel;
+
+    NSViewController *vc = [[NSViewController alloc] init];
+    vc.view = panel;
+
+    NSPopover *pop = [[NSPopover alloc] init];
+    pop.contentViewController = vc;
+    pop.behavior = NSPopoverBehaviorTransient;
+    pop.delegate = self;
+    pop.contentSize = NSMakeSize(320, 420);
+    self.historyPopover = pop;
 }
 
-#pragma mark - NSTableView
-
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
-    (void)tableView;
-    return (NSInteger)self.historyRows.count;
+- (void)selectSessionFromHistory:(AIAssistantSession *)session {
+    [self.historyPopover performClose:nil];
+    AIAssistantSessionStore.sharedStore.currentSessionId = session.sessionId;
+    [self showPane:AIAssistantPaneChat];
+    [self syncChatFromCurrentSession];
+    [self reloadUI];
 }
 
-- (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
-    (void)tableColumn;
-    NSTableCellView *cell = [tableView makeViewWithIdentifier:@"sessCell" owner:self];
-    if (!cell) {
-        cell = [[NSTableCellView alloc] initWithFrame:NSMakeRect(0, 0, 280, 44)];
-        cell.identifier = @"sessCell";
-        NSTextField *tf = [NSTextField wrappingLabelWithString:@""];
-        tf.translatesAutoresizingMaskIntoConstraints = NO;
-        tf.font = [NSFont systemFontOfSize:12];
-        tf.maximumNumberOfLines = 2;
-        [cell addSubview:tf];
-        cell.textField = tf;
-        [NSLayoutConstraint activateConstraints:@[
-            [tf.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:4],
-            [tf.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-4],
-            [tf.topAnchor constraintEqualToAnchor:cell.topAnchor constant:4],
-            [tf.bottomAnchor constraintEqualToAnchor:cell.bottomAnchor constant:-4],
-        ]];
+- (void)deleteSessionFromHistory:(AIAssistantSession *)session {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"删除该会话？";
+    alert.informativeText = session.title.length ? session.title : @"新对话";
+    [alert addButtonWithTitle:@"删除并解绑"];
+    [alert addButtonWithTitle:@"仅删除会话"];
+    [alert addButtonWithTitle:@"取消"];
+    NSModalResponse r = [alert runModal];
+    if (r == NSAlertThirdButtonReturn) return;
+    if (r == NSAlertFirstButtonReturn && session.bindingId.length) {
+        [[AIBridgeService sharedService] unbindBindingId:session.bindingId];
     }
-    if (row < 0 || row >= (NSInteger)self.historyRows.count) {
-        return cell;
+    NSString *deletedId = session.sessionId;
+    [AIAssistantSessionStore.sharedStore deleteSessionId:deletedId];
+    [self.historyPanel reload];
+    if ([[self currentSession].sessionId isEqualToString:deletedId] || ![self currentSession]) {
+        [self syncChatFromCurrentSession];
     }
-    AIAssistantSession *s = self.historyRows[(NSUInteger)row];
-    NSString *plat = [self providerDisplayName:s.providerId];
-    cell.textField.stringValue = [NSString stringWithFormat:@"%@\n%@ · %@",
-                                  s.title ?: @"新对话", plat, s.previewText ?: @""];
-    return cell;
+    [self reloadUI];
 }
 
-- (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row {
-    (void)tableView; (void)row;
-    return 48;
+- (void)popoverDidClose:(NSNotification *)notification {
+    (void)notification;
 }
 
 #pragma mark - Text
@@ -707,32 +762,42 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
 }
 
-- (void)controlTextDidChange:(NSNotification *)obj {
-    if (obj.object == self.searchField) {
-        [self reloadHistoryTable];
-    }
-}
-
 #pragma mark - Actions
 
 - (void)closeClicked:(id)sender {
     (void)sender;
+    [self.historyPopover performClose:nil];
     [self.delegate aiAssistantSidebarDidRequestClose:self];
 }
 
 - (void)openBridgeClicked:(id)sender {
     (void)sender;
+    [self.historyPopover performClose:nil];
     [self.delegate aiAssistantSidebarDidRequestOpenBridge:self];
+}
+
+- (void)placeholderClicked:(id)sender {
+    (void)sender;
+    NSButton *b = [sender isKindOfClass:[NSButton class]] ? sender : nil;
+    NSString *tip = b.toolTip.length ? b.toolTip : @"即将推出";
+    self.statusLabel.stringValue = tip;
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
 }
 
 - (void)historyClicked:(id)sender {
     (void)sender;
-    if (self.pane == AIAssistantPaneHistory) {
-        [self showPane:AIAssistantPaneChat];
-        [self reloadUI];
-    } else {
-        [self showPane:AIAssistantPaneHistory];
+    [self ensureHistoryPopover];
+    if (self.historyPopover.shown) {
+        [self.historyPopover performClose:nil];
+        return;
     }
+    [self.historyPanel reload];
+    [self.historyPopover showRelativeToRect:self.historyButton.bounds
+                                     ofView:self.historyButton
+                              preferredEdge:NSRectEdgeMaxX];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.historyPanel focusSearch];
+    });
 }
 
 - (void)backToChatClicked:(id)sender {
@@ -743,24 +808,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (void)newClicked:(id)sender {
     (void)sender;
+    [self.historyPopover performClose:nil];
     [self showPane:AIAssistantPaneNewSession];
-}
-
-- (void)searchChanged:(id)sender {
-    (void)sender;
-    [self reloadHistoryTable];
-}
-
-- (void)historyRowClicked:(id)sender {
-    (void)sender;
-    NSInteger row = self.historyTable.clickedRow;
-    if (row < 0) row = self.historyTable.selectedRow;
-    if (row < 0 || row >= (NSInteger)self.historyRows.count) return;
-    AIAssistantSession *s = self.historyRows[(NSUInteger)row];
-    AIAssistantSessionStore.sharedStore.currentSessionId = s.sessionId;
-    [self showPane:AIAssistantPaneChat];
-    [self syncChatFromCurrentSession];
-    [self reloadUI];
 }
 
 - (void)providerPicked:(NSButton *)sender {
@@ -880,34 +929,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     (void)sender;
     AIAssistantSession *s = [self currentSession];
     if (!s) return;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"删除当前会话？";
-    alert.informativeText = @"历史消息将删除。可同时解除网页绑定。";
-    [alert addButtonWithTitle:@"删除并解绑"];
-    [alert addButtonWithTitle:@"仅删除会话"];
-    [alert addButtonWithTitle:@"取消"];
-    NSModalResponse r = [alert runModal];
-    if (r == NSAlertThirdButtonReturn) return;
-    if (r == NSAlertFirstButtonReturn && s.bindingId.length) {
-        [[AIBridgeService sharedService] unbindBindingId:s.bindingId];
-    }
-    [AIAssistantSessionStore.sharedStore deleteSessionId:s.sessionId];
-    [self syncChatFromCurrentSession];
-    [self reloadUI];
-}
-
-- (void)clearAllClicked:(id)sender {
-    (void)sender;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"清空全部会话？";
-    alert.informativeText = @"不可恢复。不会自动关闭浏览器标签。";
-    [alert addButtonWithTitle:@"清空"];
-    [alert addButtonWithTitle:@"取消"];
-    if ([alert runModal] != NSAlertFirstButtonReturn) return;
-    [AIAssistantSessionStore.sharedStore deleteAllSessions];
-    [self.chatPanel clear];
-    [self reloadHistoryTable];
-    [self reloadUI];
+    [self deleteSessionFromHistory:s];
+    [self.historyPopover performClose:nil];
 }
 
 - (void)cancelClicked:(id)sender {
@@ -941,11 +964,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
     AIAssistantSession *s = [self currentSession];
     if (!s) {
-        // 无会话：用上次平台自动新建后再发
         self.pendingProviderId = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         self.inputView.string = text;
         [self createSessionWithProviderId:self.pendingProviderId];
-        // 绑定完成后再由用户点发送；避免竞态。也可轮询 — 简化：提示稍后发送
         self.statusLabel.stringValue = @"已创建会话并开页，就绪后请再次发送";
         return;
     }

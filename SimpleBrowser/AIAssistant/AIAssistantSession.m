@@ -52,6 +52,7 @@
     s.modelId = [dict[@"modelId"] isKindOfClass:[NSString class]] ? dict[@"modelId"] : nil;
     s.createdAt = [dict[@"createdAt"] doubleValue];
     s.updatedAt = [dict[@"updatedAt"] doubleValue];
+    s.pinned = [dict[@"pinned"] boolValue];
     s.connection = AIAssistantSessionConnectionDetached; // 重启后需重连/检测
     NSArray *msgs = dict[@"messages"];
     if ([msgs isKindOfClass:[NSArray class]]) {
@@ -75,6 +76,7 @@
         @"providerId": self.providerId ?: @"",
         @"createdAt": @(self.createdAt),
         @"updatedAt": @(self.updatedAt),
+        @"pinned": @(self.pinned),
         @"messages": msgs,
     } mutableCopy];
     if (self.bindingId.length) d[@"bindingId"] = self.bindingId;
