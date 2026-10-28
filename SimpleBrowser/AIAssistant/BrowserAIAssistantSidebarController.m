@@ -675,9 +675,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 #pragma mark - History popover
 
+- (void)applyHistoryPopoverSize:(NSSize)size {
+    if (!self.historyPopover) return;
+    self.historyPopover.contentSize = size;
+    self.historyPopover.contentViewController.preferredContentSize = size;
+}
+
 - (void)ensureHistoryPopover {
     if (self.historyPopover) return;
-    AIAssistantHistoryPanel *panel = [[AIAssistantHistoryPanel alloc] initWithFrame:NSMakeRect(0, 0, 320, 420)];
+    AIAssistantHistoryPanel *panel = [[AIAssistantHistoryPanel alloc] initWithFrame:NSMakeRect(0, 0, 320, 120)];
     __weak typeof(self) weakSelf = self;
     panel.onSelectSession = ^(AIAssistantSession *session) {
         [weakSelf selectSessionFromHistory:session];
@@ -689,16 +695,21 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     panel.onDeleteSession = ^(AIAssistantSession *session) {
         [weakSelf deleteSessionFromHistory:session];
     };
+    panel.onPreferredSizeChanged = ^(NSSize size) {
+        [weakSelf applyHistoryPopoverSize:size];
+    };
     self.historyPanel = panel;
+    [panel reload];
 
     NSViewController *vc = [[NSViewController alloc] init];
     vc.view = panel;
+    vc.preferredContentSize = [panel preferredPopoverSize];
 
     NSPopover *pop = [[NSPopover alloc] init];
     pop.contentViewController = vc;
     pop.behavior = NSPopoverBehaviorTransient;
     pop.delegate = self;
-    pop.contentSize = NSMakeSize(320, 420);
+    pop.contentSize = [panel preferredPopoverSize];
     self.historyPopover = pop;
 }
 
@@ -792,10 +803,12 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         return;
     }
     [self.historyPanel reload];
+    [self applyHistoryPopoverSize:[self.historyPanel preferredPopoverSize]];
     [self.historyPopover showRelativeToRect:self.historyButton.bounds
                                      ofView:self.historyButton
                               preferredEdge:NSRectEdgeMaxX];
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self applyHistoryPopoverSize:[self.historyPanel preferredPopoverSize]];
         [self.historyPanel focusSearch];
     });
 }

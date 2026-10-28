@@ -10,6 +10,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onSelectSession)(AIAssistantSession *session);
 @property (nonatomic, copy, nullable) void (^onTogglePin)(AIAssistantSession *session);
 @property (nonatomic, copy, nullable) void (^onDeleteSession)(AIAssistantSession *session);
+/// reload / 搜索后高度变化时回调，供 Popover 设置 contentSize
+@property (nonatomic, copy, nullable) void (^onPreferredSizeChanged)(NSSize size);
+
+/// 固定宽 320；高度随列表自适应（有上限）
+- (NSSize)preferredPopoverSize;
 
 - (void)reload;
 - (void)focusSearch;
