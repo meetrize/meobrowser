@@ -6,6 +6,7 @@
 #import "AIBridgeDOMProvider.h"
 #import "AIBridgeUpstreamClient.h"
 #import "BrowserTab.h"
+#import "BrowserWebView.h"
 #import <WebKit/WebKit.h>
 
 NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeServiceStateDidChangeNotification";
@@ -21,6 +22,101 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
 @end
 
 @implementation AIBridgeService
+
+#pragma mark - Provider host matching
+
+- (NSString *)displayNameForProviderId:(NSString *)providerId {
+    NSString *pid = providerId.length ? providerId : @"deepseek";
+    if ([pid isEqualToString:@"mock"]) return @"Mock 对话页";
+    if ([pid isEqualToString:@"deepseek"]) return @"DeepSeek 网页";
+    if ([pid isEqualToString:@"kimi"]) return @"Kimi 网页";
+    if ([pid isEqualToString:@"iwencai"]) return @"问财 网页";
+    if ([pid isEqualToString:@"doubao"]) return @"豆包 网页";
+    if ([pid isEqualToString:@"gemini"]) return @"Gemini 网页";
+    if ([pid isEqualToString:@"chatgpt"]) return @"ChatGPT 网页";
+    return pid;
+}
+
+/// 与各 adapter probe / 设计文档 matchHosts 对齐。
+- (NSArray<NSString *> *)matchHostsForProviderId:(NSString *)providerId {
+    NSString *pid = providerId ?: @"";
+    if ([pid isEqualToString:@"deepseek"]) {
+        return @[ @"chat.deepseek.com", @"deepseek.com" ];
+    }
+    if ([pid isEqualToString:@"kimi"]) {
+        return @[ @"kimi.moonshot.cn", @"www.kimi.com", @"kimi.com", @"app.kimi.ai" ];
+    }
+    if ([pid isEqualToString:@"iwencai"]) {
+        return @[ @"www.iwencai.com", @"iwencai.com" ];
+    }
+    if ([pid isEqualToString:@"doubao"]) {
+        return @[ @"www.doubao.com", @"doubao.com" ];
+    }
+    if ([pid isEqualToString:@"gemini"]) {
+        return @[ @"gemini.google.com", @"bard.google.com" ];
+    }
+    if ([pid isEqualToString:@"chatgpt"]) {
+        return @[ @"chatgpt.com", @"chat.openai.com" ];
+    }
+    if ([pid isEqualToString:@"mock"]) {
+        return @[]; // 任意 host
+    }
+    return @[];
+}
+
+- (BOOL)host:(NSString *)host matchesProviderId:(NSString *)providerId {
+    NSString *h = host.lowercaseString ?: @"";
+    if (h.length == 0) {
+        return NO;
+    }
+    NSArray<NSString *> *hosts = [self matchHostsForProviderId:providerId];
+    if (hosts.count == 0) {
+        return YES; // mock / 未知：不拦
+    }
+    for (NSString *needle in hosts) {
+        NSString *n = needle.lowercaseString;
+        if ([h isEqualToString:n] || [h hasSuffix:[@"." stringByAppendingString:n]]) {
+            return YES;
+        }
+        // 与 JS adapter 宽松规则对齐：子串（如 *.doubao.com）
+        if (n.length >= 4 && [h containsString:n]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (NSURL *)resolvedURLForTab:(BrowserTab *)tab fallback:(NSURL *)fallback {
+    NSURL *live = nil;
+    if (tab.webView.URL) {
+        live = [BrowserWebView publicURLFromInternalURL:tab.webView.URL] ?: tab.webView.URL;
+    }
+    if (!live) {
+        live = tab.currentOrRestorableURL;
+    }
+    if (!live) {
+        live = fallback;
+    }
+    NSString *abs = live.absoluteString ?: @"";
+    if (abs.length == 0 || [abs isEqualToString:@"about:blank"]) {
+        NSURL *restorable = tab.currentOrRestorableURL;
+        if (restorable.absoluteString.length > 0 &&
+            ![restorable.absoluteString isEqualToString:@"about:blank"]) {
+            return restorable;
+        }
+    }
+    return live;
+}
+
+- (NSString *)hostMismatchMessageForProviderId:(NSString *)providerId actualHost:(NSString *)host {
+    NSString *name = [self displayNameForProviderId:providerId];
+    NSArray<NSString *> *hosts = [self matchHostsForProviderId:providerId];
+    NSString *expect = hosts.count ? [hosts componentsJoinedByString:@" / "] : @"对应站点";
+    NSString *actual = host.length ? host : @"(空)";
+    return [NSString stringWithFormat:
+            @"域名不匹配：当前标签是 %@，但选中的是 %@（期望 %@）。请先打开对应网站再绑定，或切换到已绑定的标签。",
+            actual, name, expect];
+}
 
 + (AIBridgeService *)sharedService {
     static AIBridgeService *svc;
@@ -119,33 +215,33 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
     NSString *pid = providerId.length ? providerId : @"deepseek";
-    NSString *modelId = [NSString stringWithFormat:@"bridge__%@", pid];
-    NSString *name = pid;
-    if ([pid isEqualToString:@"mock"]) {
-        name = @"Mock 对话页";
-    } else if ([pid isEqualToString:@"deepseek"]) {
-        name = @"DeepSeek 网页";
-    } else if ([pid isEqualToString:@"kimi"]) {
-        name = @"Kimi 网页";
-    } else if ([pid isEqualToString:@"iwencai"]) {
-        name = @"问财 网页";
-    } else if ([pid isEqualToString:@"doubao"]) {
-        name = @"豆包 网页";
-    } else if ([pid isEqualToString:@"gemini"]) {
-        name = @"Gemini 网页";
-    } else if ([pid isEqualToString:@"chatgpt"]) {
-        name = @"ChatGPT 网页";
+    NSURL *resolved = [self resolvedURLForTab:tab fallback:url];
+    NSString *host = resolved.host ?: @"";
+    if (![self host:host matchesProviderId:pid]) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"AIBridgeService" code:2
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                   [self hostMismatchMessageForProviderId:pid actualHost:host]}];
+        }
+        return;
     }
+    NSString *modelId = [NSString stringWithFormat:@"bridge__%@", pid];
+    NSString *name = [self displayNameForProviderId:pid];
     [[AIBridgeRegistry sharedRegistry] bindTab:tab
                                     providerId:pid
                                        modelId:modelId
                                    displayName:name
-                                       pageURL:url.absoluteString];
+                                       pageURL:resolved.absoluteString ?: url.absoluteString];
     [self notify];
 }
 
 - (void)unbindProviderId:(NSString *)providerId {
     [[AIBridgeRegistry sharedRegistry] unbindProviderId:providerId];
+    [self notify];
+}
+
+- (void)unbindAllProviders {
+    [[AIBridgeRegistry sharedRegistry] unbindAll];
     [self notify];
 }
 
@@ -454,17 +550,48 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
 
-    // 409：先 probe 登录/输入框
+    // 409：先校验绑定标签域名，再 probe 登录/输入框
+    NSString *providerId = binding.providerId ?: @"deepseek";
     [binding.tab wakeFromHibernationIfNeeded];
+    if (binding.tab.pendingRestorableLoad) {
+        [binding.tab loadPendingRestorableURLIfNeeded];
+    }
     WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
     if (!wv) {
         [self respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable", @"type": @"bridge_error"}}];
         return;
     }
 
+    NSURL *liveURL = [self resolvedURLForTab:binding.tab fallback:nil];
+    NSString *liveHost = liveURL.host ?: @"";
+    NSString *liveAbs = liveURL.absoluteString ?: @"";
+    BOOL pageBlank = liveAbs.length == 0 || [liveAbs isEqualToString:@"about:blank"];
+    if (pageBlank) {
+        NSString *msg = @"绑定标签页面尚未加载（about:blank）。请先切换到该标签激活一次，再重试。";
+        [self appendLogModel:model status:503 duration:0 detail:msg];
+        [self respondJSON:respond status:503 object:@{@"error": @{@"message": msg, @"type": @"bridge_error"}}];
+        return;
+    }
+    if (![self host:liveHost matchesProviderId:providerId]) {
+        NSString *msg = [self hostMismatchMessageForProviderId:providerId actualHost:liveHost];
+        [self appendLogModel:model status:409 duration:0 detail:msg];
+        [self respondJSON:respond status:409 object:@{
+            @"error": @{
+                @"message": msg,
+                @"type": @"host_mismatch",
+                @"host": liveHost ?: @"",
+                @"url": liveAbs ?: @"",
+                @"provider": providerId ?: @""
+            }
+        }];
+        return;
+    }
+    // 刷新绑定摘要，便于侧栏/health 看到真实 URL
+    binding.pageURL = liveAbs;
+    binding.tabTitle = binding.tab.title;
+
     NSTimeInterval t0 = [NSDate date].timeIntervalSince1970;
     __weak typeof(self) weakSelf = self;
-    NSString *providerId = binding.providerId ?: @"deepseek";
     [[AIBridgeDOMProvider sharedProvider] ensureReadyOnWebView:wv providerId:providerId completion:^(NSError *readyErr) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -476,14 +603,38 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
             return;
         }
         [[AIBridgeDOMProvider sharedProvider] probeOnWebView:wv completion:^(NSDictionary *probe, NSError *probeErr) {
-            BOOL loggedIn = [probe[@"loggedIn"] boolValue] || [probe[@"hasInput"] boolValue] || [probe[@"ok"] boolValue];
-            if (probeErr || !loggedIn) {
-                NSString *detail = probe[@"detail"] ?: probeErr.localizedDescription ?: @"login required";
+            BOOL hostOk = YES;
+            if (probe[@"hostOk"] != nil) {
+                hostOk = [probe[@"hostOk"] boolValue];
+            }
+            BOOL okFlag = [probe[@"ok"] boolValue];
+            BOOL hasInput = [probe[@"loggedIn"] boolValue] || [probe[@"hasInput"] boolValue];
+            BOOL ready = okFlag || (hasInput && hostOk);
+            if (probeErr || !hostOk || !ready) {
+                NSString *detail = nil;
+                NSString *type = @"login_required";
+                if (!hostOk || [probe[@"detail"] isEqual:@"host mismatch"]) {
+                    NSString *probeHost = [probe[@"host"] isKindOfClass:[NSString class]] ? probe[@"host"] : liveHost;
+                    detail = [strongSelf hostMismatchMessageForProviderId:providerId actualHost:probeHost];
+                    type = @"host_mismatch";
+                } else if (probeErr) {
+                    detail = probeErr.localizedDescription;
+                } else if ([probe[@"detail"] isKindOfClass:[NSString class]] && [probe[@"detail"] length]) {
+                    NSString *raw = probe[@"detail"];
+                    if ([raw containsString:@"input not found"] || [raw containsString:@"login"]) {
+                        detail = [NSString stringWithFormat:@"%@ 未就绪：找不到输入框，请确认已登录并打开对话页。",
+                                  [strongSelf displayNameForProviderId:providerId]];
+                    } else {
+                        detail = raw;
+                    }
+                } else {
+                    detail = @"login required";
+                }
                 [strongSelf appendLogModel:model status:409 duration:0 detail:detail];
                 [strongSelf respondJSON:respond status:409 object:@{
                     @"error": @{
-                        @"message": detail,
-                        @"type": @"login_required",
+                        @"message": detail ?: @"login required",
+                        @"type": type,
                         @"probe": probe ?: @{}
                     }
                 }];

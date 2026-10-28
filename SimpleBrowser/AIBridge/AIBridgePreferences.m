@@ -1,4 +1,5 @@
 #import "AIBridgePreferences.h"
+#import <math.h>
 
 NSNotificationName const AIBridgePreferencesDidChangeNotification = @"AIBridgePreferencesDidChangeNotification";
 
@@ -8,6 +9,10 @@ static NSString * const kEnabledKey = @"AIBridge.serverEnabled";
 static NSString * const kOllamaKey = @"AIBridge.ollamaBaseURL";
 static NSString * const kOpenAIBaseKey = @"AIBridge.openaiBaseURL";
 static NSString * const kOpenAIKeyKey = @"AIBridge.openaiApiKey";
+static NSString * const kSidebarWidthKey = @"AIBridge.sidebarWidth";
+static const CGFloat kAIBridgeSidebarDefaultWidth = 320.0;
+static const CGFloat kAIBridgeSidebarMinWidth = 260.0;
+static const CGFloat kAIBridgeSidebarMaxWidth = 560.0;
 
 @implementation AIBridgePreferences
 
@@ -32,6 +37,11 @@ static NSString * const kOpenAIKeyKey = @"AIBridge.openaiApiKey";
         _ollamaBaseURL = ollama.length ? ollama : @"http://127.0.0.1:11434/v1";
         _openaiBaseURL = [ud stringForKey:kOpenAIBaseKey] ?: @"";
         _openaiApiKey = [ud stringForKey:kOpenAIKeyKey] ?: @"";
+        CGFloat w = [ud doubleForKey:kSidebarWidthKey];
+        if (w < kAIBridgeSidebarMinWidth || w > kAIBridgeSidebarMaxWidth) {
+            w = kAIBridgeSidebarDefaultWidth;
+        }
+        _sidebarWidth = w;
         [self ensureToken];
     }
     return self;
@@ -100,6 +110,18 @@ static NSString * const kOpenAIKeyKey = @"AIBridge.openaiApiKey";
     _openaiApiKey = [t copy];
     [NSUserDefaults.standardUserDefaults setObject:_openaiApiKey forKey:kOpenAIKeyKey];
     [self notify];
+}
+
+- (void)setSidebarWidth:(CGFloat)sidebarWidth {
+    CGFloat w = sidebarWidth;
+    if (w < kAIBridgeSidebarMinWidth) w = kAIBridgeSidebarMinWidth;
+    if (w > kAIBridgeSidebarMaxWidth) w = kAIBridgeSidebarMaxWidth;
+    if (fabs(_sidebarWidth - w) < 0.5) {
+        return;
+    }
+    _sidebarWidth = w;
+    [NSUserDefaults.standardUserDefaults setDouble:w forKey:kSidebarWidthKey];
+    // 拖拽过程中不刷通知，避免 UI 抖动；结束时由侧栏自行刷新即可
 }
 
 - (void)ensureToken {

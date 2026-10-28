@@ -32,6 +32,7 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeRegistryDidChangeNotification
 
 - (void)unbindProviderId:(NSString *)providerId;
 - (void)unbindTab:(BrowserTab *)tab;
+- (void)unbindAll;
 
 @end
 

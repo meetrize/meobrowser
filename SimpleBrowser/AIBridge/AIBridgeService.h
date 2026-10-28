@@ -31,6 +31,7 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
           providerId:(NSString *)providerId
                error:(NSError *_Nullable *_Nullable)error;
 - (void)unbindProviderId:(NSString *)providerId;
+- (void)unbindAllProviders;
 
 - (void)cancelAllJobs;
 - (void)newChatForProviderId:(NSString *)providerId completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion;

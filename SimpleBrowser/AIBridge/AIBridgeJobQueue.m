@@ -121,6 +121,9 @@
 
     BrowserTab *tab = binding.tab;
     [tab wakeFromHibernationIfNeeded];
+    if (tab.pendingRestorableLoad) {
+        [tab loadPendingRestorableURLIfNeeded];
+    }
     WKWebView *webView = tab.webView;
     if (!webView) {
         webView = [tab ensureWebView];

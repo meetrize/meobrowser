@@ -18,6 +18,9 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgePreferencesDidChangeNotificat
 @property (nonatomic, copy) NSString *openaiBaseURL;
 @property (nonatomic, copy) NSString *openaiApiKey;
 
+/// AI Bridge 侧栏宽度（拖拽持久化），默认 320，范围 260～560
+@property (nonatomic, assign) CGFloat sidebarWidth;
+
 - (void)ensureToken;
 - (void)regenerateToken;
 

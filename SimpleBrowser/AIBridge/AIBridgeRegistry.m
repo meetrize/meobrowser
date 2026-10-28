@@ -119,4 +119,15 @@ NSNotificationName const AIBridgeRegistryDidChangeNotification = @"AIBridgeRegis
     [self notify];
 }
 
+- (void)unbindAll {
+    if (self.byProvider.count == 0) {
+        return;
+    }
+    for (AIBridgeBinding *b in self.byProvider.allValues) {
+        b.tab.bridgeKeepsAlive = NO;
+    }
+    [self.byProvider removeAllObjects];
+    [self notify];
+}
+
 @end
