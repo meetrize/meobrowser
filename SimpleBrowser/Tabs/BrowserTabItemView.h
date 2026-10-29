@@ -20,7 +20,7 @@ FOUNDATION_EXPORT BrowserTabDisplayMode BrowserTabDisplayModeForWidth(CGFloat wi
 /// Comfortable 下限；与 `BrowserTabItemComfortMinWidth` 同值（历史别名）
 FOUNDATION_EXPORT const CGFloat BrowserTabItemMinWidth;
 FOUNDATION_EXPORT const CGFloat BrowserTabItemMaxWidth;
-/// 固定标签最小宽（与普通标签一致，仍显示标题）
+/// 固定标签固定宽（Safari 式：仅 favicon，默认 32 pt）
 FOUNDATION_EXPORT const CGFloat BrowserTabPinnedWidth;
 
 /// LRU 渐进压缩宽度常量（TS-LRU-0+）

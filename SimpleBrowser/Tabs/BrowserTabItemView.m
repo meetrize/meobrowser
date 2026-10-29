@@ -14,8 +14,8 @@ const CGFloat BrowserTabActiveWidthBonus = 24.0;
 const CGFloat BrowserTabFaviconSize = 16.0;
 const CGFloat BrowserTabFaviconLeadingPad = 6.0;
 const CGFloat BrowserTabFaviconTitleGap = 4.0;
-/// 固定标签仍显示标题，宽度参与等宽分配时的最小宽与普通标签一致。
-const CGFloat BrowserTabPinnedWidth = 108.0;
+/// Safari 式固定标签：仅 favicon，固定宽度。
+const CGFloat BrowserTabPinnedWidth = 32.0;
 
 BrowserTabDisplayMode BrowserTabDisplayModeForWidth(CGFloat width, BOOL isSelected) {
     (void)isSelected; // TS-LRU-1：档位内关闭按钮策略可能区分选中
@@ -355,7 +355,8 @@ NSColor *BrowserTabActiveFillColor(void) {
 
 - (NSSize)intrinsicContentSize {
     CGFloat height = self.heightConstraint ? self.heightConstraint.constant : kDefaultTabHeight;
-    return NSMakeSize(BrowserTabItemMinWidth, height);
+    CGFloat width = self.tabPinned ? BrowserTabPinnedWidth : BrowserTabItemMinWidth;
+    return NSMakeSize(width, height);
 }
 
 - (void)setTabHeight:(CGFloat)height {
@@ -540,6 +541,12 @@ NSColor *BrowserTabActiveFillColor(void) {
         return;
     }
     _tabPinned = tabPinned;
+    if (tabPinned) {
+        self.tabDisplayMode = BrowserTabDisplayModeMinimal;
+    } else {
+        self.tabDisplayMode = BrowserTabDisplayModeForWidth(self.appliedWidth, self.tabSelected);
+    }
+    [self updateAudioButtonAppearance];
     [self updateDisplayModeLayout];
     [self updateCloseButtonVisibility];
     [self invalidateIntrinsicContentSize];
@@ -673,7 +680,10 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (void)applyAvailableWidth:(CGFloat)width {
-    BrowserTabDisplayMode mode = BrowserTabDisplayModeForWidth(width, self.tabSelected);
+    // 固定标签始终仅 favicon（Safari），不随分配宽度升档显示标题。
+    BrowserTabDisplayMode mode = self.tabPinned
+        ? BrowserTabDisplayModeMinimal
+        : BrowserTabDisplayModeForWidth(width, self.tabSelected);
     if (fabs(self.appliedWidth - width) < 0.5 && self.tabDisplayMode == mode) {
         return;
     }
@@ -685,7 +695,8 @@ NSColor *BrowserTabActiveFillColor(void) {
 }
 
 - (BOOL)showsPinIcon {
-    return self.tabPinned && self.pinIconView.image != nil;
+    // Safari 固定标签只显示站点图标，不再叠 pin 字形。
+    return NO;
 }
 
 - (void)updateDisplayModeLayout {

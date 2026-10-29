@@ -822,7 +822,15 @@ NSColor *BrowserTabStripFillColor(void) {
     return must;
 }
 
+- (BOOL)isTabPinnedForTabID:(NSUUID *)tabID {
+    BrowserTabItemView *item = [self.tabItemsByID objectForKey:tabID];
+    return item.tabPinned;
+}
+
 - (CGFloat)minimumLayoutWidthForTabID:(NSUUID *)tabID {
+    if ([self isTabPinnedForTabID:tabID]) {
+        return BrowserTabPinnedWidth;
+    }
     if ([tabID isEqual:self.selectedTabID]) {
         return BrowserTabItemMinimalSelectedWidth;
     }
@@ -934,6 +942,9 @@ NSColor *BrowserTabStripFillColor(void) {
 }
 
 - (CGFloat)assignedWidthForTabID:(NSUUID *)tabID inactiveBase:(CGFloat)baseW {
+    if ([self isTabPinnedForTabID:tabID]) {
+        return BrowserTabPinnedWidth;
+    }
     if ([tabID isEqual:self.selectedTabID]) {
         CGFloat width = MIN(BrowserTabItemMaxWidth, baseW + BrowserTabActiveWidthBonus);
         return MAX(BrowserTabItemMinimalSelectedWidth, width);
@@ -1038,11 +1049,27 @@ NSColor *BrowserTabStripFillColor(void) {
     NSString *visibleSignature = [self signatureForVisibleTabIDs:visibleIDs];
 
     NSUInteger pinnedCount = [self pinnedTabCountInStrip];
+    NSUInteger pinnedVisibleCount = 0;
+    for (NSUUID *tabID in visibleIDs) {
+        if ([self isTabPinnedForTabID:tabID]) {
+            pinnedVisibleCount++;
+        }
+    }
+    NSUInteger unpinnedVisibleCount = visibleIDs.count > pinnedVisibleCount
+        ? visibleIDs.count - pinnedVisibleCount
+        : 0;
     CGFloat spacingTotal = (visibleIDs.count > 1) ? (visibleIDs.count - 1) * kTabSpacing : 0;
-    CGFloat baseW = visibleIDs.count > 0
-        ? (available - BrowserTabActiveWidthBonus - spacingTotal) / (CGFloat)visibleIDs.count
-        : BrowserTabItemAbsoluteMinWidth;
-    baseW = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemAbsoluteMinWidth, baseW));
+    CGFloat pinnedWidthTotal = pinnedVisibleCount * BrowserTabPinnedWidth;
+    BOOL selectedIsUnpinned = self.selectedTabID
+        && [visibleIDs containsObject:self.selectedTabID]
+        && ![self isTabPinnedForTabID:self.selectedTabID];
+    CGFloat bonusReserve = selectedIsUnpinned ? BrowserTabActiveWidthBonus : 0;
+    CGFloat remainingForUnpinned = available - pinnedWidthTotal - spacingTotal - bonusReserve;
+    CGFloat baseW = BrowserTabItemAbsoluteMinWidth;
+    if (unpinnedVisibleCount > 0) {
+        baseW = remainingForUnpinned / (CGFloat)unpinnedVisibleCount;
+        baseW = MIN(BrowserTabItemMaxWidth, MAX(BrowserTabItemAbsoluteMinWidth, baseW));
+    }
     CGFloat selectedW = self.selectedTabID
         ? [self assignedWidthForTabID:self.selectedTabID inactiveBase:baseW]
         : baseW;
