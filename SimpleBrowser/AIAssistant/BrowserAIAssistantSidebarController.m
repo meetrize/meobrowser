@@ -42,44 +42,152 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneNewSession,
 };
 
-/// 输入区拖放宿主：把文件 URL 交给侧栏。
+static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    if (!pb) return urls;
+    NSArray *classes = @[ [NSURL class] ];
+    NSDictionary *opts = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
+    NSArray *items = [pb readObjectsForClasses:classes options:opts];
+    for (id obj in items) {
+        if ([obj isKindOfClass:[NSURL class]] && [(NSURL *)obj isFileURL]) {
+            [urls addObject:obj];
+        }
+    }
+    // 兼容旧类型：NSFilenamesPboardType
+    NSArray *legacy = [pb propertyListForType:@"NSFilenamesPboardType"];
+    if ([legacy isKindOfClass:[NSArray class]]) {
+        for (id n in legacy) {
+            if (![n isKindOfClass:[NSString class]] || ![n hasPrefix:@"/"]) continue;
+            NSURL *u = [NSURL fileURLWithPath:(NSString *)n];
+            BOOL dup = NO;
+            for (NSURL *existing in urls) {
+                if ([existing.path isEqualToString:u.path]) { dup = YES; break; }
+            }
+            if (!dup) [urls addObject:u];
+        }
+    }
+    return urls;
+}
+
+/// 输入区拖放宿主：高亮 + 把文件 URL 交给侧栏（子视图未接手时兜底）。
 @interface AIAssistantComposerDropView : NSView
 @property (nonatomic, copy, nullable) BOOL (^canAcceptURLs)(NSArray<NSURL *> *urls);
 @property (nonatomic, copy, nullable) void (^onDropURLs)(NSArray<NSURL *> *urls);
+@property (nonatomic, assign) BOOL dropHighlight;
 @end
 
 @implementation AIAssistantComposerDropView
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
-        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+        self.wantsLayer = YES;
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL, @"public.file-url", @"NSFilenamesPboardType" ]];
     }
     return self;
 }
-- (NSArray<NSURL *> *)fileURLsFromDraggingInfo:(id<NSDraggingInfo>)sender {
-    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
-    NSArray *classes = @[ [NSURL class] ];
-    NSDictionary *opts = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
-    NSArray *items = [sender.draggingPasteboard readObjectsForClasses:classes options:opts];
-    for (id obj in items) {
-        if ([obj isKindOfClass:[NSURL class]]) {
-            [urls addObject:obj];
-        }
+- (void)setDropHighlight:(BOOL)dropHighlight {
+    if (_dropHighlight == dropHighlight) return;
+    _dropHighlight = dropHighlight;
+    if (@available(macOS 10.14, *)) {
+        self.layer.borderWidth = dropHighlight ? 2.0 : 0;
+        self.layer.cornerRadius = kInputCornerRadius - 1.0;
+        self.layer.borderColor = dropHighlight
+            ? NSColor.controlAccentColor.CGColor
+            : nil;
     }
-    return urls;
 }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
-    NSArray<NSURL *> *urls = [self fileURLsFromDraggingInfo:sender];
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
     if (urls.count == 0) return NSDragOperationNone;
-    if (self.canAcceptURLs && !self.canAcceptURLs(urls)) return NSDragOperationNone;
+    if (self.canAcceptURLs && !self.canAcceptURLs(urls)) {
+        self.dropHighlight = NO;
+        return NSDragOperationNone;
+    }
+    self.dropHighlight = YES;
     return NSDragOperationCopy;
 }
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self draggingEntered:sender];
+}
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    self.dropHighlight = NO;
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
+    if (urls.count == 0) return NO;
+    if (self.canAcceptURLs && !self.canAcceptURLs(urls)) return NO;
+    return YES;
+}
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-    NSArray<NSURL *> *urls = [self fileURLsFromDraggingInfo:sender];
+    self.dropHighlight = NO;
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
     if (urls.count == 0) return NO;
     if (self.canAcceptURLs && !self.canAcceptURLs(urls)) return NO;
     if (self.onDropURLs) self.onDropURLs(urls);
     return YES;
+}
+- (void)concludeDragOperation:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    self.dropHighlight = NO;
+}
+@end
+
+/// 输入框：拦截 ⌘V / 菜单粘贴图，并优先接收文件拖放（避免 NSTextView 把路径当文字插入）。
+@interface AIAssistantComposerTextView : SBTextView
+@property (nonatomic, copy, nullable) BOOL (^canAcceptFileURLs)(NSArray<NSURL *> *urls);
+@property (nonatomic, copy, nullable) void (^onDropFileURLs)(NSArray<NSURL *> *urls);
+@property (nonatomic, copy, nullable) BOOL (^tryPasteAttachment)(void);
+@end
+
+@implementation AIAssistantComposerTextView
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL, @"public.file-url", @"NSFilenamesPboardType" ]];
+    }
+    return self;
+}
+- (void)paste:(id)sender {
+    if (self.tryPasteAttachment && self.tryPasteAttachment()) {
+        return;
+    }
+    [super paste:sender];
+}
+- (void)pasteAsPlainText:(id)sender {
+    if (self.tryPasteAttachment && self.tryPasteAttachment()) {
+        return;
+    }
+    [super pasteAsPlainText:sender];
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
+    if (urls.count && self.canAcceptFileURLs && self.canAcceptFileURLs(urls)) {
+        return NSDragOperationCopy;
+    }
+    return [super draggingEntered:sender];
+}
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
+    if (urls.count && self.canAcceptFileURLs && self.canAcceptFileURLs(urls)) {
+        return NSDragOperationCopy;
+    }
+    return [super draggingUpdated:sender];
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
+    if (urls.count && self.canAcceptFileURLs && self.canAcceptFileURLs(urls)) {
+        return YES;
+    }
+    return [super prepareForDragOperation:sender];
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
+    if (urls.count && self.canAcceptFileURLs && self.canAcceptFileURLs(urls)) {
+        if (self.onDropFileURLs) self.onDropFileURLs(urls);
+        return YES;
+    }
+    return [super performDragOperation:sender];
 }
 @end
 
@@ -710,11 +818,20 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     inputScroll.autohidesScrollers = YES;
     inputScroll.borderType = NSNoBorder;
     inputScroll.drawsBackground = NO;
-    SBTextView *input = [SBTextView standardTextView];
+    AIAssistantComposerTextView *input = [AIAssistantComposerTextView standardTextView];
     input.font = [NSFont systemFontOfSize:12];
     input.delegate = self;
     input.drawsBackground = NO;
     input.textContainerInset = NSMakeSize(8, 8);
+    input.canAcceptFileURLs = ^BOOL(NSArray<NSURL *> *urls) {
+        return [weakSelf attachmentsSupportedForCurrentSession] && urls.count > 0;
+    };
+    input.onDropFileURLs = ^(NSArray<NSURL *> *urls) {
+        [weakSelf addAttachmentURLs:urls];
+    };
+    input.tryPasteAttachment = ^BOOL{
+        return [weakSelf tryPasteImageAsAttachment];
+    };
     inputScroll.documentView = input;
 
     [inputBox.contentView addSubview:drop];
@@ -1032,8 +1149,17 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.focusTabButton.hidden = detached;
     self.attachButton.enabled = attachOK && !self.inFlight;
     self.attachButton.toolTip = attachOK
-        ? @"添加本地附件（拖放 / 粘贴图片亦可）"
+        ? @"添加本地附件（可拖放到输入框，或 ⌘V 粘贴图片）"
         : @"当前仅 DeepSeek 网页支持附件";
+    if (!attachOK && self.pendingAttachments.count > 0) {
+        [self.pendingAttachments removeAllObjects];
+        [self refreshAttachmentChips];
+        if (self.statusLabel.stringValue.length == 0 ||
+            [self.statusLabel.stringValue containsString:@"附件"]) {
+            self.statusLabel.stringValue = @"已清除附件（当前模型不支持）";
+            self.statusLabel.textColor = NSColor.systemOrangeColor;
+        }
+    }
 
     if (detached) {
         self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · 网页已关闭", platform];
@@ -1293,31 +1419,44 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 }
 
 - (BOOL)tryPasteImageAsAttachment {
-    if (![self attachmentsSupportedForCurrentSession]) return NO;
-    NSPasteboard *pb = NSPasteboard.generalPasteboard;
-    NSData *png = [pb dataForType:NSPasteboardTypePNG];
-    NSData *tiff = png ? nil : [pb dataForType:NSPasteboardTypeTIFF];
-    NSData *raw = png ?: tiff;
-    NSString *ext = png ? @"png" : @"tiff";
-    NSString *mime = png ? @"image/png" : @"image/tiff";
-    if (!raw.length) {
-        // file URL on pasteboard
-        NSArray *classes = @[ [NSURL class] ];
-        NSDictionary *opts = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
-        NSArray *urls = [pb readObjectsForClasses:classes options:opts];
-        if (urls.count) {
-            [self addAttachmentURLs:urls];
+    if (![self attachmentsSupportedForCurrentSession]) {
+        // 剪贴板是图片/文件时吞掉粘贴并提示；纯文字仍交给系统
+        NSPasteboard *pb = NSPasteboard.generalPasteboard;
+        BOOL looksImage = ([pb dataForType:NSPasteboardTypePNG].length > 0 ||
+                           [pb dataForType:NSPasteboardTypeTIFF].length > 0 ||
+                           [pb canReadObjectForClasses:@[ [NSImage class] ] options:@{}]);
+        NSArray<NSURL *> *files = MeoAIAssistantFileURLsFromPasteboard(pb);
+        if (looksImage || files.count > 0) {
+            self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
+            self.statusLabel.textColor = NSColor.systemOrangeColor;
             return YES;
         }
         return NO;
     }
-    if (raw.length > kAssistantAttachmentMaxBytes) {
-        self.statusLabel.stringValue = @"粘贴图片超过 20MB";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+
+    // 1) 剪贴板文件（Finder 拷贝）
+    NSArray<NSURL *> *fileURLs = MeoAIAssistantFileURLsFromPasteboard(pb);
+    if (fileURLs.count) {
+        [self addAttachmentURLs:fileURLs];
         return YES;
     }
-    // TIFF → PNG for broader accept
-    if (!png && tiff) {
+
+    // 2) 位图：PNG / TIFF / NSImage（截图 ⌘⌃⇧4 等）
+    NSData *png = [pb dataForType:NSPasteboardTypePNG];
+    NSData *tiff = png ? nil : [pb dataForType:NSPasteboardTypeTIFF];
+    NSData *raw = png ?: tiff;
+    NSString *ext = png ? @"png" : @"png";
+    if (!raw.length) {
+        NSArray *images = [pb readObjectsForClasses:@[ [NSImage class] ] options:@{}];
+        NSImage *img = [images.firstObject isKindOfClass:[NSImage class]] ? images.firstObject : nil;
+        if (img) {
+            NSData *tiffData = [img TIFFRepresentation];
+            NSBitmapImageRep *rep = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
+            raw = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            ext = @"png";
+        }
+    } else if (!png && tiff) {
         NSImage *img = [[NSImage alloc] initWithData:tiff];
         NSData *tiffData = [img TIFFRepresentation];
         NSBitmapImageRep *rep = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
@@ -1325,10 +1464,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         if (asPNG.length) {
             raw = asPNG;
             ext = @"png";
-            mime = @"image/png";
         }
     }
-    (void)mime;
+    if (!raw.length) return NO;
+
+    if (raw.length > kAssistantAttachmentMaxBytes) {
+        self.statusLabel.stringValue = @"粘贴图片超过 20MB";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return YES;
+    }
     NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"MeoAIAttachments"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *name = [NSString stringWithFormat:@"paste-%@.%@",
@@ -1422,6 +1566,11 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (void)createSessionWithProviderId:(NSString *)providerId {
     BrowserAIAssistantPreferences.sharedPreferences.lastProviderId = providerId;
+    self.pendingProviderId = providerId;
+    if (![providerId isEqualToString:@"deepseek"] && self.pendingAttachments.count > 0) {
+        [self.pendingAttachments removeAllObjects];
+        [self refreshAttachmentChips];
+    }
     AIAssistantSession *session = [AIAssistantSessionStore.sharedStore createSessionWithProviderId:providerId
                                                                                          bindingId:nil
                                                                                            modelId:nil
