@@ -1185,6 +1185,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     NSInteger idx = 0;
     for (NSDictionary *att in self.pendingAttachments) {
         NSString *name = att[@"name"] ?: @"file";
+        NSString *path = att[@"path"] ?: @"";
         NSNumber *sz = att[@"size"];
         NSString *title = [NSString stringWithFormat:@"%@ · %@ ×",
                            name, [self formatByteSize:sz.unsignedLongLongValue]];
@@ -1193,7 +1194,18 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         chip.controlSize = NSControlSizeSmall;
         chip.font = [NSFont systemFontOfSize:10];
         chip.tag = idx;
-        chip.toolTip = att[@"path"] ?: name;
+        chip.toolTip = path.length ? path : name;
+        NSImage *icon = path.length ? [[NSWorkspace sharedWorkspace] iconForFile:path] : nil;
+        if (!icon && name.pathExtension.length) {
+            icon = [[NSWorkspace sharedWorkspace] iconForFileType:name.pathExtension.lowercaseString];
+        }
+        if (icon) {
+            icon = [icon copy];
+            icon.size = NSMakeSize(14, 14);
+            chip.image = icon;
+            chip.imagePosition = NSImageLeft;
+            chip.imageScaling = NSImageScaleProportionallyDown;
+        }
         [self.attachChipStack addArrangedSubview:chip];
         idx += 1;
     }
@@ -1867,38 +1879,55 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     NSString *apiPrompt = [self composePromptWithUserText:text];
     self.pendingSystemHint = nil;
     NSMutableArray<NSString *> *attachPaths = [NSMutableArray array];
-    NSMutableArray<NSString *> *nonImageAttachNames = [NSMutableArray array];
-    NSMutableArray<NSString *> *imageAttachPaths = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *uiAttachments = [NSMutableArray array];
+    NSInteger imageCount = 0;
+    NSInteger fileCount = 0;
     for (NSDictionary *att in self.pendingAttachments) {
         NSString *p = att[@"path"];
         NSString *n = att[@"name"] ?: p.lastPathComponent;
         if (p.length == 0) continue;
         [attachPaths addObject:p];
         if ([self pathLooksLikeImageAttachment:p]) {
-            [imageAttachPaths addObject:p];
-        } else if (n.length) {
-            [nonImageAttachNames addObject:n];
+            NSImage *img = [[NSImage alloc] initWithContentsOfFile:p];
+            NSString *preview = [self jpegDataURLFromImage:img maxSide:320];
+            if (!preview.length) continue;
+            NSMutableDictionary *one = [@{
+                @"kind": @"image",
+                @"name": n.length ? n : @"image",
+                @"path": p,
+                @"preview": preview,
+            } mutableCopy];
+            [uiAttachments addObject:one];
+            imageCount += 1;
+        } else {
+            NSMutableDictionary *one = [@{
+                @"kind": @"file",
+                @"name": n.length ? n : @"file",
+                @"path": p,
+            } mutableCopy];
+            NSString *icon = [self pngDataURLForFileIconAtPath:p];
+            if (icon.length) one[@"icon"] = icon;
+            [uiAttachments addObject:one];
+            fileCount += 1;
         }
+        if (uiAttachments.count >= 10) break;
     }
-    NSArray<NSString *> *citationImages = [self jpegDataURLsFromImageCitations:self.citations];
-    NSArray<NSString *> *attachImages = [self jpegDataURLsFromAttachmentPaths:imageAttachPaths];
-    NSMutableArray<NSString *> *bubbleImages = [NSMutableArray array];
-    if (citationImages.count) [bubbleImages addObjectsFromArray:citationImages];
-    if (attachImages.count) [bubbleImages addObjectsFromArray:attachImages];
-    if (bubbleImages.count > 6) {
-        bubbleImages = [[bubbleImages subarrayWithRange:NSMakeRange(0, 6)] mutableCopy];
+    // 图片引用：无本地 path，点击时用 data URL 临时文件打开
+    for (AIAssistantCitation *c in self.citations) {
+        if (c.kind != AIAssistantCitationKindImage || !c.previewImage) continue;
+        NSString *preview = [self jpegDataURLFromImage:c.previewImage maxSide:320];
+        if (!preview.length) continue;
+        [uiAttachments addObject:@{
+            @"kind": @"image",
+            @"name": c.title.length ? c.title : @"图片引用",
+            @"preview": preview,
+        }];
+        imageCount += 1;
+        if (uiAttachments.count >= 10) break;
     }
 
     NSString *displayText = text;
-    if (nonImageAttachNames.count > 0) {
-        NSString *join = [nonImageAttachNames componentsJoinedByString:@"、"];
-        if (displayText.length > 0) {
-            displayText = [NSString stringWithFormat:@"📎 %@ · %@", join, displayText];
-        } else {
-            displayText = [NSString stringWithFormat:@"📎 %@", join];
-        }
-    } else if (self.citations.count > 0 && text.length > 0) {
-        // 图片引用已内联到气泡；文案只保留用户问题（非图片引用仍用 📎 提示）
+    if (self.citations.count > 0 && text.length > 0) {
         BOOL onlyImageCitations = YES;
         for (AIAssistantCitation *c in self.citations) {
             if (c.kind != AIAssistantCitationKindImage) {
@@ -1907,16 +1936,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
             }
         }
         if (!onlyImageCitations) {
-            displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
+            displayText = [NSString stringWithFormat:@"引用 %lu 条 · %@",
                            (unsigned long)self.citations.count, text];
         }
-    } else if (self.citations.count > 0 && text.length == 0 && bubbleImages.count == 0) {
-        displayText = [NSString stringWithFormat:@"📎 %lu 条引用", (unsigned long)self.citations.count];
-    } else if (displayText.length == 0 && bubbleImages.count == 0 && attachPaths.count > 0) {
-        displayText = @"（附件）";
-    } else if (displayText.length == 0 && bubbleImages.count == 0) {
+    } else if (self.citations.count > 0 && text.length == 0 && uiAttachments.count == 0) {
+        displayText = [NSString stringWithFormat:@"引用 %lu 条", (unsigned long)self.citations.count];
+    } else if (displayText.length == 0 && uiAttachments.count == 0) {
         displayText = @"（引用上下文）";
     }
+    // 非图片附件已用图标条展示，不再把文件名塞进文案
 
     BOOL firstUser = YES;
     for (AIAssistantMessage *m in s.messages) {
@@ -1924,18 +1952,26 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
     AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:apiPrompt];
     userMsg.displayContent = displayText;
-    if (bubbleImages.count) userMsg.imageDataURLs = bubbleImages;
+    if (uiAttachments.count) userMsg.uiAttachments = uiAttachments;
+    // 兼容：仍写 imageDataURLs，旧逻辑可读
+    NSMutableArray<NSString *> *legacyImgs = [NSMutableArray array];
+    for (NSDictionary *a in uiAttachments) {
+        if ([a[@"kind"] isEqual:@"image"] && [a[@"preview"] isKindOfClass:[NSString class]]) {
+            [legacyImgs addObject:a[@"preview"]];
+        }
+    }
+    if (legacyImgs.count) userMsg.imageDataURLs = legacyImgs;
     [s.messages addObject:userMsg];
     if (firstUser && [s.title isEqualToString:@"新对话"]) {
         NSString *t = displayText.length
             ? [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
-            : (bubbleImages.count ? @"图片附件" : @"新对话");
+            : (imageCount ? @"图片附件" : (fileCount ? @"文件附件" : @"新对话"));
         if (t.length > 24) t = [[t substringToIndex:24] stringByAppendingString:@"…"];
         s.title = t;
         self.titleLabel.stringValue = t;
     }
     [AIAssistantSessionStore.sharedStore touchAndPersist:s];
-    [self.chatPanel appendUserText:displayText imageDataURLs:bubbleImages];
+    [self.chatPanel appendUserText:displayText uiAttachments:uiAttachments];
     if (clearInput) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
@@ -3062,19 +3098,6 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     return [NSString stringWithFormat:@"data:image/jpeg;base64,%@", b64];
 }
 
-- (NSArray<NSString *> *)jpegDataURLsFromImageCitations:(NSArray<AIAssistantCitation *> *)citations {
-    NSMutableArray<NSString *> *out = [NSMutableArray array];
-    for (AIAssistantCitation *c in citations ?: @[]) {
-        if (c.kind != AIAssistantCitationKindImage || !c.previewImage) continue;
-        NSString *dataURL = [self jpegDataURLFromImage:c.previewImage maxSide:320];
-        if (dataURL.length) {
-            [out addObject:dataURL];
-            if (out.count >= 6) break;
-        }
-    }
-    return out;
-}
-
 - (BOOL)pathLooksLikeImageAttachment:(NSString *)path {
     NSString *ext = path.pathExtension.lowercaseString ?: @"";
     static NSSet<NSString *> *exts;
@@ -3088,20 +3111,45 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     return [exts containsObject:ext];
 }
 
-/// 本地图片附件 → 气泡内联 JPEG data URL（控制边长与体积，仅 UI）
-- (NSArray<NSString *> *)jpegDataURLsFromAttachmentPaths:(NSArray<NSString *> *)paths {
-    NSMutableArray<NSString *> *out = [NSMutableArray array];
-    for (NSString *path in paths ?: @[]) {
-        if (![self pathLooksLikeImageAttachment:path]) continue;
-        NSImage *img = [[NSImage alloc] initWithContentsOfFile:path];
-        if (!img) continue;
-        NSString *dataURL = [self jpegDataURLFromImage:img maxSide:320];
-        if (dataURL.length) {
-            [out addObject:dataURL];
-            if (out.count >= 6) break;
-        }
+/// Finder/系统文件类型图标 → 小 PNG data URL，供对话气泡使用
+- (nullable NSString *)pngDataURLForFileIconAtPath:(NSString *)path {
+    if (path.length == 0) return nil;
+    NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:path];
+    if (!icon && path.pathExtension.length) {
+        icon = [[NSWorkspace sharedWorkspace] iconForFileType:path.pathExtension.lowercaseString];
     }
-    return out;
+    if (!icon) return nil;
+    NSInteger side = 64;
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL
+                      pixelsWide:side
+                      pixelsHigh:side
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSCalibratedRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (!rep) return nil;
+    NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!ctx) return nil;
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:ctx];
+    [[NSColor clearColor] set];
+    NSRectFill(NSMakeRect(0, 0, side, side));
+    [icon drawInRect:NSMakeRect(0, 0, side, side)
+            fromRect:NSZeroRect
+           operation:NSCompositingOperationSourceOver
+            fraction:1.0
+      respectFlipped:YES
+               hints:@{ NSImageHintInterpolation: @(NSImageInterpolationHigh) }];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (png.length == 0 || png.length > 80 * 1024) return nil;
+    NSString *b64 = [png base64EncodedStringWithOptions:0];
+    if (b64.length == 0) return nil;
+    return [NSString stringWithFormat:@"data:image/png;base64,%@", b64];
 }
 
 - (void)applyPreviewImage:(NSImage *)image forImageURLString:(NSString *)imageURL {

@@ -1,9 +1,13 @@
 #import "BrowserAIAssistantChatPanel.h"
 #import "AIAssistantSession.h"
+#import "LoginAssistScriptMessageProxy.h"
 #import <WebKit/WebKit.h>
 
-@interface BrowserAIAssistantChatPanel () <WKNavigationDelegate>
+static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
+
+@interface BrowserAIAssistantChatPanel () <WKNavigationDelegate, WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, strong) LoginAssistScriptMessageProxy *scriptProxy;
 @property (nonatomic, assign) BOOL pageReady;
 @property (nonatomic, strong) NSMutableArray<dispatch_block_t> *pending;
 /// 串行化所有 JS，避免 clear/append 交错导致消息顺序颠倒
@@ -24,6 +28,11 @@
 
         WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
         cfg.suppressesIncrementalRendering = YES;
+        LoginAssistScriptMessageProxy *proxy = [[LoginAssistScriptMessageProxy alloc] init];
+        proxy.target = self;
+        self.scriptProxy = proxy;
+        [cfg.userContentController addScriptMessageHandler:proxy name:kMeoAIChatHandlerName];
+
         WKWebView *wv = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:cfg];
         wv.translatesAutoresizingMaskIntoConstraints = NO;
         wv.navigationDelegate = self;
@@ -48,6 +57,10 @@
     return self;
 }
 
+- (void)dealloc {
+    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:kMeoAIChatHandlerName];
+}
+
 - (void)loadChatHTML {
     NSBundle *bundle = NSBundle.mainBundle;
     NSString *path = [bundle pathForResource:@"chat" ofType:@"html" inDirectory:@"AIAssistant"];
@@ -62,15 +75,10 @@
     NSString *html = @"<!DOCTYPE html><meta charset=utf-8><body style='font:13px -apple-system'><div id=log></div>"
                       "<script>window.MeoAIChat={clear:function(){log.innerHTML=''},"
                       "appendUser:function(t){var d=document.createElement('div');d.textContent='我: '+t;log.appendChild(d);},"
-                      "appendUserPayload:function(o){MeoAIChat.appendUser((o&&o.text)||'');"
-                      "(o&&o.images||[]).forEach(function(u){if(!u||String(u).indexOf('data:image')!==0)return;"
-                      "var img=document.createElement('img');img.src=u;img.style.maxWidth='180px';log.appendChild(img);});},"
+                      "appendUserPayload:function(o){MeoAIChat.appendUser((o&&o.text)||'');},"
                       "appendAssistant:function(t){var d=document.createElement('div');d.textContent=t;log.appendChild(d);},"
                       "appendSystem:function(t){var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);},"
-                      "setMessages:function(items){log.innerHTML='';(items||[]).forEach(function(it){var r=it.role||'user';"
-                      "if(r==='assistant')MeoAIChat.appendAssistant(it.content||'');"
-                      "else if(r==='system')MeoAIChat.appendSystem(it.content||'');"
-                      "else MeoAIChat.appendUserPayload({text:it.content||'',images:it.images||[]});});}};</script>";
+                      "setMessages:function(){}};</script>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -152,35 +160,68 @@
 }
 
 - (void)appendUserText:(NSString *)text {
-    [self appendUserText:text imageDataURLs:nil];
+    [self appendUserText:text uiAttachments:nil];
 }
 
 - (void)appendUserText:(NSString *)text imageDataURLs:(NSArray<NSString *> *)imageDataURLs {
-    __weak typeof(self) weakSelf = self;
-    NSMutableArray<NSString *> *safeImgs = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *atts = [NSMutableArray array];
     for (NSString *u in imageDataURLs ?: @[]) {
         if ([u isKindOfClass:[NSString class]] && [u hasPrefix:@"data:image"]) {
-            [safeImgs addObject:u];
+            [atts addObject:@{ @"kind": @"image", @"preview": u }];
         }
     }
-    NSDictionary *payload = @{
+    [self appendUserText:text uiAttachments:atts];
+}
+
+- (NSDictionary *)sanitizedUserPayloadText:(NSString *)text
+                            uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
+    NSMutableArray *images = [NSMutableArray array];
+    NSMutableArray *files = [NSMutableArray array];
+    for (NSDictionary *a in uiAttachments ?: @[]) {
+        if (![a isKindOfClass:[NSDictionary class]]) continue;
+        NSString *kind = [a[@"kind"] isKindOfClass:[NSString class]] ? a[@"kind"] : @"";
+        if ([kind isEqualToString:@"image"]) {
+            NSString *preview = [a[@"preview"] isKindOfClass:[NSString class]] ? a[@"preview"] : nil;
+            if (preview.length == 0 || ![preview hasPrefix:@"data:image"]) continue;
+            NSMutableDictionary *img = [@{ @"src": preview } mutableCopy];
+            if ([a[@"path"] isKindOfClass:[NSString class]] && [a[@"path"] length]) {
+                img[@"path"] = a[@"path"];
+            }
+            [images addObject:img];
+        } else if ([kind isEqualToString:@"file"]) {
+            NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"文件";
+            NSMutableDictionary *file = [@{ @"name": name } mutableCopy];
+            if ([a[@"path"] isKindOfClass:[NSString class]] && [a[@"path"] length]) {
+                file[@"path"] = a[@"path"];
+            }
+            if ([a[@"icon"] isKindOfClass:[NSString class]] && [a[@"icon"] hasPrefix:@"data:image"]) {
+                file[@"icon"] = a[@"icon"];
+            }
+            [files addObject:file];
+        }
+    }
+    return @{
         @"text": text ?: @"",
-        @"images": safeImgs,
+        @"images": images,
+        @"files": files,
     };
+}
+
+- (void)appendUserText:(NSString *)text uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
+    __weak typeof(self) weakSelf = self;
+    NSDictionary *payload = [self sanitizedUserPayloadText:text uiAttachments:uiAttachments];
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"{\"text\":\"\",\"images\":[]}";
+    NSString *json = jsonData
+        ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding]
+        : @"{\"text\":\"\",\"images\":[],\"files\":[]}";
     [self runWhenReady:^{
         [weakSelf enqueueJS:^(void (^done)(void)) {
             NSString *js = [NSString stringWithFormat:
                 @"(function(){try{"
-                 "if(!window.MeoAIChat||typeof window.MeoAIChat.appendUserPayload!=='function'){"
-                 "if(window.MeoAIChat&&typeof window.MeoAIChat.appendUser==='function'){"
-                 "var o=%@;window.MeoAIChat.appendUser((o&&o.text)||'');"
-                 "}return 'fallback';}"
+                 "if(!window.MeoAIChat||typeof window.MeoAIChat.appendUserPayload!=='function')return 'noapi';"
                  "window.MeoAIChat.appendUserPayload(%@);"
                  "return 'ok';"
                  "}catch(e){return 'err:'+String(e);}})()",
-                json ?: @"{}",
                 json ?: @"{}"];
             [weakSelf.webView evaluateJavaScript:js completionHandler:^(__unused id r, __unused NSError *e) {
                 if (done) done();
@@ -209,25 +250,38 @@
     }];
 }
 
+- (NSArray<NSDictionary *> *)uiAttachmentsForMessage:(AIAssistantMessage *)m {
+    if (m.uiAttachments.count) return m.uiAttachments;
+    // 兼容旧会话：仅有 imageDataURLs
+    if (!m.imageDataURLs.count) return @[];
+    NSMutableArray *atts = [NSMutableArray array];
+    for (NSString *u in m.imageDataURLs) {
+        if ([u isKindOfClass:[NSString class]] && [u hasPrefix:@"data:image"]) {
+            [atts addObject:@{ @"kind": @"image", @"preview": u }];
+        }
+    }
+    return atts;
+}
+
 - (void)reloadMessages:(NSArray<AIAssistantMessage *> *)messages {
     __weak typeof(self) weakSelf = self;
     NSMutableArray *payload = [NSMutableArray arrayWithCapacity:messages.count];
     for (AIAssistantMessage *m in messages ?: @[]) {
         NSString *role = m.role.length ? m.role : @"user";
         NSString *ui = m.displayContent.length ? m.displayContent : (m.content ?: @"");
+        NSDictionary *userPayload = [self sanitizedUserPayloadText:ui
+                                                    uiAttachments:[self uiAttachmentsForMessage:m]];
         NSMutableDictionary *item = [@{
             @"role": role,
             @"content": ui,
+            @"images": userPayload[@"images"] ?: @[],
+            @"files": userPayload[@"files"] ?: @[],
         } mutableCopy];
-        if (m.imageDataURLs.count) {
-            item[@"images"] = m.imageDataURLs;
-        }
         [payload addObject:item];
     }
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"[]";
     [self runWhenReady:^{
-        // 丢弃尚未执行的增量 append，避免与整表重载交错
         [weakSelf.jsQueue removeAllObjects];
         [weakSelf enqueueJS:^(void (^done)(void)) {
             NSString *js = [NSString stringWithFormat:
@@ -254,6 +308,54 @@
         b();
     }
     [self drainJSQueue];
+}
+
+#pragma mark - Open attachment with system default app
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)userContentController;
+    if (![message.name isEqualToString:kMeoAIChatHandlerName]) return;
+    id body = message.body;
+    if (![body isKindOfClass:[NSDictionary class]]) return;
+    NSDictionary *dict = (NSDictionary *)body;
+    NSString *action = [dict[@"action"] isKindOfClass:[NSString class]] ? dict[@"action"] : @"";
+    if ([action isEqualToString:@"openPath"]) {
+        NSString *path = [dict[@"path"] isKindOfClass:[NSString class]] ? dict[@"path"] : nil;
+        [self openLocalPath:path];
+    } else if ([action isEqualToString:@"openImageData"]) {
+        NSString *dataURL = [dict[@"dataURL"] isKindOfClass:[NSString class]] ? dict[@"dataURL"] : nil;
+        [self openImageDataURL:dataURL];
+    }
+}
+
+- (void)openLocalPath:(NSString *)path {
+    if (path.length == 0 || ![path hasPrefix:@"/"]) return;
+    BOOL isDir = NO;
+    if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] || isDir) {
+        return;
+    }
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
+}
+
+- (void)openImageDataURL:(NSString *)dataURL {
+    if (dataURL.length == 0 || ![dataURL hasPrefix:@"data:image"]) return;
+    NSRange comma = [dataURL rangeOfString:@","];
+    if (comma.location == NSNotFound || comma.location + 1 >= dataURL.length) return;
+    NSString *header = [dataURL substringToIndex:comma.location].lowercaseString;
+    NSString *b64 = [dataURL substringFromIndex:comma.location + 1];
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:b64
+                                                       options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if (data.length == 0) return;
+    NSString *ext = @"jpg";
+    if ([header containsString:@"image/png"]) ext = @"png";
+    else if ([header containsString:@"image/gif"]) ext = @"gif";
+    else if ([header containsString:@"image/webp"]) ext = @"webp";
+    else if ([header containsString:@"image/jpeg"] || [header containsString:@"image/jpg"]) ext = @"jpg";
+    NSString *name = [NSString stringWithFormat:@"meo-ai-preview-%@.%@", NSUUID.UUID.UUIDString, ext];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+    if (![data writeToFile:path atomically:YES]) return;
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
 }
 
 @end

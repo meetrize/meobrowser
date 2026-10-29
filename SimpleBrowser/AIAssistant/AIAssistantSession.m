@@ -25,6 +25,27 @@
         }
         if (safe.count) m.imageDataURLs = safe;
     }
+    NSArray *atts = dict[@"uiAttachments"];
+    if ([atts isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSDictionary *> *safeAtts = [NSMutableArray array];
+        for (id item in atts) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *a = (NSDictionary *)item;
+            NSString *kind = [a[@"kind"] isKindOfClass:[NSString class]] ? a[@"kind"] : @"";
+            if (![kind isEqualToString:@"image"] && ![kind isEqualToString:@"file"]) continue;
+            NSMutableDictionary *one = [@{ @"kind": kind } mutableCopy];
+            if ([a[@"name"] isKindOfClass:[NSString class]]) one[@"name"] = a[@"name"];
+            if ([a[@"path"] isKindOfClass:[NSString class]]) one[@"path"] = a[@"path"];
+            if ([a[@"preview"] isKindOfClass:[NSString class]] && [a[@"preview"] hasPrefix:@"data:image"]) {
+                one[@"preview"] = a[@"preview"];
+            }
+            if ([a[@"icon"] isKindOfClass:[NSString class]] && [a[@"icon"] hasPrefix:@"data:image"]) {
+                one[@"icon"] = a[@"icon"];
+            }
+            [safeAtts addObject:one];
+        }
+        if (safeAtts.count) m.uiAttachments = safeAtts;
+    }
     m.createdAt = [dict[@"createdAt"] doubleValue];
     if (m.createdAt <= 0) {
         m.createdAt = [NSDate date].timeIntervalSince1970;
@@ -40,6 +61,7 @@
     } mutableCopy];
     if (self.displayContent.length) d[@"displayContent"] = self.displayContent;
     if (self.imageDataURLs.count) d[@"imageDataURLs"] = self.imageDataURLs;
+    if (self.uiAttachments.count) d[@"uiAttachments"] = self.uiAttachments;
     return d;
 }
 
@@ -103,7 +125,7 @@
         AIAssistantMessage *m = self.messages[(NSUInteger)i];
         if (![m.role isEqualToString:@"user"]) continue;
         NSString *src = m.displayContent.length ? m.displayContent : m.content;
-        if (src.length == 0 && m.imageDataURLs.count) return @"📎 图片引用";
+        if (src.length == 0 && (m.imageDataURLs.count || m.uiAttachments.count)) return @"附件";
         if (src.length == 0) continue;
         NSString *t = [src stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         if (t.length > 48) {

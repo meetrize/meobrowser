@@ -16,8 +16,10 @@ typedef NS_ENUM(NSInteger, AIAssistantSessionConnection) {
 @property (nonatomic, copy) NSString *content;
 /// 对话气泡展示文案；空则回退 content
 @property (nonatomic, copy, nullable) NSString *displayContent;
-/// 用户气泡内联图（data:image/...;base64,...），仅展示用
+/// 用户气泡内联图（data:image/...;base64,...），仅展示用（兼容旧会话）
 @property (nonatomic, copy, nullable) NSArray<NSString *> *imageDataURLs;
+/// 气泡附件：[{kind:image|file, name?, path?, preview?, icon?}]；path 供系统打开
+@property (nonatomic, copy, nullable) NSArray<NSDictionary *> *uiAttachments;
 @property (nonatomic, assign) NSTimeInterval createdAt;
 - (NSDictionary *)dictionaryRepresentation;
 + (instancetype)messageFromDictionary:(NSDictionary *)dict;

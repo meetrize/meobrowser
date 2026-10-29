@@ -68,11 +68,56 @@
     object-fit: contain;
     border-radius: 10px;
     background: rgba(255,255,255,0.18);
-    cursor: default;
+    cursor: pointer;
   }
+  .bubble-img:hover { outline: 2px solid rgba(255,255,255,0.55); outline-offset: 1px; }
   .bubble-img-single {
     max-width: min(280px, 100%);
     max-height: 240px;
+  }
+  .bubble-files {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .bubble-files + .bubble-text,
+  .bubble-images + .bubble-files { margin-top: 8px; }
+  .bubble-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.16);
+    cursor: pointer;
+    max-width: 100%;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+  .bubble-file:hover { background: rgba(255,255,255,0.26); }
+  .bubble-file-icon {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    border-radius: 5px;
+    object-fit: contain;
+    background: rgba(255,255,255,0.2);
+  }
+  .bubble-file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  .bubble-file-hint {
+    flex: 0 0 auto;
+    opacity: 0.75;
+    font-size: 11px;
   }
   .assistant-body {
     max-width: 100%;
@@ -398,30 +443,111 @@
     });
   }
 
+  function postNative(payload) {
+    try {
+      if (window.webkit && webkit.messageHandlers && webkit.messageHandlers.meoAIChat) {
+        webkit.messageHandlers.meoAIChat.postMessage(payload);
+      }
+    } catch (e) {}
+  }
+
+  function openAttachment(path, dataURL) {
+    if (path) {
+      postNative({ action: 'openPath', path: String(path) });
+      return;
+    }
+    if (dataURL && String(dataURL).indexOf('data:image') === 0) {
+      postNative({ action: 'openImageData', dataURL: String(dataURL) });
+    }
+  }
+
+  function normalizeImages(images) {
+    var out = [];
+    (Array.isArray(images) ? images : []).forEach(function (item) {
+      if (typeof item === 'string') {
+        if (item.indexOf('data:image') === 0) out.push({ src: item, path: '' });
+        return;
+      }
+      if (!item || typeof item !== 'object') return;
+      var src = String(item.src || item.preview || '');
+      if (src.indexOf('data:image') !== 0) return;
+      out.push({ src: src, path: String(item.path || '') });
+    });
+    return out;
+  }
+
   function appendBubbleImages(bubble, images) {
-    var imgs = Array.isArray(images) ? images : [];
+    var imgs = normalizeImages(images);
     if (!imgs.length) return 0;
     var gallery = document.createElement('div');
     gallery.className = 'bubble-images';
-    var n = 0;
-    imgs.forEach(function (u) {
-      var src = String(u || '');
-      if (src.indexOf('data:image') !== 0) return;
+    imgs.forEach(function (it) {
       var img = document.createElement('img');
       img.className = 'bubble-img';
-      img.src = src;
-      img.alt = '图片';
+      img.src = it.src;
+      img.alt = '图片附件';
+      img.title = '点击用系统应用打开';
+      img.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openAttachment(it.path, it.src);
+      });
       gallery.appendChild(img);
-      n += 1;
     });
-    if (n === 1 && gallery.firstElementChild) {
+    if (imgs.length === 1 && gallery.firstElementChild) {
       gallery.firstElementChild.classList.add('bubble-img-single');
     }
-    if (n) bubble.appendChild(gallery);
+    bubble.appendChild(gallery);
+    return imgs.length;
+  }
+
+  function appendBubbleFiles(bubble, files) {
+    var list = Array.isArray(files) ? files : [];
+    if (!list.length) return 0;
+    var wrap = document.createElement('div');
+    wrap.className = 'bubble-files';
+    var n = 0;
+    list.forEach(function (f) {
+      if (!f || typeof f !== 'object') return;
+      var name = String(f.name || '文件');
+      var path = String(f.path || '');
+      var icon = String(f.icon || '');
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'bubble-file';
+      btn.title = path ? ('打开 ' + name) : name;
+      if (icon.indexOf('data:image') === 0) {
+        var ic = document.createElement('img');
+        ic.className = 'bubble-file-icon';
+        ic.src = icon;
+        ic.alt = '';
+        btn.appendChild(ic);
+      } else {
+        var ph = document.createElement('div');
+        ph.className = 'bubble-file-icon';
+        btn.appendChild(ph);
+      }
+      var label = document.createElement('div');
+      label.className = 'bubble-file-name';
+      label.textContent = name;
+      btn.appendChild(label);
+      var hint = document.createElement('div');
+      hint.className = 'bubble-file-hint';
+      hint.textContent = '打开';
+      btn.appendChild(hint);
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (path) openAttachment(path, '');
+      });
+      wrap.appendChild(btn);
+      n += 1;
+    });
+    if (n) bubble.appendChild(wrap);
     return n;
   }
 
-  function appendRow(role, text, images) {
+  function appendRow(role, text, images, files) {
     var log = ensureLog();
     var row = document.createElement('div');
     var src = text == null ? '' : String(text);
@@ -449,8 +575,8 @@
       row.className = 'row user';
       var bubble = document.createElement('div');
       bubble.className = 'bubble';
-      // 图片在上、文案在下（附件/引用图更自然）
-      appendBubbleImages(bubble, images);
+      var imgN = appendBubbleImages(bubble, images);
+      var fileN = appendBubbleFiles(bubble, files);
       if (src.length) {
         var t = document.createElement('div');
         t.className = 'bubble-text';
@@ -460,12 +586,11 @@
       if (!bubble.childNodes.length) {
         var empty = document.createElement('div');
         empty.className = 'bubble-text';
-        empty.textContent = '（图片）';
+        empty.textContent = imgN || fileN ? '（附件）' : '（空）';
         bubble.appendChild(empty);
       }
       row.appendChild(bubble);
     }
-    // 始终追加到末尾（最新在下）
     log.appendChild(row);
     scrollBottom();
   }
@@ -478,11 +603,10 @@
     appendUser: function (text) { appendRow('user', text); },
     appendUserPayload: function (obj) {
       var o = obj || {};
-      appendRow('user', o.text || '', o.images || []);
+      appendRow('user', o.text || '', o.images || [], o.files || []);
     },
     appendAssistant: function (markdown) { appendRow('assistant', markdown); },
     appendSystem: function (text) { appendRow('system', text); },
-    /** 原子重载：按数组顺序一次画完，避免多次 evaluateJavaScript 乱序 */
     setMessages: function (items) {
       var log = document.getElementById('log');
       log.innerHTML = '';
@@ -493,11 +617,10 @@
       }
       for (var i = 0; i < list.length; i++) {
         var it = list[i] || {};
-        appendRow(it.role || 'user', it.content || '', it.images || []);
+        appendRow(it.role || 'user', it.content || '', it.images || [], it.files || []);
       }
       scrollBottom();
     },
-    /** 供原生侧自检：返回解析后的 HTML 片段 */
     debugRender: function (markdown) {
       return mdToHtml(markdown);
     }
