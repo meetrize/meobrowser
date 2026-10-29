@@ -1867,28 +1867,56 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     NSString *apiPrompt = [self composePromptWithUserText:text];
     self.pendingSystemHint = nil;
     NSMutableArray<NSString *> *attachPaths = [NSMutableArray array];
-    NSMutableArray<NSString *> *attachNames = [NSMutableArray array];
+    NSMutableArray<NSString *> *nonImageAttachNames = [NSMutableArray array];
+    NSMutableArray<NSString *> *imageAttachPaths = [NSMutableArray array];
     for (NSDictionary *att in self.pendingAttachments) {
         NSString *p = att[@"path"];
         NSString *n = att[@"name"] ?: p.lastPathComponent;
-        if (p.length) [attachPaths addObject:p];
-        if (n.length) [attachNames addObject:n];
+        if (p.length == 0) continue;
+        [attachPaths addObject:p];
+        if ([self pathLooksLikeImageAttachment:p]) {
+            [imageAttachPaths addObject:p];
+        } else if (n.length) {
+            [nonImageAttachNames addObject:n];
+        }
     }
-    NSString *displayText = text.length ? text : (attachNames.count ? @"（附件）" : @"（引用上下文）");
-    if (attachNames.count > 0) {
-        NSString *join = [attachNames componentsJoinedByString:@"、"];
-        if (text.length > 0) {
-            displayText = [NSString stringWithFormat:@"📎 %@ · %@", join, text];
+    NSArray<NSString *> *citationImages = [self jpegDataURLsFromImageCitations:self.citations];
+    NSArray<NSString *> *attachImages = [self jpegDataURLsFromAttachmentPaths:imageAttachPaths];
+    NSMutableArray<NSString *> *bubbleImages = [NSMutableArray array];
+    if (citationImages.count) [bubbleImages addObjectsFromArray:citationImages];
+    if (attachImages.count) [bubbleImages addObjectsFromArray:attachImages];
+    if (bubbleImages.count > 6) {
+        bubbleImages = [[bubbleImages subarrayWithRange:NSMakeRange(0, 6)] mutableCopy];
+    }
+
+    NSString *displayText = text;
+    if (nonImageAttachNames.count > 0) {
+        NSString *join = [nonImageAttachNames componentsJoinedByString:@"、"];
+        if (displayText.length > 0) {
+            displayText = [NSString stringWithFormat:@"📎 %@ · %@", join, displayText];
         } else {
             displayText = [NSString stringWithFormat:@"📎 %@", join];
         }
     } else if (self.citations.count > 0 && text.length > 0) {
-        displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
-                       (unsigned long)self.citations.count, text];
-    } else if (self.citations.count > 0) {
+        // 图片引用已内联到气泡；文案只保留用户问题（非图片引用仍用 📎 提示）
+        BOOL onlyImageCitations = YES;
+        for (AIAssistantCitation *c in self.citations) {
+            if (c.kind != AIAssistantCitationKindImage) {
+                onlyImageCitations = NO;
+                break;
+            }
+        }
+        if (!onlyImageCitations) {
+            displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
+                           (unsigned long)self.citations.count, text];
+        }
+    } else if (self.citations.count > 0 && text.length == 0 && bubbleImages.count == 0) {
         displayText = [NSString stringWithFormat:@"📎 %lu 条引用", (unsigned long)self.citations.count];
+    } else if (displayText.length == 0 && bubbleImages.count == 0 && attachPaths.count > 0) {
+        displayText = @"（附件）";
+    } else if (displayText.length == 0 && bubbleImages.count == 0) {
+        displayText = @"（引用上下文）";
     }
-    NSArray<NSString *> *citationImages = [self jpegDataURLsFromImageCitations:self.citations];
 
     BOOL firstUser = YES;
     for (AIAssistantMessage *m in s.messages) {
@@ -1896,16 +1924,18 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
     AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:apiPrompt];
     userMsg.displayContent = displayText;
-    if (citationImages.count) userMsg.imageDataURLs = citationImages;
+    if (bubbleImages.count) userMsg.imageDataURLs = bubbleImages;
     [s.messages addObject:userMsg];
     if (firstUser && [s.title isEqualToString:@"新对话"]) {
-        NSString *t = [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        NSString *t = displayText.length
+            ? [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
+            : (bubbleImages.count ? @"图片附件" : @"新对话");
         if (t.length > 24) t = [[t substringToIndex:24] stringByAppendingString:@"…"];
         s.title = t;
         self.titleLabel.stringValue = t;
     }
     [AIAssistantSessionStore.sharedStore touchAndPersist:s];
-    [self.chatPanel appendUserText:displayText imageDataURLs:citationImages];
+    [self.chatPanel appendUserText:displayText imageDataURLs:bubbleImages];
     if (clearInput) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
@@ -3036,7 +3066,36 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     NSMutableArray<NSString *> *out = [NSMutableArray array];
     for (AIAssistantCitation *c in citations ?: @[]) {
         if (c.kind != AIAssistantCitationKindImage || !c.previewImage) continue;
-        NSString *dataURL = [self jpegDataURLFromImage:c.previewImage maxSide:280];
+        NSString *dataURL = [self jpegDataURLFromImage:c.previewImage maxSide:320];
+        if (dataURL.length) {
+            [out addObject:dataURL];
+            if (out.count >= 6) break;
+        }
+    }
+    return out;
+}
+
+- (BOOL)pathLooksLikeImageAttachment:(NSString *)path {
+    NSString *ext = path.pathExtension.lowercaseString ?: @"";
+    static NSSet<NSString *> *exts;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        exts = [NSSet setWithArray:@[
+            @"png", @"jpg", @"jpeg", @"gif", @"webp", @"bmp",
+            @"tif", @"tiff", @"heic", @"heif"
+        ]];
+    });
+    return [exts containsObject:ext];
+}
+
+/// 本地图片附件 → 气泡内联 JPEG data URL（控制边长与体积，仅 UI）
+- (NSArray<NSString *> *)jpegDataURLsFromAttachmentPaths:(NSArray<NSString *> *)paths {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *path in paths ?: @[]) {
+        if (![self pathLooksLikeImageAttachment:path]) continue;
+        NSImage *img = [[NSImage alloc] initWithContentsOfFile:path];
+        if (!img) continue;
+        NSString *dataURL = [self jpegDataURLFromImage:img maxSide:320];
         if (dataURL.length) {
             [out addObject:dataURL];
             if (out.count >= 6) break;

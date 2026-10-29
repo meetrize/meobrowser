@@ -83,7 +83,7 @@ accept: 约 985 个扩展名（pdf / 常见图片 / doc(x) / ppt(x) / xls(x) / m
 
 | 风险 | 说明 | 缓解 |
 |------|------|------|
-| 哈希 class 改版 | `.e70accd6` 等不稳定 | 就绪判定用「文件名文本出现 + meta 非上传中 + 无 spinner」；选择器集中 Adapter |
+| 哈希 class 改版 | `.e70accd6` 等不稳定 | **主信号**：钩住 `POST /api/v0/file/upload_file` 成功；辅以作曲区文件名文本、非「上传中」 |
 | `evaluateJavaScript` 大 payload | 大文件 base64 会卡顿/失败 | AT-1 小文件直传；AT-3 loopback 暂存 URL + 页内 `fetch` |
 | WebKit `input.files` 赋值 | Chromium 上合成 `change` 可用；WKWebView 常不触发 React | **定稿**：赋值后调 `__reactProps$.onChange` + composer `drop`；不可直调 `upload_file`（需 PoW 头） |
 | 深度思考 / 模式限制 | 历史上 Expert 模式曾禁附件 | 发送前 `probeAttachments()`；不可用则明确错误 |
@@ -313,7 +313,7 @@ GET  /v1/bridge/files/{id}     → 原始字节（仅 127.0.0.1 + Bearer）
 
 - 多文件队列体验打磨  
 - staging URL（若 chunk 注入不够）  
-- 更稳的就绪检测（可选 hook `upload_file` 响应）
+- ~~更稳的就绪检测（hook `upload_file`）~~ **已落地**（DeepSeek adapter）
 
 ### AT-4 — 扩展
 

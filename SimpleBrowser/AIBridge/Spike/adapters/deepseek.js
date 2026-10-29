@@ -1,14 +1,14 @@
 /**
  * DeepSeek web chat adapter (chat.deepseek.com)
  * Revised 2026-10-28 after live probe on logged-in session.
- * Attachments 2026-10-29: hidden input[type=file] + DataTransfer injection.
+ * Attachments 2026-10-29: DataTransfer → React onChange；就绪以 upload_file 为准。
  *
  * Findings:
  * - Composer: textarea / .aaff8b8f
  * - Send control: DIV.ds-button--primary (not <button>, often no aria-label)
  * - Assistant bubble: .ds-markdown.ds-assistant-message-main-content (inside .ds-message)
  * - File input: input[type=file][multiple] inside composer (hidden)
- * - Attach chip: filename node + meta (e.g. "TXT 73B"); upload hits /api/v0/file/upload_file
+ * - WKWebView 下勿依赖哈希 class 芯片；主信号 = POST /api/v0/file/upload_file ok
  * - Do NOT use .ds-markdown-paragraph alone (last paragraph ≠ whole reply)
  * - waitComplete must snapshot baseline BEFORE send (fast replies race otherwise)
  */
@@ -222,17 +222,16 @@
     }
   }
 
-  // 钩住官方上传：WK 上 DOM 芯片检测易漏，以 upload_file 成功为准
+  // 主就绪信号：钩住官方 upload_file（WK 上哈希 class / 芯片文本不可靠）
   var uploadHook = window.__MeoAIBridgeUploadHook;
   if (!uploadHook) {
-    uploadHook = { okCount: 0, failCount: 0, lastAt: 0, lastName: '', installed: false };
+    uploadHook = { okCount: 0, lastAt: 0, installed: false };
     window.__MeoAIBridgeUploadHook = uploadHook;
   }
 
-  function noteUploadOk(hint) {
+  function noteUploadOk() {
     uploadHook.okCount += 1;
     uploadHook.lastAt = Date.now();
-    if (hint) uploadHook.lastName = String(hint);
   }
 
   function installUploadHook() {
@@ -241,31 +240,22 @@
     try {
       var origFetch = window.fetch;
       if (typeof origFetch === 'function') {
-        window.fetch = function (input, init) {
+        window.fetch = function (input) {
           var url = '';
           try {
             url = typeof input === 'string' ? input : (input && input.url) || '';
           } catch (e1) {}
           var p = origFetch.apply(this, arguments);
           if (/\/api\/v0\/file\/upload_file/.test(url)) {
-            return Promise.resolve(p).then(
-              function (res) {
-                try {
-                  if (res && res.ok) noteUploadOk('fetch');
-                  else uploadHook.failCount += 1;
-                } catch (e2) {}
-                return res;
-              },
-              function (err) {
-                uploadHook.failCount += 1;
-                throw err;
-              }
-            );
+            return Promise.resolve(p).then(function (res) {
+              if (res && res.ok) noteUploadOk();
+              return res;
+            });
           }
           return p;
         };
       }
-    } catch (e3) {}
+    } catch (e2) {}
     try {
       var XO = window.XMLHttpRequest;
       if (XO && XO.prototype) {
@@ -274,7 +264,7 @@
         XO.prototype.open = function (method, url) {
           try {
             this.__meoUpload = /\/api\/v0\/file\/upload_file/.test(String(url || ''));
-          } catch (e4) {
+          } catch (e3) {
             this.__meoUpload = false;
           }
           return open.apply(this, arguments);
@@ -282,173 +272,40 @@
         XO.prototype.send = function () {
           if (this.__meoUpload) {
             this.addEventListener('load', function () {
-              try {
-                if (this.status >= 200 && this.status < 300) noteUploadOk('xhr');
-                else uploadHook.failCount += 1;
-              } catch (e5) {}
-            });
-            this.addEventListener('error', function () {
-              uploadHook.failCount += 1;
+              if (this.status >= 200 && this.status < 300) noteUploadOk();
             });
           }
           return send.apply(this, arguments);
         };
       }
-    } catch (e6) {}
+    } catch (e4) {}
   }
   installUploadHook();
 
-  function attachScanRoot() {
-    var input = findInput();
-    if (!input) return document.body || document.documentElement;
-    // 上溯几层：芯片有时在 .aaff8b8f 外的兄弟条带
-    var el = composerRoot(input);
-    var p = input;
-    for (var i = 0; i < 8 && p; i++) {
-      if (p.querySelector && p.querySelector('input[type="file"]')) el = p;
-      p = p.parentElement;
-    }
-    return el || document.body || document.documentElement;
-  }
-
-  function composerText() {
-    var root = attachScanRoot();
-    return ((root && root.innerText) || '').trim();
-  }
-
-  function looksUploading(root) {
-    if (!root) root = attachScanRoot();
+  function looksUploading() {
+    var root = composerRoot(findInput());
     if (!root) return false;
-    var text = ((root.innerText || '') + '').toLowerCase();
-    if (/上传中|uploading|解析中/.test(text)) return true;
-    var meta = root.querySelectorAll('[class*="7103"], [class*="progress"], [class*="loading"]');
-    for (var i = 0; i < meta.length; i++) {
-      var t = ((meta[i].innerText || '') + '').trim().toLowerCase();
-      if (/上传中|uploading|解析中|%/.test(t)) return true;
-    }
+    return /上传中|uploading|解析中/i.test((root.innerText || '') + '');
+  }
+
+  function composerMentionsName(name) {
+    if (!name) return false;
+    var root = composerRoot(findInput());
+    var text = ((root && root.innerText) || '') + '';
+    if (text.indexOf(name) !== -1) return true;
+    var dot = name.lastIndexOf('.');
+    if (dot > 0 && text.indexOf(name.slice(0, dot)) !== -1) return true;
     return false;
   }
 
-  function nameVariants(name) {
-    var n = String(name || '');
-    var out = [];
-    if (!n) return out;
-    out.push(n);
-    // 去扩展名（DeepSeek 偶发只显示 stem）
-    var dot = n.lastIndexOf('.');
-    if (dot > 0) out.push(n.slice(0, dot));
-    // 超长名截断常见
-    if (n.length > 24) out.push(n.slice(0, 20));
-    if (n.length > 32) out.push(n.slice(0, 28));
-    return out;
+  function recentUploadOk(sinceCount) {
+    return uploadHook.okCount > sinceCount;
   }
 
-  function textMentionsName(text, name) {
-    if (!text || !name) return false;
-    var vars = nameVariants(name);
-    for (var i = 0; i < vars.length; i++) {
-      if (vars[i] && text.indexOf(vars[i]) !== -1) return true;
-    }
-    return false;
-  }
-
-  /** 叶节点精确匹配文件名（不依赖哈希 class） */
-  function countFilenameLeafNodes(name) {
-    if (!name) return 0;
-    var root = attachScanRoot();
-    if (!root || !root.querySelectorAll) return 0;
-    var vars = nameVariants(name);
-    var n = 0;
-    var nodes = root.querySelectorAll('div, span, p');
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      if (el.childElementCount > 0) continue;
-      var t = ((el.textContent || '') + '').trim();
-      if (!t || t.length > 240) continue;
-      for (var v = 0; v < vars.length; v++) {
-        if (vars[v] && t === vars[v]) {
-          n += 1;
-          break;
-        }
-        if (vars[v] && t.indexOf(vars[v]) !== -1 && t.length < vars[v].length + 8) {
-          n += 1;
-          break;
-        }
-      }
-    }
-    return n;
-  }
-
-  /** 结构卡：含文件名 + 类型/大小元信息 */
-  function countAttachmentCards(name) {
-    var root = attachScanRoot();
-    if (!root) return 0;
-    var n = 0;
-    var cards = root.querySelectorAll(
-      'div._25c7358, div.dafb6286, div[class*="25c735"], div[class*="dafb62"], div[class*="7780"], div[class*="158cea"]'
-    );
-    if (!cards.length) {
-      // 回退：小块文本含「扩展名 + 数字B/K/M」
-      cards = root.querySelectorAll('div');
-    }
-    var seen = [];
-    for (var i = 0; i < cards.length; i++) {
-      var el = cards[i];
-      var t = ((el.innerText || '') + '').trim();
-      if (!t || t.length > 180) continue;
-      if (!textMentionsName(t, name)) continue;
-      if (!/\b(TXT|PDF|PNG|JPG|JPEG|GIF|WEBP|DOC|DOCX|XLS|XLSX|PPT|PPTX|MD|CSV|JSON|ZIP|MP3|MP4|WAV)\b/i.test(t) &&
-          !/\d+(\.\d+)?\s*[BKMGT]B?\b/i.test(t)) {
-        continue;
-      }
-      // 去重嵌套父节点
-      var dup = false;
-      for (var s = 0; s < seen.length; s++) {
-        if (seen[s].contains(el) || el.contains(seen[s])) {
-          dup = true;
-          break;
-        }
-      }
-      if (dup) continue;
-      seen.push(el);
-      n += 1;
-    }
-    return n;
-  }
-
-  function countAttachmentSignals(name) {
-    var leaf = countFilenameLeafNodes(name);
-    if (leaf > 0) return leaf;
-    var cards = countAttachmentCards(name);
-    if (cards > 0) return cards;
-    // 最宽：扫描根文本出现次数（可能把历史消息算上，仅作兜底）
-    var text = composerText();
-    if (!textMentionsName(text, name)) {
-      var body = ((document.body && document.body.innerText) || '');
-      if (textMentionsName(body, name)) return 1;
-      return 0;
-    }
-    return 1;
-  }
-
-  function attachmentItemsForNames(names) {
-    var root = attachScanRoot();
-    var uploading = looksUploading(root);
-    var items = [];
-    for (var i = 0; i < (names || []).length; i++) {
-      var name = names[i];
-      var count = countAttachmentSignals(name);
-      var uploadRecent =
-        uploadHook.okCount > 0 && Date.now() - uploadHook.lastAt < 20000;
-      items.push({
-        name: name,
-        count: count,
-        metaText: '',
-        ready: (count > 0 || uploadRecent) && !uploading,
-        error: null
-      });
-    }
-    return items;
+  function attachmentReady(name) {
+    if (looksUploading()) return false;
+    if (uploadHook.okCount > 0 && Date.now() - uploadHook.lastAt < 20000) return true;
+    return composerMentionsName(name);
   }
 
   function setInputFilesOnly(fileList) {
@@ -459,48 +316,45 @@
     try {
       fi.files = dt.files;
     } catch (e) {
-      return { ok: false, error: 'cannot assign files: ' + (e && e.message) };
+      return { ok: false, error: 'cannot assign files' };
     }
     return { ok: true, input: fi };
   }
 
-  async function waitAttachSuccess(fileName, beforeSignals, beforeUploads, timeoutMs) {
+  function fireFileInput(file) {
+    var r = setInputFilesOnly([file]);
+    if (!r.ok) return false;
+    if (invokeReactChange(r.input)) return true;
+    try {
+      r.input.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (e) {}
+    var p = r.input.parentElement;
+    for (var d = 0; d < 6 && p; d++, p = p.parentElement) {
+      if (invokeReactChange(p)) return true;
+    }
+    return !!(r.input.files && r.input.files.length);
+  }
+
+  async function waitUploadOrChip(fileName, beforeUploads, timeoutMs) {
     var start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      var afterSignals = countAttachmentSignals(fileName);
-      if (afterSignals > beforeSignals) {
-        return { ok: true, via: 'dom', after: afterSignals, uploads: uploadHook.okCount };
+      if (recentUploadOk(beforeUploads)) {
+        await sleep(300);
+        return { ok: true, via: 'upload_api' };
       }
-      if (uploadHook.okCount > beforeUploads) {
-        // 网络已成功：再稍等 DOM，有没有都算成功
-        await sleep(400);
-        return {
-          ok: true,
-          via: 'upload_api',
-          after: countAttachmentSignals(fileName),
-          uploads: uploadHook.okCount
-        };
+      if (composerMentionsName(fileName) && !looksUploading()) {
+        return { ok: true, via: 'dom' };
       }
       await sleep(150);
     }
-    return {
-      ok: false,
-      after: countAttachmentSignals(fileName),
-      uploads: uploadHook.okCount,
-      rootHas: textMentionsName(composerText(), fileName),
-      bodyHas: textMentionsName(((document.body && document.body.innerText) || ''), fileName)
-    };
+    return { ok: false, uploads: uploadHook.okCount - beforeUploads };
   }
 
-  /**
-   * 主策略 react-input；仅当未触发上传 API 时才试 drop。
-   * 成功条件：DOM 芯片信号增加 或 upload_file 返回 ok。
-   */
+  /** 主路径：React file input；仅未打到 upload_file 时才 drop，避免叠传 */
   async function assignOneFileWithVerify(file, fileName) {
     installUploadHook();
 
     async function tryOnce(id, runFn) {
-      var beforeSignals = countAttachmentSignals(fileName);
       var beforeUploads = uploadHook.okCount;
       var fired = false;
       try {
@@ -508,98 +362,46 @@
       } catch (e) {
         fired = false;
       }
-      if (!fired) return { ok: false, fired: false, id: id };
-      var waited = await waitAttachSuccess(fileName, beforeSignals, beforeUploads, 12000);
+      if (!fired) return { ok: false, fired: false, uploadDelta: 0 };
+      var waited = await waitUploadOrChip(fileName, beforeUploads, 12000);
       if (waited.ok) {
-        return {
-          ok: true,
-          strategy: id + '/' + waited.via,
-          before: beforeSignals,
-          after: waited.after,
-          uploads: waited.uploads
-        };
+        return { ok: true, strategy: id + '/' + waited.via, uploadDelta: uploadHook.okCount - beforeUploads };
       }
-      return {
-        ok: false,
-        fired: true,
-        id: id,
-        detail: waited,
-        uploadDelta: uploadHook.okCount - beforeUploads
-      };
+      return { ok: false, fired: true, uploadDelta: uploadHook.okCount - beforeUploads };
     }
 
     var primary = await tryOnce('react-input', function () {
-      var r = setInputFilesOnly([file]);
-      if (!r.ok) return false;
-      if (invokeReactChange(r.input)) return true;
-      // 原生 change 兜底（Chromium / 部分 WebKit）
-      try {
-        r.input.dispatchEvent(new Event('change', { bubbles: true }));
-        r.input.dispatchEvent(new Event('input', { bubbles: true }));
-      } catch (e) {}
-      var p = r.input.parentElement;
-      for (var d = 0; d < 6 && p; d++, p = p.parentElement) {
-        if (invokeReactChange(p)) return true;
-      }
-      // 只要 files 赋上了就视为已触发（等 upload / DOM）
-      return !!(r.input.files && r.input.files.length);
+      return fireFileInput(file);
     });
-    if (primary.ok) return primary;
-
-    // 已打到上传 API：绝不再 drop，避免叠传
-    if (primary.uploadDelta > 0) {
-      return {
-        ok: true,
-        strategy: 'react-input/upload_api-late',
-        before: 0,
-        after: countAttachmentSignals(fileName),
-        uploads: uploadHook.okCount
-      };
+    if (primary.ok || primary.uploadDelta > 0) {
+      return primary.ok
+        ? primary
+        : { ok: true, strategy: 'react-input/upload_api-late' };
     }
 
-    // 主策略已触发但无上传：清一下再 drop
     if (primary.fired) {
       await apiClearAttachmentsSync();
-      await sleep(250);
+      await sleep(200);
     }
 
     var secondary = await tryOnce('drop', function () {
       return dropFilesOnComposer([file]);
     });
-    if (secondary.ok) return secondary;
+    if (secondary.ok || secondary.uploadDelta > 0) {
+      return secondary.ok ? secondary : { ok: true, strategy: 'drop/upload_api-late' };
+    }
 
-    return {
-      ok: false,
-      error: 'attach_failed',
-      detail: 'no strategy produced attachment chip',
-      debug: {
-        primary: primary,
-        secondary: secondary,
-        signals: countAttachmentSignals(fileName),
-        uploads: uploadHook.okCount,
-        rootHas: textMentionsName(composerText(), fileName),
-        bodyHas: textMentionsName(((document.body && document.body.innerText) || ''), fileName),
-        fileName: fileName
-      }
-    };
+    return { ok: false, error: 'attach_failed', detail: 'upload_file not observed' };
   }
 
   async function apiClearAttachmentsSync() {
     var root = composerRoot(findInput());
     if (!root) return { ok: false, cleared: 0 };
     var n = 0;
-    for (var round = 0; round < 10; round++) {
+    for (var round = 0; round < 8; round++) {
       var closes = root.querySelectorAll(
         'div._8402d8c, [class*="8402"], button[aria-label*="删除"], button[aria-label*="移除"]'
       );
-      // 也点附件卡右上角可聚焦的小叉
-      if (!closes.length) {
-        var cards = root.querySelectorAll('[class*="25c7358"], [class*="dafb6286"]');
-        for (var c = 0; c < cards.length; c++) {
-          var btns = cards[c].querySelectorAll('[tabindex], [role="button"], .ds-icon');
-          if (btns.length) closes = btns;
-        }
-      }
       if (!closes.length) break;
       for (var i = 0; i < closes.length; i++) {
         try {
@@ -607,7 +409,7 @@
           n += 1;
         } catch (e) {}
       }
-      await sleep(120);
+      await sleep(100);
     }
     return { ok: true, cleared: n };
   }
@@ -679,14 +481,12 @@
         return {
           ok: false,
           error: r.error || 'attach_failed',
-          detail: r.detail,
-          debug: r.debug || null,
+          detail: r.detail || null,
           accepted: i,
           strategies: strategies
         };
       }
-      strategies.push(r.strategy);
-      // 多文件之间稍等，避免 DeepSeek 合并/竞态
+      strategies.push(r.strategy || 'ok');
       if (i + 1 < list.length) await sleep(350);
     }
     return { ok: true, accepted: list.length, strategies: strategies };
@@ -694,38 +494,31 @@
 
   api.attachmentsState = function (expectedNames) {
     var names = expectedNames || [];
-    var items = attachmentItemsForNames(names);
+    var uploading = looksUploading();
+    var items = names.map(function (name) {
+      var ready = attachmentReady(name);
+      return { name: name, ready: ready, error: null };
+    });
     var allReady =
       names.length > 0 &&
-      items.length === names.length &&
       items.every(function (it) {
         return it.ready;
       });
-    return {
-      items: items,
-      allReady: allReady,
-      uploading: looksUploading(composerRoot(findInput()))
-    };
+    return { items: items, allReady: allReady, uploading: uploading };
   };
 
   api.waitAttachmentsReady = async function (expectedNames, opts) {
     opts = opts || {};
-    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 30000;
+    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 15000;
     var names = expectedNames || [];
     var start = Date.now();
     var last = null;
     while (Date.now() - start < timeoutMs) {
       last = api.attachmentsState(names);
-      if (last.allReady && !last.uploading) {
-        return { ok: true, items: last.items };
-      }
+      if (last.allReady && !last.uploading) return { ok: true, items: last.items };
       await sleep(200);
     }
-    return {
-      ok: false,
-      error: 'attach_timeout',
-      items: last ? last.items : []
-    };
+    return { ok: false, error: 'attach_timeout', items: last ? last.items : [] };
   };
 
   api.clearAttachments = async function () {
@@ -794,7 +587,7 @@
     if (list.length) {
       jobProgress('attach', 'clear previous');
       await api.clearAttachments();
-      await sleep(200);
+      await sleep(150);
 
       jobProgress('attach', 'uploading ' + names.join(','));
       var attached = await api.attachFiles(list);
@@ -804,69 +597,54 @@
           phase: 'attach',
           error: attached.error || 'attach_failed',
           detail: attached.detail,
-          debug: attached.debug || null,
           strategies: attached.strategies
         };
       }
-      // attachFiles 已等芯片出现；再确认非「上传中」
+      // attachFiles 已等 upload；此处只等「上传中」消失
       jobProgress('attach', 'waiting settle');
-      var ready = await api.waitAttachmentsReady(names, {
-        timeoutMs: opts.attachTimeoutMs != null ? opts.attachTimeoutMs : 15000
-      });
-      if (!ready.ok) {
+      var settleDeadline = Date.now() + (opts.attachTimeoutMs != null ? opts.attachTimeoutMs : 10000);
+      while (Date.now() < settleDeadline && looksUploading()) await sleep(200);
+      if (looksUploading()) {
         return {
           ok: false,
           phase: 'attach',
-          error: ready.error || 'attach_timeout',
-          items: ready.items,
+          error: 'attach_timeout',
           strategies: attached.strategies,
-          detail: '附件芯片未就绪'
+          detail: '仍在上传中'
         };
       }
-      await sleep(300);
+      await sleep(200);
     }
 
-    var body = (text == null ? '' : String(text));
-    if (!body.trim() && names.length) {
-      body = '请查看附件';
-    }
+    var body = text == null ? '' : String(text);
+    if (!body.trim() && names.length) body = '请查看附件';
     jobProgress('send', 'set input');
 
-    // 附件就绪后再填字；发送按钮可能短暂 disabled，轮询可点
-    var input = findInput();
-    if (!input) return { ok: false, phase: 'send', error: 'input not found' };
+    if (!findInput()) return { ok: false, phase: 'send', error: 'input not found' };
 
     function fillPrompt() {
       var el = findInput();
       if (!el) return false;
       var ok = AIBridgeRuntime.nativeSetValue(el, body);
-      // 再捅一次 React onChange，防止受控组件吞值
       try {
         invokeReactChange(el);
       } catch (e) {}
       return ok;
     }
 
-    if (!fillPrompt()) {
-      return { ok: false, phase: 'send', error: 'setInput failed' };
-    }
-    await sleep(350);
-    var curVal = ((findInput() && findInput().value) || '').trim();
-    if (body.trim() && curVal.indexOf(body.trim().slice(0, Math.min(12, body.trim().length))) === -1) {
+    if (!fillPrompt()) return { ok: false, phase: 'send', error: 'setInput failed' };
+    await sleep(300);
+    var peek = ((findInput() && findInput().value) || '').trim();
+    var needle = body.trim().slice(0, Math.min(12, body.trim().length));
+    if (needle && peek.indexOf(needle) === -1) {
       fillPrompt();
-      await sleep(250);
-      curVal = ((findInput() && findInput().value) || '').trim();
-      if (body.trim() && curVal.indexOf(body.trim().slice(0, Math.min(12, body.trim().length))) === -1) {
-        return {
-          ok: false,
-          phase: 'send',
-          error: 'setInput not sticky',
-          detail: 'textarea value="' + curVal.slice(0, 40) + '"'
-        };
+      await sleep(200);
+      peek = ((findInput() && findInput().value) || '').trim();
+      if (peek.indexOf(needle) === -1) {
+        return { ok: false, phase: 'send', error: 'setInput not sticky' };
       }
     }
 
-    var baseline = readLastAssistant();
     var clicked = false;
     for (var s = 0; s < 30; s++) {
       var btn = findSendButton();
@@ -878,26 +656,24 @@
       await sleep(150);
     }
     if (!clicked) {
-      // 回车兜底
       var el2 = findInput();
       if (el2) {
         try {
           el2.focus();
-          var opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-          el2.dispatchEvent(new KeyboardEvent('keydown', opts));
-          el2.dispatchEvent(new KeyboardEvent('keypress', opts));
-          el2.dispatchEvent(new KeyboardEvent('keyup', opts));
+          var keyOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+          el2.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+          el2.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
           clicked = true;
         } catch (e) {}
       }
     }
-    if (!clicked) {
-      return { ok: false, phase: 'send', error: 'send button not ready' };
-    }
+    if (!clicked) return { ok: false, phase: 'send', error: 'send button not ready' };
 
     jobProgress('wait', null);
+    // 已点击发送：复用 sendAndWait 的等待逻辑（跳过再次 setInput）
     var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 120000;
     var stableMs = opts.stableMs != null ? opts.stableMs : 1000;
+    var baseline = readLastAssistant();
     var start = Date.now();
     var lastText = baseline.text;
     var lastChange = Date.now();
