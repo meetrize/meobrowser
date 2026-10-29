@@ -24,6 +24,14 @@ typedef void (^AIBridgeDOMCompletion)(NSDictionary *_Nullable result, NSError *_
                 timeoutMs:(NSInteger)timeoutMs
                completion:(AIBridgeDOMCompletion)completion;
 
+/// 带附件：`attachments` 元素为 @{ @"name", @"mime", @"base64" }；经页内分片注入后 attachAndSendAndWait。
+- (void)sendAndWaitPrompt:(NSString *)prompt
+              attachments:(nullable NSArray<NSDictionary *> *)attachments
+                onWebView:(WKWebView *)webView
+               providerId:(NSString *)providerId
+                timeoutMs:(NSInteger)timeoutMs
+               completion:(AIBridgeDOMCompletion)completion;
+
 - (void)abortOnWebView:(WKWebView *)webView;
 
 - (void)newChatOnWebView:(WKWebView *)webView

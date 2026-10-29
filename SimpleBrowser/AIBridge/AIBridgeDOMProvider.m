@@ -163,8 +163,165 @@
     }];
 }
 
+- (void)sendAndWaitPrompt:(NSString *)prompt
+                onWebView:(WKWebView *)webView
+               providerId:(NSString *)providerId
+                timeoutMs:(NSInteger)timeoutMs
+               completion:(AIBridgeDOMCompletion)completion {
+    [self sendAndWaitPrompt:prompt
+                attachments:nil
+                  onWebView:webView
+                 providerId:providerId
+                  timeoutMs:timeoutMs
+                 completion:completion];
+}
+
+/// 将附件写入页内 `__MeoAIBridgeAttachSpecs`（小文件一次注入；大文件分片）。
+- (void)stageAttachments:(NSArray<NSDictionary *> *)attachments
+               onWebView:(WKWebView *)webView
+              completion:(void (^)(NSError *_Nullable error))completion {
+    if (attachments.count == 0) {
+        [self evaluate:@"(function(){ window.__MeoAIBridgeAttachSpecs = []; return 'ok'; })()"
+             onWebView:webView
+            completion:^(__unused id result, NSError *error) {
+            if (completion) {
+                completion(error);
+            }
+        }];
+        return;
+    }
+
+    NSUInteger totalB64 = 0;
+    for (NSDictionary *att in attachments) {
+        NSString *b64 = [att[@"base64"] isKindOfClass:[NSString class]] ? att[@"base64"] : @"";
+        totalB64 += b64.length;
+    }
+
+    // ≤180KB base64（约 135KB 文件）一次注入，避免分片状态机卡死
+    if (totalB64 > 0 && totalB64 <= 180000) {
+        NSError *jsonErr = nil;
+        NSData *data = [NSJSONSerialization dataWithJSONObject:attachments options:0 error:&jsonErr];
+        if (!data) {
+            if (completion) {
+                completion(jsonErr ?: [NSError errorWithDomain:@"AIBridgeDOMProvider" code:10
+                                                    userInfo:@{NSLocalizedDescriptionKey: @"attachments json failed"}]);
+            }
+            return;
+        }
+        NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
+        NSString *js = [NSString stringWithFormat:
+                        @"(function(){ try {"
+                         "  window.__MeoAIBridgeAttachSpecs = %@;"
+                         "  return 'ok';"
+                         "} catch(e) { return 'err:'+String(e); } })()",
+                        json];
+        [self evaluate:js onWebView:webView completion:^(id result, NSError *error) {
+            if (error) {
+                if (completion) completion(error);
+                return;
+            }
+            NSString *s = [result isKindOfClass:[NSString class]] ? result : @"";
+            if (![s isEqualToString:@"ok"]) {
+                if (completion) {
+                    completion([NSError errorWithDomain:@"AIBridgeDOMProvider" code:10
+                                              userInfo:@{NSLocalizedDescriptionKey: s.length ? s : @"stage failed"}]);
+                }
+                return;
+            }
+            if (completion) completion(nil);
+        }];
+        return;
+    }
+
+    const NSUInteger kChunkChars = 48000; // ~36KB raw per chunk
+    __weak typeof(self) weakSelf = self;
+
+    void (^fail)(NSString *) = ^(NSString *msg) {
+        if (completion) {
+            completion([NSError errorWithDomain:@"AIBridgeDOMProvider" code:10
+                                      userInfo:@{NSLocalizedDescriptionKey: msg ?: @"stage failed"}]);
+        }
+    };
+
+    [self evaluate:@"(function(){ window.__MeoAIBridgeAttachSpecs = []; return 'ok'; })()"
+         onWebView:webView
+        completion:^(id clearResult, NSError *clearErr) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        if (clearErr) {
+            if (completion) {
+                completion(clearErr);
+            }
+            return;
+        }
+
+        __block NSUInteger fileIndex = 0;
+        __block void (^stageNextFile)(void) = nil;
+        __block void (^__weak weakStageNextFile)(void) = nil;
+        void (^strongStageNextFile)(void) = ^{
+            if (fileIndex >= attachments.count) {
+                if (completion) {
+                    completion(nil);
+                }
+                return;
+            }
+            NSDictionary *att = attachments[fileIndex];
+            NSString *name = [att[@"name"] isKindOfClass:[NSString class]] ? att[@"name"] : @"file";
+            NSString *mime = [att[@"mime"] isKindOfClass:[NSString class]] ? att[@"mime"] : @"application/octet-stream";
+            NSString *b64 = [att[@"base64"] isKindOfClass:[NSString class]] ? att[@"base64"] : @"";
+            NSString *nameJSON = [strongSelf jsonStringForPrompt:name];
+            NSString *mimeJSON = [strongSelf jsonStringForPrompt:mime];
+            NSString *pushMeta = [NSString stringWithFormat:
+                @"(function(){ window.__MeoAIBridgeAttachSpecs.push({name:%@,mime:%@,chunks:[]}); return 'ok'; })()",
+                nameJSON, mimeJSON];
+            [strongSelf evaluate:pushMeta onWebView:webView completion:^(id metaResult, NSError *metaErr) {
+                if (metaErr) {
+                    fail(metaErr.localizedDescription);
+                    return;
+                }
+                __block NSUInteger offset = 0;
+                __block void (^pushChunk)(void) = nil;
+                __block void (^__weak weakPushChunk)(void) = nil;
+                void (^strongPushChunk)(void) = ^{
+                    if (offset >= b64.length) {
+                        fileIndex += 1;
+                        if (weakStageNextFile) weakStageNextFile();
+                        return;
+                    }
+                    NSUInteger len = MIN(kChunkChars, b64.length - offset);
+                    NSString *piece = [b64 substringWithRange:NSMakeRange(offset, len)];
+                    NSString *pieceJSON = [strongSelf jsonStringForPrompt:piece];
+                    NSString *chunkJS = [NSString stringWithFormat:
+                        @"(function(){ var a=window.__MeoAIBridgeAttachSpecs; if(!a||!a.length) return 'err';"
+                         " a[a.length-1].chunks.push(%@); return 'ok'; })()",
+                        pieceJSON];
+                    [strongSelf evaluate:chunkJS onWebView:webView completion:^(id chunkResult, NSError *chunkErr) {
+                        if (chunkErr) {
+                            fail(chunkErr.localizedDescription);
+                            return;
+                        }
+                        if (![chunkResult isKindOfClass:[NSString class]] || ![chunkResult isEqualToString:@"ok"]) {
+                            fail(@"chunk stage failed");
+                            return;
+                        }
+                        offset += len;
+                        if (weakPushChunk) weakPushChunk();
+                    }];
+                };
+                weakPushChunk = pushChunk = strongPushChunk;
+                pushChunk();
+            }];
+        };
+        weakStageNextFile = stageNextFile = strongStageNextFile;
+        stageNextFile();
+    }];
+}
+
 /// 同步启动任务 + 轮询结果，彻底避开 evaluateJavaScript 对 Promise 的桥接缺陷。
 - (void)sendAndWaitPrompt:(NSString *)prompt
+              attachments:(NSArray<NSDictionary *> *)attachments
                 onWebView:(WKWebView *)webView
                providerId:(NSString *)providerId
                 timeoutMs:(NSInteger)timeoutMs
@@ -182,51 +339,95 @@
             return;
         }
         NSInteger ms = timeoutMs > 0 ? timeoutMs : 120000;
-        NSString *promptJSON = [strongSelf jsonStringForPrompt:prompt];
-        NSString *startJS = [NSString stringWithFormat:
-            @"(function(){"
-             "  try {"
-             "    if (!window.__MeoAIBridge || typeof window.__MeoAIBridge.sendAndWait !== 'function') {"
-             "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'sendAndWait missing'}};"
-             "      return 'error';"
-             "    }"
-             "    window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
-             "    window.__MeoAIBridge.sendAndWait(%@, {timeoutMs:%ld, stableMs:1000}).then(function(r){"
-             "      window.__MeoAIBridgeJob = {status:'done', result:{"
-             "        ok: !!(r && r.ok),"
-             "        text: (r && r.text != null) ? String(r.text) : '',"
-             "        error: (r && r.error != null) ? String(r.error) : null,"
-             "        sawBusy: !!(r && r.sawBusy),"
-             "        count: (r && typeof r.count === 'number') ? r.count : 0"
-             "      }};"
-             "    }).catch(function(e){"
-             "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
-             "    });"
-             "    return 'started';"
-             "  } catch (e) {"
-             "    window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
-             "    return 'error';"
-             "  }"
-             "})()",
-            promptJSON, (long)ms];
-
-        [strongSelf evaluate:startJS onWebView:webView completion:^(id startResult, NSError *startError) {
-            if (startError) {
+        NSArray *atts = attachments.count ? attachments : @[];
+        [strongSelf stageAttachments:atts onWebView:webView completion:^(NSError *stageErr) {
+            if (stageErr) {
                 if (completion) {
-                    completion(nil, startError);
+                    completion(nil, stageErr);
                 }
                 return;
             }
-            NSString *startStatus = [startResult isKindOfClass:[NSString class]] ? startResult : @"";
-            if ([startStatus isEqualToString:@"error"]) {
-                // 立即读一次结果
-                [strongSelf pollJobOnWebView:webView
-                                   deadline:[NSDate dateWithTimeIntervalSinceNow:1]
-                                 completion:completion];
-                return;
+            NSString *promptJSON = [strongSelf jsonStringForPrompt:prompt ?: @""];
+            BOOL hasAtt = atts.count > 0;
+            NSString *startJS = nil;
+            if (hasAtt) {
+                startJS = [NSString stringWithFormat:
+                    @"(function(){"
+                     "  try {"
+                     "    if (!window.__MeoAIBridge || typeof window.__MeoAIBridge.attachAndSendAndWait !== 'function') {"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'attachAndSendAndWait missing'}};"
+                     "      return 'error';"
+                     "    }"
+                     "    var specs = window.__MeoAIBridgeAttachSpecs || [];"
+                     "    window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
+                     "    window.__MeoAIBridge.attachAndSendAndWait(%@, specs, {timeoutMs:%ld, stableMs:1000, attachTimeoutMs:25000, attachQuickMs:3000}).then(function(r){"
+                     "      window.__MeoAIBridgeAttachSpecs = [];"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{"
+                     "        ok: !!(r && r.ok),"
+                     "        text: (r && r.text != null) ? String(r.text) : '',"
+                     "        error: (r && r.error != null) ? String(r.error) : null,"
+                     "        detail: (r && r.detail != null) ? String(r.detail) : null,"
+                     "        phase: (r && r.phase != null) ? String(r.phase) : null,"
+                     "        strategies: (r && r.strategies) ? r.strategies : null,"
+                     "        sawBusy: !!(r && r.sawBusy),"
+                     "        count: (r && typeof r.count === 'number') ? r.count : 0"
+                     "      }};"
+                     "    }).catch(function(e){"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
+                     "    });"
+                     "    return 'started';"
+                     "  } catch (e) {"
+                     "    window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
+                     "    return 'error';"
+                     "  }"
+                     "})()",
+                    promptJSON, (long)ms];
+            } else {
+                startJS = [NSString stringWithFormat:
+                    @"(function(){"
+                     "  try {"
+                     "    if (!window.__MeoAIBridge || typeof window.__MeoAIBridge.sendAndWait !== 'function') {"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'sendAndWait missing'}};"
+                     "      return 'error';"
+                     "    }"
+                     "    window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
+                     "    window.__MeoAIBridge.sendAndWait(%@, {timeoutMs:%ld, stableMs:1000}).then(function(r){"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{"
+                     "        ok: !!(r && r.ok),"
+                     "        text: (r && r.text != null) ? String(r.text) : '',"
+                     "        error: (r && r.error != null) ? String(r.error) : null,"
+                     "        sawBusy: !!(r && r.sawBusy),"
+                     "        count: (r && typeof r.count === 'number') ? r.count : 0"
+                     "      }};"
+                     "    }).catch(function(e){"
+                     "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
+                     "    });"
+                     "    return 'started';"
+                     "  } catch (e) {"
+                     "    window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
+                     "    return 'error';"
+                     "  }"
+                     "})()",
+                    promptJSON, (long)ms];
             }
-            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(ms / 1000.0) + 5.0];
-            [strongSelf pollJobOnWebView:webView deadline:deadline completion:completion];
+
+            [strongSelf evaluate:startJS onWebView:webView completion:^(id startResult, NSError *startError) {
+                if (startError) {
+                    if (completion) {
+                        completion(nil, startError);
+                    }
+                    return;
+                }
+                NSString *startStatus = [startResult isKindOfClass:[NSString class]] ? startResult : @"";
+                if ([startStatus isEqualToString:@"error"]) {
+                    [strongSelf pollJobOnWebView:webView
+                                       deadline:[NSDate dateWithTimeIntervalSinceNow:1]
+                                     completion:completion];
+                    return;
+                }
+                NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(ms / 1000.0) + 5.0];
+                [strongSelf pollJobOnWebView:webView deadline:deadline completion:completion];
+            }];
         }];
     }];
 }

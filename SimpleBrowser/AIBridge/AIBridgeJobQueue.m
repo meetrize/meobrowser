@@ -7,6 +7,7 @@
 @interface AIBridgeJob : NSObject
 @property (nonatomic, copy) NSString *modelId;
 @property (nonatomic, copy) NSString *prompt;
+@property (nonatomic, copy, nullable) NSArray<NSDictionary *> *attachments;
 @property (nonatomic, assign) NSInteger timeoutMs;
 @property (nonatomic, copy) AIBridgeJobCompletion completion;
 @property (nonatomic, assign) BOOL finished;
@@ -51,6 +52,14 @@
               prompt:(NSString *)prompt
            timeoutMs:(NSInteger)timeoutMs
           completion:(AIBridgeJobCompletion)completion {
+    [self enqueueModel:modelId prompt:prompt attachments:nil timeoutMs:timeoutMs completion:completion];
+}
+
+- (void)enqueueModel:(NSString *)modelId
+              prompt:(NSString *)prompt
+         attachments:(NSArray<NSDictionary *> *)attachments
+           timeoutMs:(NSInteger)timeoutMs
+          completion:(AIBridgeJobCompletion)completion {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.pending.count >= self.maxPending) {
             if (completion) {
@@ -61,6 +70,7 @@
         AIBridgeJob *job = [[AIBridgeJob alloc] init];
         job.modelId = modelId ?: @"";
         job.prompt = prompt ?: @"";
+        job.attachments = attachments.count ? [attachments copy] : nil;
         job.timeoutMs = timeoutMs > 0 ? timeoutMs : 120000;
         job.completion = completion;
         [self.pending addObject:job];
@@ -137,6 +147,7 @@
     NSString *providerId = binding.providerId ?: @"deepseek";
     __weak typeof(self) weakSelf = self;
     [[AIBridgeDOMProvider sharedProvider] sendAndWaitPrompt:job.prompt
+                                                attachments:job.attachments
                                                   onWebView:webView
                                                  providerId:providerId
                                                   timeoutMs:job.timeoutMs
@@ -155,13 +166,22 @@
         BOOL ok = [result[@"ok"] boolValue];
         NSString *text = [result[@"text"] isKindOfClass:[NSString class]] ? result[@"text"] : @"";
         NSString *err = [result[@"error"] isKindOfClass:[NSString class]] ? result[@"error"] : nil;
+        NSString *detail = [result[@"detail"] isKindOfClass:[NSString class]] ? result[@"detail"] : nil;
         if ([err isEqualToString:@"aborted"] || [err isEqualToString:@"cancelled"]) {
             [strongSelf finishJob:job result:result status:499 error:@"cancelled" generation:gen];
             return;
         }
         if (!ok) {
             NSString *msg = err.length ? err : @"bridge failed";
-            NSInteger status = [msg isEqualToString:@"timeout"] ? 504 : 503;
+            if (detail.length) {
+                msg = [NSString stringWithFormat:@"%@ — %@", msg, detail];
+            }
+            NSInteger status = 503;
+            if ([err isEqualToString:@"timeout"] || [err isEqualToString:@"attach_timeout"]) {
+                status = 504;
+            } else if ([err isEqualToString:@"attachments_unsupported"]) {
+                status = 400;
+            }
             [strongSelf finishJob:job result:result status:status error:msg generation:gen];
             return;
         }

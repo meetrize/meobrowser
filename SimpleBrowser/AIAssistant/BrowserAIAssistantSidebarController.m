@@ -34,11 +34,54 @@ static const CGFloat kCitationChipRowHeight = 24.0;
 static const CGFloat kCitationChipSpacing = 4.0;
 static const CGFloat kCitationMaxVisibleRows = 3.0;
 static const CGFloat kInputCornerRadius = 12.0;
+static const unsigned long long kAssistantAttachmentMaxBytes = 20ULL * 1024ULL * 1024ULL;
+static const NSUInteger kAssistantAttachmentMaxCount = 10;
 
 typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneChat = 0,
     AIAssistantPaneNewSession,
 };
+
+/// 输入区拖放宿主：把文件 URL 交给侧栏。
+@interface AIAssistantComposerDropView : NSView
+@property (nonatomic, copy, nullable) BOOL (^canAcceptURLs)(NSArray<NSURL *> *urls);
+@property (nonatomic, copy, nullable) void (^onDropURLs)(NSArray<NSURL *> *urls);
+@end
+
+@implementation AIAssistantComposerDropView
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    }
+    return self;
+}
+- (NSArray<NSURL *> *)fileURLsFromDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    NSArray *classes = @[ [NSURL class] ];
+    NSDictionary *opts = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
+    NSArray *items = [sender.draggingPasteboard readObjectsForClasses:classes options:opts];
+    for (id obj in items) {
+        if ([obj isKindOfClass:[NSURL class]]) {
+            [urls addObject:obj];
+        }
+    }
+    return urls;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = [self fileURLsFromDraggingInfo:sender];
+    if (urls.count == 0) return NSDragOperationNone;
+    if (self.canAcceptURLs && !self.canAcceptURLs(urls)) return NSDragOperationNone;
+    return NSDragOperationCopy;
+}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSURL *> *urls = [self fileURLsFromDraggingInfo:sender];
+    if (urls.count == 0) return NO;
+    if (self.canAcceptURLs && !self.canAcceptURLs(urls)) return NO;
+    if (self.onDropURLs) self.onDropURLs(urls);
+    return YES;
+}
+@end
 
 @interface BrowserAIAssistantResizeView : NSView
 @property (nonatomic, copy, nullable) void (^onDragBegan)(void);
@@ -138,9 +181,15 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) NSStackView *citationStack;
 @property (nonatomic, strong) NSLayoutConstraint *citationHeightConstraint;
 @property (nonatomic, strong) NSMutableArray<AIAssistantCitation *> *citations;
+@property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *pendingAttachments; // path/name/size
 @property (nonatomic, strong) NSBox *inputBox;
+@property (nonatomic, strong) AIAssistantComposerDropView *composerDropView;
+@property (nonatomic, strong) NSScrollView *attachChipScroll;
+@property (nonatomic, strong) NSStackView *attachChipStack;
+@property (nonatomic, strong) NSLayoutConstraint *attachChipHeightConstraint;
 @property (nonatomic, strong) NSScrollView *inputScroll;
 @property (nonatomic, strong) SBTextView *inputView;
+@property (nonatomic, strong) NSButton *attachButton;
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
 @property (nonatomic, copy, nullable) NSString *pendingSystemHint;
@@ -169,6 +218,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         _currentWidth = w;
         _pane = AIAssistantPaneChat;
         _citations = [NSMutableArray array];
+        _pendingAttachments = [NSMutableArray array];
         _layerCheckboxes = [NSMutableDictionary dictionary];
         _pageContextExpanded = NO;
         [self buildUI];
@@ -626,6 +676,34 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         inputBox.borderColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.22];
     }
 
+    AIAssistantComposerDropView *drop = [[AIAssistantComposerDropView alloc] initWithFrame:NSZeroRect];
+    drop.translatesAutoresizingMaskIntoConstraints = NO;
+    __weak typeof(self) weakSelf = self;
+    drop.canAcceptURLs = ^BOOL(NSArray<NSURL *> *urls) {
+        return [weakSelf attachmentsSupportedForCurrentSession] && urls.count > 0;
+    };
+    drop.onDropURLs = ^(NSArray<NSURL *> *urls) {
+        [weakSelf addAttachmentURLs:urls];
+    };
+
+    NSScrollView *attachChipScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    attachChipScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    attachChipScroll.hasHorizontalScroller = YES;
+    attachChipScroll.hasVerticalScroller = NO;
+    attachChipScroll.autohidesScrollers = YES;
+    attachChipScroll.borderType = NSNoBorder;
+    attachChipScroll.drawsBackground = NO;
+    attachChipScroll.hidden = YES;
+    NSStackView *attachChipStack = [NSStackView stackViewWithViews:@[]];
+    attachChipStack.translatesAutoresizingMaskIntoConstraints = NO;
+    attachChipStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    attachChipStack.alignment = NSLayoutAttributeCenterY;
+    attachChipStack.spacing = 6;
+    attachChipStack.edgeInsets = NSEdgeInsetsMake(4, 8, 0, 8);
+    attachChipScroll.documentView = attachChipStack;
+    self.attachChipHeightConstraint = [attachChipScroll.heightAnchor constraintEqualToConstant:0];
+    [attachChipStack.heightAnchor constraintEqualToConstant:24].active = YES;
+
     NSScrollView *inputScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     inputScroll.translatesAutoresizingMaskIntoConstraints = NO;
     inputScroll.hasVerticalScroller = YES;
@@ -638,16 +716,35 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     input.drawsBackground = NO;
     input.textContainerInset = NSMakeSize(8, 8);
     inputScroll.documentView = input;
-    [inputBox.contentView addSubview:inputScroll];
+
+    [inputBox.contentView addSubview:drop];
+    [drop addSubview:attachChipScroll];
+    [drop addSubview:inputScroll];
     [NSLayoutConstraint activateConstraints:@[
-        [inputScroll.topAnchor constraintEqualToAnchor:inputBox.contentView.topAnchor],
-        [inputScroll.leadingAnchor constraintEqualToAnchor:inputBox.contentView.leadingAnchor],
-        [inputScroll.trailingAnchor constraintEqualToAnchor:inputBox.contentView.trailingAnchor],
-        [inputScroll.bottomAnchor constraintEqualToAnchor:inputBox.contentView.bottomAnchor],
+        [drop.topAnchor constraintEqualToAnchor:inputBox.contentView.topAnchor],
+        [drop.leadingAnchor constraintEqualToAnchor:inputBox.contentView.leadingAnchor],
+        [drop.trailingAnchor constraintEqualToAnchor:inputBox.contentView.trailingAnchor],
+        [drop.bottomAnchor constraintEqualToAnchor:inputBox.contentView.bottomAnchor],
+        [attachChipScroll.topAnchor constraintEqualToAnchor:drop.topAnchor],
+        [attachChipScroll.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor],
+        [attachChipScroll.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor],
+        self.attachChipHeightConstraint,
+        [inputScroll.topAnchor constraintEqualToAnchor:attachChipScroll.bottomAnchor],
+        [inputScroll.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor],
+        [inputScroll.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor],
+        [inputScroll.bottomAnchor constraintEqualToAnchor:drop.bottomAnchor],
     ]];
     self.inputBox = inputBox;
+    self.composerDropView = drop;
+    self.attachChipScroll = attachChipScroll;
+    self.attachChipStack = attachChipStack;
     self.inputScroll = inputScroll;
     self.inputView = input;
+
+    self.attachButton = [NSButton buttonWithTitle:@"附件" target:self action:@selector(attachClicked:)];
+    self.attachButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.attachButton.bezelStyle = NSBezelStyleRounded;
+    self.attachButton.toolTip = @"添加本地附件（DeepSeek）";
 
     self.sendButton = [NSButton buttonWithTitle:@"发送" target:self action:@selector(sendClicked:)];
     self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -660,7 +757,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
     for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
                         self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton, self.pageContextRecaptureButton,
-                        self.pageContextPanel, self.citationScroll, inputBox, self.sendButton, self.cancelButton]) {
+                        self.pageContextPanel, self.citationScroll, inputBox, self.attachButton, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
@@ -714,11 +811,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         [inputBox.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor constant:6],
         [inputBox.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [inputBox.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
-        [inputBox.heightAnchor constraintEqualToConstant:80],
+        [inputBox.heightAnchor constraintEqualToConstant:96],
 
-        [self.sendButton.topAnchor constraintEqualToAnchor:inputBox.bottomAnchor constant:8],
-        [self.sendButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.sendButton.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
+        [self.attachButton.topAnchor constraintEqualToAnchor:inputBox.bottomAnchor constant:8],
+        [self.attachButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.attachButton.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
+
+        [self.sendButton.centerYAnchor constraintEqualToAnchor:self.attachButton.centerYAnchor],
+        [self.sendButton.leadingAnchor constraintEqualToAnchor:self.attachButton.trailingAnchor constant:8],
 
         [self.cancelButton.centerYAnchor constraintEqualToAnchor:self.sendButton.centerYAnchor],
         [self.cancelButton.leadingAnchor constraintEqualToAnchor:self.sendButton.trailingAnchor constant:8],
@@ -888,6 +988,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (void)syncChatFromCurrentSession {
     AIAssistantSession *s = [self currentSession];
+    [self.pendingAttachments removeAllObjects];
+    [self refreshAttachmentChips];
     if (!s) {
         self.titleLabel.stringValue = @"AI 助手";
         [self.chatPanel clear];
@@ -911,9 +1013,11 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = NO;
+        self.attachButton.enabled = NO;
         self.focusTabButton.enabled = NO;
         self.reopenButton.hidden = YES;
         self.cancelButton.enabled = self.inFlight;
+        [self refreshAttachmentChips];
         [self refreshPageContextTray];
         return;
     }
@@ -922,9 +1026,14 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     NSString *platform = [self providerDisplayName:s.providerId];
     BOOL ready = (s.connection == AIAssistantSessionConnectionReady && s.modelId.length > 0);
     BOOL detached = (s.connection == AIAssistantSessionConnectionDetached);
+    BOOL attachOK = [self attachmentsSupportedForCurrentSession];
     self.reopenButton.hidden = !detached;
     self.focusTabButton.enabled = ready;
     self.focusTabButton.hidden = detached;
+    self.attachButton.enabled = attachOK && !self.inFlight;
+    self.attachButton.toolTip = attachOK
+        ? @"添加本地附件（拖放 / 粘贴图片亦可）"
+        : @"当前仅 DeepSeek 网页支持附件";
 
     if (detached) {
         self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · 网页已关闭", platform];
@@ -945,6 +1054,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.sendButton.enabled = NO;
     }
     self.cancelButton.enabled = self.inFlight;
+    [self refreshAttachmentChips];
     [self refreshPageContextTray];
 }
 
@@ -1025,6 +1135,12 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (BOOL)textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector {
     if (textView != self.inputView) return NO;
+    if (commandSelector == @selector(paste:)) {
+        if ([self tryPasteImageAsAttachment]) {
+            return YES;
+        }
+        return NO;
+    }
     if (commandSelector == @selector(insertNewline:)) {
         NSEvent *e = NSApp.currentEvent;
         BOOL shift = (e.modifierFlags & NSEventModifierFlagShift) != 0;
@@ -1035,6 +1151,192 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         return YES;
     }
     return NO;
+}
+
+#pragma mark - Attachments
+
+- (BOOL)attachmentsSupportedForCurrentSession {
+    AIAssistantSession *s = [self currentSession];
+    if (!s) {
+        // 无会话时允许先选附件，发送时会建 DeepSeek 会话；若 pendingProvider 非 deepseek 则否
+        NSString *pid = self.pendingProviderId.length
+            ? self.pendingProviderId
+            : (BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek");
+        return [pid isEqualToString:@"deepseek"];
+    }
+    return [s.providerId isEqualToString:@"deepseek"];
+}
+
+- (NSString *)formatByteSize:(unsigned long long)bytes {
+    if (bytes < 1024) return [NSString stringWithFormat:@"%lluB", bytes];
+    if (bytes < 1024ULL * 1024ULL) return [NSString stringWithFormat:@"%.1fKB", bytes / 1024.0];
+    return [NSString stringWithFormat:@"%.1fMB", bytes / (1024.0 * 1024.0)];
+}
+
+- (void)refreshAttachmentChips {
+    while (self.attachChipStack.arrangedSubviews.count) {
+        NSView *v = self.attachChipStack.arrangedSubviews.firstObject;
+        [self.attachChipStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    BOOL has = self.pendingAttachments.count > 0;
+    self.attachChipScroll.hidden = !has;
+    self.attachChipHeightConstraint.constant = has ? 28 : 0;
+    NSInteger idx = 0;
+    for (NSDictionary *att in self.pendingAttachments) {
+        NSString *name = att[@"name"] ?: @"file";
+        NSNumber *sz = att[@"size"];
+        NSString *title = [NSString stringWithFormat:@"%@ · %@ ×",
+                           name, [self formatByteSize:sz.unsignedLongLongValue]];
+        NSButton *chip = [NSButton buttonWithTitle:title target:self action:@selector(removeAttachmentChip:)];
+        chip.bezelStyle = NSBezelStyleRounded;
+        chip.controlSize = NSControlSizeSmall;
+        chip.font = [NSFont systemFontOfSize:10];
+        chip.tag = idx;
+        chip.toolTip = att[@"path"] ?: name;
+        [self.attachChipStack addArrangedSubview:chip];
+        idx += 1;
+    }
+}
+
+- (void)removeAttachmentChip:(NSButton *)sender {
+    NSInteger i = sender.tag;
+    if (i < 0 || (NSUInteger)i >= self.pendingAttachments.count) return;
+    [self.pendingAttachments removeObjectAtIndex:(NSUInteger)i];
+    [self refreshAttachmentChips];
+}
+
+- (BOOL)addAttachmentPath:(NSString *)path errorMessage:(NSString **)outError {
+    if (![self attachmentsSupportedForCurrentSession]) {
+        if (outError) *outError = @"当前仅 DeepSeek 网页支持附件";
+        return NO;
+    }
+    if (self.pendingAttachments.count >= kAssistantAttachmentMaxCount) {
+        if (outError) *outError = [NSString stringWithFormat:@"最多 %lu 个附件", (unsigned long)kAssistantAttachmentMaxCount];
+        return NO;
+    }
+    if (path.length == 0 || ![path hasPrefix:@"/"]) {
+        if (outError) *outError = @"无效文件路径";
+        return NO;
+    }
+    BOOL isDir = NO;
+    if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] || isDir) {
+        if (outError) *outError = @"文件不存在";
+        return NO;
+    }
+    for (NSDictionary *existing in self.pendingAttachments) {
+        if ([existing[@"path"] isEqualToString:path]) {
+            if (outError) *outError = @"已添加该文件";
+            return NO;
+        }
+    }
+    NSDictionary *attrs = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+    unsigned long long sz = [attrs fileSize];
+    if (sz > kAssistantAttachmentMaxBytes) {
+        if (outError) *outError = [NSString stringWithFormat:@"超过 20MB：%@", path.lastPathComponent];
+        return NO;
+    }
+    [self.pendingAttachments addObject:[@{
+        @"path": path,
+        @"name": path.lastPathComponent ?: @"file",
+        @"size": @(sz)
+    } mutableCopy]];
+    return YES;
+}
+
+- (void)addAttachmentURLs:(NSArray<NSURL *> *)urls {
+    NSMutableArray<NSString *> *errors = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        if (!url.isFileURL) continue;
+        NSString *err = nil;
+        if (![self addAttachmentPath:url.path errorMessage:&err] && err.length) {
+            [errors addObject:err];
+        }
+    }
+    [self refreshAttachmentChips];
+    if (errors.count) {
+        self.statusLabel.stringValue = errors.firstObject;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    }
+}
+
+- (void)attachClicked:(id)sender {
+    (void)sender;
+    if (![self attachmentsSupportedForCurrentSession]) {
+        self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = YES;
+    panel.prompt = @"添加";
+    panel.message = @"选择要上传到 DeepSeek 的附件（单文件 ≤20MB）";
+    __weak typeof(self) weakSelf = self;
+    [panel beginSheetModalForWindow:self.view.window completionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK) return;
+        [weakSelf addAttachmentURLs:panel.URLs];
+    }];
+}
+
+- (BOOL)tryPasteImageAsAttachment {
+    if (![self attachmentsSupportedForCurrentSession]) return NO;
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    NSData *png = [pb dataForType:NSPasteboardTypePNG];
+    NSData *tiff = png ? nil : [pb dataForType:NSPasteboardTypeTIFF];
+    NSData *raw = png ?: tiff;
+    NSString *ext = png ? @"png" : @"tiff";
+    NSString *mime = png ? @"image/png" : @"image/tiff";
+    if (!raw.length) {
+        // file URL on pasteboard
+        NSArray *classes = @[ [NSURL class] ];
+        NSDictionary *opts = @{ NSPasteboardURLReadingFileURLsOnlyKey: @YES };
+        NSArray *urls = [pb readObjectsForClasses:classes options:opts];
+        if (urls.count) {
+            [self addAttachmentURLs:urls];
+            return YES;
+        }
+        return NO;
+    }
+    if (raw.length > kAssistantAttachmentMaxBytes) {
+        self.statusLabel.stringValue = @"粘贴图片超过 20MB";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return YES;
+    }
+    // TIFF → PNG for broader accept
+    if (!png && tiff) {
+        NSImage *img = [[NSImage alloc] initWithData:tiff];
+        NSData *tiffData = [img TIFFRepresentation];
+        NSBitmapImageRep *rep = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
+        NSData *asPNG = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        if (asPNG.length) {
+            raw = asPNG;
+            ext = @"png";
+            mime = @"image/png";
+        }
+    }
+    (void)mime;
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"MeoAIAttachments"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *name = [NSString stringWithFormat:@"paste-%@.%@",
+                      [[NSUUID UUID].UUIDString substringToIndex:8], ext];
+    NSString *path = [dir stringByAppendingPathComponent:name];
+    if (![raw writeToFile:path atomically:YES]) {
+        self.statusLabel.stringValue = @"无法保存粘贴图片";
+        self.statusLabel.textColor = NSColor.systemRedColor;
+        return YES;
+    }
+    NSString *err = nil;
+    if ([self addAttachmentPath:path errorMessage:&err]) {
+        [self refreshAttachmentChips];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已添加粘贴图片 %@", name];
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    } else if (err.length) {
+        self.statusLabel.stringValue = err;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    }
+    return YES;
 }
 
 - (void)controlTextDidEndEditing:(NSNotification *)obj {
@@ -1538,8 +1840,13 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 - (void)sendPrompt:(NSString *)prompt clearInput:(BOOL)clearInput {
     if (self.inFlight) return;
     NSString *text = [prompt stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (text.length == 0 && self.citations.count == 0) {
-        self.statusLabel.stringValue = @"请输入提示词或加入引用";
+    if (text.length == 0 && self.citations.count == 0 && self.pendingAttachments.count == 0) {
+        self.statusLabel.stringValue = @"请输入提示词、加入引用或添加附件";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    if (self.pendingAttachments.count > 0 && ![self attachmentsSupportedForCurrentSession]) {
+        self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
         self.statusLabel.textColor = NSColor.systemOrangeColor;
         return;
     }
@@ -1559,8 +1866,23 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
     NSString *apiPrompt = [self composePromptWithUserText:text];
     self.pendingSystemHint = nil;
-    NSString *displayText = text.length ? text : @"（引用上下文）";
-    if (self.citations.count > 0 && text.length > 0) {
+    NSMutableArray<NSString *> *attachPaths = [NSMutableArray array];
+    NSMutableArray<NSString *> *attachNames = [NSMutableArray array];
+    for (NSDictionary *att in self.pendingAttachments) {
+        NSString *p = att[@"path"];
+        NSString *n = att[@"name"] ?: p.lastPathComponent;
+        if (p.length) [attachPaths addObject:p];
+        if (n.length) [attachNames addObject:n];
+    }
+    NSString *displayText = text.length ? text : (attachNames.count ? @"（附件）" : @"（引用上下文）");
+    if (attachNames.count > 0) {
+        NSString *join = [attachNames componentsJoinedByString:@"、"];
+        if (text.length > 0) {
+            displayText = [NSString stringWithFormat:@"📎 %@ · %@", join, text];
+        } else {
+            displayText = [NSString stringWithFormat:@"📎 %@", join];
+        }
+    } else if (self.citations.count > 0 && text.length > 0) {
         displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
                        (unsigned long)self.citations.count, text];
     } else if (self.citations.count > 0) {
@@ -1587,7 +1909,9 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     if (clearInput) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
+        [self.pendingAttachments removeAllObjects];
         [self reloadCitationChips];
+        [self refreshAttachmentChips];
         [self refreshPageContextTray];
     }
 
@@ -1597,10 +1921,13 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.inFlight = YES;
     self.inFlightSessionId = sid;
     [self reloadUI];
-    self.statusLabel.stringValue = @"请求中…";
+    self.statusLabel.stringValue = attachPaths.count ? @"上传附件并请求中…" : @"请求中…";
 
     __weak typeof(self) weakSelf = self;
-    [[BrowserAIAssistantClient sharedClient] chatWithModel:model prompt:apiPrompt completion:^(NSInteger httpStatus, NSString *assistantText, NSString *errorMessage) {
+    [[BrowserAIAssistantClient sharedClient] chatWithModel:model
+                                                    prompt:apiPrompt
+                                           attachmentPaths:attachPaths
+                                                completion:^(NSInteger httpStatus, NSString *assistantText, NSString *errorMessage) {
         weakSelf.inFlight = NO;
         weakSelf.inFlightSessionId = nil;
         AIAssistantSession *sess = [AIAssistantSessionStore.sharedStore sessionForId:sid];

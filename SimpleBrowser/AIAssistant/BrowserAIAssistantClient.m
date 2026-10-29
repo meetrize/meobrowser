@@ -61,11 +61,19 @@
 - (void)chatWithModel:(NSString *)modelId
               prompt:(NSString *)prompt
           completion:(BrowserAIAssistantClientCompletion)completion {
+    [self chatWithModel:modelId prompt:prompt attachmentPaths:nil completion:completion];
+}
+
+- (void)chatWithModel:(NSString *)modelId
+              prompt:(NSString *)prompt
+     attachmentPaths:(NSArray<NSString *> *)attachmentPaths
+          completion:(BrowserAIAssistantClientCompletion)completion {
     NSString *model = modelId.length ? modelId : @"bridge__deepseek";
     NSString *text = prompt ?: @"";
-    if (text.length == 0) {
+    NSArray<NSString *> *paths = attachmentPaths.count ? attachmentPaths : @[];
+    if (text.length == 0 && paths.count == 0) {
         if (completion) {
-            completion(400, nil, @"请输入提示词");
+            completion(400, nil, @"请输入提示词或添加附件");
         }
         return;
     }
@@ -92,11 +100,23 @@
         return;
     }
 
-    NSDictionary *body = @{
+    NSMutableDictionary *body = [@{
         @"model": model,
         @"stream": @NO,
         @"messages": @[ @{ @"role": @"user", @"content": text } ]
-    };
+    } mutableCopy];
+    if (paths.count > 0) {
+        NSMutableArray *atts = [NSMutableArray arrayWithCapacity:paths.count];
+        for (NSString *path in paths) {
+            if (![path isKindOfClass:[NSString class]] || path.length == 0) continue;
+            [atts addObject:@{
+                @"path": path,
+                @"name": path.lastPathComponent ?: @"file"
+            }];
+        }
+        body[@"meo_attachments"] = atts;
+    }
+
     NSError *jsonErr = nil;
     NSData *payload = [NSJSONSerialization dataWithJSONObject:body options:0 error:&jsonErr];
     if (!payload) {

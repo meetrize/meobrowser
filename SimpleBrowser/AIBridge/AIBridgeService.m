@@ -548,10 +548,117 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
                     }
                 }
             }
-            return acc.length ? acc : nil;
+            return acc.length ? acc : @"";
         }
     }
     return nil;
+}
+
+/// 单文件上限 20MB（设计 D4）。
+static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 1024ULL;
+
+- (nullable NSString *)guessMIMEForPath:(NSString *)path {
+    NSString *ext = path.pathExtension.lowercaseString;
+    if (!ext.length) return @"application/octet-stream";
+    static NSDictionary *map;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        map = @{
+            @"txt": @"text/plain",
+            @"md": @"text/markdown",
+            @"csv": @"text/csv",
+            @"json": @"application/json",
+            @"pdf": @"application/pdf",
+            @"png": @"image/png",
+            @"jpg": @"image/jpeg",
+            @"jpeg": @"image/jpeg",
+            @"gif": @"image/gif",
+            @"webp": @"image/webp",
+            @"doc": @"application/msword",
+            @"docx": @"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            @"xls": @"application/vnd.ms-excel",
+            @"xlsx": @"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            @"ppt": @"application/vnd.ms-powerpoint",
+            @"pptx": @"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            @"html": @"text/html",
+            @"htm": @"text/html",
+            @"js": @"text/javascript",
+            @"ts": @"text/typescript",
+            @"py": @"text/x-python",
+            @"c": @"text/x-c",
+            @"cpp": @"text/x-c++",
+            @"h": @"text/x-c",
+            @"java": @"text/x-java",
+            @"go": @"text/x-go",
+            @"rs": @"text/x-rust",
+            @"swift": @"text/x-swift",
+            @"log": @"text/plain",
+            @"yaml": @"text/yaml",
+            @"yml": @"text/yaml",
+        };
+    });
+    return map[ext] ?: @"application/octet-stream";
+}
+
+/// 解析 meo_attachments → [{name,mime,base64}]；失败时 *outError 有可读说明。
+- (nullable NSArray<NSDictionary *> *)loadAttachmentsFromJSON:(NSDictionary *)json
+                                                        error:(NSString *_Nullable *_Nullable)outError {
+    id raw = json[@"meo_attachments"];
+    if (raw == nil) {
+        return @[];
+    }
+    if (![raw isKindOfClass:[NSArray class]]) {
+        if (outError) *outError = @"meo_attachments must be an array";
+        return nil;
+    }
+    NSArray *arr = (NSArray *)raw;
+    if (arr.count == 0) {
+        return @[];
+    }
+    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+    for (id item in arr) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            if (outError) *outError = @"meo_attachments item must be object";
+            return nil;
+        }
+        NSDictionary *d = item;
+        NSString *path = [d[@"path"] isKindOfClass:[NSString class]] ? d[@"path"] : nil;
+        NSString *name = [d[@"name"] isKindOfClass:[NSString class]] ? d[@"name"] : nil;
+        NSString *mime = [d[@"mime"] isKindOfClass:[NSString class]] ? d[@"mime"] : nil;
+        if (path.length == 0) {
+            if (outError) *outError = @"meo_attachments.path required";
+            return nil;
+        }
+        if (![path hasPrefix:@"/"]) {
+            if (outError) *outError = @"meo_attachments.path must be absolute";
+            return nil;
+        }
+        BOOL isDir = NO;
+        if (![NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDir] || isDir) {
+            if (outError) *outError = [NSString stringWithFormat:@"附件不存在：%@", path.lastPathComponent];
+            return nil;
+        }
+        NSDictionary *attrs = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+        unsigned long long sz = [attrs fileSize];
+        if (sz > kAIBridgeAttachmentMaxBytes) {
+            if (outError) *outError = [NSString stringWithFormat:@"附件超过 20MB 上限：%@", path.lastPathComponent];
+            return nil;
+        }
+        NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+        if (!data) {
+            if (outError) *outError = [NSString stringWithFormat:@"无法读取附件：%@", path.lastPathComponent];
+            return nil;
+        }
+        NSString *fileName = name.length ? name : path.lastPathComponent;
+        NSString *contentType = mime.length ? mime : [self guessMIMEForPath:path];
+        NSString *b64 = [data base64EncodedStringWithOptions:0];
+        [out addObject:@{
+            @"name": fileName ?: @"file",
+            @"mime": contentType ?: @"application/octet-stream",
+            @"base64": b64 ?: @""
+        }];
+    }
+    return out;
 }
 
 - (BOOL)boolValue:(id)v {
@@ -644,14 +751,39 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         }];
         return;
     }
+    NSString *attachErr = nil;
+    NSArray<NSDictionary *> *attachments = [self loadAttachmentsFromJSON:json error:&attachErr];
+    if (!attachments) {
+        [self respondJSON:respond status:400 object:@{
+            @"error": @{
+                @"message": attachErr ?: @"invalid meo_attachments",
+                @"type": @"invalid_request"
+            }
+        }];
+        return;
+    }
+
     NSString *prompt = [self extractUserPrompt:json];
-    if (prompt.length == 0) {
+    if (prompt == nil) {
         [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content", @"type": @"invalid_request"}}];
+        return;
+    }
+    if (prompt.length == 0 && attachments.count == 0) {
+        [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content or meo_attachments", @"type": @"invalid_request"}}];
         return;
     }
 
     // 409：先校验绑定标签域名，再 probe 登录/输入框
     NSString *providerId = binding.providerId ?: @"deepseek";
+    if (attachments.count > 0 && ![providerId isEqualToString:@"deepseek"]) {
+        [self respondJSON:respond status:400 object:@{
+            @"error": @{
+                @"message": @"attachments currently supported only for bridge__deepseek",
+                @"type": @"attachments_unsupported"
+            }
+        }];
+        return;
+    }
     [binding.tab wakeFromHibernationIfNeeded];
     if (binding.tab.pendingRestorableLoad) {
         [binding.tab loadPendingRestorableURLIfNeeded];
@@ -742,16 +874,26 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
             }
             [[AIBridgeJobQueue sharedQueue] enqueueModel:model
                                                   prompt:prompt
+                                             attachments:attachments
                                                timeoutMs:120000
                                               completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
                 NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
                 [strongSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
                 [strongSelf notify];
                 if (httpStatus != 200) {
+                    NSString *errType = @"bridge_error";
+                    NSString *msg = errorMessage ?: @"failed";
+                    if ([msg containsString:@"attachments_unsupported"]) {
+                        errType = @"attachments_unsupported";
+                    } else if ([msg containsString:@"attach_timeout"]) {
+                        errType = @"attach_timeout";
+                    } else if ([msg containsString:@"attach"] || [result[@"phase"] isEqual:@"attach"]) {
+                        errType = @"attach_failed";
+                    }
                     [strongSelf respondJSON:respond status:httpStatus object:@{
                         @"error": @{
-                            @"message": errorMessage ?: @"failed",
-                            @"type": @"bridge_error"
+                            @"message": msg,
+                            @"type": errType
                         }
                     }];
                     return;

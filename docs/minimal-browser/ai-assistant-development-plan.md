@@ -29,6 +29,7 @@
 | B5 | 划词：润色 / 更简洁 / 列表化 | 计划中 |
 | B6 | 未绑定「去绑定」预选 Provider | 计划中 |
 | B7 | Ollama / OpenAI 上游分组 | 计划中 |
+| B8 | 本地附件 → Bridge → DeepSeek 网页上传 | **AT-0～2 已实现**，见 [ai-attachment-development-plan.md](ai-attachment-development-plan.md) |
 
 ---
 

@@ -15,6 +15,12 @@ typedef void (^BrowserAIAssistantClientCompletion)(NSInteger httpStatus,
               prompt:(NSString *)prompt
           completion:(BrowserAIAssistantClientCompletion)completion;
 
+/// `attachmentPaths`：本机绝对路径；会编码为 meo_attachments。可与空 prompt 同用（仅附件）。
+- (void)chatWithModel:(NSString *)modelId
+              prompt:(NSString *)prompt
+     attachmentPaths:(nullable NSArray<NSString *> *)attachmentPaths
+          completion:(BrowserAIAssistantClientCompletion)completion;
+
 - (void)cancelInFlight;
 
 @end
