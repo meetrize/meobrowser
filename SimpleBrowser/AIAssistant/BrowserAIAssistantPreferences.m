@@ -7,6 +7,7 @@ NSNotificationName const BrowserAIAssistantPreferencesDidChangeNotification =
 static NSString * const kWidthKey = @"AIAssistant.sidebarWidth";
 static NSString * const kModelKey = @"AIAssistant.lastModelId";
 static NSString * const kProviderKey = @"AIAssistant.lastProviderId";
+static NSString * const kAutoConnectKey = @"AIAssistant.autoConnect";
 static NSString * const kPrivacyKey = @"AIAssistant.pageContextPrivacyMode";
 static const CGFloat kDefaultWidth = 380.0;
 static const CGFloat kMinWidth = 300.0;
@@ -40,6 +41,11 @@ static const CGFloat kMaxWidth = 4000.0;
             pid = [AIBridgeRegistry providerIdFromModelId:_lastModelId] ?: @"deepseek";
         }
         _lastProviderId = pid;
+        if ([ud objectForKey:kAutoConnectKey] == nil) {
+            _autoConnect = YES;
+        } else {
+            _autoConnect = [ud boolForKey:kAutoConnectKey];
+        }
         NSString *priv = [ud stringForKey:kPrivacyKey];
         if (![priv isEqualToString:@"strict"] && ![priv isEqualToString:@"developer"]) {
             priv = @"standard";
@@ -47,6 +53,13 @@ static const CGFloat kMaxWidth = 4000.0;
         _pageContextPrivacyMode = priv;
     }
     return self;
+}
+
+- (void)setAutoConnect:(BOOL)autoConnect {
+    if (_autoConnect == autoConnect) return;
+    _autoConnect = autoConnect;
+    [NSUserDefaults.standardUserDefaults setBool:autoConnect forKey:kAutoConnectKey];
+    [self notify];
 }
 
 - (void)setPageContextPrivacyMode:(NSString *)pageContextPrivacyMode {

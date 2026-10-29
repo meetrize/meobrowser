@@ -363,9 +363,12 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSButton *closeBtn;
 @property (nonatomic, strong) NSView *statusDot;
 @property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSButton *focusTabButton;
-@property (nonatomic, strong) NSButton *reopenButton;
+@property (nonatomic, strong) NSButton *connectButton;   // 未连接时：连接 / 重连
+@property (nonatomic, strong) NSButton *focusTabButton;  // 已连接时：显示
+@property (nonatomic, strong) NSButton *autoConnectCheckbox;
+@property (nonatomic, strong) NSStackView *statusRow;
 @property (nonatomic, strong) NSButton *moreButton;
+@property (nonatomic, assign) BOOL autoConnectAttemptedThisShow;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
 @property (nonatomic, strong) NSStackView *recipeButtonStack;
 @property (nonatomic, strong) NSButton *summarizePageButton;
@@ -700,25 +703,57 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.statusDot = [[NSView alloc] initWithFrame:NSZeroRect];
     self.statusDot.translatesAutoresizingMaskIntoConstraints = NO;
     self.statusDot.wantsLayer = YES;
-    self.statusDot.layer.cornerRadius = 4.0;
+    self.statusDot.layer.cornerRadius = 3.5;
     self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
+    [NSLayoutConstraint activateConstraints:@[
+        [self.statusDot.widthAnchor constraintEqualToConstant:7],
+        [self.statusDot.heightAnchor constraintEqualToConstant:7],
+    ]];
 
-    self.statusLabel = [NSTextField wrappingLabelWithString:@""];
+    self.statusLabel = [NSTextField labelWithString:@""];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.statusLabel.font = [NSFont systemFontOfSize:11];
+    self.statusLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
-    self.statusLabel.maximumNumberOfLines = 2;
+    self.statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    self.focusTabButton = [NSButton buttonWithTitle:@"显示网页" target:self action:@selector(focusTabClicked:)];
+    self.connectButton = [NSButton buttonWithTitle:@"连接" target:self action:@selector(connectClicked:)];
+    self.connectButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.connectButton.bezelStyle = NSBezelStyleRounded;
+    self.connectButton.controlSize = NSControlSizeMini;
+    self.connectButton.font = [NSFont systemFontOfSize:11];
+    self.connectButton.hidden = YES;
+
+    self.focusTabButton = [NSButton buttonWithTitle:@"显示" target:self action:@selector(focusTabClicked:)];
     self.focusTabButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.focusTabButton.bezelStyle = NSBezelStyleRounded;
-    self.focusTabButton.controlSize = NSControlSizeSmall;
+    self.focusTabButton.controlSize = NSControlSizeMini;
+    self.focusTabButton.font = [NSFont systemFontOfSize:11];
+    self.focusTabButton.toolTip = @"显示已绑定的网页标签";
+    self.focusTabButton.hidden = YES;
 
-    self.reopenButton = [NSButton buttonWithTitle:@"重新打开网页" target:self action:@selector(reopenClicked:)];
-    self.reopenButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.reopenButton.bezelStyle = NSBezelStyleRounded;
-    self.reopenButton.controlSize = NSControlSizeSmall;
-    self.reopenButton.hidden = YES;
+    self.autoConnectCheckbox = [NSButton checkboxWithTitle:@"自动连接"
+                                                    target:self
+                                                    action:@selector(autoConnectToggled:)];
+    self.autoConnectCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.autoConnectCheckbox.controlSize = NSControlSizeMini;
+    self.autoConnectCheckbox.font = [NSFont systemFontOfSize:11];
+    self.autoConnectCheckbox.toolTip = @"打开 AI 助手时自动连接 Bridge（默认 DeepSeek 网页）";
+    self.autoConnectCheckbox.state = BrowserAIAssistantPreferences.sharedPreferences.autoConnect
+        ? NSControlStateValueOn : NSControlStateValueOff;
+
+    self.statusRow = [NSStackView stackViewWithViews:@[
+        self.statusDot, self.statusLabel, self.connectButton, self.focusTabButton, self.autoConnectCheckbox
+    ]];
+    self.statusRow.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.statusRow.alignment = NSLayoutAttributeCenterY;
+    self.statusRow.spacing = 6;
+    self.statusRow.edgeInsets = NSEdgeInsetsMake(0, 0, 0, 0);
+    [self.statusRow setCustomSpacing:8 afterView:self.statusLabel];
+    [self.statusRow setCustomSpacing:4 afterView:self.connectButton];
+    [self.statusRow setCustomSpacing:4 afterView:self.focusTabButton];
 
     self.moreButton = [NSButton buttonWithTitle:@"⋯" target:self action:@selector(moreClicked:)];
     self.moreButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -972,31 +1007,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.cancelButton.bezelStyle = NSBezelStyleRounded;
     self.cancelButton.enabled = NO;
 
-    for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
+    for (NSView *v in @[self.statusRow, self.moreButton,
                         self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton, self.pageContextRecaptureButton,
                         self.pageContextPanel, self.citationScroll, inputBox, self.attachButton, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.statusDot.topAnchor constraintEqualToAnchor:pane.topAnchor constant:4],
-        [self.statusDot.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.statusDot.widthAnchor constraintEqualToConstant:8],
-        [self.statusDot.heightAnchor constraintEqualToConstant:8],
+        [self.statusRow.topAnchor constraintEqualToAnchor:pane.topAnchor constant:2],
+        [self.statusRow.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.statusRow.trailingAnchor constraintLessThanOrEqualToAnchor:self.moreButton.leadingAnchor constant:-4],
+        [self.statusRow.heightAnchor constraintEqualToConstant:22],
 
-        [self.statusLabel.centerYAnchor constraintEqualToAnchor:self.statusDot.centerYAnchor],
-        [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.statusDot.trailingAnchor constant:6],
-        [self.statusLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.moreButton.leadingAnchor constant:-6],
-
-        [self.moreButton.centerYAnchor constraintEqualToAnchor:self.statusDot.centerYAnchor],
+        [self.moreButton.centerYAnchor constraintEqualToAnchor:self.statusRow.centerYAnchor],
         [self.moreButton.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
 
-        [self.focusTabButton.topAnchor constraintEqualToAnchor:self.statusDot.bottomAnchor constant:8],
-        [self.focusTabButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.reopenButton.centerYAnchor constraintEqualToAnchor:self.focusTabButton.centerYAnchor],
-        [self.reopenButton.leadingAnchor constraintEqualToAnchor:self.focusTabButton.trailingAnchor constant:8],
-
-        [self.chatPanel.topAnchor constraintEqualToAnchor:self.focusTabButton.bottomAnchor constant:8],
+        [self.chatPanel.topAnchor constraintEqualToAnchor:self.statusRow.bottomAnchor constant:6],
         [self.chatPanel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.chatPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:120],
@@ -1162,7 +1188,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         else [self reloadCitationChips];
     }
     if (visible) {
+        self.autoConnectAttemptedThisShow = NO;
         [self reloadUI];
+        [self maybeAutoConnectIfNeeded];
+    } else {
+        self.autoConnectAttemptedThisShow = NO;
     }
 }
 
@@ -1179,6 +1209,15 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         }
     }
     return pid ?: @"";
+}
+
+/// 状态行用短名（去掉「网页」后缀），如 DeepSeek
+- (NSString *)providerShortName:(NSString *)pid {
+    NSString *full = [self providerDisplayName:pid];
+    if ([full hasSuffix:@" 网页"]) {
+        return [full substringToIndex:full.length - 3];
+    }
+    return full;
 }
 
 - (void)refreshConnectionState {
@@ -1223,16 +1262,21 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         return;
     }
 
+    self.autoConnectCheckbox.state = BrowserAIAssistantPreferences.sharedPreferences.autoConnect
+        ? NSControlStateValueOn : NSControlStateValueOff;
+
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         self.titleLabel.stringValue = @"AI 助手";
-        self.statusLabel.stringValue = @"还没有会话，点击左侧 ＋ 开始";
+        self.statusLabel.stringValue = @"未连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = NO;
         self.attachButton.enabled = NO;
-        self.focusTabButton.enabled = NO;
-        self.reopenButton.hidden = YES;
+        self.connectButton.hidden = NO;
+        self.connectButton.enabled = YES;
+        self.connectButton.title = @"连接";
+        self.focusTabButton.hidden = YES;
         self.cancelButton.enabled = self.inFlight;
         [self refreshAttachmentChips];
         [self refreshPageContextTray];
@@ -1240,13 +1284,18 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
 
     self.titleLabel.stringValue = s.title.length ? s.title : @"新对话";
-    NSString *platform = [self providerDisplayName:s.providerId];
+    NSString *platform = [self providerShortName:s.providerId];
     BOOL ready = (s.connection == AIAssistantSessionConnectionReady && s.modelId.length > 0);
     BOOL detached = (s.connection == AIAssistantSessionConnectionDetached);
+    BOOL opening = (s.connection == AIAssistantSessionConnectionOpening);
+    BOOL errored = (s.connection == AIAssistantSessionConnectionError);
     BOOL attachOK = [self attachmentsSupportedForCurrentSession];
-    self.reopenButton.hidden = !detached;
+    BOOL needConnect = detached || errored || (!ready && !opening);
+    self.connectButton.hidden = !needConnect;
+    self.connectButton.enabled = needConnect;
+    self.connectButton.title = @"连接";
+    self.focusTabButton.hidden = !ready;
     self.focusTabButton.enabled = ready;
-    self.focusTabButton.hidden = detached;
     self.attachButton.enabled = attachOK && !self.inFlight;
     self.attachButton.toolTip = attachOK
         ? @"添加本地附件（可拖放；⌘V 可粘贴截图/图片）"
@@ -1261,22 +1310,31 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         }
     }
 
-    if (detached) {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · 网页已关闭", platform];
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    if (detached || errored) {
+        self.statusLabel.stringValue = platform.length
+            ? [NSString stringWithFormat:@"未连接 · %@", platform]
+            : @"未连接";
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
         self.sendButton.enabled = NO;
     } else if (ready) {
-        AIBridgeService *svc = AIBridgeService.sharedService;
-        NSString *extra = svc.isListening ? (svc.statusText ?: @"就绪") : @"发送时将启动 Bridge";
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · %@", platform, extra];
+        self.statusLabel.stringValue = platform.length
+            ? [NSString stringWithFormat:@"已连接 · %@", platform]
+            : @"已连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGreenColor.CGColor;
         self.sendButton.enabled = !self.inFlight;
-    } else {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · 连接中…", platform];
+    } else if (opening) {
+        self.statusLabel.stringValue = @"连接中…";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
+        self.sendButton.enabled = NO;
+    } else {
+        self.statusLabel.stringValue = platform.length
+            ? [NSString stringWithFormat:@"未连接 · %@", platform]
+            : @"未连接";
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = NO;
     }
     self.cancelButton.enabled = self.inFlight;
@@ -1803,7 +1861,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [AIAssistantSessionStore.sharedStore saveSession:session];
     [self showPane:AIAssistantPaneChat];
     [self syncChatFromCurrentSession];
-    self.statusLabel.stringValue = @"正在打开网页…";
+    self.statusLabel.stringValue = @"连接中…";
     self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
     self.sendButton.enabled = NO;
 
@@ -1843,10 +1901,31 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self.delegate aiAssistantSidebar:self focusTabForBindingId:s.bindingId];
 }
 
-- (void)reopenClicked:(id)sender {
+- (void)autoConnectToggled:(id)sender {
+    (void)sender;
+    BOOL on = (self.autoConnectCheckbox.state == NSControlStateValueOn);
+    BrowserAIAssistantPreferences.sharedPreferences.autoConnect = on;
+    if (on) {
+        self.autoConnectAttemptedThisShow = NO;
+        [self maybeAutoConnectIfNeeded];
+    }
+}
+
+- (void)connectClicked:(id)sender {
     (void)sender;
     AIAssistantSession *s = [self currentSession];
+    if (!s) {
+        NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        [self createSessionWithProviderId:pid];
+        return;
+    }
+    [self reconnectCurrentSession];
+}
+
+- (void)reconnectCurrentSession {
+    AIAssistantSession *s = [self currentSession];
     if (!s) return;
+    if (s.connection == AIAssistantSessionConnectionOpening) return;
     // 清掉失效 binding，避免 Opening 期间被 prune 当成「标签已死」删掉
     s.bindingId = nil;
     s.modelId = nil;
@@ -1855,14 +1934,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self reloadUI];
     __weak typeof(self) weakSelf = self;
     NSString *sid = s.sessionId;
-    NSString *pid = s.providerId;
-    [self.delegate aiAssistantSidebar:self reopenAndBindProviderId:pid sessionId:sid completion:^(AIBridgeBinding *binding, NSString *errorDetail) {
+    NSString *pid = s.providerId.length ? s.providerId : @"deepseek";
+    id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
+    if (![del respondsToSelector:@selector(aiAssistantSidebar:reopenAndBindProviderId:sessionId:completion:)]) {
+        s.connection = AIAssistantSessionConnectionError;
+        [AIAssistantSessionStore.sharedStore saveSession:s];
+        self.statusLabel.stringValue = @"无法连接（无窗口委托）";
+        [self reloadUI];
+        return;
+    }
+    [del aiAssistantSidebar:self reopenAndBindProviderId:pid sessionId:sid completion:^(AIBridgeBinding *binding, NSString *errorDetail) {
         AIAssistantSession *sess = [AIAssistantSessionStore.sharedStore sessionForId:sid];
         if (!sess) return;
         if (!binding) {
             sess.connection = AIAssistantSessionConnectionDetached;
             [AIAssistantSessionStore.sharedStore saveSession:sess];
-            weakSelf.statusLabel.stringValue = errorDetail.length ? errorDetail : @"重新打开失败";
+            weakSelf.statusLabel.stringValue = errorDetail.length ? errorDetail : @"连接失败";
             [weakSelf reloadUI];
             return;
         }
@@ -1873,6 +1960,33 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [AIAssistantSessionStore.sharedStore touchAndPersist:sess];
         [weakSelf reloadUI];
     }];
+}
+
+/// 打开侧栏或勾选「自动连接」时：无会话则新建并开 DeepSeek；已断线则重连。
+- (void)maybeAutoConnectIfNeeded {
+    if (!self.visible) return;
+    if (!BrowserAIAssistantPreferences.sharedPreferences.autoConnect) return;
+    if (self.pane != AIAssistantPaneChat) return;
+    if (self.autoConnectAttemptedThisShow) return;
+
+    AIAssistantSession *s = [self currentSession];
+    if (!s) {
+        self.autoConnectAttemptedThisShow = YES;
+        NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        [self createSessionWithProviderId:pid];
+        return;
+    }
+    if (s.connection == AIAssistantSessionConnectionOpening) {
+        self.autoConnectAttemptedThisShow = YES;
+        return;
+    }
+    BOOL ready = (s.connection == AIAssistantSessionConnectionReady && s.modelId.length > 0);
+    if (ready) {
+        self.autoConnectAttemptedThisShow = YES;
+        return;
+    }
+    self.autoConnectAttemptedThisShow = YES;
+    [self reconnectCurrentSession];
 }
 
 - (void)moreClicked:(id)sender {
@@ -2244,7 +2358,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         return;
     }
     if (s.connection != AIAssistantSessionConnectionReady || s.modelId.length == 0) {
-        self.statusLabel.stringValue = @"网页未就绪，请等待或点「重新打开网页」";
+        self.statusLabel.stringValue = @"未连接，请点「连接」或开启自动连接";
         self.statusLabel.textColor = NSColor.systemOrangeColor;
         return;
     }
@@ -2420,7 +2534,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.inputView.string = prompt;
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         [self createSessionWithProviderId:pid];
-        self.statusLabel.stringValue = @"已创建会话，网页就绪后将可发送";
+        self.statusLabel.stringValue = @"已创建会话，连接后可发送";
         return;
     }
     self.inputView.string = prompt;

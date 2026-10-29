@@ -17,6 +17,9 @@ FOUNDATION_EXPORT NSNotificationName const BrowserAIAssistantPreferencesDidChang
 /// 新建会话默认平台，如 deepseek
 @property (nonatomic, copy) NSString *lastProviderId;
 
+/// 打开 AI 助手侧栏时自动连接 Bridge（默认 DeepSeek 网页）；默认开启
+@property (nonatomic, assign) BOOL autoConnect;
+
 /// 页面上下文隐私档：strict | standard | developer（默认 standard）
 @property (nonatomic, copy) NSString *pageContextPrivacyMode;
 - (BOOL)pageContextAllowsHTML;
