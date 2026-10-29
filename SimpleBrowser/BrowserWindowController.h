@@ -47,6 +47,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openAIAssistantWithAction:(NSString *)actionKey
                           context:(nullable NSString *)context
                       pageContext:(BOOL)pageContext;
+/// 采集当前标签页正文并运行「总结该网页」配方。
+- (void)openAIAssistantSummarizeCurrentPage;
+/// 采集当前标签页正文并填入「问答本页」（不自动发送）。
+- (void)openAIAssistantAskCurrentPage;
+/// 处理 meobrowser:// AI / 打开类 URL Scheme。
+- (BOOL)handleMeoBrowserURL:(NSURL *)url;
 /// 加入引用：打开助手侧栏，把 payload 加入输入区引用条（不自动发送）。
 /// payload: @{ @"kind": text|image|file|link|url, @"text"/"url"/"title"/"thumb": ... }
 - (void)addAIAssistantCitation:(NSDictionary *)payload;

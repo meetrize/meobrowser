@@ -7,6 +7,7 @@ NSNotificationName const BrowserAIAssistantPreferencesDidChangeNotification =
 static NSString * const kWidthKey = @"AIAssistant.sidebarWidth";
 static NSString * const kModelKey = @"AIAssistant.lastModelId";
 static NSString * const kProviderKey = @"AIAssistant.lastProviderId";
+static NSString * const kPrivacyKey = @"AIAssistant.pageContextPrivacyMode";
 static const CGFloat kDefaultWidth = 380.0;
 static const CGFloat kMinWidth = 300.0;
 /// 仅作持久化硬顶；运行时侧栏还会按窗口宽度 80% 再裁
@@ -39,8 +40,32 @@ static const CGFloat kMaxWidth = 4000.0;
             pid = [AIBridgeRegistry providerIdFromModelId:_lastModelId] ?: @"deepseek";
         }
         _lastProviderId = pid;
+        NSString *priv = [ud stringForKey:kPrivacyKey];
+        if (![priv isEqualToString:@"strict"] && ![priv isEqualToString:@"developer"]) {
+            priv = @"standard";
+        }
+        _pageContextPrivacyMode = priv;
     }
     return self;
+}
+
+- (void)setPageContextPrivacyMode:(NSString *)pageContextPrivacyMode {
+    NSString *p = pageContextPrivacyMode.lowercaseString ?: @"standard";
+    if (![p isEqualToString:@"strict"] && ![p isEqualToString:@"developer"]) {
+        p = @"standard";
+    }
+    if ([_pageContextPrivacyMode isEqualToString:p]) return;
+    _pageContextPrivacyMode = [p copy];
+    [NSUserDefaults.standardUserDefaults setObject:_pageContextPrivacyMode forKey:kPrivacyKey];
+    [self notify];
+}
+
+- (BOOL)pageContextAllowsHTML {
+    return ![self.pageContextPrivacyMode isEqualToString:@"strict"];
+}
+
+- (BOOL)pageContextAllowsScriptResources {
+    return [self.pageContextPrivacyMode isEqualToString:@"developer"];
 }
 
 - (void)notify {

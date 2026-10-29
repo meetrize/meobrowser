@@ -1,6 +1,7 @@
 # AI 助手侧栏 — 开发计划
 
-> 基于 [ai-assistant-design.md](ai-assistant-design.md)。依赖 [AI Bridge](ai-bridge-design.md)。
+> 基于 [ai-assistant-design.md](ai-assistant-design.md)。依赖 [AI Bridge](ai-bridge-design.md)。  
+> 页面上下文（整页摘要 / 可引用 Bundle）：[ai-page-context-design.md](ai-page-context-design.md) · [ai-page-context-development-plan.md](ai-page-context-development-plan.md)（**已确认**）
 
 ---
 
@@ -21,8 +22,8 @@
 
 | ID | 项 | 状态 |
 |----|-----|------|
-| B1 | 整页摘要 | 计划中 |
-| B2 | 问答本页（标题+URL+正文摘录） | 计划中 |
+| B1 | 整页摘要（正文 Citation + Recipe `summarize-page`） | **PC-0 已实现**，见 [ai-page-context-development-plan.md](ai-page-context-development-plan.md) |
+| B2 | 问答本页（可勾选 Bundle 层） | **PC-1 已实现** |
 | B3 | 多轮会话 + 新对话 | **已完成（多会话）**，见 [ai-multi-session-redesign.md](ai-multi-session-redesign.md) · [ai-multi-session-development-plan.md](ai-multi-session-development-plan.md) |
 | B4 | `stream:true` 假 SSE 边显 | 计划中 |
 | B5 | 划词：润色 / 更简洁 / 列表化 | 计划中 |
@@ -45,9 +46,9 @@
 
 ## Phase D — 生态
 
-- `meobrowser://ai?action=summarize`
-- Page Pack 固定 prompt
-- 爬虫结果 AI 清洗
+- `meobrowser://ai?action=summarize`（Page Context PC-3）
+- Page Pack 固定 prompt / 用户 Recipe 共享
+- 爬虫结果 AI 清洗；Bundle → Scraper 字段草稿（PC-3）
 
 ---
 

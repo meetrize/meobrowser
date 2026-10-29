@@ -17,6 +17,11 @@ FOUNDATION_EXPORT NSNotificationName const BrowserAIAssistantPreferencesDidChang
 /// 新建会话默认平台，如 deepseek
 @property (nonatomic, copy) NSString *lastProviderId;
 
+/// 页面上下文隐私档：strict | standard | developer（默认 standard）
+@property (nonatomic, copy) NSString *pageContextPrivacyMode;
+- (BOOL)pageContextAllowsHTML;
+- (BOOL)pageContextAllowsScriptResources;
+
 @end
 
 NS_ASSUME_NONNULL_END

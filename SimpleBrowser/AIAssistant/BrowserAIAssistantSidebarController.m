@@ -9,7 +9,22 @@
 #import "AIAssistantHistoryPanel.h"
 #import "AIBridgeRegistry.h"
 #import "AIBridgeService.h"
+#import "AIPageContextCapturer.h"
+#import "AIPageContextBundle.h"
+#import "AIPageContextResource.h"
+#import "AIPageContextStore.h"
+#import "AIPageContextRecipe.h"
+#import "AIPageContextRecipeStore.h"
+#import "AIPageContextPromptBuilder.h"
+#import "AIPageContextBundleExporter.h"
+#import "AIPageContextScraperBridge.h"
+#import "BrowserScraperElementPicker.h"
+#import "BrowserDownloadManager.h"
 #import "SBTextView.h"
+#import "SBTextField.h"
+
+static const NSUInteger kPageContextPromptBudget = 32000;
+static const CGFloat kPageContextPanelHeight = 210.0;
 
 static const CGFloat kSidebarDefaultWidth = 400.0;
 static const CGFloat kSidebarMinWidth = 320.0;
@@ -101,6 +116,24 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) NSButton *reopenButton;
 @property (nonatomic, strong) NSButton *moreButton;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
+@property (nonatomic, strong) NSStackView *recipeButtonStack;
+@property (nonatomic, strong) NSButton *summarizePageButton;
+@property (nonatomic, strong) NSButton *askPageButton;
+@property (nonatomic, strong) NSButton *pageContextToggleButton;
+@property (nonatomic, strong) NSButton *pageContextRecaptureButton;
+@property (nonatomic, strong) NSView *pageContextPanel;
+@property (nonatomic, strong) NSLayoutConstraint *pageContextPanelHeightConstraint;
+@property (nonatomic, strong) NSStackView *layerCheckboxStack;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSButton *> *layerCheckboxes;
+@property (nonatomic, strong) NSScrollView *resourceScroll;
+@property (nonatomic, strong) NSStackView *resourceStack;
+@property (nonatomic, assign) BOOL pageContextExpanded;
+@property (nonatomic, strong, nullable) AIPageContextBundle *currentPageBundle;
+@property (nonatomic, copy, nullable) NSDictionary *lastPagePickResult;
+@property (nonatomic, copy, nullable) NSString *pendingRegexPatternOverride;
+@property (nonatomic, strong, nullable) NSPopover *citationPreviewPopover;
+@property (nonatomic, strong, nullable) NSPopover *mentionPopover;
+@property (nonatomic, assign) BOOL suppressMention;
 @property (nonatomic, strong) NSScrollView *citationScroll;
 @property (nonatomic, strong) NSStackView *citationStack;
 @property (nonatomic, strong) NSLayoutConstraint *citationHeightConstraint;
@@ -110,6 +143,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 @property (nonatomic, strong) SBTextView *inputView;
 @property (nonatomic, strong) NSButton *sendButton;
 @property (nonatomic, strong) NSButton *cancelButton;
+@property (nonatomic, copy, nullable) NSString *pendingSystemHint;
 
 @property (nonatomic, strong) NSStackView *providerStack;
 @property (nonatomic, copy, nullable) NSString *pendingProviderId;
@@ -135,6 +169,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         _currentWidth = w;
         _pane = AIAssistantPaneChat;
         _citations = [NSMutableArray array];
+        _layerCheckboxes = [NSMutableDictionary dictionary];
+        _pageContextExpanded = NO;
         [self buildUI];
         __weak typeof(self) weakSelf = self;
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -435,6 +471,120 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.chatPanel = [[BrowserAIAssistantChatPanel alloc] initWithFrame:NSZeroRect];
     self.chatPanel.translatesAutoresizingMaskIntoConstraints = NO;
 
+    self.summarizePageButton = [NSButton buttonWithTitle:@"总结该网页"
+                                                  target:self
+                                                  action:@selector(summarizePageClicked:)];
+    self.summarizePageButton.bezelStyle = NSBezelStyleRounded;
+    self.summarizePageButton.controlSize = NSControlSizeSmall;
+    self.summarizePageButton.toolTip = @"采集当前标签页正文并总结";
+
+    self.askPageButton = [NSButton buttonWithTitle:@"问答本页"
+                                            target:self
+                                            action:@selector(askPageClicked:)];
+    self.askPageButton.bezelStyle = NSBezelStyleRounded;
+    self.askPageButton.controlSize = NSControlSizeSmall;
+    self.askPageButton.toolTip = @"采集正文并填入问答提示（不自动发送）";
+
+    self.recipeButtonStack = [NSStackView stackViewWithViews:@[self.summarizePageButton, self.askPageButton]];
+    self.recipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.recipeButtonStack.spacing = 6;
+    self.recipeButtonStack.alignment = NSLayoutAttributeCenterY;
+
+    self.pageContextToggleButton = [NSButton buttonWithTitle:@"本页上下文 · 未采集"
+                                                      target:self
+                                                      action:@selector(pageContextToggleClicked:)];
+    self.pageContextToggleButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pageContextToggleButton.bezelStyle = NSBezelStyleInline;
+    self.pageContextToggleButton.bordered = NO;
+    self.pageContextToggleButton.font = [NSFont systemFontOfSize:11];
+    self.pageContextToggleButton.alignment = NSTextAlignmentLeft;
+    self.pageContextToggleButton.toolTip = @"展开资源盘，勾选要引用的层";
+
+    self.pageContextRecaptureButton = [NSButton buttonWithTitle:@"重采"
+                                                         target:self
+                                                         action:@selector(pageContextRecaptureClicked:)];
+    self.pageContextRecaptureButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pageContextRecaptureButton.bezelStyle = NSBezelStyleRounded;
+    self.pageContextRecaptureButton.controlSize = NSControlSizeMini;
+    self.pageContextRecaptureButton.toolTip = @"重新采集当前标签页";
+
+    self.pageContextPanel = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.pageContextPanel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pageContextPanel.hidden = YES;
+    self.pageContextPanelHeightConstraint = [self.pageContextPanel.heightAnchor constraintEqualToConstant:0];
+
+    self.layerCheckboxStack = [NSStackView stackViewWithViews:@[]];
+    self.layerCheckboxStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.layerCheckboxStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.layerCheckboxStack.spacing = 2;
+    self.layerCheckboxStack.alignment = NSLayoutAttributeLeading;
+    [self.pageContextPanel addSubview:self.layerCheckboxStack];
+
+    NSStackView *layerActions = [NSStackView stackViewWithViews:@[]];
+    layerActions.translatesAutoresizingMaskIntoConstraints = NO;
+    layerActions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    layerActions.spacing = 6;
+    NSButton *onlyArticle = [NSButton buttonWithTitle:@"仅正文" target:self action:@selector(pageContextOnlyArticleClicked:)];
+    onlyArticle.bezelStyle = NSBezelStyleRounded;
+    onlyArticle.controlSize = NSControlSizeMini;
+    NSButton *attachAll = [NSButton buttonWithTitle:@"全部引用…" target:self action:@selector(pageContextAttachAllClicked:)];
+    attachAll.bezelStyle = NSBezelStyleRounded;
+    attachAll.controlSize = NSControlSizeMini;
+    [layerActions addArrangedSubview:onlyArticle];
+    [layerActions addArrangedSubview:attachAll];
+    [self.pageContextPanel addSubview:layerActions];
+
+    AIPageContextBundle *nameHelper = [[AIPageContextBundle alloc] init];
+    for (NSString *layerId in [AIPageContextBundle allLayerIds]) {
+        NSButton *cb = [NSButton checkboxWithTitle:[nameHelper displayNameForLayer:layerId]
+                                            target:self
+                                            action:@selector(pageContextLayerToggled:)];
+        cb.translatesAutoresizingMaskIntoConstraints = NO;
+        cb.identifier = layerId;
+        cb.font = [NSFont systemFontOfSize:11];
+        cb.controlSize = NSControlSizeSmall;
+        self.layerCheckboxes[layerId] = cb;
+        [self.layerCheckboxStack addArrangedSubview:cb];
+    }
+
+    NSTextField *resCaption = [NSTextField labelWithString:@"资源"];
+    resCaption.translatesAutoresizingMaskIntoConstraints = NO;
+    resCaption.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
+    resCaption.textColor = NSColor.secondaryLabelColor;
+    [self.pageContextPanel addSubview:resCaption];
+
+    self.resourceScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    self.resourceScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    self.resourceScroll.hasVerticalScroller = YES;
+    self.resourceScroll.autohidesScrollers = YES;
+    self.resourceScroll.borderType = NSNoBorder;
+    self.resourceScroll.drawsBackground = NO;
+    self.resourceStack = [NSStackView stackViewWithViews:@[]];
+    self.resourceStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.resourceStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.resourceStack.spacing = 2;
+    self.resourceStack.alignment = NSLayoutAttributeLeading;
+    self.resourceScroll.documentView = self.resourceStack;
+    [self.pageContextPanel addSubview:self.resourceScroll];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.layerCheckboxStack.topAnchor constraintEqualToAnchor:self.pageContextPanel.topAnchor],
+        [self.layerCheckboxStack.leadingAnchor constraintEqualToAnchor:self.pageContextPanel.leadingAnchor],
+        [self.layerCheckboxStack.trailingAnchor constraintEqualToAnchor:self.pageContextPanel.trailingAnchor],
+        [layerActions.topAnchor constraintEqualToAnchor:self.layerCheckboxStack.bottomAnchor constant:2],
+        [layerActions.leadingAnchor constraintEqualToAnchor:self.pageContextPanel.leadingAnchor],
+        [resCaption.topAnchor constraintEqualToAnchor:layerActions.bottomAnchor constant:4],
+        [resCaption.leadingAnchor constraintEqualToAnchor:self.pageContextPanel.leadingAnchor],
+        [self.resourceScroll.topAnchor constraintEqualToAnchor:resCaption.bottomAnchor constant:2],
+        [self.resourceScroll.leadingAnchor constraintEqualToAnchor:self.pageContextPanel.leadingAnchor],
+        [self.resourceScroll.trailingAnchor constraintEqualToAnchor:self.pageContextPanel.trailingAnchor],
+        [self.resourceScroll.bottomAnchor constraintEqualToAnchor:self.pageContextPanel.bottomAnchor],
+        [self.resourceStack.topAnchor constraintEqualToAnchor:self.resourceScroll.contentView.topAnchor],
+        [self.resourceStack.leadingAnchor constraintEqualToAnchor:self.resourceScroll.contentView.leadingAnchor],
+        [self.resourceStack.widthAnchor constraintEqualToAnchor:self.resourceScroll.contentView.widthAnchor],
+    ]];
+
     self.citationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     self.citationScroll.translatesAutoresizingMaskIntoConstraints = NO;
     self.citationScroll.hasHorizontalScroller = NO;
@@ -509,7 +659,8 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     self.cancelButton.enabled = NO;
 
     for (NSView *v in @[self.statusDot, self.statusLabel, self.focusTabButton, self.reopenButton, self.moreButton,
-                        self.chatPanel, self.citationScroll, inputBox, self.sendButton, self.cancelButton]) {
+                        self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton, self.pageContextRecaptureButton,
+                        self.pageContextPanel, self.citationScroll, inputBox, self.sendButton, self.cancelButton]) {
         [pane addSubview:v];
     }
 
@@ -534,9 +685,24 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         [self.chatPanel.topAnchor constraintEqualToAnchor:self.focusTabButton.bottomAnchor constant:8],
         [self.chatPanel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.chatPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
-        [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:160],
+        [self.chatPanel.heightAnchor constraintGreaterThanOrEqualToConstant:120],
 
-        [self.citationScroll.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
+        [self.recipeButtonStack.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
+        [self.recipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+
+        [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
+        [self.pageContextToggleButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.pageContextToggleButton.trailingAnchor constraintLessThanOrEqualToAnchor:self.pageContextRecaptureButton.leadingAnchor constant:-6],
+
+        [self.pageContextRecaptureButton.centerYAnchor constraintEqualToAnchor:self.pageContextToggleButton.centerYAnchor],
+        [self.pageContextRecaptureButton.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
+
+        [self.pageContextPanel.topAnchor constraintEqualToAnchor:self.pageContextToggleButton.bottomAnchor constant:2],
+        [self.pageContextPanel.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.pageContextPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
+        self.pageContextPanelHeightConstraint,
+
+        [self.citationScroll.topAnchor constraintEqualToAnchor:self.pageContextPanel.bottomAnchor constant:6],
         [self.citationScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.citationScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         self.citationHeightConstraint,
@@ -748,6 +914,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.focusTabButton.enabled = NO;
         self.reopenButton.hidden = YES;
         self.cancelButton.enabled = self.inFlight;
+        [self refreshPageContextTray];
         return;
     }
 
@@ -778,6 +945,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.sendButton.enabled = NO;
     }
     self.cancelButton.enabled = self.inFlight;
+    [self refreshPageContextTray];
 }
 
 #pragma mark - History popover
@@ -1023,6 +1191,56 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 - (void)moreClicked:(id)sender {
     NSButton *btn = (NSButton *)sender;
     NSMenu *menu = [[NSMenu alloc] init];
+
+    NSMenu *recipeMenu = [[NSMenu alloc] init];
+    for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] allRecipes]) {
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:r.title
+                                                    action:@selector(runRecipeFromMenu:)
+                                             keyEquivalent:@""];
+        it.target = self;
+        it.representedObject = r.recipeId;
+        [recipeMenu addItem:it];
+    }
+    NSMenuItem *runRecipes = [[NSMenuItem alloc] initWithTitle:@"运行配方" action:nil keyEquivalent:@""];
+    runRecipes.submenu = recipeMenu;
+    [menu addItem:runRecipes];
+
+    [menu addItemWithTitle:@"管理用户配方…" action:@selector(manageRecipesClicked:) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+
+    NSMenu *privMenu = [[NSMenu alloc] init];
+    NSString *cur = BrowserAIAssistantPreferences.sharedPreferences.pageContextPrivacyMode ?: @"standard";
+    NSArray *modes = @[
+        @[@"严格（禁 HTML/脚本）", @"strict"],
+        @[@"标准（默认）", @"standard"],
+        @[@"开发（允许脚本资源）", @"developer"],
+    ];
+    for (NSArray *m in modes) {
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:m[0]
+                                                    action:@selector(privacyModeClicked:)
+                                             keyEquivalent:@""];
+        it.target = self;
+        it.representedObject = m[1];
+        it.state = [cur isEqualToString:m[1]] ? NSControlStateValueOn : NSControlStateValueOff;
+        [privMenu addItem:it];
+    }
+    NSMenuItem *privItem = [[NSMenuItem alloc] initWithTitle:@"页面上下文隐私" action:nil keyEquivalent:@""];
+    privItem.submenu = privMenu;
+    [menu addItem:privItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"导出 Bundle 到剪贴板" action:@selector(exportCurrentBundleToPasteboard) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+    [menu addItemWithTitle:@"导出 Bundle 到下载目录" action:@selector(exportCurrentBundleToDownloads) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+    [menu addItemWithTitle:@"应用到页面爬虫…" action:@selector(applyCurrentContextToScraperDraft) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+    [menu addItemWithTitle:@"点选区域加入引用…" action:@selector(startPickPageSubtreeForCitation) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+    [menu addItemWithTitle:@"Regex Lab…" action:@selector(showRegexLab) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
+
+    [menu addItem:[NSMenuItem separatorItem]];
     [menu addItemWithTitle:@"导出会话到剪贴板" action:@selector(exportClicked:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
     [menu addItemWithTitle:@"删除当前会话" action:@selector(deleteCurrentClicked:) keyEquivalent:@""];
@@ -1031,6 +1249,62 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [menu addItemWithTitle:@"打开 AI Bridge…" action:@selector(openBridgeClicked:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
     [NSMenu popUpContextMenu:menu withEvent:NSApp.currentEvent forView:btn];
+}
+
+- (void)runRecipeFromMenu:(NSMenuItem *)sender {
+    NSString *rid = sender.representedObject;
+    if (![rid isKindOfClass:[NSString class]]) return;
+    BOOL autoSend = [rid isEqualToString:AIPageContextRecipeIDSummarizePage];
+    [self presentPageRecipe:rid autoSend:autoSend];
+}
+
+- (void)privacyModeClicked:(NSMenuItem *)sender {
+    NSString *mode = sender.representedObject;
+    if (![mode isKindOfClass:[NSString class]]) return;
+    BrowserAIAssistantPreferences.sharedPreferences.pageContextPrivacyMode = mode;
+    [self refreshPageContextTray];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"隐私档：%@", mode];
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+}
+
+- (void)manageRecipesClicked:(id)sender {
+    (void)sender;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"管理用户配方";
+    alert.informativeText = @"可将内置配方复制为可编辑的用户配方（保存到 Application Support）。";
+    [alert addButtonWithTitle:@"复制「总结该网页」"];
+    [alert addButtonWithTitle:@"删除全部用户配方"];
+    [alert addButtonWithTitle:@"关闭"];
+    NSModalResponse resp = [alert runModal];
+    if (resp == NSAlertFirstButtonReturn) {
+        AIPageContextRecipe *src = [[AIPageContextRecipeStore sharedStore] recipeWithId:AIPageContextRecipeIDSummarizePage];
+        AIPageContextRecipe *dup = [[AIPageContextRecipeStore sharedStore] duplicateRecipe:src withTitle:@"我的总结提示"];
+        // 简单编辑提示词
+        NSAlert *edit = [[NSAlert alloc] init];
+        edit.messageText = @"编辑用户提示词";
+        SBTextField *field = [SBTextField standardField];
+        field.frame = NSMakeRect(0, 0, 360, 24);
+        field.stringValue = dup.userPrompt ?: @"";
+        edit.accessoryView = field;
+        [edit addButtonWithTitle:@"保存"];
+        [edit addButtonWithTitle:@"取消"];
+        if ([edit runModal] == NSAlertFirstButtonReturn) {
+            dup.userPrompt = field.stringValue ?: @"";
+            NSError *err = nil;
+            if ([[AIPageContextRecipeStore sharedStore] saveUserRecipe:dup error:&err]) {
+                self.statusLabel.stringValue = @"已保存用户配方「我的总结提示」";
+                self.statusLabel.textColor = NSColor.systemGreenColor;
+            } else {
+                self.statusLabel.stringValue = err.localizedDescription ?: @"保存失败";
+                self.statusLabel.textColor = NSColor.systemRedColor;
+            }
+        }
+    } else if (resp == NSAlertSecondButtonReturn) {
+        for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] userRecipes]) {
+            [[AIPageContextRecipeStore sharedStore] deleteUserRecipeId:r.recipeId error:nil];
+        }
+        self.statusLabel.stringValue = @"已删除全部用户配方";
+    }
 }
 
 - (void)exportClicked:(id)sender {
@@ -1071,18 +1345,185 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [self reloadUI];
 }
 
+#pragma mark - Slash / @ mentions
+
+- (void)textDidChange:(NSNotification *)notification {
+    if (notification.object != self.inputView) return;
+    if (self.suppressMention) return;
+    NSString *text = self.inputView.string ?: @"";
+    NSUInteger loc = self.inputView.selectedRange.location;
+    if (loc == 0 || loc > text.length) {
+        [self.mentionPopover performClose:nil];
+        return;
+    }
+    // 取光标前 token
+    NSUInteger start = loc;
+    while (start > 0) {
+        unichar ch = [text characterAtIndex:start - 1];
+        if ([[NSCharacterSet whitespaceAndNewlineCharacterSet] characterIsMember:ch]) break;
+        start -= 1;
+        if (loc - start > 40) break;
+    }
+    NSString *token = [text substringWithRange:NSMakeRange(start, loc - start)];
+    if ([token hasPrefix:@"/"]) {
+        [self showMentionPopoverKind:@"/" query:[token substringFromIndex:1] tokenRange:NSMakeRange(start, loc - start)];
+    } else if ([token hasPrefix:@"@"]) {
+        [self showMentionPopoverKind:@"@" query:[token substringFromIndex:1] tokenRange:NSMakeRange(start, loc - start)];
+    } else {
+        [self.mentionPopover performClose:nil];
+    }
+}
+
+- (void)showMentionPopoverKind:(NSString *)kind query:(NSString *)query tokenRange:(NSRange)tokenRange {
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    NSString *q = query.lowercaseString ?: @"";
+    if ([kind isEqualToString:@"/"]) {
+        for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] allRecipes]) {
+            if (q.length &&
+                [r.title.lowercaseString rangeOfString:q].location == NSNotFound &&
+                [r.recipeId.lowercaseString rangeOfString:q].location == NSNotFound) {
+                continue;
+            }
+            [items addObject:@{ @"title": r.title ?: r.recipeId, @"id": r.recipeId, @"type": @"recipe" }];
+        }
+    } else {
+        AIPageContextBundle *helper = [[AIPageContextBundle alloc] init];
+        for (NSString *layerId in [AIPageContextBundle allLayerIds]) {
+            NSString *name = [helper displayNameForLayer:layerId];
+            if (q.length && [name.lowercaseString rangeOfString:q].location == NSNotFound &&
+                [layerId rangeOfString:q].location == NSNotFound) continue;
+            if ([layerId isEqualToString:AIPageContextLayerHTML] &&
+                !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) continue;
+            [items addObject:@{ @"title": [NSString stringWithFormat:@"@%@", name],
+                                @"id": layerId, @"type": @"layer" }];
+        }
+        for (AIPageContextResource *res in self.currentPageBundle.resources) {
+            if (res.kind == AIPageContextResourceKindScript &&
+                !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsScriptResources) continue;
+            NSString *label = res.chipLabel;
+            if (q.length && [label.lowercaseString rangeOfString:q].location == NSNotFound) continue;
+            [items addObject:@{ @"title": [NSString stringWithFormat:@"@%@", label],
+                                @"id": res.resourceId ?: @"", @"type": @"resource" }];
+            if (items.count > 24) break;
+        }
+    }
+    if (items.count == 0) {
+        [self.mentionPopover performClose:nil];
+        return;
+    }
+
+    NSStackView *stack = [NSStackView stackViewWithViews:@[]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.spacing = 2;
+    stack.edgeInsets = NSEdgeInsetsMake(6, 6, 6, 6);
+    NSInteger i = 0;
+    for (NSDictionary *item in items) {
+        if (i >= 12) break;
+        NSButton *b = [NSButton buttonWithTitle:item[@"title"] target:self action:@selector(mentionItemClicked:)];
+        b.bezelStyle = NSBezelStyleRecessed;
+        b.controlSize = NSControlSizeSmall;
+        b.identifier = [NSString stringWithFormat:@"%@|%@|%lu|%lu",
+                        item[@"type"], item[@"id"],
+                        (unsigned long)tokenRange.location, (unsigned long)tokenRange.length];
+        [stack addArrangedSubview:b];
+        i += 1;
+    }
+    NSViewController *vc = [[NSViewController alloc] init];
+    vc.view = stack;
+    [stack layoutSubtreeIfNeeded];
+    vc.preferredContentSize = NSMakeSize(220, MIN(280, 8 + i * 26.0));
+
+    if (!self.mentionPopover) {
+        self.mentionPopover = [[NSPopover alloc] init];
+        self.mentionPopover.behavior = NSPopoverBehaviorTransient;
+    }
+    self.mentionPopover.contentViewController = vc;
+    NSRect caret = [self.inputView firstRectForCharacterRange:self.inputView.selectedRange actualRange:NULL];
+    // firstRect 是屏幕坐标；popover 需要相对 view
+    NSRect inWindow = [self.inputView.window convertRectFromScreen:caret];
+    NSRect inView = [self.inputView convertRect:inWindow fromView:nil];
+    if (NSIsEmptyRect(inView)) inView = NSMakeRect(8, 8, 1, 1);
+    [self.mentionPopover showRelativeToRect:inView ofView:self.inputView preferredEdge:NSRectEdgeMaxY];
+}
+
+- (void)mentionItemClicked:(NSButton *)sender {
+    NSArray *parts = [sender.identifier componentsSeparatedByString:@"|"];
+    if (parts.count < 4) return;
+    NSString *type = parts[0];
+    NSString *oid = parts[1];
+    NSUInteger loc = (NSUInteger)[parts[2] integerValue];
+    NSUInteger len = (NSUInteger)[parts[3] integerValue];
+    [self.mentionPopover performClose:nil];
+
+    self.suppressMention = YES;
+    NSString *text = self.inputView.string ?: @"";
+    if (loc + len <= text.length) {
+        NSString *replacement = @"";
+        if ([type isEqualToString:@"recipe"]) {
+            // 删掉 /token，再跑配方
+            NSMutableString *m = [text mutableCopy];
+            [m replaceCharactersInRange:NSMakeRange(loc, len) withString:@""];
+            self.inputView.string = m;
+            self.suppressMention = NO;
+            BOOL autoSend = [oid isEqualToString:AIPageContextRecipeIDSummarizePage];
+            [self presentPageRecipe:oid autoSend:autoSend];
+            return;
+        }
+        // @ 层/资源：删 token，挂引用
+        NSMutableString *m = [text mutableCopy];
+        [m replaceCharactersInRange:NSMakeRange(loc, len) withString:replacement];
+        self.inputView.string = m;
+    }
+    self.suppressMention = NO;
+
+    if ([type isEqualToString:@"layer"]) {
+        if (!self.currentPageBundle) {
+            [self capturePageContextOnlyUpdatingTray:YES];
+            self.statusLabel.stringValue = @"请先采集，再使用 @ 引用";
+            return;
+        }
+        if ([oid isEqualToString:AIPageContextLayerHTML] &&
+            !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
+            self.statusLabel.stringValue = @"隐私档禁止 HTML";
+            return;
+        }
+        [self attachLayer:oid fromBundle:self.currentPageBundle];
+        [self reloadCitationChips];
+        [self refreshPageContextTray];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已引用 %@", oid];
+    } else if ([type isEqualToString:@"resource"]) {
+        AIPageContextResource *res = [self.currentPageBundle resourceWithId:oid];
+        if (!res) {
+            self.statusLabel.stringValue = @"资源不存在，请先采集";
+            return;
+        }
+        // 复用 checkbox 逻辑
+        NSButton *fake = [NSButton checkboxWithTitle:@"" target:nil action:nil];
+        fake.identifier = oid;
+        fake.state = NSControlStateValueOn;
+        [self resourceCheckboxToggled:fake];
+    }
+}
+
 - (void)sendClicked:(id)sender {
     (void)sender;
+    [self.mentionPopover performClose:nil];
     NSString *prompt = [self.inputView.string stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     [self sendPrompt:prompt clearInput:YES];
 }
 
 - (NSString *)composePromptWithUserText:(NSString *)userText {
     NSString *q = [userText stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
-    if (self.citations.count == 0) {
-        return q;
-    }
     NSMutableString *out = [NSMutableString string];
+    if (self.pendingSystemHint.length > 0) {
+        [out appendString:self.pendingSystemHint];
+        [out appendString:@"\n\n"];
+    }
+    if (self.citations.count == 0) {
+        if (out.length == 0) return q;
+        [out appendString:q];
+        return out;
+    }
     [out appendString:@"以下是用户提供的上下文引用，请结合它们回答后面的问题：\n\n"];
     NSInteger i = 1;
     for (AIAssistantCitation *c in self.citations) {
@@ -1117,6 +1558,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     }
 
     NSString *apiPrompt = [self composePromptWithUserText:text];
+    self.pendingSystemHint = nil;
     NSString *displayText = text.length ? text : @"（引用上下文）";
     if (self.citations.count > 0 && text.length > 0) {
         displayText = [NSString stringWithFormat:@"📎 %lu 条引用 · %@",
@@ -1146,6 +1588,7 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
         [self reloadCitationChips];
+        [self refreshPageContextTray];
     }
 
     NSString *model = s.modelId;
@@ -1192,6 +1635,10 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
               context:(NSString *)context
           pageContext:(BOOL)pageContext
              autoSend:(BOOL)autoSend {
+    if (pageContext && [actionKey isEqualToString:BrowserAIAssistantActionSummarize]) {
+        [self presentPageRecipe:AIPageContextRecipeIDSummarizePage autoSend:autoSend];
+        return;
+    }
     NSString *prompt = [BrowserAIAssistantPrompts promptForAction:actionKey
                                                           context:context ?: @""
                                                       pageContext:pageContext];
@@ -1211,6 +1658,973 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     } else {
         NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey pageContext:pageContext];
         self.statusLabel.stringValue = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title];
+    }
+}
+
+- (void)summarizePageClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDSummarizePage autoSend:YES];
+}
+
+- (void)askPageClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDAskPage autoSend:NO];
+}
+
+- (BOOL)isPageContextCitationKind:(AIAssistantCitationKind)kind {
+    switch (kind) {
+        case AIAssistantCitationKindPageMeta:
+        case AIAssistantCitationKindPageArticle:
+        case AIAssistantCitationKindPageOutline:
+        case AIAssistantCitationKindPageHTML:
+        case AIAssistantCitationKindPageMarkdown:
+        case AIAssistantCitationKindResourceScript:
+        case AIAssistantCitationKindResourceStyle:
+        case AIAssistantCitationKindResourceJSON:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+- (BOOL)hasCitationForResourceId:(NSString *)resourceId {
+    if (resourceId.length == 0) return NO;
+    for (AIAssistantCitation *c in self.citations) {
+        if ([c.resourceId isEqualToString:resourceId]) return YES;
+    }
+    return NO;
+}
+
+- (void)removeCitationForResourceId:(NSString *)resourceId {
+    if (resourceId.length == 0) return;
+    NSIndexSet *idx = [self.citations indexesOfObjectsPassingTest:^BOOL(AIAssistantCitation *obj, NSUInteger i, BOOL *stop) {
+        (void)i; (void)stop;
+        return [obj.resourceId isEqualToString:resourceId];
+    }];
+    if (idx.count) [self.citations removeObjectsAtIndexes:idx];
+}
+
+- (void)removePageContextCitations {
+    NSIndexSet *idx = [self.citations indexesOfObjectsPassingTest:^BOOL(AIAssistantCitation *obj, NSUInteger i, BOOL *stop) {
+        (void)i; (void)stop;
+        return [self isPageContextCitationKind:obj.kind];
+    }];
+    if (idx.count) {
+        [self.citations removeObjectsAtIndexes:idx];
+    }
+}
+
+- (void)removeCitationForLayer:(NSString *)layerId {
+    NSInteger kind = [AIPageContextPromptBuilder citationKindForLayerId:layerId];
+    if (kind < 0) return;
+    NSIndexSet *idx = [self.citations indexesOfObjectsPassingTest:^BOOL(AIAssistantCitation *obj, NSUInteger i, BOOL *stop) {
+        (void)i; (void)stop;
+        return obj.kind == (AIAssistantCitationKind)kind;
+    }];
+    if (idx.count) [self.citations removeObjectsAtIndexes:idx];
+}
+
+- (BOOL)hasCitationForLayer:(NSString *)layerId {
+    NSInteger kind = [AIPageContextPromptBuilder citationKindForLayerId:layerId];
+    if (kind < 0) return NO;
+    for (AIAssistantCitation *c in self.citations) {
+        if (c.kind == (AIAssistantCitationKind)kind) return YES;
+    }
+    return NO;
+}
+
+- (void)attachLayer:(NSString *)layerId fromBundle:(AIPageContextBundle *)bundle {
+    if (!bundle || layerId.length == 0) return;
+    [self removeCitationForLayer:layerId];
+    AIAssistantCitation *c = [AIPageContextPromptBuilder citationForLayer:layerId inBundle:bundle recipe:nil];
+    if (c) [self.citations addObject:c];
+}
+
+- (nullable WKWebView *)currentBrowseWebView {
+    id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
+    if ([del respondsToSelector:@selector(aiAssistantSidebarCurrentWebView:)]) {
+        return [del aiAssistantSidebarCurrentWebView:self];
+    }
+    return nil;
+}
+
+- (nullable NSUUID *)currentBrowseTabID {
+    id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
+    if ([del respondsToSelector:@selector(aiAssistantSidebarCurrentTabID:)]) {
+        return [del aiAssistantSidebarCurrentTabID:self];
+    }
+    return nil;
+}
+
+- (void)setPageContextButtonsEnabled:(BOOL)enabled {
+    self.summarizePageButton.enabled = enabled;
+    self.askPageButton.enabled = enabled;
+    self.pageContextRecaptureButton.enabled = enabled;
+}
+
+- (void)refreshPageContextTray {
+    NSUUID *tabID = [self currentBrowseTabID];
+    if (tabID && !self.currentPageBundle) {
+        self.currentPageBundle = [[AIPageContextStore sharedStore] bundleForTabID:tabID];
+    } else if (tabID && self.currentPageBundle &&
+               ![self.currentPageBundle.tabID isEqual:tabID]) {
+        self.currentPageBundle = [[AIPageContextStore sharedStore] bundleForTabID:tabID];
+    } else if (tabID) {
+        AIPageContextBundle *stored = [[AIPageContextStore sharedStore] bundleForTabID:tabID];
+        if (stored) self.currentPageBundle = stored;
+    }
+
+    AIPageContextBundle *b = self.currentPageBundle;
+    NSString *title;
+    if (!b) {
+        title = @"▸ 本页上下文 · 未采集";
+        self.pageContextToggleButton.contentTintColor = NSColor.secondaryLabelColor;
+    } else if (b.stale) {
+        title = [NSString stringWithFormat:@"%@ 本页上下文 · 已过期 · %@",
+                 self.pageContextExpanded ? @"▾" : @"▸", [b ageDescription]];
+        if (@available(macOS 10.14, *)) {
+            self.pageContextToggleButton.contentTintColor = NSColor.systemOrangeColor;
+        }
+    } else {
+        title = [NSString stringWithFormat:@"%@ 本页上下文 · %@",
+                 self.pageContextExpanded ? @"▾" : @"▸", [b ageDescription]];
+        if (@available(macOS 10.14, *)) {
+            self.pageContextToggleButton.contentTintColor = NSColor.secondaryLabelColor;
+        }
+    }
+    self.pageContextToggleButton.title = title;
+
+    for (NSString *layerId in self.layerCheckboxes) {
+        NSButton *cb = self.layerCheckboxes[layerId];
+        BOOL has = b && [b hasContentForLayer:layerId];
+        cb.enabled = has;
+        NSString *name = [b ?: [[AIPageContextBundle alloc] init] displayNameForLayer:layerId];
+        if (has) {
+            NSUInteger n = [b charCountForLayer:layerId];
+            if (n >= 1000) {
+                cb.title = [NSString stringWithFormat:@"%@（%.1fk）", name, n / 1000.0];
+            } else {
+                cb.title = [NSString stringWithFormat:@"%@（%lu）", name, (unsigned long)n];
+            }
+        } else {
+            cb.title = name;
+        }
+        cb.state = [self hasCitationForLayer:layerId] ? NSControlStateValueOn : NSControlStateValueOff;
+        if ([layerId isEqualToString:AIPageContextLayerHTML] &&
+            !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
+            cb.enabled = NO;
+            cb.toolTip = @"当前隐私档为「严格」，禁止引用 HTML";
+        } else {
+            cb.toolTip = nil;
+        }
+    }
+
+    [self rebuildResourceRows];
+
+    self.pageContextPanel.hidden = !self.pageContextExpanded;
+    self.pageContextPanelHeightConstraint.constant = self.pageContextExpanded ? kPageContextPanelHeight : 0;
+}
+
+- (void)rebuildResourceRows {
+    for (NSView *v in [self.resourceStack.arrangedSubviews copy]) {
+        [self.resourceStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    AIPageContextBundle *b = self.currentPageBundle;
+    if (!b.resources.count) {
+        NSTextField *empty = [NSTextField labelWithString:@"（无资源或未采集）"];
+        empty.font = [NSFont systemFontOfSize:10];
+        empty.textColor = NSColor.tertiaryLabelColor;
+        [self.resourceStack addArrangedSubview:empty];
+        return;
+    }
+    BOOL allowScript = BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsScriptResources;
+    NSUInteger shown = 0;
+    for (AIPageContextResource *res in b.resources) {
+        if (shown >= 30) break;
+        if (res.kind == AIPageContextResourceKindScript && !allowScript) {
+            // 标准/严格：仍列出，但禁用挂载；开发档才可挂 JS
+        }
+        NSView *row = [self resourceRowForResource:res allowScript:allowScript];
+        [self.resourceStack addArrangedSubview:row];
+        shown += 1;
+    }
+}
+
+- (NSView *)resourceRowForResource:(AIPageContextResource *)res allowScript:(BOOL)allowScript {
+    NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSButton *cb = [NSButton checkboxWithTitle:res.chipLabel target:self action:@selector(resourceCheckboxToggled:)];
+    cb.translatesAutoresizingMaskIntoConstraints = NO;
+    cb.identifier = res.resourceId;
+    cb.font = [NSFont systemFontOfSize:10];
+    cb.controlSize = NSControlSizeMini;
+    cb.state = [self hasCitationForResourceId:res.resourceId] ? NSControlStateValueOn : NSControlStateValueOff;
+    BOOL blockedScript = (res.kind == AIPageContextResourceKindScript && !allowScript);
+    cb.enabled = !blockedScript;
+    if (blockedScript) {
+        cb.toolTip = @"将隐私档设为「开发」后可引用脚本";
+    } else if (!res.hasTextBody && res.kind != AIPageContextResourceKindImage) {
+        cb.toolTip = @"勾选将先加载正文（同源）";
+    }
+
+    NSButton *loadBtn = [NSButton buttonWithTitle:res.loading ? @"…" : (res.hasTextBody ? @"已载" : @"加载")
+                                           target:self
+                                           action:@selector(resourceLoadClicked:)];
+    loadBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    loadBtn.bezelStyle = NSBezelStyleRounded;
+    loadBtn.controlSize = NSControlSizeMini;
+    loadBtn.identifier = res.resourceId;
+    loadBtn.enabled = res.canFetchSameOrigin && !res.loading && !blockedScript;
+    loadBtn.hidden = (res.kind == AIPageContextResourceKindImage) || res.inlineContent;
+
+    [row addSubview:cb];
+    [row addSubview:loadBtn];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:20],
+        [cb.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [cb.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [cb.trailingAnchor constraintLessThanOrEqualToAnchor:loadBtn.leadingAnchor constant:-4],
+        [loadBtn.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [loadBtn.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [row.widthAnchor constraintEqualToConstant:280],
+    ]];
+    return row;
+}
+
+- (void)resourceLoadClicked:(NSButton *)sender {
+    NSString *rid = sender.identifier;
+    AIPageContextResource *res = [self.currentPageBundle resourceWithId:rid];
+    WKWebView *wv = [self currentBrowseWebView];
+    if (!res || !wv) return;
+    sender.enabled = NO;
+    __weak typeof(self) weakSelf = self;
+    [[AIPageContextCapturer sharedCapturer] loadTextForResource:res
+                                                      inWebView:wv
+                                                       maxChars:65536
+                                                     completion:^(BOOL ok, NSString *text, NSString *errorMessage) {
+        (void)text;
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!ok) {
+            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"资源加载失败";
+            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+        } else {
+            strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"已加载 %@", res.chipLabel];
+            strongSelf.statusLabel.textColor = NSColor.secondaryLabelColor;
+        }
+        [strongSelf refreshPageContextTray];
+    }];
+}
+
+- (void)resourceCheckboxToggled:(NSButton *)sender {
+    NSString *rid = sender.identifier;
+    AIPageContextResource *res = [self.currentPageBundle resourceWithId:rid];
+    if (!res) {
+        sender.state = NSControlStateValueOff;
+        return;
+    }
+    if (res.kind == AIPageContextResourceKindScript &&
+        !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsScriptResources) {
+        sender.state = NSControlStateValueOff;
+        self.statusLabel.stringValue = @"隐私档「开发」才可引用脚本";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    if (sender.state != NSControlStateValueOn) {
+        [self removeCitationForResourceId:rid];
+        [self reloadCitationChips];
+        return;
+    }
+    void (^attach)(void) = ^{
+        [self removeCitationForResourceId:rid];
+        AIAssistantCitation *c = [AIPageContextPromptBuilder citationForResource:res inBundle:self.currentPageBundle];
+        if (c) [self.citations addObject:c];
+        [self reloadCitationChips];
+        [self refreshPageContextTray];
+    };
+    if (!res.hasTextBody && res.kind != AIPageContextResourceKindImage) {
+        WKWebView *wv = [self currentBrowseWebView];
+        if (!wv) {
+            sender.state = NSControlStateValueOff;
+            return;
+        }
+        self.statusLabel.stringValue = @"正在加载资源…";
+        __weak typeof(self) weakSelf = self;
+        [[AIPageContextCapturer sharedCapturer] loadTextForResource:res
+                                                          inWebView:wv
+                                                           maxChars:65536
+                                                         completion:^(BOOL ok, NSString *text, NSString *errorMessage) {
+            (void)text;
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (!ok) {
+                sender.state = NSControlStateValueOff;
+                strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"加载失败";
+                strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+                [strongSelf refreshPageContextTray];
+                return;
+            }
+            attach();
+        }];
+        return;
+    }
+    attach();
+}
+
+- (void)pageContextToggleClicked:(id)sender {
+    (void)sender;
+    self.pageContextExpanded = !self.pageContextExpanded;
+    [self refreshPageContextTray];
+}
+
+- (void)pageContextRecaptureClicked:(id)sender {
+    (void)sender;
+    [self capturePageContextOnlyUpdatingTray:YES];
+}
+
+- (void)pageContextOnlyArticleClicked:(id)sender {
+    (void)sender;
+    if (!self.currentPageBundle) {
+        [self capturePageContextOnlyUpdatingTray:YES];
+        return;
+    }
+    [self removePageContextCitations];
+    [self attachLayer:AIPageContextLayerMeta fromBundle:self.currentPageBundle];
+    [self attachLayer:AIPageContextLayerArticle fromBundle:self.currentPageBundle];
+    [self reloadCitationChips];
+    [self refreshPageContextTray];
+    self.statusLabel.stringValue = @"已改为仅引用页信息 + 正文";
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+}
+
+- (void)pageContextAttachAllClicked:(id)sender {
+    (void)sender;
+    if (!self.currentPageBundle) {
+        self.statusLabel.stringValue = @"请先采集本页上下文";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"引用全部页面层？";
+    alert.informativeText = @"将挂上页信息、正文、提纲、HTML、Markdown（若有）。超长内容会自动裁剪，可能影响模型回复质量。";
+    [alert addButtonWithTitle:@"引用全部"];
+    [alert addButtonWithTitle:@"取消"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+
+    [self removePageContextCitations];
+    NSMutableArray<AIAssistantCitation *> *added =
+        [[AIPageContextPromptBuilder citationsFromBundle:self.currentPageBundle
+                                                  layers:[AIPageContextBundle allLayerIds]
+                                                  recipe:nil] mutableCopy];
+    NSString *trimNote = [AIPageContextPromptBuilder trimCitations:added toMaxChars:kPageContextPromptBudget];
+    [self.citations addObjectsFromArray:added];
+    [self reloadCitationChips];
+    [self refreshPageContextTray];
+    if (trimNote.length) {
+        self.statusLabel.stringValue = trimNote;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    } else {
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已引用 %lu 个页面层", (unsigned long)added.count];
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    }
+}
+
+- (void)pageContextLayerToggled:(NSButton *)sender {
+    NSString *layerId = sender.identifier;
+    if (layerId.length == 0) return;
+    if (!self.currentPageBundle) {
+        sender.state = NSControlStateValueOff;
+        self.statusLabel.stringValue = @"请先采集本页上下文";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    if (sender.state == NSControlStateValueOn) {
+        if ([layerId isEqualToString:AIPageContextLayerHTML]) {
+            if (!BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
+                sender.state = NSControlStateValueOff;
+                self.statusLabel.stringValue = @"隐私档「严格」禁止引用 HTML";
+                self.statusLabel.textColor = NSColor.systemOrangeColor;
+                return;
+            }
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"引用整页 HTML？";
+            alert.informativeText = @"HTML 通常很长，可能超出模型上下文。确定继续？";
+            [alert addButtonWithTitle:@"引用"];
+            [alert addButtonWithTitle:@"取消"];
+            if ([alert runModal] != NSAlertFirstButtonReturn) {
+                sender.state = NSControlStateValueOff;
+                return;
+            }
+        }
+        [self attachLayer:layerId fromBundle:self.currentPageBundle];
+        NSMutableArray *pageOnly = [NSMutableArray array];
+        for (AIAssistantCitation *c in self.citations) {
+            if ([self isPageContextCitationKind:c.kind]) [pageOnly addObject:c];
+        }
+        NSMutableArray *mutablePage = [pageOnly mutableCopy];
+        NSString *note = [AIPageContextPromptBuilder trimCitations:mutablePage toMaxChars:kPageContextPromptBudget];
+        if (note.length && mutablePage.count < pageOnly.count) {
+            // 若裁剪删了当前层，同步 checkbox
+            [self removePageContextCitations];
+            [self.citations addObjectsFromArray:mutablePage];
+            self.statusLabel.stringValue = note;
+            self.statusLabel.textColor = NSColor.systemOrangeColor;
+        }
+    } else {
+        [self removeCitationForLayer:layerId];
+    }
+    [self reloadCitationChips];
+    [self refreshPageContextTray];
+}
+
+- (void)capturePageContextOnlyUpdatingTray:(BOOL)updateTray {
+    WKWebView *webView = [self currentBrowseWebView];
+    NSUUID *tabID = [self currentBrowseTabID];
+    if (!webView) {
+        self.statusLabel.stringValue = @"当前没有可采集的网页标签";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    self.statusLabel.stringValue = @"正在采集页面上下文…";
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setPageContextButtonsEnabled:NO];
+    __weak typeof(self) weakSelf = self;
+    [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
+                                                         tabID:tabID
+                                              maxArticleChars:24000
+                                                    completion:^(AIPageContextBundle *bundle, NSString *errorMessage) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf setPageContextButtonsEnabled:YES];
+        if (!bundle) {
+            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"采集失败";
+            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            return;
+        }
+        strongSelf.currentPageBundle = bundle;
+        if (updateTray) {
+            // 刷新已挂载页层内容
+            NSArray *layers = [[strongSelf.citations valueForKey:@"kind"] copy];
+            (void)layers;
+            NSMutableArray<NSString *> *attached = [NSMutableArray array];
+            for (AIAssistantCitation *c in strongSelf.citations) {
+                NSString *lid = [AIPageContextPromptBuilder layerIdForCitationKind:c.kind];
+                if (lid.length) [attached addObject:lid];
+            }
+            if (attached.count) {
+                [strongSelf removePageContextCitations];
+                for (NSString *lid in attached) {
+                    [strongSelf attachLayer:lid fromBundle:bundle];
+                }
+                [strongSelf reloadCitationChips];
+            }
+            [strongSelf refreshPageContextTray];
+            strongSelf.statusLabel.stringValue =
+                [NSString stringWithFormat:@"已重新采集 · %@", [bundle ageDescription]];
+            strongSelf.statusLabel.textColor = bundle.stale ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
+            if (bundle.articleQuality == AIPageContextArticleQualityLow && bundle.articleWarning.length) {
+                strongSelf.statusLabel.stringValue = bundle.articleWarning;
+                strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            }
+        }
+    }];
+}
+
+- (void)presentPageRecipe:(NSString *)recipeId autoSend:(BOOL)autoSend {
+    AIPageContextRecipe *recipe = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
+    if (!recipe) {
+        self.statusLabel.stringValue = @"未知配方";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    [self showPane:AIAssistantPaneChat];
+
+    WKWebView *webView = [self currentBrowseWebView];
+    NSUUID *tabID = [self currentBrowseTabID];
+    if (!webView) {
+        self.statusLabel.stringValue = @"当前没有可采集的网页标签";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        self.inputView.string = recipe.userPrompt;
+        return;
+    }
+
+    self.statusLabel.stringValue = @"正在采集页面正文…";
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setPageContextButtonsEnabled:NO];
+
+    __weak typeof(self) weakSelf = self;
+    [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
+                                                         tabID:tabID
+                                              maxArticleChars:recipe.maxArticleChars
+                                                    completion:^(AIPageContextBundle *bundle, NSString *errorMessage) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf setPageContextButtonsEnabled:YES];
+        if (!bundle) {
+            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"采集失败";
+            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            strongSelf.inputView.string = recipe.userPrompt;
+            return;
+        }
+        strongSelf.currentPageBundle = bundle;
+        if (![bundle hasUsableArticle]) {
+            strongSelf.statusLabel.stringValue = @"未能提取到可用正文";
+            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            strongSelf.inputView.string = recipe.userPrompt;
+            [strongSelf refreshPageContextTray];
+            return;
+        }
+        [strongSelf runPreprocessIfNeededForRecipe:recipe
+                                           bundle:bundle
+                                          webView:webView
+                                       completion:^(NSArray<AIAssistantCitation *> *extra) {
+            [strongSelf finishPresentPageRecipe:recipe
+                                         bundle:bundle
+                                       autoSend:autoSend
+                                  extraCitations:extra];
+        }];
+    }];
+}
+
+/// PC-3：可选页内 preprocess（Recipe.preprocessScript 为 function(input) 函数体）。
+- (void)runPreprocessIfNeededForRecipe:(AIPageContextRecipe *)recipe
+                                bundle:(AIPageContextBundle *)bundle
+                               webView:(WKWebView *)webView
+                            completion:(void (^)(NSArray<AIAssistantCitation *> *extra))completion {
+    if (!completion) return;
+    NSString *scriptBody = recipe.preprocessScript;
+    if (scriptBody.length == 0 || !webView) {
+        completion(@[]);
+        return;
+    }
+    NSString *article = [bundle effectiveArticleText] ?: @"";
+    if (article.length > 8000) article = [article substringToIndex:8000];
+    NSDictionary *input = @{
+        @"url": bundle.urlString ?: @"",
+        @"title": bundle.title ?: @"",
+        @"article": article,
+        @"outline": bundle.outlineText ?: @"",
+    };
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:input options:0 error:nil];
+    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"{}";
+    NSString *js = [NSString stringWithFormat:
+                    @"(function(){\n"
+                    @"  var __meoInput = %@;\n"
+                    @"  try {\n"
+                    @"    var __meoOut = (function(input){\n%@\n})(__meoInput);\n"
+                    @"    if (__meoOut === undefined || __meoOut === null) return {ok:true};\n"
+                    @"    return __meoOut;\n"
+                    @"  } catch (e) {\n"
+                    @"    return {ok:false, error: String(e && e.message ? e.message : e)};\n"
+                    @"  }\n"
+                    @"})();", json, scriptBody];
+    __weak typeof(self) weakSelf = self;
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        (void)strongSelf;
+        NSMutableArray<AIAssistantCitation *> *extra = [NSMutableArray array];
+        if (error) {
+            completion(extra);
+            return;
+        }
+        NSDictionary *dict = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            dict = (NSDictionary *)result;
+        } else if ([result isKindOfClass:[NSString class]] && [(NSString *)result length] > 0) {
+            AIAssistantCitation *c = [AIAssistantCitation textCitation:(NSString *)result
+                                                             sourceURL:[NSURL URLWithString:bundle.urlString ?: @""]
+                                                             pageTitle:bundle.title];
+            if (c) [extra addObject:c];
+            completion(extra);
+            return;
+        }
+        if (![dict isKindOfClass:[NSDictionary class]]) {
+            completion(extra);
+            return;
+        }
+        if ([dict[@"ok"] respondsToSelector:@selector(boolValue)] && ![dict[@"ok"] boolValue]) {
+            completion(extra);
+            return;
+        }
+        NSString *extraText = [dict[@"extraText"] isKindOfClass:[NSString class]] ? dict[@"extraText"] : nil;
+        if (extraText.length == 0 && [dict[@"text"] isKindOfClass:[NSString class]]) {
+            extraText = dict[@"text"];
+        }
+        if (extraText.length) {
+            AIAssistantCitation *c = [AIAssistantCitation textCitation:extraText
+                                                             sourceURL:[NSURL URLWithString:bundle.urlString ?: @""]
+                                                             pageTitle:bundle.title];
+            if (c) [extra addObject:c];
+        }
+        NSArray *cites = [dict[@"citations"] isKindOfClass:[NSArray class]] ? dict[@"citations"] : nil;
+        for (id item in cites) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *cd = (NSDictionary *)item;
+            NSString *body = [cd[@"body"] isKindOfClass:[NSString class]] ? cd[@"body"] : nil;
+            if (!body.length && [cd[@"text"] isKindOfClass:[NSString class]]) body = cd[@"text"];
+            if (!body.length) continue;
+            NSString *title = [cd[@"title"] isKindOfClass:[NSString class]] ? cd[@"title"] : @"预处理";
+            AIAssistantCitation *c = [AIAssistantCitation textCitation:body
+                                                             sourceURL:[NSURL URLWithString:bundle.urlString ?: @""]
+                                                             pageTitle:title];
+            if (c) [extra addObject:c];
+            if (extra.count >= 8) break;
+        }
+        completion(extra);
+    }];
+}
+
+- (void)finishPresentPageRecipe:(AIPageContextRecipe *)recipe
+                         bundle:(AIPageContextBundle *)bundle
+                       autoSend:(BOOL)autoSend
+                  extraCitations:(NSArray<AIAssistantCitation *> *)extra {
+    [self removePageContextCitations];
+    NSMutableArray<NSString *> *layers = [recipe.autoAttachLayers mutableCopy] ?: [NSMutableArray array];
+    if (!BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
+        [layers removeObject:AIPageContextLayerHTML];
+    }
+    NSMutableArray<AIAssistantCitation *> *pageCites =
+        [[AIPageContextPromptBuilder citationsFromBundle:bundle layers:layers recipe:recipe] mutableCopy];
+    if (extra.count) [pageCites addObjectsFromArray:extra];
+    NSString *trimNote = [AIPageContextPromptBuilder trimCitations:pageCites toMaxChars:kPageContextPromptBudget];
+    [self.citations addObjectsFromArray:pageCites];
+    [self reloadCitationChips];
+    [self refreshPageContextTray];
+
+    self.pendingSystemHint = recipe.systemHint;
+    NSString *prompt = recipe.userPrompt ?: @"";
+    if ([recipe.recipeId isEqualToString:AIPageContextRecipeIDRegexExtract] &&
+        self.pendingRegexPatternOverride.length) {
+        NSString *pat = self.pendingRegexPatternOverride;
+        self.pendingRegexPatternOverride = nil;
+        NSRange mark = [prompt rangeOfString:@"正则：\n"];
+        if (mark.location != NSNotFound) {
+            prompt = [[prompt substringToIndex:NSMaxRange(mark)] stringByAppendingFormat:@"%@\n", pat];
+        } else {
+            prompt = [prompt stringByAppendingFormat:@"\n正则：\n%@\n", pat];
+        }
+    }
+    self.inputView.string = prompt;
+
+    NSString *warn = bundle.articleWarning ?: @"";
+    if (trimNote.length) {
+        self.statusLabel.stringValue = trimNote;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    } else if (bundle.articleQuality == AIPageContextArticleQualityLow && warn.length) {
+        self.statusLabel.stringValue = warn;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    } else {
+        self.statusLabel.stringValue =
+            [NSString stringWithFormat:@"已引用正文（%lu 字）",
+             (unsigned long)[bundle effectiveArticleText].length];
+        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    }
+
+    AIAssistantSession *s = [self currentSession];
+    if (!s) {
+        NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        [self createSessionWithProviderId:pid];
+        self.statusLabel.stringValue = @"已采集正文并创建会话，网页就绪后请发送";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    [self reloadUI];
+    [self refreshPageContextTray];
+    if (autoSend && s.connection == AIAssistantSessionConnectionReady && s.modelId.length) {
+        [self sendPrompt:prompt clearInput:YES];
+    } else {
+        NSString *msg = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", recipe.title];
+        if (bundle.articleQuality == AIPageContextArticleQualityLow && warn.length) {
+            msg = [NSString stringWithFormat:@"%@ · %@", warn, msg];
+        }
+        self.statusLabel.stringValue = msg;
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+    }
+}
+
+#pragma mark - Page Context PC-3 Actions
+
+- (void)withCurrentOrCapturedBundle:(void (^)(AIPageContextBundle *_Nullable bundle, NSString *_Nullable error))block {
+    if (!block) return;
+    if (self.currentPageBundle && [self.currentPageBundle hasUsableArticle]) {
+        block(self.currentPageBundle, nil);
+        return;
+    }
+    WKWebView *webView = [self currentBrowseWebView];
+    NSUUID *tabID = [self currentBrowseTabID];
+    if (!webView) {
+        block(nil, @"当前没有可采集的网页标签");
+        return;
+    }
+    self.statusLabel.stringValue = @"正在采集页面…";
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    __weak typeof(self) weakSelf = self;
+    [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
+                                                         tabID:tabID
+                                              maxArticleChars:24000
+                                                    completion:^(AIPageContextBundle *bundle, NSString *errorMessage) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (bundle) strongSelf.currentPageBundle = bundle;
+        [strongSelf refreshPageContextTray];
+        block(bundle, bundle ? nil : (errorMessage.length ? errorMessage : @"采集失败"));
+    }];
+}
+
+- (void)exportCurrentBundleToPasteboard {
+    [self withCurrentOrCapturedBundle:^(AIPageContextBundle *bundle, NSString *error) {
+        if (!bundle) {
+            self.statusLabel.stringValue = error ?: @"无 Bundle 可导出";
+            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            return;
+        }
+        [AIPageContextBundleExporter copyBundleJSONToPasteboard:bundle];
+        self.statusLabel.stringValue = @"已复制 Bundle JSON（摘要，无正文全文）到剪贴板";
+        self.statusLabel.textColor = NSColor.systemGreenColor;
+    }];
+}
+
+- (void)exportCurrentBundleToDownloads {
+    [self withCurrentOrCapturedBundle:^(AIPageContextBundle *bundle, NSString *error) {
+        if (!bundle) {
+            self.statusLabel.stringValue = error ?: @"无 Bundle 可导出";
+            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            return;
+        }
+        NSURL *dirURL = [BrowserDownloadManager.sharedManager downloadDirectoryURL];
+        NSString *dir = dirURL.path;
+        if (dir.length == 0) {
+            dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
+        }
+        NSError *err = nil;
+        NSString *path = [AIPageContextBundleExporter exportBundle:bundle toDirectory:dir error:&err];
+        if (!path) {
+            self.statusLabel.stringValue = err.localizedDescription ?: @"导出失败";
+            self.statusLabel.textColor = NSColor.systemRedColor;
+            return;
+        }
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已导出 %@", path.lastPathComponent];
+        self.statusLabel.textColor = NSColor.systemGreenColor;
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
+    }];
+}
+
+- (void)applyCurrentContextToScraperDraft {
+    __weak typeof(self) weakSelf = self;
+    [self withCurrentOrCapturedBundle:^(AIPageContextBundle *bundle, NSString *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!bundle) {
+            strongSelf.statusLabel.stringValue = error ?: @"无 Bundle 可导入爬虫";
+            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            return;
+        }
+        id recipe = [AIPageContextScraperBridge draftRecipeFromBundle:bundle
+                                                          pickResult:strongSelf.lastPagePickResult];
+        id<BrowserAIAssistantSidebarControllerDelegate> del = strongSelf.delegate;
+        if ([del respondsToSelector:@selector(aiAssistantSidebar:applyScraperDraftRecipe:)]) {
+            [del aiAssistantSidebar:strongSelf applyScraperDraftRecipe:recipe];
+            strongSelf.statusLabel.stringValue = strongSelf.lastPagePickResult
+                ? @"已打开页面爬虫并套用点选草稿"
+                : @"已打开页面爬虫并套用草稿";
+            strongSelf.statusLabel.textColor = NSColor.systemGreenColor;
+        } else {
+            strongSelf.statusLabel.stringValue = @"无法打开页面爬虫";
+            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+        }
+    }];
+}
+
+- (void)startPickPageSubtreeForCitation {
+    WKWebView *webView = [self currentBrowseWebView];
+    if (!webView) {
+        self.statusLabel.stringValue = @"当前没有可点选的网页";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    [self showPane:AIAssistantPaneChat];
+    self.statusLabel.stringValue = @"请在页面上点选要引用的区域（Esc 取消）…";
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    __weak typeof(self) weakSelf = self;
+    [BrowserScraperElementPicker startPickingInWebView:webView
+                                                  mode:BrowserScraperPickModeContainer
+                                            completion:^(NSDictionary *result, BOOL cancelled) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (cancelled || !result) {
+            strongSelf.statusLabel.stringValue = @"已取消点选";
+            strongSelf.statusLabel.textColor = NSColor.secondaryLabelColor;
+            return;
+        }
+        NSString *path = [result[@"absolutePath"] isKindOfClass:[NSString class]] ? result[@"absolutePath"] : nil;
+        if (!path.length && [result[@"cssPath"] isKindOfClass:[NSString class]]) {
+            path = result[@"cssPath"];
+        }
+        if (!path.length) {
+            strongSelf.statusLabel.stringValue = @"未能解析点选路径";
+            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            return;
+        }
+        NSString *nameHint = [result[@"nameHint"] isKindOfClass:[NSString class]] ? result[@"nameHint"] : @"";
+        NSString *tag = [result[@"tagName"] isKindOfClass:[NSString class]] ? result[@"tagName"] : @"区域";
+        NSString *pathJSON = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:path options:0 error:nil]
+                                                   encoding:NSUTF8StringEncoding] ?: @"\"\"";
+        NSString *fetchJS = [NSString stringWithFormat:
+                             @"(function(){\n"
+                             @"  var p = %@;\n"
+                             @"  var el = null;\n"
+                             @"  try { el = document.querySelector(p); } catch (e) { el = null; }\n"
+                             @"  if (!el) return null;\n"
+                             @"  var text = (el.innerText || el.textContent || '').trim();\n"
+                             @"  if (text.length > 50000) text = text.slice(0, 50000);\n"
+                             @"  var html = '';\n"
+                             @"  try { html = String(el.outerHTML || '').slice(0, 60000); } catch (e2) {}\n"
+                             @"  return { text: text, html: html, tag: (el.tagName || '').toLowerCase() };\n"
+                             @"})();", pathJSON];
+        [webView evaluateJavaScript:fetchJS completionHandler:^(id payload, NSError *error) {
+            typeof(self) s2 = weakSelf;
+            if (!s2) return;
+            NSString *text = nil;
+            NSString *html = nil;
+            if ([payload isKindOfClass:[NSDictionary class]]) {
+                text = [payload[@"text"] isKindOfClass:[NSString class]] ? payload[@"text"] : nil;
+                html = [payload[@"html"] isKindOfClass:[NSString class]] ? payload[@"html"] : nil;
+            }
+            if (!text.length) {
+                text = [result[@"textSample"] isKindOfClass:[NSString class]] ? result[@"textSample"] : @"";
+            }
+            if (!text.length && !html.length) {
+                s2.statusLabel.stringValue = error.localizedDescription ?: @"点选区域无可用文本";
+                s2.statusLabel.textColor = NSColor.systemOrangeColor;
+                return;
+            }
+            NSString *pageTitle = s2.currentPageBundle.title;
+            NSString *pageURL = s2.currentPageBundle.urlString;
+            if (!pageURL.length) {
+                pageURL = webView.URL.absoluteString;
+                pageTitle = webView.title;
+            }
+            NSString *chipTitle = nameHint.length ? nameHint
+                : [NSString stringWithFormat:@"点选 · %@", tag.length ? tag : @"区域"];
+            NSMutableString *body = [NSMutableString string];
+            [body appendFormat:@"【DOM 区域】%@\n选择器：%@\n\n", chipTitle, path];
+            if (text.length) {
+                [body appendString:text];
+            } else if (html.length) {
+                [body appendString:html];
+            }
+            AIAssistantCitation *c = [AIAssistantCitation textCitation:body
+                                                             sourceURL:[NSURL URLWithString:pageURL ?: @""]
+                                                             pageTitle:pageTitle.length ? pageTitle : chipTitle];
+            if (c) {
+                [s2.citations addObject:c];
+                [s2 reloadCitationChips];
+            }
+            // 可选：同时预填爬虫草稿（不强制打开）
+            s2.lastPagePickResult = result;
+            s2.statusLabel.stringValue =
+                [NSString stringWithFormat:@"已加入点选引用（%lu 字）· 可用 ⋯ → 应用到页面爬虫",
+                 (unsigned long)text.length];
+            s2.statusLabel.textColor = NSColor.systemGreenColor;
+        }];
+    }];
+}
+
+- (void)showRegexLab {
+    AIPageContextBundle *bundle = self.currentPageBundle;
+    NSString *source = bundle ? [bundle effectiveArticleText] : @"";
+    if (source.length == 0) {
+        source = self.inputView.string ?: @"";
+    }
+    if (source.length == 0) {
+        self.statusLabel.stringValue = @"请先采集页面或粘贴待匹配文本";
+        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Regex Lab";
+    alert.informativeText = @"对当前正文（或输入框文本）做本地正则预览；确认后可填入「按正则提取」配方。";
+
+    NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 120)];
+    SBTextField *patternField = [SBTextField standardField];
+    patternField.frame = NSMakeRect(0, 88, 420, 24);
+    patternField.placeholderString = @"正则，例如 \\d{4}-\\d{2}-\\d{2}";
+    NSString *existing = self.inputView.string ?: @"";
+    NSRange r = [existing rangeOfString:@"正则：\n"];
+    if (r.location != NSNotFound) {
+        NSString *tail = [existing substringFromIndex:NSMaxRange(r)];
+        NSString *line = [[tail componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]] firstObject];
+        if (line.length) patternField.stringValue = line;
+    }
+    NSTextField *hint = [NSTextField labelWithString:
+                         [NSString stringWithFormat:@"样本：%lu 字（取前 2 万）", (unsigned long)MIN(source.length, (NSUInteger)20000)]];
+    hint.frame = NSMakeRect(0, 60, 420, 18);
+    hint.textColor = NSColor.secondaryLabelColor;
+    hint.font = [NSFont systemFontOfSize:11];
+    SBTextField *previewField = [SBTextField standardField];
+    previewField.frame = NSMakeRect(0, 0, 420, 52);
+    previewField.editable = NO;
+    previewField.selectable = YES;
+    previewField.placeholderString = @"匹配预览";
+    [box addSubview:patternField];
+    [box addSubview:hint];
+    [box addSubview:previewField];
+    alert.accessoryView = box;
+    [alert addButtonWithTitle:@"预览"];
+    [alert addButtonWithTitle:@"填入配方"];
+    [alert addButtonWithTitle:@"关闭"];
+
+    // 循环：预览可反复点
+    while (YES) {
+        NSModalResponse resp = [alert runModal];
+        NSString *pat = [patternField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (resp == NSAlertThirdButtonReturn) return;
+        if (pat.length == 0) {
+            previewField.stringValue = @"请输入正则";
+            continue;
+        }
+        NSError *rxErr = nil;
+        NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:pat
+                                                                            options:NSRegularExpressionCaseInsensitive
+                                                                              error:&rxErr];
+        if (!rx) {
+            previewField.stringValue = rxErr.localizedDescription ?: @"正则无效";
+            if (resp == NSAlertSecondButtonReturn) continue;
+            continue;
+        }
+        NSString *hay = source.length > 20000 ? [source substringToIndex:20000] : source;
+        NSArray<NSTextCheckingResult *> *matches =
+            [rx matchesInString:hay options:0 range:NSMakeRange(0, hay.length)];
+        NSMutableArray<NSString *> *hits = [NSMutableArray array];
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        for (NSTextCheckingResult *m in matches) {
+            if (m.range.length == 0) continue;
+            NSString *hit = [hay substringWithRange:m.range];
+            if ([seen containsObject:hit]) continue;
+            [seen addObject:hit];
+            [hits addObject:hit];
+            if (hits.count >= 30) break;
+        }
+        NSString *preview = hits.count
+            ? [NSString stringWithFormat:@"%lu 命中（去重展示 %lu）：\n%@",
+               (unsigned long)matches.count, (unsigned long)hits.count, [hits componentsJoinedByString:@" · "]]
+            : @"无匹配";
+        previewField.stringValue = preview;
+        if (resp == NSAlertFirstButtonReturn) {
+            continue; // 预览后再弹
+        }
+        if (resp == NSAlertSecondButtonReturn) {
+            self.pendingRegexPatternOverride = pat;
+            [self presentPageRecipe:AIPageContextRecipeIDRegexExtract autoSend:NO];
+            self.statusLabel.stringValue =
+                [NSString stringWithFormat:@"正在采集并填入正则（本地预览 %lu 命中）…",
+                 (unsigned long)matches.count];
+            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            return;
+        }
     }
 }
 
@@ -1548,8 +2962,20 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
         icon.image = [[NSWorkspace sharedWorkspace] iconForFileType:ext]
             ?: [NSImage imageNamed:NSImageNameMultipleDocuments];
 #pragma clang diagnostic pop
-    } else if (citation.kind == AIAssistantCitationKindText) {
+    } else if (citation.kind == AIAssistantCitationKindText ||
+               citation.kind == AIAssistantCitationKindPageArticle ||
+               citation.kind == AIAssistantCitationKindPageMarkdown) {
         icon.image = [NSImage imageNamed:NSImageNameFontPanel];
+    } else if (citation.kind == AIAssistantCitationKindPageOutline) {
+        icon.image = [NSImage imageNamed:NSImageNameListViewTemplate];
+    } else if (citation.kind == AIAssistantCitationKindPageHTML) {
+        icon.image = [NSImage imageNamed:NSImageNameActionTemplate];
+    } else if (citation.kind == AIAssistantCitationKindPageMeta) {
+        if (@available(macOS 11.0, *)) {
+            icon.image = [NSImage imageWithSystemSymbolName:@"info.circle" accessibilityDescription:nil];
+        } else {
+            icon.image = [NSImage imageNamed:NSImageNameNetwork];
+        }
     } else {
         icon.image = [NSImage imageNamed:NSImageNameNetwork];
     }
@@ -1559,21 +2985,16 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     label.font = [NSFont systemFontOfSize:10];
     label.textColor = NSColor.labelColor;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
+    label.toolTip = @"点击预览 · ✕ 移除";
     if (citation.kind == AIAssistantCitationKindImage) {
-        NSMutableString *tip = [NSMutableString string];
+        NSMutableString *tip = [NSMutableString stringWithString:@"点击预览\n"];
         if (citation.url.absoluteString.length) {
             [tip appendFormat:@"图片：%@\n", citation.url.absoluteString];
         }
         if (citation.sourcePageURL.absoluteString.length) {
             [tip appendFormat:@"网页：%@", citation.sourcePageURL.absoluteString];
         }
-        label.toolTip = tip.length ? tip : (citation.body.length ? citation.body : citation.title);
-    } else if (citation.kind == AIAssistantCitationKindText && citation.url.absoluteString.length) {
-        label.toolTip = [NSString stringWithFormat:@"%@\n%@",
-                         citation.url.absoluteString,
-                         citation.body.length ? citation.body : citation.title];
-    } else {
-        label.toolTip = citation.body.length ? citation.body : citation.title;
+        label.toolTip = tip;
     }
 
     NSButton *remove = [NSButton buttonWithTitle:@"✕" target:self action:@selector(citationRemoveClicked:)];
@@ -1587,6 +3008,12 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
     [chip addSubview:icon];
     [chip addSubview:label];
     [chip addSubview:remove];
+
+    NSClickGestureRecognizer *click = [[NSClickGestureRecognizer alloc] initWithTarget:self
+                                                                                action:@selector(citationChipClicked:)];
+    click.numberOfClicksRequired = 1;
+    [chip addGestureRecognizer:click];
+    chip.identifier = citation.citationId;
 
     [NSLayoutConstraint activateConstraints:@[
         [chip.heightAnchor constraintEqualToConstant:kCitationChipRowHeight],
@@ -1608,6 +3035,100 @@ typedef NS_ENUM(NSInteger, AIAssistantPane) {
 
 - (void)citationRemoveClicked:(NSButton *)sender {
     [self removeCitationId:sender.identifier];
+    [self refreshPageContextTray];
+}
+
+- (nullable AIAssistantCitation *)citationWithId:(NSString *)cid {
+    if (cid.length == 0) return nil;
+    for (AIAssistantCitation *c in self.citations) {
+        if ([c.citationId isEqualToString:cid]) return c;
+    }
+    return nil;
+}
+
+- (void)citationChipClicked:(NSClickGestureRecognizer *)gr {
+    if (gr.state != NSGestureRecognizerStateEnded) return;
+    NSView *chip = gr.view;
+    // 点在 ✕ 上时不弹预览
+    NSPoint p = [gr locationInView:chip];
+    for (NSView *sub in chip.subviews) {
+        if (![sub isKindOfClass:[NSButton class]]) continue;
+        if (NSPointInRect(p, sub.frame)) return;
+    }
+    AIAssistantCitation *c = [self citationWithId:chip.identifier];
+    if (!c) return;
+    [self showPreviewForCitation:c relativeToView:chip];
+}
+
+- (void)showPreviewForCitation:(AIAssistantCitation *)citation relativeToView:(NSView *)anchor {
+    if (!citation || !anchor) return;
+    [self.citationPreviewPopover performClose:nil];
+
+    NSUInteger chars = citation.body.length;
+    NSMutableString *header = [NSMutableString stringWithFormat:@"%@ · %lu 字",
+                               citation.kindDisplayName, (unsigned long)chars];
+    if ([citation.body containsString:@"…（已截断）"] ||
+        [citation.body containsString:@"HTML 已截断"] ||
+        [citation.title containsString:@"…"]) {
+        [header appendString:@" · 已截断"];
+    }
+
+    NSArray<NSString *> *lines = [citation.body componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+    NSMutableArray<NSString *> *previewLines = [NSMutableArray array];
+    NSUInteger count = 0;
+    for (NSString *line in lines) {
+        if (count >= 20) {
+            [previewLines addObject:@"…"];
+            break;
+        }
+        [previewLines addObject:line];
+        count += 1;
+    }
+    NSString *body = [previewLines componentsJoinedByString:@"\n"];
+
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 220)];
+    NSTextField *title = [NSTextField labelWithString:header];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    title.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    title.lineBreakMode = NSLineBreakByTruncatingTail;
+
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSNoBorder;
+    scroll.drawsBackground = NO;
+    SBTextView *tv = [SBTextView standardTextView];
+    tv.string = body.length ? body : @"(空)";
+    tv.editable = NO;
+    tv.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    if (![tv.font.fontName containsString:@"Mono"]) {
+        tv.font = [NSFont userFixedPitchFontOfSize:11] ?: [NSFont systemFontOfSize:11];
+    }
+    tv.textContainerInset = NSMakeSize(6, 6);
+    scroll.documentView = tv;
+    [content addSubview:title];
+    [content addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [title.topAnchor constraintEqualToAnchor:content.topAnchor constant:8],
+        [title.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [title.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
+        [scroll.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:4],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-4],
+        [scroll.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-8],
+        [content.widthAnchor constraintEqualToConstant:320],
+        [content.heightAnchor constraintEqualToConstant:220],
+    ]];
+
+    NSViewController *vc = [[NSViewController alloc] init];
+    vc.view = content;
+    vc.preferredContentSize = NSMakeSize(320, 220);
+
+    NSPopover *pop = [[NSPopover alloc] init];
+    pop.contentViewController = vc;
+    pop.behavior = NSPopoverBehaviorTransient;
+    self.citationPreviewPopover = pop;
+    [pop showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
 }
 
 - (void)applyPreviewImage:(NSImage *)img forCitationId:(NSString *)cid {

@@ -27,6 +27,9 @@ didReceivePickMessage:(id)body;
 /// 页内候选标注层消息（selectCandidate / clearCandidateOverlay）。
 - (void)handleCandidateOverlayMessage:(id)body;
 
+/// 用外部草稿替换当前编辑中的配方并刷新表单（AI 页面上下文导入）。
+- (void)applyExternalDraftRecipe:(BrowserScraperRecipe *)recipe;
+
 @end
 
 NS_ASSUME_NONNULL_END

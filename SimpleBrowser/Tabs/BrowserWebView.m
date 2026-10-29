@@ -879,6 +879,19 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
     // 菜单名：「问问 AI」——有选区针对选区，无选区针对当前页。
     NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"问问 AI"];
+    NSMenuItem *sumPage = [[NSMenuItem alloc] initWithTitle:@"总结该网页"
+                                                     action:@selector(meo_aiAssistantSummarizePage:)
+                                              keyEquivalent:@""];
+    sumPage.target = self;
+    sumPage.toolTip = @"采集当前页正文并总结（忽略选区）";
+    [submenu addItem:sumPage];
+    NSMenuItem *askPage = [[NSMenuItem alloc] initWithTitle:@"问答本页…"
+                                                     action:@selector(meo_aiAssistantAskPage:)
+                                              keyEquivalent:@""];
+    askPage.target = self;
+    askPage.toolTip = @"采集正文并打开助手，自行补充问题后发送";
+    [submenu addItem:askPage];
+    [submenu addItem:[NSMenuItem separatorItem]];
     NSArray<NSDictionary *> *actions = @[
         @{@"title": @"直接问问", @"key": BrowserAIAssistantActionAsk},
         @{@"title": @"解释", @"key": BrowserAIAssistantActionExplain},
@@ -1534,6 +1547,22 @@ static NSString *MeoScrollToFragmentJS(void) {
         NSString *s = [(NSString *)result stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         completion([s hasPrefix:@"data:image"] ? s : nil);
     }];
+}
+
+- (void)meo_aiAssistantSummarizePage:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantSummarizeCurrentPage];
+    }
+}
+
+- (void)meo_aiAssistantAskPage:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantAskCurrentPage];
+    }
 }
 
 - (void)meo_aiAssistantAction:(id)sender {

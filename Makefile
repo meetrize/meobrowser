@@ -171,6 +171,15 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantClient.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantChatPanel.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/BrowserAIAssistantSidebarController.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextBundle.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextResource.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextStore.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextRecipe.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextRecipeStore.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextCapturer.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextPromptBuilder.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextBundleExporter.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextScraperBridge.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindSession.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindEngine.m \
                    $(BROWSER_SRC_DIR)/FindInPage/BrowserFindBarView.m \
@@ -282,7 +291,7 @@ BROWSER_INJECT_CFLAGS := -DMEO_ENABLE_INJECTION=1
 BROWSER_INJECT_LDFLAGS := -Xlinker -interposable
 endif
 
-BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/SplitView -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/Scraper -I$(BROWSER_SRC_DIR)/AIBridge -I$(BROWSER_SRC_DIR)/AIAssistant -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
+BROWSER_CFLAGS := -Wall -Wextra $(BROWSER_OPT) -fobjc-arc $(BROWSER_INJECT_CFLAGS) -DMEO_ENABLE_PRIVATE_INSPECTOR_SHOW=$(MEO_ENABLE_PRIVATE_INSPECTOR_SHOW) -I$(BROWSER_SRC_DIR) -I$(BROWSER_SRC_DIR)/Tabs -I$(BROWSER_SRC_DIR)/ChromeActions -I$(BROWSER_SRC_DIR)/AfkMode -I$(BROWSER_SRC_DIR)/PresentationFullscreen -I$(BROWSER_SRC_DIR)/AutoScroll -I$(BROWSER_SRC_DIR)/WindowLayout -I$(BROWSER_SRC_DIR)/SplitView -I$(BROWSER_SRC_DIR)/TransparentMode -I$(BROWSER_SRC_DIR)/NewTab -I$(BROWSER_SRC_DIR)/AddressBar -I$(BROWSER_SRC_DIR)/Downloads -I$(BROWSER_SRC_DIR)/History -I$(BROWSER_SRC_DIR)/PagePack -I$(BROWSER_SRC_DIR)/Scraper -I$(BROWSER_SRC_DIR)/AIBridge -I$(BROWSER_SRC_DIR)/AIAssistant -I$(BROWSER_SRC_DIR)/AIAssistant/PageContext -I$(BROWSER_SRC_DIR)/FindInPage -I$(BROWSER_SRC_DIR)/TabOverview -I$(BROWSER_SRC_DIR)/Favicon -I$(BROWSER_SRC_DIR)/LoginAssist -I$(BROWSER_SRC_DIR)/LoginAssist/FormMemo -I$(BROWSER_SRC_DIR)/LoginAssist/AssistSidebar -I$(BROWSER_SRC_DIR)/LoginAssist/Companion -I$(BROWSER_SRC_DIR)/CaptchaAssist -I$(BROWSER_SRC_DIR)/Security -I$(BROWSER_SRC_DIR)/Privacy -I$(BROWSER_SRC_DIR)/Developer -I$(BROWSER_SRC_DIR)/Navigation -I$(BROWSER_SRC_DIR)/Feed -I$(BROWSER_SRC_DIR)/SyncCore -I$(BROWSER_SRC_DIR)/ServerSync -I$(BROWSER_SRC_DIR)/Translation -I$(SBKIT_DIR)
 LDFLAGS := -framework Cocoa -framework Foundation
 BROWSER_LDFLAGS := -framework Cocoa -framework Foundation -framework WebKit -framework QuartzCore -framework ImageIO -framework Security -framework AuthenticationServices -framework Network -framework UserNotifications -framework CoreLocation $(BROWSER_INJECT_LDFLAGS)
 
@@ -336,6 +345,12 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '      <key>CFBundleURLName</key><string>Web site URL</string>' >> $(1)/Contents/Info.plist
 	@echo '      <key>CFBundleURLSchemes</key>' >> $(1)/Contents/Info.plist
 	@echo '      <array><string>http</string><string>https</string></array>' >> $(1)/Contents/Info.plist
+	@echo '    </dict>' >> $(1)/Contents/Info.plist
+	@echo '    <dict>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleTypeRole</key><string>Viewer</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleURLName</key><string>MeoBrowser AI</string>' >> $(1)/Contents/Info.plist
+	@echo '      <key>CFBundleURLSchemes</key>' >> $(1)/Contents/Info.plist
+	@echo '      <array><string>meobrowser</string></array>' >> $(1)/Contents/Info.plist
 	@echo '    </dict>' >> $(1)/Contents/Info.plist
 	@echo '  </array>' >> $(1)/Contents/Info.plist
 	@echo '  <key>CFBundleDocumentTypes</key>' >> $(1)/Contents/Info.plist
@@ -411,6 +426,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/adapters/chatgpt.js \
 		$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html \
 		$(BROWSER_SRC_DIR)/AIAssistant/Resources/chat.html \
+		$(BROWSER_SRC_DIR)/AIAssistant/PageContext/Resources/meo-page-context.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.js \
@@ -446,6 +462,7 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/AIBridge/Spike/mock-chat.html" "$(BROWSER_RES_DIR)/AIBridge/mock-chat.html"
 	mkdir -p "$(BROWSER_RES_DIR)/AIAssistant"
 	cp "$(BROWSER_SRC_DIR)/AIAssistant/Resources/chat.html" "$(BROWSER_RES_DIR)/AIAssistant/chat.html"
+	cp "$(BROWSER_SRC_DIR)/AIAssistant/PageContext/Resources/meo-page-context.js" "$(BROWSER_RES_DIR)/AIAssistant/meo-page-context.js"
 	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/manifest.json"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/pack-identity.js" "$(BROWSER_RES_DIR)/BundledPacks/maps-overlay-calibration/pack-identity.js"

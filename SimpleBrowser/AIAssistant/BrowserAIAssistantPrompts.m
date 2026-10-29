@@ -54,7 +54,7 @@ NSString * const BrowserAIAssistantActionTranslate = @"translate";
 + (NSString *)displayTitleForAction:(NSString *)actionKey pageContext:(BOOL)pageContext {
     if (pageContext) {
         if ([actionKey isEqualToString:BrowserAIAssistantActionExplain]) return @"解释此页";
-        if ([actionKey isEqualToString:BrowserAIAssistantActionSummarize]) return @"总结此页";
+        if ([actionKey isEqualToString:BrowserAIAssistantActionSummarize]) return @"总结该网页";
         if ([actionKey isEqualToString:BrowserAIAssistantActionTranslate]) return @"说明网址";
         return @"问问此页";
     }

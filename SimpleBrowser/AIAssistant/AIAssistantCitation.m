@@ -10,6 +10,8 @@
 @property (nonatomic, copy, readwrite, nullable) NSString *sourcePageTitle;
 @end
 
+// resourceId 已在公开头声明为 readwrite nullable
+
 @implementation AIAssistantCitation
 
 + (NSSet<NSString *> *)imageExtensions {
@@ -130,6 +132,149 @@
     return [self citationWithKind:AIAssistantCitationKindLink title:t body:url.absoluteString ?: @"" url:url];
 }
 
++ (instancetype)pageMetaCitationWithTitle:(NSString *)title
+                                urlString:(NSString *)urlString
+                              description:(NSString *)description
+                                 language:(NSString *)language {
+    NSMutableString *body = [NSMutableString string];
+    NSString *t = [title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    NSString *u = [urlString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if (t.length) [body appendFormat:@"标题：%@\n", t];
+    if (u.length) [body appendFormat:@"地址：%@\n", u];
+    NSString *desc = [description stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (desc.length) [body appendFormat:@"描述：%@\n", desc];
+    NSString *lang = [language stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (lang.length) [body appendFormat:@"语言：%@\n", lang];
+    if (body.length == 0) {
+        return nil;
+    }
+    NSString *chip = t.length ? t : (u.length ? u : @"页信息");
+    if (chip.length > 22) {
+        chip = [[chip substringToIndex:22] stringByAppendingString:@"…"];
+    }
+    NSURL *url = u.length ? [NSURL URLWithString:u] : nil;
+    AIAssistantCitation *c = [self citationWithKind:AIAssistantCitationKindPageMeta
+                                              title:chip
+                                               body:body
+                                                url:url];
+    c.sourcePageURL = url;
+    c.sourcePageTitle = t.length ? t : nil;
+    return c;
+}
+
++ (instancetype)pageArticleCitationWithText:(NSString *)text
+                                    quality:(NSString *)quality
+                                    warning:(NSString *)warning
+                                  pageTitle:(NSString *)pageTitle
+                                    pageURL:(NSString *)pageURL {
+    NSString *body = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if (body.length == 0) return nil;
+    NSUInteger chars = body.length;
+    NSString *chip;
+    if (chars >= 1000) {
+        chip = [NSString stringWithFormat:@"正文 · %.1fk 字", chars / 1000.0];
+    } else {
+        chip = [NSString stringWithFormat:@"正文 · %lu 字", (unsigned long)chars];
+    }
+    NSURL *url = pageURL.length ? [NSURL URLWithString:pageURL] : nil;
+    AIAssistantCitation *c = [self citationWithKind:AIAssistantCitationKindPageArticle
+                                              title:chip
+                                               body:body
+                                                url:url];
+    c.sourcePageURL = url;
+    NSString *pt = [pageTitle stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    c.sourcePageTitle = pt.length ? pt : nil;
+    (void)quality;
+    (void)warning;
+    return c;
+}
+
++ (instancetype)pageLayerCitationKind:(AIAssistantCitationKind)kind
+                                title:(NSString *)title
+                                 body:(NSString *)body
+                            pageTitle:(NSString *)pageTitle
+                              pageURL:(NSString *)pageURL {
+    NSString *t = [body stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if (t.length == 0) return nil;
+    NSURL *url = pageURL.length ? [NSURL URLWithString:pageURL] : nil;
+    AIAssistantCitation *c = [self citationWithKind:kind title:title body:t url:url];
+    c.sourcePageURL = url;
+    NSString *pt = [pageTitle stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    c.sourcePageTitle = pt.length ? pt : nil;
+    return c;
+}
+
++ (instancetype)pageOutlineCitationWithText:(NSString *)text
+                                  pageTitle:(NSString *)pageTitle
+                                    pageURL:(NSString *)pageURL {
+    NSUInteger n = [[text componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]] filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSString *s, NSDictionary *b) {
+        (void)b;
+        return [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0;
+    }]].count;
+    NSString *chip = [NSString stringWithFormat:@"提纲 · %lu 条", (unsigned long)MAX(n, 1)];
+    return [self pageLayerCitationKind:AIAssistantCitationKindPageOutline
+                                 title:chip
+                                  body:text
+                             pageTitle:pageTitle
+                               pageURL:pageURL];
+}
+
++ (instancetype)pageHTMLCitationWithText:(NSString *)text
+                               truncated:(BOOL)truncated
+                               pageTitle:(NSString *)pageTitle
+                                 pageURL:(NSString *)pageURL {
+    NSUInteger chars = text.length;
+    NSString *chip;
+    if (chars >= 1024) {
+        chip = [NSString stringWithFormat:@"HTML · %.0f KB%@", chars / 1024.0, truncated ? @"…" : @""];
+    } else {
+        chip = [NSString stringWithFormat:@"HTML · %lu 字%@", (unsigned long)chars, truncated ? @"…" : @""];
+    }
+    return [self pageLayerCitationKind:AIAssistantCitationKindPageHTML
+                                 title:chip
+                                  body:text
+                             pageTitle:pageTitle
+                               pageURL:pageURL];
+}
+
++ (instancetype)pageMarkdownCitationWithText:(NSString *)text
+                                   pageTitle:(NSString *)pageTitle
+                                     pageURL:(NSString *)pageURL {
+    NSUInteger chars = text.length;
+    NSString *chip = chars >= 1000
+        ? [NSString stringWithFormat:@"MD · %.1fk 字", chars / 1000.0]
+        : [NSString stringWithFormat:@"MD · %lu 字", (unsigned long)chars];
+    return [self pageLayerCitationKind:AIAssistantCitationKindPageMarkdown
+                                 title:chip
+                                  body:text
+                             pageTitle:pageTitle
+                               pageURL:pageURL];
+}
+
++ (instancetype)resourceCitationWithKind:(AIAssistantCitationKind)kind
+                                   title:(NSString *)title
+                                    body:(NSString *)body
+                                     url:(NSString *)urlString
+                              resourceId:(NSString *)resourceId
+                               pageTitle:(NSString *)pageTitle
+                                 pageURL:(NSString *)pageURL {
+    NSString *t = [body stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    NSString *u = urlString ?: @"";
+    if (t.length == 0 && u.length == 0) return nil;
+    NSString *chip = title.length ? title : @"资源";
+    if (chip.length > 22) chip = [[chip substringToIndex:22] stringByAppendingString:@"…"];
+    NSURL *url = u.length ? [NSURL URLWithString:u] : nil;
+    AIAssistantCitation *c = [self citationWithKind:kind
+                                              title:chip
+                                               body:t.length ? t : u
+                                                url:url];
+    c.resourceId = resourceId;
+    c.sourcePageURL = pageURL.length ? [NSURL URLWithString:pageURL] : nil;
+    NSString *pt = [pageTitle stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    c.sourcePageTitle = pt.length ? pt : nil;
+    return c;
+}
+
 + (instancetype)citationWithURLString:(NSString *)urlString
                                 title:(NSString *)title
                                  hint:(NSString *)hint {
@@ -177,6 +322,14 @@
         case AIAssistantCitationKindImage: return @"图片";
         case AIAssistantCitationKindFile: return @"文件";
         case AIAssistantCitationKindLink: return @"链接";
+        case AIAssistantCitationKindPageMeta: return @"页信息";
+        case AIAssistantCitationKindPageArticle: return @"正文";
+        case AIAssistantCitationKindPageOutline: return @"提纲";
+        case AIAssistantCitationKindPageHTML: return @"HTML";
+        case AIAssistantCitationKindPageMarkdown: return @"Markdown";
+        case AIAssistantCitationKindResourceScript: return @"JS";
+        case AIAssistantCitationKindResourceStyle: return @"CSS";
+        case AIAssistantCitationKindResourceJSON: return @"JSON";
     }
     return @"引用";
 }
@@ -192,6 +345,21 @@
             t = [[t substringToIndex:18] stringByAppendingString:@"…"];
         }
         return [NSString stringWithFormat:@"图 · %@", t];
+    }
+    if (self.kind == AIAssistantCitationKindPageMeta) {
+        NSString *t = self.title.length ? self.title : @"页信息";
+        t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        if (t.length > 18) t = [[t substringToIndex:18] stringByAppendingString:@"…"];
+        return [NSString stringWithFormat:@"页 · %@", t];
+    }
+    if (self.kind == AIAssistantCitationKindPageArticle ||
+        self.kind == AIAssistantCitationKindPageOutline ||
+        self.kind == AIAssistantCitationKindPageHTML ||
+        self.kind == AIAssistantCitationKindPageMarkdown ||
+        self.kind == AIAssistantCitationKindResourceScript ||
+        self.kind == AIAssistantCitationKindResourceStyle ||
+        self.kind == AIAssistantCitationKindResourceJSON) {
+        return self.title.length ? self.title : [self kindDisplayName];
     }
     NSString *t = self.title.length ? self.title : self.body;
     t = [t stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
@@ -232,6 +400,45 @@
                 [block appendFormat:@"所在网页地址：%@\n", pageURL];
             } else if (self.sourcePageTitle.length > 0) {
                 [block appendFormat:@"所在网页标题：%@\n", self.sourcePageTitle];
+            }
+            return block;
+        }
+        case AIAssistantCitationKindPageMeta:
+            return [NSString stringWithFormat:@"【引用 · 页信息】\n%@", self.body ?: @""];
+        case AIAssistantCitationKindPageArticle:
+        case AIAssistantCitationKindPageOutline:
+        case AIAssistantCitationKindPageHTML:
+        case AIAssistantCitationKindPageMarkdown:
+        case AIAssistantCitationKindResourceScript:
+        case AIAssistantCitationKindResourceStyle:
+        case AIAssistantCitationKindResourceJSON: {
+            NSString *label = [self kindDisplayName];
+            NSMutableString *block = [NSMutableString stringWithFormat:@"【引用 · %@】\n", label];
+            if (self.title.length) [block appendFormat:@"名称：%@\n", self.title];
+            if (self.sourcePageTitle.length) {
+                [block appendFormat:@"页面标题：%@\n", self.sourcePageTitle];
+            }
+            NSString *pageURL = self.sourcePageURL.absoluteString ?: @"";
+            if (pageURL.length) [block appendFormat:@"页面地址：%@\n", pageURL];
+            NSString *resURL = self.url.absoluteString ?: @"";
+            if (resURL.length && self.kind >= AIAssistantCitationKindResourceScript) {
+                [block appendFormat:@"资源地址：%@\n", resURL];
+            } else if (resURL.length && self.kind == AIAssistantCitationKindPageHTML) {
+                [block appendFormat:@"页面地址：%@\n", resURL];
+            }
+            NSString *fence = @"text";
+            if (self.kind == AIAssistantCitationKindPageHTML) fence = @"html";
+            else if (self.kind == AIAssistantCitationKindResourceScript) fence = @"javascript";
+            else if (self.kind == AIAssistantCitationKindResourceStyle) fence = @"css";
+            else if (self.kind == AIAssistantCitationKindResourceJSON) fence = @"json";
+            else if (self.kind == AIAssistantCitationKindPageMarkdown) fence = @"markdown";
+            if (self.kind == AIAssistantCitationKindPageHTML ||
+                self.kind == AIAssistantCitationKindResourceScript ||
+                self.kind == AIAssistantCitationKindResourceStyle ||
+                self.kind == AIAssistantCitationKindResourceJSON) {
+                [block appendFormat:@"```%@\n%@\n```", fence, self.body ?: @""];
+            } else {
+                [block appendString:self.body ?: @""];
             }
             return block;
         }

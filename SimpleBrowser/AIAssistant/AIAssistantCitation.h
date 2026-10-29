@@ -8,6 +8,14 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
     AIAssistantCitationKindImage,     /// 在线图片
     AIAssistantCitationKindFile,      /// 在线文件
     AIAssistantCitationKindLink,      /// 其他链接
+    AIAssistantCitationKindPageMeta,  /// 页面元信息（标题/URL/描述）
+    AIAssistantCitationKindPageArticle, /// 页面正文
+    AIAssistantCitationKindPageOutline, /// 页面提纲
+    AIAssistantCitationKindPageHTML,    /// 页面 HTML
+    AIAssistantCitationKindPageMarkdown, /// 页面 Markdown
+    AIAssistantCitationKindResourceScript,
+    AIAssistantCitationKindResourceStyle,
+    AIAssistantCitationKindResourceJSON,
 };
 
 @interface AIAssistantCitation : NSObject
@@ -22,6 +30,7 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
 @property (nonatomic, copy, readonly, nullable) NSURL *sourcePageURL;
 /// 来源页标题（可选）
 @property (nonatomic, copy, readonly, nullable) NSString *sourcePageTitle;
+@property (nonatomic, copy, nullable) NSString *resourceId; /// PageContext 资源 id（可空）
 @property (nonatomic, strong, nullable) NSImage *previewImage;
 
 + (instancetype)textCitation:(NSString *)text;
@@ -37,6 +46,33 @@ typedef NS_ENUM(NSInteger, AIAssistantCitationKind) {
                            pageTitle:(nullable NSString *)pageTitle;
 + (instancetype)fileCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
 + (instancetype)linkCitationWithURL:(NSURL *)url title:(nullable NSString *)title;
+
++ (nullable instancetype)pageMetaCitationWithTitle:(nullable NSString *)title
+                                         urlString:(nullable NSString *)urlString
+                                       description:(nullable NSString *)description
+                                          language:(nullable NSString *)language;
++ (nullable instancetype)pageArticleCitationWithText:(NSString *)text
+                                             quality:(nullable NSString *)quality
+                                             warning:(nullable NSString *)warning
+                                           pageTitle:(nullable NSString *)pageTitle
+                                             pageURL:(nullable NSString *)pageURL;
++ (nullable instancetype)pageOutlineCitationWithText:(NSString *)text
+                                           pageTitle:(nullable NSString *)pageTitle
+                                             pageURL:(nullable NSString *)pageURL;
++ (nullable instancetype)pageHTMLCitationWithText:(NSString *)text
+                                        truncated:(BOOL)truncated
+                                        pageTitle:(nullable NSString *)pageTitle
+                                          pageURL:(nullable NSString *)pageURL;
++ (nullable instancetype)pageMarkdownCitationWithText:(NSString *)text
+                                            pageTitle:(nullable NSString *)pageTitle
+                                              pageURL:(nullable NSString *)pageURL;
++ (nullable instancetype)resourceCitationWithKind:(AIAssistantCitationKind)kind
+                                            title:(NSString *)title
+                                             body:(NSString *)body
+                                              url:(nullable NSString *)urlString
+                                       resourceId:(nullable NSString *)resourceId
+                                        pageTitle:(nullable NSString *)pageTitle
+                                          pageURL:(nullable NSString *)pageURL;
 
 /// 根据 URL 扩展名与 DOM 提示推断类型（hint: text|image|file|link|url）
 + (instancetype)citationWithURLString:(NSString *)urlString

@@ -79,4 +79,5 @@
 
 ## 6. 后续能力（见开发计划 Phase B～D）
 
-整页摘要、问答本页、多轮、流式、改写、上游模型分组、阅读模式 AI、标签整理等。
+- **页面上下文（已定稿）**：整页正文摘要、可勾选 Bundle（HTML/资源）、Prompt Recipe — [ai-page-context-design.md](ai-page-context-design.md) · [ai-page-context-development-plan.md](ai-page-context-development-plan.md)
+- 多轮（已完成）、流式、改写、上游模型分组、阅读模式 AI、标签整理等。

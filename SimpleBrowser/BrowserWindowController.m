@@ -52,6 +52,7 @@
 #import "PagePackInjector.h"
 #import "BrowserScraperSidebarController.h"
 #import "BrowserScraperMessageHub.h"
+#import "BrowserScraperModels.h"
 #import "AIBridgeSidebarController.h"
 #import "AIBridgeService.h"
 #import "AIBridgeRegistry.h"
@@ -59,6 +60,8 @@
 #import "AIAssistantSessionStore.h"
 #import "BrowserAIAssistantSidebarController.h"
 #import "BrowserAIAssistantPrompts.h"
+#import "AIPageContextRecipe.h"
+#import "AIPageContextStore.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
 #import "BrowserTabOverviewController.h"
@@ -3124,6 +3127,50 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
 }
 
+- (void)openAIAssistantSummarizeCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDSummarizePage autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (void)openAIAssistantAskCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDAskPage autoSend:NO];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab || tab.isNewTabPage) {
+        return nil;
+    }
+    return tab.webView;
+}
+
+- (NSUUID *)aiAssistantSidebarCurrentTabID:(BrowserAIAssistantSidebarController *)controller {
+    (void)controller;
+    return self.tabController.selectedTab.tabID;
+}
+
+- (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
+applyScraperDraftRecipe:(id)recipe {
+    (void)controller;
+    if (![recipe isKindOfClass:[BrowserScraperRecipe class]]) return;
+    [self.trailingSidebarSlot setScraperVisible:YES animated:YES];
+    [BrowserScraperMessageHub sharedHub].activeSidebar = self.scraperSidebarController;
+    [self.scraperSidebarController applyExternalDraftRecipe:(BrowserScraperRecipe *)recipe];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionPageScraperID];
+    [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionAIAssistantID];
+    [self updateAIAssistantButtonAppearance];
+}
+
 - (void)addAIAssistantCitation:(NSDictionary *)payload {
     [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
     [self.aiAssistantSidebarController reloadUI];
@@ -5317,6 +5364,10 @@ didRequestTransferTabID:(NSUUID *)tabID
     NSMutableArray<NSURL *> *accepted = [NSMutableArray array];
     for (NSURL *url in urls) {
         NSString *scheme = url.scheme.lowercaseString;
+        if ([scheme isEqualToString:@"meobrowser"]) {
+            [self handleMeoBrowserURL:url];
+            continue;
+        }
         BOOL isWebURL = [scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"];
         if (isWebURL) {
             [accepted addObject:url];
@@ -5331,6 +5382,70 @@ didRequestTransferTabID:(NSUUID *)tabID
         return;
     }
     [self openAcceptedURLsInBrowser:accepted];
+}
+
+- (BOOL)handleMeoBrowserURL:(NSURL *)url {
+    if (![url.scheme.lowercaseString isEqualToString:@"meobrowser"]) {
+        return NO;
+    }
+    [self showWindow:nil];
+    [self.window makeKeyAndOrderFront:nil];
+
+    NSString *host = url.host.lowercaseString ?: @"";
+    NSURLComponents *comps = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSMutableDictionary<NSString *, NSString *> *q = [NSMutableDictionary dictionary];
+    for (NSURLQueryItem *item in comps.queryItems) {
+        if (item.name.length) q[item.name] = item.value ?: @"";
+    }
+
+    // meobrowser://ai?action=summarize|ask|outline|…
+    // meobrowser://open?url=https://…
+    if ([host isEqualToString:@"open"] || [url.path isEqualToString:@"/open"]) {
+        NSString *target = q[@"url"];
+        if (target.length) {
+            NSURL *web = [NSURL URLWithString:target];
+            if (web) [self openAcceptedURLsInBrowser:@[web]];
+        }
+        return YES;
+    }
+
+    BOOL isAI = [host isEqualToString:@"ai"] || [url.path hasPrefix:@"/ai"] || [host isEqualToString:@""];
+    // meobrowser:ai?… 或 meobrowser://ai?…
+    NSString *action = q[@"action"];
+    if (!action.length && [host isEqualToString:@"ai"]) {
+        action = @"summarize";
+    }
+    // path-style: meobrowser://ai/summarize
+    if (!action.length && url.path.length > 1) {
+        action = [[url.path substringFromIndex:1] pathComponents].firstObject;
+    }
+    if (isAI || action.length) {
+        NSString *recipeId = AIPageContextRecipeIDSummarizePage;
+        BOOL autoSend = YES;
+        if ([action isEqualToString:@"ask"]) {
+            recipeId = AIPageContextRecipeIDAskPage;
+            autoSend = NO;
+        } else if ([action isEqualToString:@"outline"]) {
+            recipeId = AIPageContextRecipeIDOutlinePage;
+            autoSend = YES;
+        } else if ([action isEqualToString:@"facts"] || [action isEqualToString:@"extract"]) {
+            recipeId = AIPageContextRecipeIDExtractFacts;
+            autoSend = YES;
+        } else if ([action isEqualToString:@"regex"]) {
+            recipeId = AIPageContextRecipeIDRegexExtract;
+            autoSend = NO;
+        } else if (q[@"recipe"].length) {
+            recipeId = q[@"recipe"];
+            autoSend = ![recipeId isEqualToString:AIPageContextRecipeIDAskPage];
+        }
+        [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+        [self.aiAssistantSidebarController reloadUI];
+        [self.aiAssistantSidebarController presentPageRecipe:recipeId autoSend:autoSend];
+        [self updateAIAssistantButtonAppearance];
+        [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+        return YES;
+    }
+    return NO;
 }
 
 - (void)openAcceptedURLsInBrowser:(NSArray<NSURL *> *)urls {
@@ -7460,6 +7575,9 @@ didBecomeDownload:(WKDownload *)download {
     BrowserTab *tab = [self.tabController tabForWebView:webView];
     if (![tab isMainFrameNavigation:navigation]) {
         return;
+    }
+    if (tab.tabID) {
+        [[AIPageContextStore sharedStore] markStaleForTabID:tab.tabID];
     }
     if (webView == self.webView && self.autoScrollController.enabled) {
         self.autoScrollController.enabled = NO;

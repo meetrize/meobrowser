@@ -1247,6 +1247,15 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     }
 }
 
+- (void)applyExternalDraftRecipe:(BrowserScraperRecipe *)recipe {
+    if (!recipe) return;
+    self.draft = [recipe copy];
+    [self refreshRecipePopup];
+    [self.recipePopup selectItemAtIndex:0];
+    [self syncUIFromDraft];
+    self.statusLabel.stringValue = @"已从 AI 导入草稿（未保存）";
+}
+
 - (void)syncUIFromDraft {
     self.nameField.stringValue = self.draft.name ?: @"";
     [self.modePopup selectItemAtIndex:self.draft.mode == BrowserScraperModeScalar ? 1 : 0];
