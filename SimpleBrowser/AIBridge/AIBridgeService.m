@@ -875,7 +875,7 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
             [[AIBridgeJobQueue sharedQueue] enqueueModel:model
                                                   prompt:prompt
                                              attachments:attachments
-                                               timeoutMs:120000
+                                               timeoutMs:180000
                                               completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
                 NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
                 [strongSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];

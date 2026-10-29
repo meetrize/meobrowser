@@ -69,6 +69,37 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
     return urls;
 }
 
+/// 剪贴板是否含截图/图片（系统 ⌘⌃⇧4 多为 TIFF，纯文本 NSTextView 默认会因此禁用「粘贴」）
+static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
+    if (!pb) return NO;
+    if ([pb availableTypeFromArray:@[
+            NSPasteboardTypePNG,
+            NSPasteboardTypeTIFF,
+            @"public.png",
+            @"public.tiff",
+            @"public.jpeg",
+            @"public.jpg",
+            @"public.heic",
+            @"NeXT TIFF v4.0 pasteboard type",
+        ]]) {
+        return YES;
+    }
+    if ([pb canReadObjectForClasses:@[ [NSImage class] ] options:@{}]) return YES;
+    // 轻量探测：不强制解码大图
+    for (NSPasteboardItem *item in pb.pasteboardItems) {
+        NSArray *types = item.types ?: @[];
+        for (NSString *t in types) {
+            if ([t hasPrefix:@"public."] &&
+                ([t containsString:@"png"] || [t containsString:@"tiff"] ||
+                 [t containsString:@"jpeg"] || [t containsString:@"jpg"] ||
+                 [t containsString:@"heic"] || [t containsString:@"image"])) {
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
 /// 输入区拖放宿主：高亮 + 把文件 URL 交给侧栏（子视图未接手时兜底）。
 @interface AIAssistantComposerDropView : NSView
 @property (nonatomic, copy, nullable) BOOL (^canAcceptURLs)(NSArray<NSURL *> *urls);
@@ -144,10 +175,65 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
-        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL, @"public.file-url", @"NSFilenamesPboardType" ]];
+        [self registerForDraggedTypes:@[
+            NSPasteboardTypeFileURL,
+            @"public.file-url",
+            @"NSFilenamesPboardType",
+            NSPasteboardTypePNG,
+            NSPasteboardTypeTIFF,
+            @"public.png",
+            @"public.tiff",
+            @"public.jpeg",
+        ]];
     }
     return self;
 }
+
+/// 声明可读图片类型，否则系统认为「无可粘贴内容」，右键/菜单「粘贴」一直灰、⌘V 也不触发
+- (NSArray<NSPasteboardType> *)readablePasteboardTypes {
+    NSMutableArray<NSPasteboardType> *types =
+        [[super readablePasteboardTypes] mutableCopy] ?: [NSMutableArray array];
+    NSArray *extra = @[
+        NSPasteboardTypePNG,
+        NSPasteboardTypeTIFF,
+        @"public.png",
+        @"public.tiff",
+        @"public.jpeg",
+        @"public.jpg",
+        @"public.heic",
+        @"NeXT TIFF v4.0 pasteboard type",
+    ];
+    for (NSString *t in extra) {
+        if (t.length && ![types containsObject:t]) [types addObject:t];
+    }
+    return types;
+}
+
+- (BOOL)pasteboardHasAttachmentContent {
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    return MeoAIAssistantPasteboardLooksLikeImage(pb) || MeoAIAssistantFileURLsFromPasteboard(pb).count > 0;
+}
+
+- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
+    SEL action = item.action;
+    if (action == @selector(paste:) ||
+        action == @selector(pasteAsPlainText:) ||
+        action == @selector(pasteAsRichText:)) {
+        if (!self.isEditable || !self.window) {
+            return NO;
+        }
+        // 剪贴板是截图/文件时强制可粘贴（由 tryPasteAttachment 收成附件）
+        if ([self pasteboardHasAttachmentContent]) {
+            return YES;
+        }
+    }
+    return [super validateUserInterfaceItem:item];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    return [self validateUserInterfaceItem:menuItem];
+}
+
 - (void)paste:(id)sender {
     if (self.tryPasteAttachment && self.tryPasteAttachment()) {
         return;
@@ -159,6 +245,20 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
         return;
     }
     [super pasteAsPlainText:sender];
+}
+- (void)pasteAsRichText:(id)sender {
+    if (self.tryPasteAttachment && self.tryPasteAttachment()) {
+        return;
+    }
+    [super pasteAsRichText:sender];
+}
+/// NSTextView 的 paste: 最终会走到这里；截图粘贴必须拦在此，避免变成内嵌附件字符
+- (BOOL)readSelectionFromPasteboard:(NSPasteboard *)pboard {
+    (void)pboard;
+    if (self.tryPasteAttachment && self.tryPasteAttachment()) {
+        return YES;
+    }
+    return [super readSelectionFromPasteboard:pboard];
 }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     NSArray<NSURL *> *urls = MeoAIAssistantFileURLsFromPasteboard(sender.draggingPasteboard);
@@ -1149,7 +1249,7 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
     self.focusTabButton.hidden = detached;
     self.attachButton.enabled = attachOK && !self.inFlight;
     self.attachButton.toolTip = attachOK
-        ? @"添加本地附件（可拖放到输入框，或 ⌘V 粘贴图片）"
+        ? @"添加本地附件（可拖放；⌘V 可粘贴截图/图片）"
         : @"当前仅 DeepSeek 网页支持附件";
     if (!attachOK && self.pendingAttachments.count > 0) {
         [self.pendingAttachments removeAllObjects];
@@ -1418,53 +1518,172 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
     }];
 }
 
+/// 剪贴板是否像「截图/图片」（无文件 URL 时也要能识别）
+- (BOOL)pasteboardLooksLikeImage:(NSPasteboard *)pb {
+    return MeoAIAssistantPasteboardLooksLikeImage(pb);
+}
+
+/// 把剪贴板图片稳定编码为 PNG（⌘⌃⇧4 截图多为 TIFF）
+- (nullable NSData *)pngDataFromPasteboardImage:(NSPasteboard *)pb {
+    if (!pb) return nil;
+
+    // 1) 直接拿 PNG
+    NSData *png = [pb dataForType:NSPasteboardTypePNG] ?: [pb dataForType:@"public.png"];
+    if (png.length > 16) return png;
+
+    // 2) 合成 NSImage（对系统截图最稳）
+    NSImage *img = [[NSImage alloc] initWithPasteboard:pb];
+    if (!img || img.size.width < 1 || img.size.height < 1) {
+        NSArray *objs = [pb readObjectsForClasses:@[ [NSImage class] ] options:@{}];
+        img = [objs.firstObject isKindOfClass:[NSImage class]] ? objs.firstObject : nil;
+    }
+    if (!img || img.size.width < 1 || img.size.height < 1) {
+        // 3) 按 UTI 扫 pasteboard item
+        for (NSPasteboardItem *item in pb.pasteboardItems) {
+            for (NSString *type in @[ NSPasteboardTypeTIFF, @"public.tiff", @"public.jpeg", @"public.jpg", @"public.heic" ]) {
+                NSData *data = [item dataForType:type];
+                if (data.length < 16) continue;
+                img = [[NSImage alloc] initWithData:data];
+                if (img && img.size.width > 0) break;
+            }
+            if (img && img.size.width > 0) break;
+        }
+    }
+    if (!img || img.size.width < 1 || img.size.height < 1) return nil;
+
+    NSBitmapImageRep *rep = nil;
+    for (NSImageRep *r in img.representations) {
+        if ([r isKindOfClass:[NSBitmapImageRep class]]) {
+            rep = (NSBitmapImageRep *)r;
+            break;
+        }
+    }
+    if (!rep) {
+        NSData *tiff = [img TIFFRepresentation];
+        rep = tiff.length ? [NSBitmapImageRep imageRepWithData:tiff] : nil;
+    }
+    if (!rep) {
+        NSSize sz = img.size;
+        NSInteger w = MAX(1, (NSInteger)floor(sz.width));
+        NSInteger h = MAX(1, (NSInteger)floor(sz.height));
+        rep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:NULL
+                          pixelsWide:w
+                          pixelsHigh:h
+                       bitsPerSample:8
+                     samplesPerPixel:4
+                            hasAlpha:YES
+                            isPlanar:NO
+                      colorSpaceName:NSCalibratedRGBColorSpace
+                         bytesPerRow:0
+                        bitsPerPixel:0];
+        if (!rep) return nil;
+        NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+        if (!ctx) return nil;
+        [NSGraphicsContext saveGraphicsState];
+        [NSGraphicsContext setCurrentContext:ctx];
+        [[NSColor clearColor] set];
+        NSRectFill(NSMakeRect(0, 0, w, h));
+        [img drawInRect:NSMakeRect(0, 0, w, h)
+               fromRect:NSZeroRect
+              operation:NSCompositingOperationSourceOver
+               fraction:1.0
+         respectFlipped:YES
+                  hints:@{ NSImageHintInterpolation: @(NSImageInterpolationHigh) }];
+        [NSGraphicsContext restoreGraphicsState];
+    }
+    return [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+}
+
+/// 截图压缩为 JPEG：限制最长边，便于 Bridge 注入与 DeepSeek 上传
+- (nullable NSData *)compressedJPEGDataFromPasteboardImage:(NSPasteboard *)pb maxSide:(CGFloat)maxSide {
+    if (!pb) return nil;
+    NSImage *img = [[NSImage alloc] initWithPasteboard:pb];
+    if (!img || img.size.width < 1 || img.size.height < 1) {
+        NSArray *objs = [pb readObjectsForClasses:@[ [NSImage class] ] options:@{}];
+        img = [objs.firstObject isKindOfClass:[NSImage class]] ? objs.firstObject : nil;
+    }
+    if (!img || img.size.width < 1 || img.size.height < 1) {
+        NSData *png = [self pngDataFromPasteboardImage:pb];
+        if (png.length) img = [[NSImage alloc] initWithData:png];
+    }
+    if (!img || img.size.width < 1 || img.size.height < 1) return nil;
+
+    NSSize src = img.size;
+    for (NSImageRep *r in img.representations) {
+        if (r.pixelsWide > 0 && r.pixelsHigh > 0) {
+            src = NSMakeSize(r.pixelsWide, r.pixelsHigh);
+            break;
+        }
+    }
+    CGFloat longest = MAX(src.width, src.height);
+    CGFloat scale = (maxSide > 0 && longest > maxSide) ? (maxSide / longest) : 1.0;
+    NSInteger w = MAX(1, (NSInteger)floor(src.width * scale));
+    NSInteger h = MAX(1, (NSInteger)floor(src.height * scale));
+
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL
+                      pixelsWide:w
+                      pixelsHigh:h
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSCalibratedRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0];
+    if (!rep) return nil;
+    NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!ctx) return nil;
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:ctx];
+    [[NSColor whiteColor] set]; // JPEG 无透明：白底
+    NSRectFill(NSMakeRect(0, 0, w, h));
+    [img drawInRect:NSMakeRect(0, 0, w, h)
+           fromRect:NSZeroRect
+          operation:NSCompositingOperationSourceOver
+           fraction:1.0
+     respectFlipped:YES
+              hints:@{ NSImageHintInterpolation: @(NSImageInterpolationHigh) }];
+    [NSGraphicsContext restoreGraphicsState];
+
+    NSData *jpeg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                     properties:@{ NSImageCompressionFactor: @0.82 }];
+    // 仍过大则再压一档
+    if (jpeg.length > 2.5 * 1024 * 1024) {
+        jpeg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                 properties:@{ NSImageCompressionFactor: @0.65 }];
+    }
+    return jpeg.length ? jpeg : nil;
+}
+
 - (BOOL)tryPasteImageAsAttachment {
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    BOOL looksImage = [self pasteboardLooksLikeImage:pb];
+    NSArray<NSURL *> *fileURLs = MeoAIAssistantFileURLsFromPasteboard(pb);
+
     if (![self attachmentsSupportedForCurrentSession]) {
         // 剪贴板是图片/文件时吞掉粘贴并提示；纯文字仍交给系统
-        NSPasteboard *pb = NSPasteboard.generalPasteboard;
-        BOOL looksImage = ([pb dataForType:NSPasteboardTypePNG].length > 0 ||
-                           [pb dataForType:NSPasteboardTypeTIFF].length > 0 ||
-                           [pb canReadObjectForClasses:@[ [NSImage class] ] options:@{}]);
-        NSArray<NSURL *> *files = MeoAIAssistantFileURLsFromPasteboard(pb);
-        if (looksImage || files.count > 0) {
+        if (looksImage || fileURLs.count > 0) {
             self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
             self.statusLabel.textColor = NSColor.systemOrangeColor;
             return YES;
         }
         return NO;
     }
-    NSPasteboard *pb = NSPasteboard.generalPasteboard;
 
     // 1) 剪贴板文件（Finder 拷贝）
-    NSArray<NSURL *> *fileURLs = MeoAIAssistantFileURLsFromPasteboard(pb);
     if (fileURLs.count) {
         [self addAttachmentURLs:fileURLs];
         return YES;
     }
 
-    // 2) 位图：PNG / TIFF / NSImage（截图 ⌘⌃⇧4 等）
-    NSData *png = [pb dataForType:NSPasteboardTypePNG];
-    NSData *tiff = png ? nil : [pb dataForType:NSPasteboardTypeTIFF];
-    NSData *raw = png ?: tiff;
-    NSString *ext = png ? @"png" : @"png";
+    // 2) 截图 / 位图 → 压缩 JPEG 临时附件
+    // 全分辨率 PNG 往往数 MB，Bridge 分片注入会卡住，DeepSeek 页表现为「毫无动静」
+    NSData *raw = [self compressedJPEGDataFromPasteboardImage:pb maxSide:2048];
     if (!raw.length) {
-        NSArray *images = [pb readObjectsForClasses:@[ [NSImage class] ] options:@{}];
-        NSImage *img = [images.firstObject isKindOfClass:[NSImage class]] ? images.firstObject : nil;
-        if (img) {
-            NSData *tiffData = [img TIFFRepresentation];
-            NSBitmapImageRep *rep = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
-            raw = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-            ext = @"png";
-        }
-    } else if (!png && tiff) {
-        NSImage *img = [[NSImage alloc] initWithData:tiff];
-        NSData *tiffData = [img TIFFRepresentation];
-        NSBitmapImageRep *rep = tiffData ? [NSBitmapImageRep imageRepWithData:tiffData] : nil;
-        NSData *asPNG = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        if (asPNG.length) {
-            raw = asPNG;
-            ext = @"png";
-        }
+        // 回退：未压缩 PNG（小图）
+        raw = [self pngDataFromPasteboardImage:pb];
     }
     if (!raw.length) return NO;
 
@@ -1473,20 +1692,25 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
         self.statusLabel.textColor = NSColor.systemOrangeColor;
         return YES;
     }
+    BOOL isJPEG = (raw.length >= 3 &&
+                   ((const unsigned char *)raw.bytes)[0] == 0xFF &&
+                   ((const unsigned char *)raw.bytes)[1] == 0xD8);
+    NSString *ext = isJPEG ? @"jpg" : @"png";
     NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"MeoAIAttachments"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *name = [NSString stringWithFormat:@"paste-%@.%@",
+    NSString *name = [NSString stringWithFormat:@"screenshot-%@.%@",
                       [[NSUUID UUID].UUIDString substringToIndex:8], ext];
     NSString *path = [dir stringByAppendingPathComponent:name];
     if (![raw writeToFile:path atomically:YES]) {
-        self.statusLabel.stringValue = @"无法保存粘贴图片";
+        self.statusLabel.stringValue = @"无法保存粘贴截图";
         self.statusLabel.textColor = NSColor.systemRedColor;
         return YES;
     }
     NSString *err = nil;
     if ([self addAttachmentPath:path errorMessage:&err]) {
         [self refreshAttachmentChips];
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已添加粘贴图片 %@", name];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"已添加截图 %@（%.0fKB）",
+                                        name, raw.length / 1024.0];
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
     } else if (err.length) {
         self.statusLabel.stringValue = err;
@@ -2025,7 +2249,13 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
         return;
     }
 
-    NSString *apiPrompt = [self composePromptWithUserText:text];
+    // 仅附件无文案时给模型可读指令（避免「请根据引用作答」占位）
+    NSString *apiPrompt = nil;
+    if (text.length == 0 && self.citations.count == 0 && self.pendingAttachments.count > 0) {
+        apiPrompt = @"请查看附件";
+    } else {
+        apiPrompt = [self composePromptWithUserText:text];
+    }
     self.pendingSystemHint = nil;
     NSMutableArray<NSString *> *attachPaths = [NSMutableArray array];
     NSMutableArray<NSDictionary *> *uiAttachments = [NSMutableArray array];

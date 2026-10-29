@@ -197,8 +197,8 @@
         totalB64 += b64.length;
     }
 
-    // ≤180KB base64（约 135KB 文件）一次注入，避免分片状态机卡死
-    if (totalB64 > 0 && totalB64 <= 180000) {
+    // ≤500KB base64（约 375KB 文件）一次注入；截图压缩后多落在此区间
+    if (totalB64 > 0 && totalB64 <= 500000) {
         NSError *jsonErr = nil;
         NSData *data = [NSJSONSerialization dataWithJSONObject:attachments options:0 error:&jsonErr];
         if (!data) {
