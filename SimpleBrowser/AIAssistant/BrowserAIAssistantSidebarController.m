@@ -364,9 +364,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSButton *closeBtn;
 @property (nonatomic, strong) NSView *statusDot;
-@property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSButton *connectButton;   // 未连接时：连接 / 重连
-@property (nonatomic, strong) NSButton *focusTabButton;  // 已连接时：显示
+/// 连接状态：未连接时可点直接连接；已连接时展示「已连接 · 平台」
+@property (nonatomic, strong) NSButton *connectionStatusButton;
+@property (nonatomic, strong) NSButton *focusTabButton;  // 已连接时：显示 AI 网页标签
 @property (nonatomic, strong) NSButton *autoConnectCheckbox;
 @property (nonatomic, strong) NSStackView *statusRow;
 @property (nonatomic, strong) NSButton *moreButton;
@@ -769,27 +769,23 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self.statusDot.heightAnchor constraintEqualToConstant:7],
     ]];
 
-    self.statusLabel = [NSTextField labelWithString:@""];
-    self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.statusLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
-    self.statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    [self.statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
-
-    self.connectButton = [NSButton buttonWithTitle:@"连接" target:self action:@selector(connectClicked:)];
-    self.connectButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.connectButton.bezelStyle = NSBezelStyleRounded;
-    self.connectButton.controlSize = NSControlSizeMini;
-    self.connectButton.font = [NSFont systemFontOfSize:11];
-    self.connectButton.hidden = YES;
+    self.connectionStatusButton = [NSButton buttonWithTitle:@"未连接"
+                                                     target:self
+                                                     action:@selector(connectClicked:)];
+    self.connectionStatusButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.connectionStatusButton.bezelStyle = NSBezelStyleRounded;
+    self.connectionStatusButton.controlSize = NSControlSizeMini;
+    self.connectionStatusButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.connectionStatusButton.toolTip = @"点击连接 AI 网页";
+    [self.connectionStatusButton setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.focusTabButton = [NSButton buttonWithTitle:@"显示" target:self action:@selector(focusTabClicked:)];
     self.focusTabButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.focusTabButton.bezelStyle = NSBezelStyleRounded;
     self.focusTabButton.controlSize = NSControlSizeMini;
     self.focusTabButton.font = [NSFont systemFontOfSize:11];
-    self.focusTabButton.toolTip = @"显示已绑定的网页标签";
+    self.focusTabButton.toolTip = @"显示已绑定的 AI 网页标签";
     self.focusTabButton.hidden = YES;
 
     self.autoConnectCheckbox = [NSButton checkboxWithTitle:@"自动连接"
@@ -803,15 +799,14 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         ? NSControlStateValueOn : NSControlStateValueOff;
 
     self.statusRow = [NSStackView stackViewWithViews:@[
-        self.statusDot, self.statusLabel, self.connectButton, self.focusTabButton, self.autoConnectCheckbox
+        self.statusDot, self.connectionStatusButton, self.focusTabButton, self.autoConnectCheckbox
     ]];
     self.statusRow.translatesAutoresizingMaskIntoConstraints = NO;
     self.statusRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.statusRow.alignment = NSLayoutAttributeCenterY;
     self.statusRow.spacing = 6;
     self.statusRow.edgeInsets = NSEdgeInsetsMake(0, 0, 0, 0);
-    [self.statusRow setCustomSpacing:8 afterView:self.statusLabel];
-    [self.statusRow setCustomSpacing:4 afterView:self.connectButton];
+    [self.statusRow setCustomSpacing:8 afterView:self.connectionStatusButton];
     [self.statusRow setCustomSpacing:4 afterView:self.focusTabButton];
 
     self.moreButton = [NSButton buttonWithTitle:@"⋯" target:self action:@selector(moreClicked:)];
@@ -1339,6 +1334,38 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self.chatPanel reloadMessages:s.messages];
 }
 
+/// 顶部只展示连接态；临时提示不再覆盖（避免「已重新采集 / 正文提取较短」等抢占绑定区）。
+- (void)setStatusTip:(NSString *)tip {
+    (void)tip;
+}
+
+- (void)applyConnectionStatusTitle:(NSString *)title
+                         clickable:(BOOL)clickable
+                         tooltip:(NSString *)tooltip {
+    self.connectionStatusButton.title = title.length ? title : @"未连接";
+    self.connectionStatusButton.enabled = YES; // 已连接时也保持可读，只是不可点
+    self.connectionStatusButton.toolTip = tooltip.length
+        ? tooltip
+        : (clickable ? @"点击连接 AI 网页" : nil);
+    if (clickable) {
+        self.connectionStatusButton.bezelStyle = NSBezelStyleRounded;
+        self.connectionStatusButton.bordered = YES;
+        self.connectionStatusButton.target = self;
+        self.connectionStatusButton.action = @selector(connectClicked:);
+        if (@available(macOS 10.14, *)) {
+            self.connectionStatusButton.contentTintColor = NSColor.controlAccentColor;
+        }
+    } else {
+        self.connectionStatusButton.bezelStyle = NSBezelStyleInline;
+        self.connectionStatusButton.bordered = NO;
+        self.connectionStatusButton.target = nil;
+        self.connectionStatusButton.action = nil;
+        if (@available(macOS 10.14, *)) {
+            self.connectionStatusButton.contentTintColor = NSColor.secondaryLabelColor;
+        }
+    }
+}
+
 - (void)reloadUI {
     if (self.isResizingWidth) return;
     [self refreshConnectionState];
@@ -1352,14 +1379,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         self.titleLabel.stringValue = @"AI 助手";
-        self.statusLabel.stringValue = @"未连接";
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self applyConnectionStatusTitle:@"未连接" clickable:YES tooltip:@"点击连接 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = self.inFlight; // 飞行中仍可点停止
         self.attachButton.enabled = NO;
-        self.connectButton.hidden = NO;
-        self.connectButton.enabled = YES;
-        self.connectButton.title = @"连接";
         self.focusTabButton.hidden = YES;
         [self applySendStopButtonAppearance];
         [self refreshAttachmentChips];
@@ -1374,10 +1397,6 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     BOOL opening = (s.connection == AIAssistantSessionConnectionOpening);
     BOOL errored = (s.connection == AIAssistantSessionConnectionError);
     BOOL attachOK = [self attachmentsSupportedForCurrentSession];
-    BOOL needConnect = detached || errored || (!ready && !opening);
-    self.connectButton.hidden = !needConnect;
-    self.connectButton.enabled = needConnect;
-    self.connectButton.title = @"连接";
     self.focusTabButton.hidden = !ready;
     self.focusTabButton.enabled = ready;
     self.attachButton.enabled = attachOK && !self.inFlight;
@@ -1387,37 +1406,33 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (!attachOK && self.pendingAttachments.count > 0) {
         [self.pendingAttachments removeAllObjects];
         [self refreshAttachmentChips];
-        if (self.statusLabel.stringValue.length == 0 ||
-            [self.statusLabel.stringValue containsString:@"附件"]) {
-            self.statusLabel.stringValue = @"已清除附件（当前模型不支持）";
-            self.statusLabel.textColor = NSColor.systemOrangeColor;
-        }
     }
 
     if (detached || errored) {
-        self.statusLabel.stringValue = platform.length
-            ? [NSString stringWithFormat:@"未连接 · %@", platform]
-            : @"未连接";
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self applyConnectionStatusTitle:@"未连接"
+                              clickable:YES
+                               tooltip:platform.length
+                                   ? [NSString stringWithFormat:@"点击连接 %@", platform]
+                                   : @"点击连接 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     } else if (ready) {
-        self.statusLabel.stringValue = platform.length
+        NSString *connected = platform.length
             ? [NSString stringWithFormat:@"已连接 · %@", platform]
             : @"已连接";
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self applyConnectionStatusTitle:connected clickable:NO tooltip:nil];
         self.statusDot.layer.backgroundColor = NSColor.systemGreenColor.CGColor;
         self.sendButton.enabled = YES; // 发送或停止
     } else if (opening) {
-        self.statusLabel.stringValue = @"连接中…";
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self applyConnectionStatusTitle:@"连接中…" clickable:NO tooltip:@"正在打开并绑定 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     } else {
-        self.statusLabel.stringValue = platform.length
-            ? [NSString stringWithFormat:@"未连接 · %@", platform]
-            : @"未连接";
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self applyConnectionStatusTitle:@"未连接"
+                              clickable:YES
+                               tooltip:platform.length
+                                   ? [NSString stringWithFormat:@"点击连接 %@", platform]
+                                   : @"点击连接 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     }
@@ -1636,16 +1651,14 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
     [self refreshAttachmentChips];
     if (errors.count) {
-        self.statusLabel.stringValue = errors.firstObject;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:errors.firstObject];
     }
 }
 
 - (void)attachClicked:(id)sender {
     (void)sender;
     if (![self attachmentsSupportedForCurrentSession]) {
-        self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"当前仅 DeepSeek 网页支持附件"];
         return;
     }
     NSOpenPanel *panel = [NSOpenPanel openPanel];
@@ -1808,8 +1821,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (![self attachmentsSupportedForCurrentSession]) {
         // 剪贴板是图片/文件时吞掉粘贴并提示；纯文字仍交给系统
         if (looksImage || fileURLs.count > 0) {
-            self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
-            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:@"当前仅 DeepSeek 网页支持附件"];
             return YES;
         }
         return NO;
@@ -1831,8 +1843,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (!raw.length) return NO;
 
     if (raw.length > kAssistantAttachmentMaxBytes) {
-        self.statusLabel.stringValue = @"粘贴图片超过 20MB";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"粘贴图片超过 20MB"];
         return YES;
     }
     BOOL isJPEG = (raw.length >= 3 &&
@@ -1845,19 +1856,16 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                       [[NSUUID UUID].UUIDString substringToIndex:8], ext];
     NSString *path = [dir stringByAppendingPathComponent:name];
     if (![raw writeToFile:path atomically:YES]) {
-        self.statusLabel.stringValue = @"无法保存粘贴截图";
-        self.statusLabel.textColor = NSColor.systemRedColor;
+        [self setStatusTip:@"无法保存粘贴截图"];
         return YES;
     }
     NSString *err = nil;
     if ([self addAttachmentPath:path errorMessage:&err]) {
         [self refreshAttachmentChips];
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已添加截图 %@（%.0fKB）",
-                                        name, raw.length / 1024.0];
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self setStatusTip:[NSString stringWithFormat:@"已添加截图 %@（%.0fKB）",
+                                        name, raw.length / 1024.0]];
     } else if (err.length) {
-        self.statusLabel.stringValue = err;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:err];
     }
     return YES;
 }
@@ -1891,8 +1899,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     (void)sender;
     NSButton *b = [sender isKindOfClass:[NSButton class]] ? sender : nil;
     NSString *tip = b.toolTip.length ? b.toolTip : @"即将推出";
-    self.statusLabel.stringValue = tip;
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:tip];
 }
 
 - (void)historyClicked:(id)sender {
@@ -1946,25 +1953,24 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [AIAssistantSessionStore.sharedStore saveSession:session];
     [self showPane:AIAssistantPaneChat];
     [self syncChatFromCurrentSession];
-    self.statusLabel.stringValue = @"连接中…";
+    [self applyConnectionStatusTitle:@"连接中…" clickable:NO tooltip:@"正在打开并绑定 AI 网页"];
     self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
     self.sendButton.enabled = NO;
 
     id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
     if (![del respondsToSelector:@selector(aiAssistantSidebar:openAndBindProviderId:sessionId:completion:)]) {
-        self.statusLabel.stringValue = @"无法打开网页（无窗口委托）";
+        [self applyConnectionStatusTitle:@"未连接" clickable:YES tooltip:@"无法打开网页（无窗口委托）"];
         return;
     }
     __weak typeof(self) weakSelf = self;
     NSString *sid = session.sessionId;
     [del aiAssistantSidebar:self openAndBindProviderId:providerId sessionId:sid completion:^(AIBridgeBinding *binding, NSString *errorDetail) {
+        (void)errorDetail;
         AIAssistantSession *s = [AIAssistantSessionStore.sharedStore sessionForId:sid];
         if (!s) return;
         if (!binding) {
             s.connection = AIAssistantSessionConnectionError;
             [AIAssistantSessionStore.sharedStore saveSession:s];
-            weakSelf.statusLabel.stringValue = errorDetail.length ? errorDetail : @"打开失败";
-            weakSelf.statusLabel.textColor = NSColor.systemRedColor;
             weakSelf.statusDot.layer.backgroundColor = NSColor.systemRedColor.CGColor;
             [weakSelf reloadUI];
             return;
@@ -2024,17 +2030,16 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (![del respondsToSelector:@selector(aiAssistantSidebar:reopenAndBindProviderId:sessionId:completion:)]) {
         s.connection = AIAssistantSessionConnectionError;
         [AIAssistantSessionStore.sharedStore saveSession:s];
-        self.statusLabel.stringValue = @"无法连接（无窗口委托）";
         [self reloadUI];
         return;
     }
     [del aiAssistantSidebar:self reopenAndBindProviderId:pid sessionId:sid completion:^(AIBridgeBinding *binding, NSString *errorDetail) {
+        (void)errorDetail;
         AIAssistantSession *sess = [AIAssistantSessionStore.sharedStore sessionForId:sid];
         if (!sess) return;
         if (!binding) {
             sess.connection = AIAssistantSessionConnectionDetached;
             [AIAssistantSessionStore.sharedStore saveSession:sess];
-            weakSelf.statusLabel.stringValue = errorDetail.length ? errorDetail : @"连接失败";
             [weakSelf reloadUI];
             return;
         }
@@ -2149,8 +2154,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (![mode isKindOfClass:[NSString class]]) return;
     BrowserAIAssistantPreferences.sharedPreferences.pageContextPrivacyMode = mode;
     [self refreshPageContextTray];
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"隐私档：%@", mode];
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:[NSString stringWithFormat:@"隐私档：%@", mode]];
 }
 
 - (void)manageRecipesClicked:(id)sender {
@@ -2178,18 +2182,16 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             dup.userPrompt = field.stringValue ?: @"";
             NSError *err = nil;
             if ([[AIPageContextRecipeStore sharedStore] saveUserRecipe:dup error:&err]) {
-                self.statusLabel.stringValue = @"已保存用户配方「我的总结提示」";
-                self.statusLabel.textColor = NSColor.systemGreenColor;
+                [self setStatusTip:@"已保存用户配方「我的总结提示」"];
             } else {
-                self.statusLabel.stringValue = err.localizedDescription ?: @"保存失败";
-                self.statusLabel.textColor = NSColor.systemRedColor;
+                [self setStatusTip:err.localizedDescription ?: @"保存失败"];
             }
         }
     } else if (resp == NSAlertSecondButtonReturn) {
         for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] userRecipes]) {
             [[AIPageContextRecipeStore sharedStore] deleteUserRecipeId:r.recipeId error:nil];
         }
-        self.statusLabel.stringValue = @"已删除全部用户配方";
+        [self setStatusTip:@"已删除全部用户配方"];
     }
 }
 
@@ -2205,7 +2207,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     NSPasteboard *pb = NSPasteboard.generalPasteboard;
     [pb clearContents];
     [pb setString:out forType:NSPasteboardTypeString];
-    self.statusLabel.stringValue = @"已复制到剪贴板";
+    [self setStatusTip:@"已复制到剪贴板"];
 }
 
 - (void)deleteCurrentClicked:(id)sender {
@@ -2375,22 +2377,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if ([type isEqualToString:@"layer"]) {
         if (!self.currentPageBundle) {
             [self capturePageContextOnlyUpdatingTray:YES];
-            self.statusLabel.stringValue = @"请先采集，再使用 @ 引用";
+            [self setStatusTip:@"请先采集，再使用 @ 引用"];
             return;
         }
         if ([oid isEqualToString:AIPageContextLayerHTML] &&
             !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
-            self.statusLabel.stringValue = @"隐私档禁止 HTML";
+            [self setStatusTip:@"隐私档禁止 HTML"];
             return;
         }
         [self attachLayer:oid fromBundle:self.currentPageBundle];
         [self reloadCitationChips];
         [self refreshPageContextTray];
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已引用 %@", oid];
+        [self setStatusTip:[NSString stringWithFormat:@"已引用 %@", oid]];
     } else if ([type isEqualToString:@"resource"]) {
         AIPageContextResource *res = [self.currentPageBundle resourceWithId:oid];
         if (!res) {
-            self.statusLabel.stringValue = @"资源不存在，请先采集";
+            [self setStatusTip:@"资源不存在，请先采集"];
             return;
         }
         // 复用 checkbox 逻辑
@@ -2435,13 +2437,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (self.inFlight) return;
     NSString *text = [prompt stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (text.length == 0 && self.citations.count == 0 && self.pendingAttachments.count == 0) {
-        self.statusLabel.stringValue = @"请输入提示词、加入引用或添加附件";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"请输入提示词、加入引用或添加附件"];
         return;
     }
     if (self.pendingAttachments.count > 0 && ![self attachmentsSupportedForCurrentSession]) {
-        self.statusLabel.stringValue = @"当前仅 DeepSeek 网页支持附件";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"当前仅 DeepSeek 网页支持附件"];
         return;
     }
     AIAssistantSession *s = [self currentSession];
@@ -2449,12 +2449,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.pendingProviderId = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         self.inputView.string = text;
         [self createSessionWithProviderId:self.pendingProviderId];
-        self.statusLabel.stringValue = @"已创建会话并开页，就绪后请再次发送";
+        [self setStatusTip:@"已创建会话并开页，就绪后请再次发送"];
         return;
     }
     if (s.connection != AIAssistantSessionConnectionReady || s.modelId.length == 0) {
-        self.statusLabel.stringValue = @"未连接，请点「连接」或开启自动连接";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"未连接，请点击上方「未连接」或开启自动连接"];
         return;
     }
 
@@ -2572,8 +2571,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.inFlightSessionId = sid;
     [self reloadUI];
     NSString *thinking = attachPaths.count ? @"正在阅读附件…" : @"正在思考…";
-    self.statusLabel.stringValue = thinking;
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:thinking];
     [self.chatPanel showThinkingStatus:thinking];
 
     __weak typeof(self) weakSelf = self;
@@ -2597,8 +2595,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             if (sameSession) {
                 [weakSelf.chatPanel appendSystemText:sys];
             }
-            weakSelf.statusLabel.stringValue = errorMessage;
-            weakSelf.statusLabel.textColor = NSColor.systemRedColor;
+            [self setStatusTip:errorMessage];
         } else {
             NSString *reply = assistantText ?: @"";
             if (sess) {
@@ -2608,8 +2605,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             if (sameSession) {
                 [weakSelf.chatPanel appendAssistantMarkdown:reply];
             }
-            weakSelf.statusLabel.stringValue = [NSString stringWithFormat:@"完成 · HTTP %ld", (long)httpStatus];
-            weakSelf.statusLabel.textColor = NSColor.systemGreenColor;
+            [self setStatusTip:[NSString stringWithFormat:@"完成 · HTTP %ld", (long)httpStatus]];
         }
         [weakSelf reloadUI];
     }];
@@ -2632,7 +2628,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.inputView.string = prompt;
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         [self createSessionWithProviderId:pid];
-        self.statusLabel.stringValue = @"已创建会话，连接后可发送";
+        [self setStatusTip:@"已创建会话，连接后可发送"];
         return;
     }
     self.inputView.string = prompt;
@@ -2641,7 +2637,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self sendPrompt:prompt clearInput:YES];
     } else {
         NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey pageContext:pageContext];
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title];
+        [self setStatusTip:[NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title]];
     }
 }
 
@@ -2915,11 +2911,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!ok) {
-            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"资源加载失败";
-            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            [self setStatusTip:errorMessage.length ? errorMessage : @"资源加载失败"];
         } else {
-            strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"已加载 %@", res.chipLabel];
-            strongSelf.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self setStatusTip:[NSString stringWithFormat:@"已加载 %@", res.chipLabel]];
         }
         [strongSelf refreshPageContextTray];
     }];
@@ -2935,8 +2929,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (res.kind == AIPageContextResourceKindScript &&
         !BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsScriptResources) {
         sender.state = NSControlStateValueOff;
-        self.statusLabel.stringValue = @"隐私档「开发」才可引用脚本";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"隐私档「开发」才可引用脚本"];
         return;
     }
     if (sender.state != NSControlStateValueOn) {
@@ -2957,7 +2950,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             sender.state = NSControlStateValueOff;
             return;
         }
-        self.statusLabel.stringValue = @"正在加载资源…";
+        [self setStatusTip:@"正在加载资源…"];
         __weak typeof(self) weakSelf = self;
         [[AIPageContextCapturer sharedCapturer] loadTextForResource:res
                                                           inWebView:wv
@@ -2968,8 +2961,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             if (!strongSelf) return;
             if (!ok) {
                 sender.state = NSControlStateValueOff;
-                strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"加载失败";
-                strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+                [self setStatusTip:errorMessage.length ? errorMessage : @"加载失败"];
                 [strongSelf refreshPageContextTray];
                 return;
             }
@@ -3059,15 +3051,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self attachLayer:AIPageContextLayerArticle fromBundle:self.currentPageBundle];
     [self reloadCitationChips];
     [self refreshPageContextTray];
-    self.statusLabel.stringValue = @"已改为仅引用页信息 + 正文";
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:@"已改为仅引用页信息 + 正文"];
 }
 
 - (void)pageContextAttachAllClicked:(id)sender {
     (void)sender;
     if (!self.currentPageBundle) {
-        self.statusLabel.stringValue = @"请先采集本页上下文";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"请先采集本页上下文"];
         return;
     }
     NSAlert *alert = [[NSAlert alloc] init];
@@ -3087,11 +3077,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self reloadCitationChips];
     [self refreshPageContextTray];
     if (trimNote.length) {
-        self.statusLabel.stringValue = trimNote;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:trimNote];
     } else {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已引用 %lu 个页面层", (unsigned long)added.count];
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self setStatusTip:[NSString stringWithFormat:@"已引用 %lu 个页面层", (unsigned long)added.count]];
     }
 }
 
@@ -3100,16 +3088,14 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (layerId.length == 0) return;
     if (!self.currentPageBundle) {
         sender.state = NSControlStateValueOff;
-        self.statusLabel.stringValue = @"请先采集本页上下文";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"请先采集本页上下文"];
         return;
     }
     if (sender.state == NSControlStateValueOn) {
         if ([layerId isEqualToString:AIPageContextLayerHTML]) {
             if (!BrowserAIAssistantPreferences.sharedPreferences.pageContextAllowsHTML) {
                 sender.state = NSControlStateValueOff;
-                self.statusLabel.stringValue = @"隐私档「严格」禁止引用 HTML";
-                self.statusLabel.textColor = NSColor.systemOrangeColor;
+                [self setStatusTip:@"隐私档「严格」禁止引用 HTML"];
                 return;
             }
             NSAlert *alert = [[NSAlert alloc] init];
@@ -3133,8 +3119,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             // 若裁剪删了当前层，同步 checkbox
             [self removePageContextCitations];
             [self.citations addObjectsFromArray:mutablePage];
-            self.statusLabel.stringValue = note;
-            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:note];
         }
     } else {
         [self removeCitationForLayer:layerId];
@@ -3147,14 +3132,12 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     WKWebView *webView = [self currentBrowseWebView];
     NSUUID *tabID = [self currentBrowseTabID];
     if (!webView) {
-        self.statusLabel.stringValue = @"当前没有可采集的网页标签";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"当前没有可采集的网页标签"];
         return;
     }
     if (self.pageContextCaptureInFlight) return;
     self.pageContextCaptureInFlight = YES;
-    self.statusLabel.stringValue = @"正在采集页面上下文…";
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:@"正在采集页面上下文…"];
     [self setPageContextButtonsEnabled:NO];
     __weak typeof(self) weakSelf = self;
     [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
@@ -3180,8 +3163,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             return;
         }
         if (!bundle) {
-            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"采集失败";
-            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            [self setStatusTip:errorMessage.length ? errorMessage : @"采集失败"];
             // 失败仍保留 pending，标题后续变化时可再试
             return;
         }
@@ -3207,12 +3189,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                 [strongSelf reloadCitationChips];
             }
             [strongSelf refreshPageContextTray];
-            strongSelf.statusLabel.stringValue =
-                [NSString stringWithFormat:@"已重新采集 · %@", [bundle ageDescription]];
-            strongSelf.statusLabel.textColor = bundle.stale ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
+            [self setStatusTip:[NSString stringWithFormat:@"已重新采集 · %@", [bundle ageDescription]]];
             if (bundle.articleQuality == AIPageContextArticleQualityLow && bundle.articleWarning.length) {
-                strongSelf.statusLabel.stringValue = bundle.articleWarning;
-                strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+                [self setStatusTip:bundle.articleWarning];
             }
         }
     }];
@@ -3221,8 +3200,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)presentPageRecipe:(NSString *)recipeId autoSend:(BOOL)autoSend {
     AIPageContextRecipe *recipe = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
     if (!recipe) {
-        self.statusLabel.stringValue = @"未知配方";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"未知配方"];
         return;
     }
     [self showPane:AIAssistantPaneChat];
@@ -3230,14 +3208,12 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     WKWebView *webView = [self currentBrowseWebView];
     NSUUID *tabID = [self currentBrowseTabID];
     if (!webView) {
-        self.statusLabel.stringValue = @"当前没有可采集的网页标签";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"当前没有可采集的网页标签"];
         self.inputView.string = recipe.userPrompt;
         return;
     }
 
-    self.statusLabel.stringValue = @"正在采集页面正文…";
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:@"正在采集页面正文…"];
     [self setPageContextButtonsEnabled:NO];
 
     __weak typeof(self) weakSelf = self;
@@ -3249,15 +3225,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         if (!strongSelf) return;
         [strongSelf setPageContextButtonsEnabled:YES];
         if (!bundle) {
-            strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"采集失败";
-            strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            [self setStatusTip:errorMessage.length ? errorMessage : @"采集失败"];
             strongSelf.inputView.string = recipe.userPrompt;
             return;
         }
         strongSelf.currentPageBundle = bundle;
         if (![bundle hasUsableArticle]) {
-            strongSelf.statusLabel.stringValue = @"未能提取到可用正文";
-            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:@"未能提取到可用正文"];
             strongSelf.inputView.string = recipe.userPrompt;
             [strongSelf refreshPageContextTray];
             return;
@@ -3396,24 +3370,19 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
     NSString *warn = bundle.articleWarning ?: @"";
     if (trimNote.length) {
-        self.statusLabel.stringValue = trimNote;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:trimNote];
     } else if (bundle.articleQuality == AIPageContextArticleQualityLow && warn.length) {
-        self.statusLabel.stringValue = warn;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:warn];
     } else {
-        self.statusLabel.stringValue =
-            [NSString stringWithFormat:@"已引用正文（%lu 字）",
-             (unsigned long)[bundle effectiveArticleText].length];
-        self.statusLabel.textColor = NSColor.secondaryLabelColor;
+        [self setStatusTip:[NSString stringWithFormat:@"已引用正文（%lu 字）",
+             (unsigned long)[bundle effectiveArticleText].length]];
     }
 
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         [self createSessionWithProviderId:pid];
-        self.statusLabel.stringValue = @"已采集正文并创建会话，网页就绪后请发送";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"已采集正文并创建会话，网页就绪后请发送"];
         return;
     }
     [self reloadUI];
@@ -3425,8 +3394,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         if (bundle.articleQuality == AIPageContextArticleQualityLow && warn.length) {
             msg = [NSString stringWithFormat:@"%@ · %@", warn, msg];
         }
-        self.statusLabel.stringValue = msg;
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:msg];
     }
 }
 
@@ -3444,8 +3412,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         block(nil, @"当前没有可采集的网页标签");
         return;
     }
-    self.statusLabel.stringValue = @"正在采集页面…";
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:@"正在采集页面…"];
     __weak typeof(self) weakSelf = self;
     [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
                                                          tabID:tabID
@@ -3462,21 +3429,18 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)exportCurrentBundleToPasteboard {
     [self withCurrentOrCapturedBundle:^(AIPageContextBundle *bundle, NSString *error) {
         if (!bundle) {
-            self.statusLabel.stringValue = error ?: @"无 Bundle 可导出";
-            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:error ?: @"无 Bundle 可导出"];
             return;
         }
         [AIPageContextBundleExporter copyBundleJSONToPasteboard:bundle];
-        self.statusLabel.stringValue = @"已复制 Bundle JSON（摘要，无正文全文）到剪贴板";
-        self.statusLabel.textColor = NSColor.systemGreenColor;
+        [self setStatusTip:@"已复制 Bundle JSON（摘要，无正文全文）到剪贴板"];
     }];
 }
 
 - (void)exportCurrentBundleToDownloads {
     [self withCurrentOrCapturedBundle:^(AIPageContextBundle *bundle, NSString *error) {
         if (!bundle) {
-            self.statusLabel.stringValue = error ?: @"无 Bundle 可导出";
-            self.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:error ?: @"无 Bundle 可导出"];
             return;
         }
         NSURL *dirURL = [BrowserDownloadManager.sharedManager downloadDirectoryURL];
@@ -3487,12 +3451,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         NSError *err = nil;
         NSString *path = [AIPageContextBundleExporter exportBundle:bundle toDirectory:dir error:&err];
         if (!path) {
-            self.statusLabel.stringValue = err.localizedDescription ?: @"导出失败";
-            self.statusLabel.textColor = NSColor.systemRedColor;
+            [self setStatusTip:err.localizedDescription ?: @"导出失败"];
             return;
         }
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已导出 %@", path.lastPathComponent];
-        self.statusLabel.textColor = NSColor.systemGreenColor;
+        [self setStatusTip:[NSString stringWithFormat:@"已导出 %@", path.lastPathComponent]];
         [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
     }];
 }
@@ -3503,8 +3465,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!bundle) {
-            strongSelf.statusLabel.stringValue = error ?: @"无 Bundle 可导入爬虫";
-            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:error ?: @"无 Bundle 可导入爬虫"];
             return;
         }
         id recipe = [AIPageContextScraperBridge draftRecipeFromBundle:bundle
@@ -3512,13 +3473,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         id<BrowserAIAssistantSidebarControllerDelegate> del = strongSelf.delegate;
         if ([del respondsToSelector:@selector(aiAssistantSidebar:applyScraperDraftRecipe:)]) {
             [del aiAssistantSidebar:strongSelf applyScraperDraftRecipe:recipe];
-            strongSelf.statusLabel.stringValue = strongSelf.lastPagePickResult
+            [self setStatusTip:strongSelf.lastPagePickResult
                 ? @"已打开页面爬虫并套用点选草稿"
-                : @"已打开页面爬虫并套用草稿";
-            strongSelf.statusLabel.textColor = NSColor.systemGreenColor;
+                : @"已打开页面爬虫并套用草稿"];
         } else {
-            strongSelf.statusLabel.stringValue = @"无法打开页面爬虫";
-            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:@"无法打开页面爬虫"];
         }
     }];
 }
@@ -3526,13 +3485,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)startPickPageSubtreeForCitation {
     WKWebView *webView = [self currentBrowseWebView];
     if (!webView) {
-        self.statusLabel.stringValue = @"当前没有可点选的网页";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"当前没有可点选的网页"];
         return;
     }
     [self showPane:AIAssistantPaneChat];
-    self.statusLabel.stringValue = @"请在页面上点选要引用的区域（Esc 取消）…";
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self setStatusTip:@"请在页面上点选要引用的区域（Esc 取消）…"];
     __weak typeof(self) weakSelf = self;
     [BrowserScraperElementPicker startPickingInWebView:webView
                                                   mode:BrowserScraperPickModeContainer
@@ -3540,8 +3497,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (cancelled || !result) {
-            strongSelf.statusLabel.stringValue = @"已取消点选";
-            strongSelf.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self setStatusTip:@"已取消点选"];
             return;
         }
         NSString *path = [result[@"absolutePath"] isKindOfClass:[NSString class]] ? result[@"absolutePath"] : nil;
@@ -3549,8 +3505,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             path = result[@"cssPath"];
         }
         if (!path.length) {
-            strongSelf.statusLabel.stringValue = @"未能解析点选路径";
-            strongSelf.statusLabel.textColor = NSColor.systemOrangeColor;
+            [self setStatusTip:@"未能解析点选路径"];
             return;
         }
         NSString *nameHint = [result[@"nameHint"] isKindOfClass:[NSString class]] ? result[@"nameHint"] : @"";
@@ -3582,8 +3537,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                 text = [result[@"textSample"] isKindOfClass:[NSString class]] ? result[@"textSample"] : @"";
             }
             if (!text.length && !html.length) {
-                s2.statusLabel.stringValue = error.localizedDescription ?: @"点选区域无可用文本";
-                s2.statusLabel.textColor = NSColor.systemOrangeColor;
+                [self setStatusTip:error.localizedDescription ?: @"点选区域无可用文本"];
                 return;
             }
             NSString *pageTitle = s2.currentPageBundle.title;
@@ -3610,10 +3564,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             }
             // 可选：同时预填爬虫草稿（不强制打开）
             s2.lastPagePickResult = result;
-            s2.statusLabel.stringValue =
-                [NSString stringWithFormat:@"已加入点选引用（%lu 字）· 可用 ⋯ → 应用到页面爬虫",
-                 (unsigned long)text.length];
-            s2.statusLabel.textColor = NSColor.systemGreenColor;
+            [self setStatusTip:[NSString stringWithFormat:@"已加入点选引用（%lu 字）· 可用 ⋯ → 应用到页面爬虫",
+                 (unsigned long)text.length]];
         }];
     }];
 }
@@ -3625,8 +3577,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         source = self.inputView.string ?: @"";
     }
     if (source.length == 0) {
-        self.statusLabel.stringValue = @"请先采集页面或粘贴待匹配文本";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"请先采集页面或粘贴待匹配文本"];
         return;
     }
 
@@ -3705,10 +3656,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         if (resp == NSAlertSecondButtonReturn) {
             self.pendingRegexPatternOverride = pat;
             [self presentPageRecipe:AIPageContextRecipeIDRegexExtract autoSend:NO];
-            self.statusLabel.stringValue =
-                [NSString stringWithFormat:@"正在采集并填入正则（本地预览 %lu 命中）…",
-                 (unsigned long)matches.count];
-            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self setStatusTip:[NSString stringWithFormat:@"正在采集并填入正则（本地预览 %lu 命中）…",
+                 (unsigned long)matches.count]];
             return;
         }
     }
@@ -3899,8 +3848,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                                               sourcePageTitle:pageTitle];
     }
     if (!citation) {
-        self.statusLabel.stringValue = @"无法加入引用";
-        self.statusLabel.textColor = NSColor.systemOrangeColor;
+        [self setStatusTip:@"无法加入引用"];
         return;
     }
 
@@ -3909,8 +3857,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         if (citation.kind == AIAssistantCitationKindText &&
             existing.kind == AIAssistantCitationKindText &&
             [existing.body isEqualToString:citation.body]) {
-            self.statusLabel.stringValue = @"该引用已在列表中";
-            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self setStatusTip:@"该引用已在列表中"];
             [self focusAssistantInput];
             return;
         }
@@ -3931,8 +3878,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                     [self loadThumbnailForCitation:existing];
                 }
             }
-            self.statusLabel.stringValue = @"该引用已在列表中";
-            self.statusLabel.textColor = NSColor.secondaryLabelColor;
+            [self setStatusTip:@"该引用已在列表中"];
             [self focusAssistantInput];
             return;
         }
@@ -3961,16 +3907,15 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         NSString *img = citation.url.absoluteString ?: @"";
         NSString *page = citation.sourcePageURL.absoluteString ?: @"";
         if (img.length && page.length) {
-            self.statusLabel.stringValue = @"已加入图片引用（含图片网址与网页地址）";
+            [self setStatusTip:@"已加入图片引用（含图片网址与网页地址）"];
         } else if (img.length) {
-            self.statusLabel.stringValue = @"已加入图片引用（含图片网址）";
+            [self setStatusTip:@"已加入图片引用（含图片网址）"];
         } else {
-            self.statusLabel.stringValue = @"已加入引用 · 图片";
+            [self setStatusTip:@"已加入引用 · 图片"];
         }
     } else {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"已加入引用 · %@", citation.kindDisplayName];
+        [self setStatusTip:[NSString stringWithFormat:@"已加入引用 · %@", citation.kindDisplayName]];
     }
-    self.statusLabel.textColor = NSColor.secondaryLabelColor;
     [self focusAssistantInput];
 }
 
