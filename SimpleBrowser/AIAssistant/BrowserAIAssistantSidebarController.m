@@ -38,6 +38,7 @@ static const CGFloat kComposerToolbarHeight = 28.0;
 static const CGFloat kComposerTextAreaHeight = 68.0;
 static const unsigned long long kAssistantAttachmentMaxBytes = 20ULL * 1024ULL * 1024ULL;
 static const NSUInteger kAssistantAttachmentMaxCount = 10;
+static const NSInteger kAutoReconnectCountdownSeconds = 5;
 
 typedef NS_ENUM(NSInteger, AIAssistantPane) {
     AIAssistantPaneChat = 0,
@@ -371,6 +372,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSStackView *statusRow;
 @property (nonatomic, strong) NSButton *moreButton;
 @property (nonatomic, assign) BOOL autoConnectAttemptedThisShow;
+/// 自动连接开启且 AI 网页已关闭时：5 秒倒计时后重连
+@property (nonatomic, strong, nullable) NSTimer *autoReconnectTimer;
+@property (nonatomic, assign) NSInteger autoReconnectSecondsLeft;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
 @property (nonatomic, strong) NSStackView *recipeButtonStack;
 @property (nonatomic, strong) NSButton *summarizePageButton;
@@ -468,6 +472,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 }
 
 - (void)dealloc {
+    [self cancelAutoReconnectCountdown];
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     if (self.registryObserver) [nc removeObserver:self.registryObserver];
     if (self.serviceObserver) [nc removeObserver:self.serviceObserver];
@@ -794,7 +799,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.autoConnectCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
     self.autoConnectCheckbox.controlSize = NSControlSizeMini;
     self.autoConnectCheckbox.font = [NSFont systemFontOfSize:11];
-    self.autoConnectCheckbox.toolTip = @"打开 AI 助手时自动连接 Bridge（默认 DeepSeek 网页）";
+    self.autoConnectCheckbox.toolTip = @"打开 AI 助手时自动连接；AI 网页关闭后 5 秒自动重连";
     self.autoConnectCheckbox.state = BrowserAIAssistantPreferences.sharedPreferences.autoConnect
         ? NSControlStateValueOn : NSControlStateValueOff;
 
@@ -1272,6 +1277,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self maybeAutoConnectIfNeeded];
     } else {
         self.autoConnectAttemptedThisShow = NO;
+        [self cancelAutoReconnectCountdown];
     }
 }
 
@@ -1409,11 +1415,15 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
 
     if (detached || errored) {
-        [self applyConnectionStatusTitle:@"未连接"
-                              clickable:YES
-                               tooltip:platform.length
-                                   ? [NSString stringWithFormat:@"点击连接 %@", platform]
-                                   : @"点击连接 AI 网页"];
+        NSString *title = @"未连接";
+        NSString *tip = platform.length
+            ? [NSString stringWithFormat:@"点击连接 %@", platform]
+            : @"点击连接 AI 网页";
+        if (self.autoReconnectTimer && self.autoReconnectSecondsLeft > 0) {
+            title = [NSString stringWithFormat:@"未连接 · %lds", (long)self.autoReconnectSecondsLeft];
+            tip = @"AI 网页已关闭，倒计时结束后自动重连；也可点击立即连接";
+        }
+        [self applyConnectionStatusTitle:title clickable:YES tooltip:tip];
         self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     } else if (ready) {
@@ -1428,17 +1438,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     } else {
-        [self applyConnectionStatusTitle:@"未连接"
-                              clickable:YES
-                               tooltip:platform.length
-                                   ? [NSString stringWithFormat:@"点击连接 %@", platform]
-                                   : @"点击连接 AI 网页"];
+        NSString *title = @"未连接";
+        NSString *tip = platform.length
+            ? [NSString stringWithFormat:@"点击连接 %@", platform]
+            : @"点击连接 AI 网页";
+        if (self.autoReconnectTimer && self.autoReconnectSecondsLeft > 0) {
+            title = [NSString stringWithFormat:@"未连接 · %lds", (long)self.autoReconnectSecondsLeft];
+            tip = @"AI 网页已关闭，倒计时结束后自动重连；也可点击立即连接";
+        }
+        [self applyConnectionStatusTitle:title clickable:YES tooltip:tip];
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
         self.sendButton.enabled = self.inFlight;
     }
     [self applySendStopButtonAppearance];
     [self refreshAttachmentChips];
     [self refreshPageContextTray];
+    [self scheduleAutoReconnectCountdownIfNeeded];
 }
 
 #pragma mark - History popover
@@ -1999,11 +2014,16 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (on) {
         self.autoConnectAttemptedThisShow = NO;
         [self maybeAutoConnectIfNeeded];
+        [self scheduleAutoReconnectCountdownIfNeeded];
+    } else {
+        [self cancelAutoReconnectCountdown];
+        [self reloadUI];
     }
 }
 
 - (void)connectClicked:(id)sender {
     (void)sender;
+    [self cancelAutoReconnectCountdown];
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
@@ -2017,6 +2037,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     AIAssistantSession *s = [self currentSession];
     if (!s) return;
     if (s.connection == AIAssistantSessionConnectionOpening) return;
+    [self cancelAutoReconnectCountdown];
     // 清掉失效 binding，避免 Opening 期间被 prune 当成「标签已死」删掉
     s.bindingId = nil;
     s.modelId = nil;
@@ -2048,6 +2069,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         sess.modelId = binding.modelId;
         sess.connection = AIAssistantSessionConnectionReady;
         [AIAssistantSessionStore.sharedStore touchAndPersist:sess];
+        [weakSelf cancelAutoReconnectCountdown];
         [weakSelf reloadUI];
     }];
 }
@@ -2073,10 +2095,84 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     BOOL ready = (s.connection == AIAssistantSessionConnectionReady && s.modelId.length > 0);
     if (ready) {
         self.autoConnectAttemptedThisShow = YES;
+        [self cancelAutoReconnectCountdown];
         return;
     }
     self.autoConnectAttemptedThisShow = YES;
     [self reconnectCurrentSession];
+}
+
+- (void)cancelAutoReconnectCountdown {
+    [self.autoReconnectTimer invalidate];
+    self.autoReconnectTimer = nil;
+    self.autoReconnectSecondsLeft = 0;
+}
+
+/// AI 网页已关且开启自动连接时，启动 5 秒倒计时后重连（侧栏保持打开期间）。
+- (void)scheduleAutoReconnectCountdownIfNeeded {
+    if (!self.visible) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    if (!BrowserAIAssistantPreferences.sharedPreferences.autoConnect) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    if (self.pane != AIAssistantPaneChat) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    AIAssistantSession *s = [self currentSession];
+    if (!s) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    if (s.connection == AIAssistantSessionConnectionOpening) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    BOOL ready = (s.connection == AIAssistantSessionConnectionReady && s.modelId.length > 0);
+    if (ready) {
+        [self cancelAutoReconnectCountdown];
+        return;
+    }
+    // 已在倒计时则保持，避免 reloadUI 反复重置
+    if (self.autoReconnectTimer) return;
+
+    self.autoReconnectSecondsLeft = kAutoReconnectCountdownSeconds;
+    __weak typeof(self) weakSelf = self;
+    self.autoReconnectTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                             repeats:YES
+                                                               block:^(__unused NSTimer *timer) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!strongSelf.visible
+            || !BrowserAIAssistantPreferences.sharedPreferences.autoConnect) {
+            [strongSelf cancelAutoReconnectCountdown];
+            [strongSelf reloadUI];
+            return;
+        }
+        AIAssistantSession *cur = [strongSelf currentSession];
+        BOOL nowReady = (cur.connection == AIAssistantSessionConnectionReady && cur.modelId.length > 0);
+        if (nowReady || cur.connection == AIAssistantSessionConnectionOpening) {
+            [strongSelf cancelAutoReconnectCountdown];
+            [strongSelf reloadUI];
+            return;
+        }
+        strongSelf.autoReconnectSecondsLeft -= 1;
+        if (strongSelf.autoReconnectSecondsLeft <= 0) {
+            [strongSelf cancelAutoReconnectCountdown];
+            if (!cur) {
+                NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+                [strongSelf createSessionWithProviderId:pid];
+            } else {
+                [strongSelf reconnectCurrentSession];
+            }
+            return;
+        }
+        [strongSelf reloadUI];
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:self.autoReconnectTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)moreClicked:(id)sender {
