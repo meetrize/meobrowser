@@ -598,6 +598,9 @@ static NSString *MeoScrollToFragmentJS(void) {
     [self meo_ensureSelectionCacheInstalled];
     [self meo_captureContextMenuAIContext];
 
+    // 去掉系统「查询 / 翻译」（选中文本时通常在菜单最前两项）
+    [self meo_removeSystemLookUpAndTranslateItemsFromMenu:menu];
+
     NSMenuItem *downloadItem = nil;
     NSMenuItem *openImageItem = nil;
     NSMenuItem *openMediaItem = nil;
@@ -781,6 +784,86 @@ static NSString *MeoScrollToFragmentJS(void) {
     }
 
     return NO;
+}
+
+/// WebKit 选区右键顶部的系统「Look Up / Translate」（本地化后为「查询 / 翻译」）。
+- (BOOL)meo_isSystemLookUpOrTranslateMenuItem:(NSMenuItem *)item {
+    if (!item || item.isSeparatorItem) {
+        return NO;
+    }
+
+    NSString *identifier = item.identifier ?: @"";
+    if ([identifier isEqualToString:@"WKMenuItemIdentifierLookUp"] ||
+        [identifier isEqualToString:@"WKMenuItemIdentifierTranslate"]) {
+        return YES;
+    }
+
+    NSString *actionName = item.action ? NSStringFromSelector(item.action) : @"";
+    if ([actionName containsString:@"lookUp"] ||
+        [actionName containsString:@"LookUp"] ||
+        [actionName isEqualToString:@"showDefinitionFromRemoteDictionary:"]) {
+        return YES;
+    }
+    // 系统 Translate 项；此时自定义「问问 AI → 翻译 / 说明」尚未插入，可按 action 名匹配。
+    if (actionName.length > 0 &&
+        ([actionName containsString:@"translate"] || [actionName containsString:@"Translate"])) {
+        return YES;
+    }
+
+    NSString *title = item.title ?: @"";
+    if (title.length == 0) {
+        NSAttributedString *attributed = item.attributedTitle;
+        title = attributed.string ?: @"";
+    }
+    if (title.length == 0) {
+        return NO;
+    }
+
+    NSString *lower = title.lowercaseString;
+    if ([lower hasPrefix:@"look up"] || [lower hasPrefix:@"lookup"]) {
+        return YES;
+    }
+    if ([title hasPrefix:@"查询"]) {
+        return YES;
+    }
+    // 系统项为「Translate…」/「翻译…」；勿匹配「翻译 / 说明」等自定义子项（此时尚未插入）。
+    if ([lower hasPrefix:@"translate"] || [title isEqualToString:@"翻译"] || [title hasPrefix:@"翻译…"] || [title hasPrefix:@"翻译..."]) {
+        return YES;
+    }
+
+    return NO;
+}
+
+- (void)meo_removeSystemLookUpAndTranslateItemsFromMenu:(NSMenu *)menu {
+    if (!menu) {
+        return;
+    }
+
+    NSMutableArray<NSMenuItem *> *toRemove = [NSMutableArray array];
+    for (NSMenuItem *item in menu.itemArray) {
+        if ([self meo_isSystemLookUpOrTranslateMenuItem:item]) {
+            [toRemove addObject:item];
+        }
+    }
+    for (NSMenuItem *item in toRemove) {
+        [menu removeItem:item];
+    }
+
+    // 去掉因删除顶部项留下的前置/连续分隔线
+    while (menu.numberOfItems > 0 && menu.itemArray.firstObject.isSeparatorItem) {
+        [menu removeItemAtIndex:0];
+    }
+    NSInteger index = 0;
+    while (index < menu.numberOfItems) {
+        NSMenuItem *item = [menu itemAtIndex:index];
+        if (item.isSeparatorItem &&
+            index + 1 < menu.numberOfItems &&
+            [menu itemAtIndex:index + 1].isSeparatorItem) {
+            [menu removeItemAtIndex:index];
+            continue;
+        }
+        index += 1;
+    }
 }
 
 /// 链接菜单 + 非空选区：在菜单顶部补齐选区「搜索 / 拷贝」（与链接项并存）。
