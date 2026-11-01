@@ -270,7 +270,7 @@ Content-Type: application/json
 
 当请求带有**非空** `tools` 且 `tool_choice` 不是 `"none"` 时，Bridge 进入 **Agent 模式**（实现：`AIBridgeToolSimulator`）：
 
-1. 把压缩后的 `messages`（含引用文件 / `system` / `tool` 结果）与**精简后的** `tools` schema 打成自包含网页提示词（约 48k 字符上限）。**Messages 优先**；**丢弃历史散文 assistant**（避免跑题闲聊污染）；末尾重复「Latest user task」。tools 去掉冗长 `description`/`<example>`。
+1. 网页上下文紧：总预算约 **28k**。丢弃 IDE 长 `system`（改成一行 `Project roots: …`）；丢弃散文 assistant；去掉附件套话；**不**重复 Latest task。tools 默认无 description，非核心工具仅保留 name，tools 硬顶约 3.5k，**把额度留给代码文件**。
 2. 要求网页**只输出**下列 JSON 之一（可带 \`\`\`json 围栏，Bridge 会剥离）；字符串内 `"` 必须写成 `\\\"`。Bridge 会对常见未转义引号做修复，并把 `/Volumes/...` 绝对路径改写成 IDE 所需的项目相对路径（如 `test/hello.py`）：
 
 ```json

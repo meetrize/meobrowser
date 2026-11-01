@@ -6,13 +6,13 @@
 @implementation AIBridgeToolSimulator
 
 + (NSUInteger)maxPromptChars {
-    // DeepSeek 等网页输入可吃更长文本；仍设上限防卡死。
-    return 48000;
+    // 网页对话窗口上下文远小于真 API；压紧后把额度留给代码附件。
+    return 28000;
 }
 
-/// messages 至少保留的字符预算（优先于 tools 长描述）
+/// messages（含代码文件）至少保留的字符预算
 + (NSUInteger)minMessagesBudget {
-    return 16000;
+    return 18000;
 }
 
 #pragma mark - Enable / tool_choice
@@ -410,58 +410,76 @@
 
 + (NSString *)instructionBlockRequiringTools:(BOOL)require
                               forcedFunction:(NSString *)forcedName {
+    // 尽量短：网页上下文昂贵；细则靠 tools schema + 最新任务。
     NSMutableString *s = [NSMutableString string];
     [s appendString:
-     @"You are a coding agent API. Solve ONLY the latest programming task with tools.\n"
-     @"你是编程 Agent API：只用工具解决「最新」的编程任务；忽略历史里跑题的闲聊。\n\n"
-     @"Reply with ONE JSON object only. No markdown. No prose outside JSON.\n"
-     @"只输出一个 JSON 对象；不要 markdown；JSON 外不要写字。\n\n"
-     @"Schema A:\n"
-     @"{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"TOOL_NAME\",\"arguments\":{...}}]}\n\n"
-     @"Schema B:\n"
-     @"{\"mode\":\"message\",\"content\":\"...\"}\n\n"
-     @"CRITICAL — valid JSON string escaping:\n"
-     @"Inside any JSON string, every double-quote MUST be written as \\\" .\n"
-     @"VALID example (edit a Python file):\n"
-     @"{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"edit_file\",\"arguments\":{\"path\":\"test/hello.py\",\"edits\":[{\"old_text\":\"print(\\\"Hello, World!\\\")\",\"new_text\":\"print(\\\"你好，世界！\\\")\"}]}}]}\n"
-     @"INVALID (never do this — breaks JSON):\n"
-     @"{\"old_text\":\"print(\"Hello, World!\")\"}\n"
-     @"Tip: when possible use single quotes in code snippets inside JSON, e.g. print('你好，世界！').\n\n"
-     @"Paths: use project-relative paths required by tools (e.g. test/hello.py). "
-     @"Do NOT use absolute paths like /Volumes/... unless a tool explicitly requires them.\n"
-     @"路径必须用工具要求的项目相对路径（如 test/hello.py），不要用 /Volumes/... 绝对路径。\n\n"];
+     @"Coding agent. Output ONE JSON only (no markdown).\n"
+     @"A:{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"N\",\"arguments\":{...}}]}\n"
+     @"B:{\"mode\":\"message\",\"content\":\"...\"}\n"
+     @"Escape \" as \\\" inside strings. Prefer print('...') in code snippets.\n"
+     @"Paths: project-relative (test/hello.py), never /Volumes/...\n"
+     @"Example:{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"edit_file\",\"arguments\":{\"path\":\"test/hello.py\",\"edits\":[{\"old_text\":\"print('Hello, World!')\",\"new_text\":\"print('你好，世界！')\"}]}}]}\n"];
     if (require) {
-        [s appendString:@"You MUST use Schema A (mode=tool_calls). Do not use Schema B.\n"];
-        [s appendString:@"必须使用 Schema A（mode=tool_calls），禁止 Schema B。\n"];
+        [s appendString:@"Must use mode=tool_calls.\n"];
     } else {
-        [s appendString:@"If the user asks to create/edit/read/search code or files, you MUST use Schema A.\n"];
-        [s appendString:@"用户要求读写改文件或搜索代码时，必须用 Schema A 调用工具，不要只用文字描述怎么改。\n"];
+        [s appendString:@"File/code tasks => mode=tool_calls (not prose).\n"];
     }
     if (forcedName.length) {
-        [s appendFormat:@"You MUST call the function named \"%@\".\n", forcedName];
-        [s appendFormat:@"必须调用名为 \"%@\" 的工具。\n", forcedName];
+        [s appendFormat:@"Must call \"%@\".\n", forcedName];
     }
     return s;
 }
 
 #pragma mark - Message filter / path rewrite
 
-+ (NSString *)truncateSystemContent:(NSString *)content maxLen:(NSUInteger)maxLen {
-    if (content.length <= maxLen) {
-        return content ?: @"";
+/// 去掉 IDE 附件套话，保留用户意图与 <files> 代码。
++ (NSString *)compactUserFacingContent:(NSString *)content {
+    if (content.length == 0) {
+        return @"";
     }
-    // Prefer keeping project roots / path rules from the tail of system prompts
-    NSUInteger keepHead = maxLen / 3;
-    NSUInteger keepTail = maxLen - keepHead - 40;
-    return [NSString stringWithFormat:@"%@\n…[system truncated]…\n%@",
-            [content substringToIndex:keepHead],
-            [content substringFromIndex:content.length - keepTail]];
+    NSMutableString *s = [content mutableCopy];
+    NSArray *noise = @[
+        @"The following items were attached by the user. They are up-to-date and don't need to be re-read.\n\n",
+        @"The following items were attached by the user. They are up-to-date and don't need to be re-read.\n",
+        @"<context>\n",
+        @"</context>",
+    ];
+    for (NSString *n in noise) {
+        [s replaceOccurrencesOfString:n withString:@"" options:0 range:NSMakeRange(0, s.length)];
+    }
+    // [@name](file:///abs) → @name — 绝对路径由 Bridge 改写，提示里省字符
+    NSRegularExpression *link = [NSRegularExpression
+        regularExpressionWithPattern:@"\\[@?([^\\]]+)\\]\\(file://[^\\)]+\\)"
+                             options:0 error:nil];
+    s = [[link stringByReplacingMatchesInString:s options:0 range:NSMakeRange(0, s.length)
+                                   withTemplate:@"@$1"] mutableCopy];
+    return s;
 }
 
-/// 丢掉历史散文 assistant（含跑题内容），只保留 system / user / tool / 带 tool_calls 的 assistant。
+/// 不用 IDE 长 system；只注入项目根名（路径规则够用）。
++ (NSDictionary *)syntheticSystemMessageWithRoots:(NSArray<NSString *> *)roots {
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSString *r in roots) {
+        NSString *n = r.lastPathComponent ?: r;
+        if (n.length && ![names containsObject:n]) {
+            [names addObject:n];
+        }
+    }
+    NSString *rootsLine = names.count ? [names componentsJoinedByString:@", "] : @"project";
+    NSString *example = names.count ? [NSString stringWithFormat:@"%@/file", names.firstObject] : @"root/file";
+    NSString *content = [NSString stringWithFormat:
+                         @"Project roots: %@. Paths like %@. Use listed tools.",
+                         rootsLine, example];
+    return @{@"role": @"system", @"content": content};
+}
+
+/// 丢掉 IDE 长 system / 散文 assistant；压缩 user；只留最近几轮 tool 轨迹。
 + (NSArray *)filterMessagesForAgent:(NSArray *)messages {
+    return [self filterMessagesForAgent:messages roots:@[]];
+}
+
++ (NSArray *)filterMessagesForAgent:(NSArray *)messages roots:(NSArray<NSString *> *)roots {
     NSMutableArray *out = [NSMutableArray array];
-    NSDictionary *systemMsg = nil;
     NSMutableArray *body = [NSMutableArray array];
     for (id raw in messages) {
         if (![raw isKindOfClass:[NSDictionary class]]) {
@@ -470,32 +488,39 @@
         NSDictionary *c = [self compactMessage:(NSDictionary *)raw];
         NSString *role = c[@"role"] ?: @"";
         if ([role isEqualToString:@"system"]) {
-            if (!systemMsg) {
-                NSMutableDictionary *s = [c mutableCopy];
-                s[@"content"] = [self truncateSystemContent:s[@"content"] ?: @"" maxLen:2800];
-                systemMsg = s;
-            }
-            continue;
+            continue; // 用 syntheticSystemMessage 替代
         }
         if ([role isEqualToString:@"assistant"]) {
             id tcs = c[@"tool_calls"];
             BOOL hasTools = [tcs isKindOfClass:[NSArray class]] && [(NSArray *)tcs count] > 0;
             if (!hasTools) {
-                continue; // drop prose / polluted history
+                continue;
             }
+        }
+        if ([role isEqualToString:@"user"] || [role isEqualToString:@"tool"]) {
+            NSMutableDictionary *m = [c mutableCopy];
+            if ([m[@"content"] isKindOfClass:[NSString class]]) {
+                m[@"content"] = [self compactUserFacingContent:m[@"content"]];
+            }
+            // tool 结果过长时截断，优先留错误摘要
+            NSString *tc = m[@"content"];
+            if ([role isEqualToString:@"tool"] && tc.length > 4000) {
+                m[@"content"] = [[tc substringToIndex:3000]
+                    stringByAppendingFormat:@"\n…[tool result truncated %lu chars]…\n%@",
+                    (unsigned long)(tc.length - 3500),
+                    [tc substringFromIndex:tc.length - 500]];
+            }
+            [body addObject:m];
+            continue;
         }
         [body addObject:c];
     }
-    // Keep last few body messages; always include the final user turn
-    NSUInteger keep = 8;
+    // 网页多轮贵：只留最近 4 条 body（通常够 1～2 轮 tool 往返）
+    NSUInteger keep = 4;
     if (body.count > keep) {
-        NSArray *tail = [body subarrayWithRange:NSMakeRange(body.count - keep, keep)];
-        [body removeAllObjects];
-        [body addObjectsFromArray:tail];
+        body = [[body subarrayWithRange:NSMakeRange(body.count - keep, keep)] mutableCopy];
     }
-    if (systemMsg) {
-        [out addObject:systemMsg];
-    }
+    [out addObject:[self syntheticSystemMessageWithRoots:roots]];
     [out addObjectsFromArray:body];
     return out;
 }
@@ -704,25 +729,109 @@
     return nil;
 }
 
++ (NSArray *)prioritizeCodingTools:(NSArray *)rawTools {
+    static NSArray *coreOrder;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        coreOrder = @[
+            @"edit_file", @"write_file", @"read_file", @"grep", @"find_path",
+            @"list_directory", @"diagnostics", @"terminal", @"delete_path",
+            @"create_directory", @"copy_path", @"move_path"
+        ];
+    });
+    NSMutableArray *core = [NSMutableArray array];
+    NSMutableArray *rest = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+    for (NSString *want in coreOrder) {
+        for (id t in rawTools) {
+            if (![t isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *tool = (NSDictionary *)t;
+            NSString *name = nil;
+            if ([tool[@"function"] isKindOfClass:[NSDictionary class]]) {
+                name = tool[@"function"][@"name"];
+            } else {
+                name = tool[@"name"];
+            }
+            if ([name isEqualToString:want] && ![seen containsObject:name]) {
+                [core addObject:t];
+                [seen addObject:name];
+            }
+        }
+    }
+    for (id t in rawTools) {
+        if (![t isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *tool = (NSDictionary *)t;
+        NSString *name = nil;
+        if ([tool[@"function"] isKindOfClass:[NSDictionary class]]) {
+            name = tool[@"function"][@"name"];
+        } else {
+            name = tool[@"name"];
+        }
+        if (name.length && ![seen containsObject:name]) {
+            [rest addObject:t];
+            [seen addObject:name];
+        }
+    }
+    NSMutableArray *out = [NSMutableArray arrayWithArray:core];
+    [out addObjectsFromArray:rest];
+    return out;
+}
+
+/// 核心工具带精简 parameters；其余仅 name（大幅省字符）。
++ (NSArray *)hybridToolsForPrompt:(NSArray *)rawTools {
+    NSArray *ordered = [self prioritizeCodingTools:rawTools];
+    NSSet *fullSchema = [NSSet setWithArray:@[
+        @"edit_file", @"write_file", @"read_file", @"grep", @"find_path",
+        @"list_directory", @"diagnostics", @"terminal", @"delete_path",
+        @"create_directory", @"copy_path", @"move_path"
+    ]];
+    NSMutableArray *out = [NSMutableArray array];
+    for (id t in ordered) {
+        if (![t isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *tool = (NSDictionary *)t;
+        NSString *name = nil;
+        NSDictionary *fnSrc = nil;
+        if ([tool[@"function"] isKindOfClass:[NSDictionary class]]) {
+            fnSrc = tool[@"function"];
+            name = fnSrc[@"name"];
+        } else if ([tool[@"name"] isKindOfClass:[NSString class]]) {
+            fnSrc = tool;
+            name = tool[@"name"];
+        }
+        if (!name.length) continue;
+        if ([fullSchema containsObject:name]) {
+            NSMutableDictionary *f = [NSMutableDictionary dictionary];
+            f[@"name"] = name;
+            if (fnSrc[@"parameters"]) {
+                f[@"parameters"] = [self slimJSONSchema:fnSrc[@"parameters"] depth:0];
+            }
+            [out addObject:@{@"type": @"function", @"function": f}];
+        } else {
+            [out addObject:@{@"name": name}];
+        }
+    }
+    return out;
+}
+
 + (NSString *)fitToolsJSON:(NSArray *)tools rawTools:(NSArray *)rawTools maxChars:(NSUInteger)maxChars {
     if (maxChars < 32) {
         return @"[]";
     }
-    // 逐步降级：带描述+参数 → 无描述+参数 → 仅 name
-    NSArray *levels = @[
-        [self compactToolsForPrompt:rawTools includeDescriptions:YES includeParameters:YES],
-        [self compactToolsForPrompt:rawTools includeDescriptions:NO includeParameters:YES],
-        [self minimalToolNamesOnly:rawTools]
-    ];
     (void)tools;
+    NSArray *ordered = [self prioritizeCodingTools:rawTools];
+    // 默认就不带 description；逐步降级
+    NSArray *levels = @[
+        [self hybridToolsForPrompt:ordered],
+        [self compactToolsForPrompt:ordered includeDescriptions:NO includeParameters:YES],
+        [self minimalToolNamesOnly:ordered]
+    ];
     for (NSArray *level in levels) {
         NSString *s = [self jsonString:level pretty:NO];
         if (s.length <= maxChars) {
             return s;
         }
     }
-    // 仍超长：截断 name 列表
-    NSArray *namesOnly = [self minimalToolNamesOnly:rawTools];
+    NSArray *namesOnly = [self minimalToolNamesOnly:ordered];
     NSMutableArray *kept = [NSMutableArray array];
     for (id item in namesOnly) {
         [kept addObject:item];
@@ -732,7 +841,7 @@
             break;
         }
     }
-    return [self jsonString:kept.count ? kept : @[@{@"name": @"read_file"}] pretty:NO];
+    return [self jsonString:kept.count ? kept : @[@{@"name": @"edit_file"}] pretty:NO];
 }
 
 + (NSString *)buildWebpagePromptFromRequest:(NSDictionary *)json {
@@ -741,58 +850,39 @@
     NSUInteger budget = [self maxPromptChars];
 
     NSString *instructions = [self instructionBlockRequiringTools:require forcedFunction:forced];
-    NSString *footer =
-        @"\n\n## Your reply\n"
-        @"Output ONE valid JSON object now (Schema A for file edits).\n"
-        @"Remember: escape every \" inside strings as \\\" .\n"
-        @"Use project-relative paths (e.g. test/hello.py), not /Volumes/... absolute paths.\n";
+    NSString *footer = @"\n\n## Reply\nONE JSON now. Escape \\\". Relative paths only.\n";
 
     id rawTools = json[@"tools"];
     NSArray *toolArr = [rawTools isKindOfClass:[NSArray class]] ? (NSArray *)rawTools : @[];
     id messages = json[@"messages"];
     NSArray *rawMsgs = [messages isKindOfClass:[NSArray class]] ? (NSArray *)messages : @[];
-    // 过滤跑题的历史 prose，只留编程相关上下文
-    NSArray *msgArr = [self filterMessagesForAgent:rawMsgs];
 
-    // 提取最新 user 任务，放在末尾强化（避免被长 system/历史淹没）
-    NSString *latestUser = @"";
-    for (NSInteger i = (NSInteger)rawMsgs.count - 1; i >= 0; i--) {
-        id m = rawMsgs[(NSUInteger)i];
-        if (![m isKindOfClass:[NSDictionary class]]) continue;
-        if ([m[@"role"] isEqualToString:@"user"]) {
-            latestUser = [self stringifyContent:m[@"content"]];
-            break;
-        }
-    }
-    if (latestUser.length > 6000) {
-        latestUser = [[latestUser substringToIndex:5000]
-            stringByAppendingFormat:@"\n…[latest task truncated]…\n%@",
-            [latestUser substringFromIndex:latestUser.length - 800]];
-    }
-    NSString *latestSection = latestUser.length
-        ? [NSString stringWithFormat:@"\n\n## Latest user task (do this)\n%@\n", latestUser]
-        : @"";
+    // 先抽 roots，再合成极短 system（丢弃 IDE 长 system）
+    NSArray<NSString *> *roots = [self projectRootsFromRequest:json];
+    NSArray *msgArr = [self filterMessagesForAgent:rawMsgs roots:roots];
 
-    // 1) 先给 messages 留足预算（引用文件必须进网页），tools 吃剩余
-    NSUInteger overhead = instructions.length + footer.length + latestSection.length + 64;
+    // tools 硬顶：给代码附件留额度（网页上下文紧）
+    const NSUInteger kToolsHardCap = 3500;
+
+    NSUInteger overhead = instructions.length + footer.length + 48;
     NSUInteger remaining = budget > overhead ? budget - overhead : budget / 2;
-    NSUInteger msgBudget = MAX([self minMessagesBudget], remaining * 2 / 3);
-    if (msgBudget + 512 > remaining) {
-        msgBudget = remaining > 1024 ? remaining - 512 : remaining / 2;
+    NSUInteger toolsBudget = MIN(kToolsHardCap, MAX(256, remaining / 5));
+    NSUInteger msgBudget = remaining > toolsBudget + 64 ? remaining - toolsBudget - 64 : remaining / 2;
+    if (msgBudget < [self minMessagesBudget] && remaining > [self minMessagesBudget] + 512) {
+        msgBudget = [self minMessagesBudget];
+        toolsBudget = MIN(kToolsHardCap, remaining - msgBudget - 64);
     }
 
     NSArray *truncatedMsgs = [self truncateMessages:msgArr maxChars:msgBudget];
-    // 紧凑 JSON，省字符
     NSString *messagesJSON = [self jsonString:truncatedMsgs pretty:NO];
-    // 单条超长 user（大文件上下文）：硬截断内容但仍保留尾部任务句
     if (messagesJSON.length > msgBudget && truncatedMsgs.count > 0) {
         NSMutableArray *clipped = [truncatedMsgs mutableCopy];
         for (NSInteger i = (NSInteger)clipped.count - 1; i >= 0; i--) {
             NSMutableDictionary *m = [clipped[(NSUInteger)i] mutableCopy];
             NSString *c = [m[@"content"] isKindOfClass:[NSString class]] ? m[@"content"] : @"";
-            if (c.length > 8000) {
-                NSUInteger keepHead = 5000;
-                NSUInteger keepTail = 2500;
+            if (c.length > 12000) {
+                NSUInteger keepHead = 8000;
+                NSUInteger keepTail = 3000;
                 if (c.length > keepHead + keepTail) {
                     NSString *mid = [NSString stringWithFormat:@"\n…[content truncated %lu chars]…\n",
                                      (unsigned long)(c.length - keepHead - keepTail)];
@@ -807,41 +897,35 @@
                 break;
             }
         }
-        // 仍超：再跑 truncateMessages
         if (messagesJSON.length > msgBudget) {
             truncatedMsgs = [self truncateMessages:clipped maxChars:msgBudget];
             messagesJSON = [self jsonString:truncatedMsgs pretty:NO];
         }
     }
 
-    NSUInteger toolsBudget = remaining > messagesJSON.length + 64
-        ? remaining - messagesJSON.length - 64
-        : 256;
     NSString *toolsJSON = [self fitToolsJSON:nil rawTools:toolArr maxChars:toolsBudget];
 
-    // 2) Messages 在前，Tools 在后 —— 即便再截断也优先保住任务与附件上下文
+    // Messages 在前（代码优先）；不重复粘贴 Latest task（已在 Messages 里）
     NSMutableString *prompt = [NSMutableString string];
     [prompt appendString:instructions];
     [prompt appendString:@"\n## Messages\n"];
     [prompt appendString:messagesJSON];
-    [prompt appendString:@"\n\n## Available tools (compact)\n"];
+    [prompt appendString:@"\n\n## Tools\n"];
     [prompt appendString:toolsJSON];
-    [prompt appendString:latestSection];
     [prompt appendString:footer];
 
     if (prompt.length > budget) {
-        // 只砍 tools 段：保留 messages + latest task
-        NSString *marker = @"\n\n## Available tools (compact)\n";
+        NSString *marker = @"\n\n## Tools\n";
         NSRange r = [prompt rangeOfString:marker];
         if (r.location != NSNotFound) {
             NSUInteger keepPrefix = r.location + r.length;
-            NSUInteger tailLen = latestSection.length + footer.length + 32;
-            NSUInteger room = budget > keepPrefix + tailLen ? budget - keepPrefix - tailLen : 64;
+            NSUInteger room = budget > keepPrefix + footer.length + 16
+                ? budget - keepPrefix - footer.length - 16
+                : 64;
             NSString *slimTools = [self fitToolsJSON:nil rawTools:toolArr maxChars:room];
             NSMutableString *rebuilt = [NSMutableString string];
             [rebuilt appendString:[prompt substringToIndex:keepPrefix]];
             [rebuilt appendString:slimTools];
-            [rebuilt appendString:latestSection];
             [rebuilt appendString:footer];
             if (rebuilt.length <= budget) {
                 return rebuilt;
@@ -850,7 +934,6 @@
             rebuilt = [NSMutableString string];
             [rebuilt appendString:[prompt substringToIndex:keepPrefix]];
             [rebuilt appendString:[self jsonString:names pretty:NO]];
-            [rebuilt appendString:latestSection];
             [rebuilt appendString:footer];
             if (rebuilt.length <= budget) {
                 return rebuilt;

@@ -203,7 +203,12 @@ int main(int argc, const char *argv[]) {
             expect(![p containsString:@"Suno"], "music prose filtered from prompt");
             expect(![p containsString:@"写音乐"], "music topic filtered");
             expect([p containsString:@"hello.py"], "coding task kept");
-            expect([p containsString:@"Latest user task"], "latest task section present");
+            expect(![p containsString:@"You are the Zed coding agent"], "IDE long system dropped");
+            expect([p containsString:@"Project roots:"], "synthetic short system present");
+            expect(![p containsString:@"Latest user task"], "no duplicated latest-task section");
+            expect(![p containsString:@"up-to-date and don't need to be re-read"], "attachment boilerplate stripped");
+            // 压缩后应显著短于旧版（旧版常 >8k 仅 system+tools）
+            expect(p.length < 8000, "compact prompt for simple edit task");
         }
 
         // Huge IDE tool schemas must NOT wipe user file context from the prompt
