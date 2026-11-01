@@ -31,7 +31,8 @@
 | messages | 默认最后一条 user |
 | stream | 假流式（整段后再切 SSE）；真增量 → BR-4 |
 | 上游 | `ollama__*` / `openai__*` 真 HTTP |
-| MCP / tools | BR-4 |
+| MCP | BR-4 |
+| tools 模拟 | **BR-4.3 已落地**（`AIBridgeToolSimulator`） |
 
 ---
 
@@ -75,14 +76,30 @@
 
 ## Phase BR-4：后续（不阻塞）
 
-| ID | 项 |
-|----|-----|
-| 4.1 | 真增量 SSE（轮询差分） |
-| 4.2 | 用户 Adapter 目录热覆盖 |
-| 4.3 | tools 模拟 |
-| 4.4 | MCP server |
-| 4.5 | ChatGPT 实验适配器 |
-| 4.6 | 与 CA-3 共享客户端 |
+| ID | 项 | 状态 |
+|----|-----|------|
+| 4.1 | 真增量 SSE（轮询差分） | 计划中 |
+| 4.2 | 用户 Adapter 目录热覆盖 | 计划中 |
+| 4.3 | tools / tool_calls 模拟（网页 JSON → OpenAI Agent） | **完成** |
+| 4.4 | MCP server | 计划中 |
+| 4.5 | ChatGPT 实验适配器 | 计划中（适配器已有；持续修订） |
+| 4.6 | 与 CA-3 共享客户端 | 计划中 |
+
+### BR-4.3 验收
+
+```bash
+make test-ai-bridge-tools
+
+# 需浏览器已启动 Bridge + 绑定；期望 finish_reason=tool_calls
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "model":"bridge__deepseek",
+    "tools":[{"type":"function","function":{"name":"get_time","parameters":{"type":"object","properties":{}}}}],
+    "tool_choice":"required",
+    "messages":[{"role":"user","content":"调用 get_time"}]
+  }' | jq '.choices[0].finish_reason, .choices[0].message.tool_calls'
+```
 
 ---
 

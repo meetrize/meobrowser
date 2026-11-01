@@ -228,8 +228,10 @@ Content-Type: application/json
 | 字段 | 必填 | 行为 |
 |------|------|------|
 | `model` | 是 | 见 §5 |
-| `messages` | 是（网页路径） | **只取最后一条 `role=user` 的 content** 写入网页；前面的历史默认由网页会话自身保持 |
-| `stream` | 否 | `true` 时：网页路径为**假流式**（整段生成完再切成 SSE）；上游路径透传 |
+| `messages` | 是（网页路径） | **普通聊天**：只取最后一条 `role=user`；**Agent 模式**（见 §7.3.1）：打包完整 messages |
+| `tools` | 否 | 非空数组 → 启用 Agent / tools 模拟 |
+| `tool_choice` | 否 | `auto`（默认）/ `none`（强制普通聊天）/ `required` / `{type:function,function:{name}}` |
+| `stream` | 否 | `true` 时：网页路径为**假流式**（整段生成完再切成 SSE；含 tool_calls）；上游路径透传 |
 | `meo_attachments` | 否 | 本机附件，见 §8；目前仅 DeepSeek |
 
 `content` 支持：
@@ -237,7 +239,7 @@ Content-Type: application/json
 - 字符串：直接作为提示词  
 - 数组（多模态形态）：拼接其中 `type=text` 的 `text` 字段（忽略图片等其它 part）
 
-网页路径**不会**把完整 `messages` 多轮原样重放到网页（避免与页内上下文重复）。
+普通聊天路径**不会**把完整 `messages` 多轮原样重放到网页（避免与页内上下文重复）。Agent 模式例外，见下节。
 
 #### 成功响应（非流式）
 
@@ -263,6 +265,76 @@ Content-Type: application/json
 ```
 
 `usage` 固定为 0（网页无精确 token）。超时默认约 **180s**（队列任务）。
+
+#### 7.3.1 Agent / tools 模拟（完整 Agent）
+
+当请求带有**非空** `tools` 且 `tool_choice` 不是 `"none"` 时，Bridge 进入 **Agent 模式**（实现：`AIBridgeToolSimulator`）：
+
+1. 把压缩后的 `messages`（含引用文件 / `system` / `tool` 结果）与**精简后的** `tools` schema 打成自包含网页提示词（约 48k 字符上限）。**Messages 优先**；**丢弃历史散文 assistant**（避免跑题闲聊污染）；末尾重复「Latest user task」。tools 去掉冗长 `description`/`<example>`。
+2. 要求网页**只输出**下列 JSON 之一（可带 \`\`\`json 围栏，Bridge 会剥离）；字符串内 `"` 必须写成 `\\\"`。Bridge 会对常见未转义引号做修复，并把 `/Volumes/...` 绝对路径改写成 IDE 所需的项目相对路径（如 `test/hello.py`）：
+
+```json
+{"mode":"tool_calls","tool_calls":[{"name":"TOOL_NAME","arguments":{}}]}
+```
+
+```json
+{"mode":"message","content":"最终答复"}
+```
+
+3. 解析成功后返回标准 OpenAI 形态：
+   - `mode=tool_calls` → `finish_reason: "tool_calls"`，`message.tool_calls`（自动补 `id` / `type` / 字符串化 `arguments`）
+   - `mode=message` → 普通助手文本，`finish_reason: "stop"`
+4. 解析失败时自动 **1 次** repair 再问网页；仍失败 → **502** `type: tool_parse_error`（避免 IDE 把散文当成「已完成」）。
+
+`tool_choice`：
+
+| 值 | 行为 |
+|----|------|
+| 缺省 / `"auto"` | 允许 message 或 tool_calls |
+| `"none"` | **不**启用 Agent，走普通最后一条 user |
+| `"required"` | 必须 tool_calls；回 message 则 repair / 502 |
+| `{"type":"function","function":{"name":"…"}}` | 必须调用指定工具名 |
+
+成功响应（tool_calls）示例：
+
+```json
+{
+  "id": "chatcmpl-meo-…",
+  "object": "chat.completion",
+  "created": 1730000000,
+  "model": "bridge__deepseek__0aca09",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [{
+        "id": "call_…",
+        "type": "function",
+        "function": {
+          "name": "Write",
+          "arguments": "{\"path\":\"/tmp/hello.py\",\"contents\":\"print(\\\"你好，世界！\\\")\\n\"}"
+        }
+      }]
+    },
+    "finish_reason": "tool_calls"
+  }],
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+}
+```
+
+IDE 侧典型闭环：
+
+1. 发送 `messages` + `tools` → 收到 `tool_calls`
+2. **IDE 本地执行**工具（读/写文件等）——Bridge **不会**改你的磁盘
+3. 下一轮把 `role=tool` 结果塞进 `messages` 再请求，直到 `finish_reason=stop`
+
+配置注意：
+
+- 必须使用 IDE 的 **Agent / 带 tools** 模式；纯 Chat 不会下发 `tools`，故不会写盘
+- 建议每个 Agent 会话开始时调用一次 `POST /v1/bridge/new_chat`
+- 网页生成慢 + 假流式：客户端会感觉「很久才冒出 tool」——属预期
+- 工具名必须是请求 `tools` 里声明过的；网页若编造名字会解析失败
 
 #### curl 示例
 
@@ -384,7 +456,7 @@ curl -s -X POST "$MEO_BRIDGE/v1/bridge/cancel" \
 | 409 | 多绑定歧义、需登录/输入框未就绪、域名不匹配 | `ambiguous_model` / `login_required` / `host_mismatch` |
 | 429 | 队列已满（默认 `maxPending=5`） | （job 层） |
 | 499 | 客户端取消 / cancelAll | — |
-| 502 | 上游转发失败 | `upstream_error` |
+| 502 | 上游转发失败；Agent JSON 解析失败（含 repair 后） | `upstream_error` / `tool_parse_error` |
 | 503 | 服务/WebView/Adapter 注入失败、页面 about:blank | `bridge_error` |
 | 504 | 等待网页回复超时 | — |
 
@@ -450,7 +522,9 @@ console.log(r.choices[0].message.content);
 
 - 仅本机可用；远程机器连不上（loopback）。  
 - 网页路径延迟高（真实页面生成），适合低频；并发会被队列串行化。  
-- 默认只发**最后一条 user**；依赖网页里已有的多轮上下文。需要干净会话时先调 `/v1/bridge/new_chat`。
+- **要自动改文件**：必须用 Agent（会发 `tools`）。纯 Chat 只会得到 markdown 说明，IDE 不会执行。  
+- Agent 模式由 Bridge 把网页 JSON 译成 `tool_calls`；执行仍在 IDE。  
+- 需要干净会话时先调 `/v1/bridge/new_chat`。
 
 ### 10.5 纯 curl + jq
 
@@ -490,8 +564,9 @@ curl -s "$MEO_BRIDGE/v1/chat/completions" \
 
 | OpenAI 云 API | AI Bridge 网页路径 |
 |---------------|-------------------|
-| 无状态；每次带全量 messages | **有状态**：页内会话即上下文 |
-| `messages` 全部生效 | 默认只注入**最后一条 user** |
+| 无状态；每次带全量 messages | 普通聊天依赖页内会话；**Agent 模式**每次注入自包含包 |
+| `messages` 全部生效 | 普通：最后一条 user；Agent：压缩后的多轮（含 tool） |
+| 原生 function calling | Agent：网页 JSON → 标准 `tool_calls`（有解析失败风险） |
 | 高并发多连接 | 本机单队列，贴近真人节奏 |
 | 稳定 SLA | 依赖站点 DOM；改版可能导致 probe/发送失败 |
 
@@ -514,9 +589,11 @@ curl -s "$MEO_BRIDGE/v1/chat/completions" \
 | 路径 | 说明 |
 |------|------|
 | `SimpleBrowser/AIBridge/AIBridgeService.m` | HTTP 路由与协议实现 |
+| `SimpleBrowser/AIBridge/AIBridgeToolSimulator.m` | Agent：tools 提示词 + 网页 JSON → tool_calls |
 | `SimpleBrowser/AIBridge/AIBridgeHTTPServer.m` | loopback 监听 |
 | `SimpleBrowser/AIBridge/AIBridgePreferences.m` | 端口 / Token / 上游 |
 | `SimpleBrowser/AIBridge/AIBridgeRegistry.m` | 绑定与 modelId |
+| `make test-ai-bridge-tools` | tools 解析单测 |
 | `docs/minimal-browser/ai-bridge-design.md` | 产品与架构设计 |
 | `docs/minimal-browser/ai-bridge-development-plan.md` | 分阶段计划 |
 | `docs/minimal-browser/ai-attachment-design.md` | 附件协议设计 |
@@ -539,4 +616,15 @@ curl -s http://127.0.0.1:3921/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"bridge__deepseek","messages":[{"role":"user","content":"只回复：ok"}]}' \
   | jq -r '.choices[0].message.content'
+
+# 4) Agent：应返回 tool_calls（需绑定页已登录）
+curl -s http://127.0.0.1:3921/v1/chat/completions \
+  -H "Authorization: Bearer $MEO_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model":"bridge__deepseek",
+    "tools":[{"type":"function","function":{"name":"get_time","parameters":{"type":"object","properties":{}}}}],
+    "tool_choice":"required",
+    "messages":[{"role":"user","content":"调用 get_time"}]
+  }' | jq '.choices[0].finish_reason, .choices[0].message.tool_calls'
 ```

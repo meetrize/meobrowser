@@ -160,6 +160,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeJobQueue.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeHTTPServer.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeUpstreamClient.m \
+                   $(BROWSER_SRC_DIR)/AIBridge/AIBridgeToolSimulator.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeService.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeSidebarController.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/AIAssistantSession.m \
@@ -390,7 +391,7 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 
-.PHONY: all browser clean run run-browser install-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools
+.PHONY: all browser clean run run-browser install-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools test-ai-bridge-tools
 
 all: $(BINARY) $(NIB_OUT)
 
@@ -595,6 +596,18 @@ verify: all browser
 	@test -f $(BROWSER_BUNDLE)/Contents/Info.plist
 	@test -f $(BROWSER_RES_DIR)/$(BROWSER_ICON_NAME).icns
 	@echo "verify OK: SimpleWindow + MeoBrowser binaries, Info.plist, AppIcon"
+
+# AI Bridge tools/tool_calls 解析单测（不依赖完整浏览器）
+test-ai-bridge-tools:
+	@mkdir -p $(BUILD_DIR)
+	$(CC) -Wall -Wextra -O0 -fobjc-arc \
+		-I$(BROWSER_SRC_DIR)/AIBridge \
+		-isysroot $$(xcrun --sdk macosx --show-sdk-path) \
+		$(BROWSER_SRC_DIR)/AIBridge/AIBridgeToolSimulator.m \
+		Tests/ai_bridge_tool_sim_parse.m \
+		-framework Foundation \
+		-o $(BUILD_DIR)/ai_bridge_tool_sim_parse
+	$(BUILD_DIR)/ai_bridge_tool_sim_parse
 
 clean:
 	rm -rf $(BUILD_DIR)

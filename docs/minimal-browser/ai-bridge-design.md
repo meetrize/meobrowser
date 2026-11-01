@@ -319,10 +319,10 @@ ChatGPT 选择器已于 2026-10-28 登录态实测（见 Spike/`adapters/chatgpt
 | 字段 | 行为 |
 |------|------|
 | `model` | 必须为已注册 `bridge__*`（或 Gateway 其它前缀） |
-| `messages` | 默认取最后一条 `role=user` 的 `content`（字符串；多模态 BR-3） |
+| `messages` | 默认取最后一条 `role=user` 的 `content`；**有非空 `tools` 时**改为 Agent 自包含包（含 system / tool 结果） |
 | `history` | 缺省 `webpage`；`forward` 时把多轮拼成单段再发送 |
-| `stream` | BR-1 忽略或假流式一整块；BR-2 支持 |
-| `tools` | BR-1/2 忽略；BR-3 prompt 模拟 |
+| `stream` | 假流式一整块；tool_calls 亦有假 SSE |
+| `tools` | 非空且 `tool_choice≠none` 时启用 **prompt 模拟**（`AIBridgeToolSimulator`）：网页强制 JSON → OpenAI `tool_calls` |
 | 超时 | Adapter `defaultTimeoutMs`，可被请求扩展字段覆盖 |
 
 成功响应（非流式）对齐 OpenAI：

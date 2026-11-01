@@ -5,6 +5,7 @@
 #import "AIBridgeJobQueue.h"
 #import "AIBridgeDOMProvider.h"
 #import "AIBridgeUpstreamClient.h"
+#import "AIBridgeToolSimulator.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
 #import <WebKit/WebKit.h>
@@ -763,14 +764,26 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         return;
     }
 
-    NSString *prompt = [self extractUserPrompt:json];
-    if (prompt == nil) {
-        [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content", @"type": @"invalid_request"}}];
-        return;
-    }
-    if (prompt.length == 0 && attachments.count == 0) {
-        [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content or meo_attachments", @"type": @"invalid_request"}}];
-        return;
+    BOOL agentMode = [AIBridgeToolSimulator shouldEnableForRequest:json];
+    NSString *prompt = nil;
+    if (agentMode) {
+        prompt = [AIBridgeToolSimulator buildWebpagePromptFromRequest:json];
+        if (prompt.length == 0) {
+            [self respondJSON:respond status:400 object:@{
+                @"error": @{@"message": @"unable to build agent prompt", @"type": @"invalid_request"}
+            }];
+            return;
+        }
+    } else {
+        prompt = [self extractUserPrompt:json];
+        if (prompt == nil) {
+            [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content", @"type": @"invalid_request"}}];
+            return;
+        }
+        if (prompt.length == 0 && attachments.count == 0) {
+            [self respondJSON:respond status:400 object:@{@"error": @{@"message": @"messages must include user content or meo_attachments", @"type": @"invalid_request"}}];
+            return;
+        }
     }
 
     // 409：先校验绑定标签域名，再 probe 登录/输入框
@@ -877,10 +890,10 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
                                              attachments:attachments
                                                timeoutMs:180000
                                               completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
-                NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
-                [strongSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
-                [strongSelf notify];
                 if (httpStatus != 200) {
+                    NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+                    [strongSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
+                    [strongSelf notify];
                     NSString *errType = @"bridge_error";
                     NSString *msg = errorMessage ?: @"failed";
                     if ([msg containsString:@"attachments_unsupported"]) {
@@ -899,13 +912,116 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
                     return;
                 }
                 NSString *text = result[@"text"] ?: @"";
-                if (stream) {
-                    [strongSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
+                if (agentMode) {
+                    [strongSelf finishAgentCompletionWithText:text
+                                                        model:model
+                                                      request:json
+                                                       stream:stream
+                                                    startedAt:t0
+                                                 repairAttempted:NO
+                                                      respond:respond];
                 } else {
-                    [strongSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
+                    NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+                    [strongSelf appendLogModel:model status:200 duration:dt detail:nil];
+                    [strongSelf notify];
+                    if (stream) {
+                        [strongSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
+                    } else {
+                        [strongSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
+                    }
                 }
             }];
         }];
+    }];
+}
+
+/// Agent 模式：解析网页 JSON；失败则自动 1 次 repair；再失败 502。
+- (void)finishAgentCompletionWithText:(NSString *)text
+                                model:(NSString *)model
+                              request:(NSDictionary *)json
+                               stream:(BOOL)stream
+                            startedAt:(NSTimeInterval)t0
+                       repairAttempted:(BOOL)repairAttempted
+                              respond:(AIBridgeHTTPRespondBlock)respond {
+    AIBridgeToolSimResult *parsed = [AIBridgeToolSimulator parseWebpageText:text forRequest:json];
+    if (!parsed.parseError.length) {
+        NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+        NSString *detail = (parsed.kind == AIBridgeToolSimKindToolCalls)
+            ? [NSString stringWithFormat:@"tools tool_calls:%lu", (unsigned long)parsed.toolCalls.count]
+            : @"tools message";
+        [self appendLogModel:model status:200 duration:dt detail:detail];
+        [self notify];
+        if (parsed.kind == AIBridgeToolSimKindToolCalls) {
+            if (stream) {
+                [self respondFakeSSEToolCalls:respond
+                                        model:model
+                                    toolCalls:parsed.toolCalls
+                                      created:(NSInteger)t0];
+            } else {
+                [self respondToolCallsCompletion:respond
+                                           model:model
+                                       toolCalls:parsed.toolCalls
+                                         created:(NSInteger)t0];
+            }
+        } else {
+            NSString *content = parsed.content ?: @"";
+            if (stream) {
+                [self respondFakeSSE:respond model:model text:content created:(NSInteger)t0];
+            } else {
+                [self respondCompletion:respond model:model text:content created:(NSInteger)t0];
+            }
+        }
+        return;
+    }
+
+    if (!repairAttempted) {
+        NSString *repairPrompt = [AIBridgeToolSimulator buildRepairPromptFromRequest:json
+                                                                        previousText:text ?: @""];
+        __weak typeof(self) weakSelf = self;
+        [[AIBridgeJobQueue sharedQueue] enqueueModel:model
+                                              prompt:repairPrompt
+                                         attachments:nil
+                                           timeoutMs:180000
+                                          completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if (httpStatus != 200) {
+                NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+                NSString *msg = [NSString stringWithFormat:@"tool_parse_error: %@; repair failed: %@",
+                                 parsed.parseError ?: @"", errorMessage ?: @"failed"];
+                [strongSelf appendLogModel:model status:httpStatus duration:dt detail:msg];
+                [strongSelf notify];
+                [strongSelf respondJSON:respond status:502 object:@{
+                    @"error": @{
+                        @"message": msg,
+                        @"type": @"tool_parse_error"
+                    }
+                }];
+                return;
+            }
+            NSString *retryText = result[@"text"] ?: @"";
+            [strongSelf finishAgentCompletionWithText:retryText
+                                                model:model
+                                              request:json
+                                               stream:stream
+                                            startedAt:t0
+                                       repairAttempted:YES
+                                              respond:respond];
+        }];
+        return;
+    }
+
+    NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+    NSString *msg = [NSString stringWithFormat:@"tool_parse_error: %@", parsed.parseError ?: @"invalid agent JSON"];
+    [self appendLogModel:model status:502 duration:dt detail:msg];
+    [self notify];
+    [self respondJSON:respond status:502 object:@{
+        @"error": @{
+            @"message": msg,
+            @"type": @"tool_parse_error"
+        }
     }];
 }
 
@@ -1016,6 +1132,131 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         }
     };
     [self respondJSON:respond status:200 object:payload];
+}
+
+- (void)respondToolCallsCompletion:(AIBridgeHTTPRespondBlock)respond
+                             model:(NSString *)model
+                         toolCalls:(NSArray<NSDictionary *> *)toolCalls
+                           created:(NSInteger)created {
+    NSString *idStr = [NSString stringWithFormat:@"chatcmpl-meo-%@", NSUUID.UUID.UUIDString];
+    NSDictionary *payload = @{
+        @"id": idStr,
+        @"object": @"chat.completion",
+        @"created": @(created),
+        @"model": model ?: @"",
+        @"choices": @[
+            @{
+                @"index": @0,
+                @"message": @{
+                    @"role": @"assistant",
+                    @"content": [NSNull null],
+                    @"tool_calls": toolCalls ?: @[]
+                },
+                @"finish_reason": @"tool_calls"
+            }
+        ],
+        @"usage": @{
+            @"prompt_tokens": @0,
+            @"completion_tokens": @0,
+            @"total_tokens": @0
+        }
+    };
+    [self respondJSON:respond status:200 object:payload];
+}
+
+/// 假流式 tool_calls：先 role，再按 index 推 delta.tool_calls，最后 finish_reason=tool_calls。
+- (void)respondFakeSSEToolCalls:(AIBridgeHTTPRespondBlock)respond
+                          model:(NSString *)model
+                      toolCalls:(NSArray<NSDictionary *> *)toolCalls
+                        created:(NSInteger)created {
+    NSString *idStr = [NSString stringWithFormat:@"chatcmpl-meo-%@", NSUUID.UUID.UUIDString];
+    NSMutableString *sse = [NSMutableString string];
+
+    void (^emit)(NSDictionary *) = ^(NSDictionary *obj) {
+        NSData *d = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+        NSString *line = d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"{}";
+        [sse appendFormat:@"data: %@\n\n", line];
+    };
+
+    emit(@{
+        @"id": idStr,
+        @"object": @"chat.completion.chunk",
+        @"created": @(created),
+        @"model": model ?: @"",
+        @"choices": @[ @{
+            @"index": @0,
+            @"delta": @{@"role": @"assistant", @"content": [NSNull null]},
+            @"finish_reason": [NSNull null]
+        }]
+    });
+
+    NSArray *calls = toolCalls ?: @[];
+    for (NSUInteger i = 0; i < calls.count; i++) {
+        NSDictionary *tc = calls[i];
+        NSDictionary *fn = [tc[@"function"] isKindOfClass:[NSDictionary class]] ? tc[@"function"] : @{};
+        NSString *name = [fn[@"name"] isKindOfClass:[NSString class]] ? fn[@"name"] : @"";
+        NSString *args = [fn[@"arguments"] isKindOfClass:[NSString class]] ? fn[@"arguments"] : @"{}";
+        NSString *callId = [tc[@"id"] isKindOfClass:[NSString class]] ? tc[@"id"] : [NSString stringWithFormat:@"call_%lu", (unsigned long)i];
+
+        // name chunk
+        emit(@{
+            @"id": idStr,
+            @"object": @"chat.completion.chunk",
+            @"created": @(created),
+            @"model": model ?: @"",
+            @"choices": @[ @{
+                @"index": @0,
+                @"delta": @{
+                    @"tool_calls": @[ @{
+                        @"index": @(i),
+                        @"id": callId,
+                        @"type": @"function",
+                        @"function": @{@"name": name, @"arguments": @""}
+                    }]
+                },
+                @"finish_reason": [NSNull null]
+            }]
+        });
+
+        // arguments in pieces
+        NSUInteger chunkSize = 48;
+        for (NSUInteger off = 0; off < args.length; off += chunkSize) {
+            NSUInteger len = MIN(chunkSize, args.length - off);
+            NSString *piece = [args substringWithRange:NSMakeRange(off, len)];
+            emit(@{
+                @"id": idStr,
+                @"object": @"chat.completion.chunk",
+                @"created": @(created),
+                @"model": model ?: @"",
+                @"choices": @[ @{
+                    @"index": @0,
+                    @"delta": @{
+                        @"tool_calls": @[ @{
+                            @"index": @(i),
+                            @"function": @{@"arguments": piece}
+                        }]
+                    },
+                    @"finish_reason": [NSNull null]
+                }]
+            });
+        }
+    }
+
+    emit(@{
+        @"id": idStr,
+        @"object": @"chat.completion.chunk",
+        @"created": @(created),
+        @"model": model ?: @"",
+        @"choices": @[ @{
+            @"index": @0,
+            @"delta": @{},
+            @"finish_reason": @"tool_calls"
+        }]
+    });
+    [sse appendString:@"data: [DONE]\n\n"];
+
+    NSData *body = [sse dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    respond(200, @"text/event-stream; charset=utf-8", body);
 }
 
 /// 整段生成后切成 SSE delta（假流式）。
