@@ -34,6 +34,8 @@ static const CGFloat kCitationChipRowHeight = 24.0;
 static const CGFloat kCitationChipSpacing = 4.0;
 static const CGFloat kCitationMaxVisibleRows = 3.0;
 static const CGFloat kInputCornerRadius = 12.0;
+static const CGFloat kComposerToolbarHeight = 28.0;
+static const CGFloat kComposerTextAreaHeight = 68.0;
 static const unsigned long long kAssistantAttachmentMaxBytes = 20ULL * 1024ULL * 1024ULL;
 static const NSUInteger kAssistantAttachmentMaxCount = 10;
 
@@ -394,6 +396,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSMutableArray<AIAssistantCitation *> *citations;
 @property (nonatomic, strong) NSMutableArray<NSMutableDictionary *> *pendingAttachments; // path/name/size
 @property (nonatomic, strong) NSBox *inputBox;
+@property (nonatomic, strong) NSLayoutConstraint *inputBoxHeightConstraint;
 @property (nonatomic, strong) AIAssistantComposerDropView *composerDropView;
 @property (nonatomic, strong) NSScrollView *attachChipScroll;
 @property (nonatomic, strong) NSStackView *attachChipStack;
@@ -402,7 +405,6 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) SBTextView *inputView;
 @property (nonatomic, strong) NSButton *attachButton;
 @property (nonatomic, strong) NSButton *sendButton;
-@property (nonatomic, strong) NSButton *cancelButton;
 @property (nonatomic, copy, nullable) NSString *pendingSystemHint;
 
 @property (nonatomic, strong) NSStackView *providerStack;
@@ -479,6 +481,58 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         return [img imageWithSymbolConfiguration:cfg] ?: img;
     }
     return nil;
+}
+
+- (NSButton *)composerIconButtonSymbol:(NSString *)symbol
+                              fallback:(NSString *)fallback
+                               tooltip:(NSString *)tip
+                                action:(SEL)action {
+    NSImage *img = [self symbolNamed:symbol];
+    NSButton *b = img
+        ? [NSButton buttonWithImage:img target:self action:action]
+        : [NSButton buttonWithTitle:(fallback.length ? fallback : @"·") target:self action:action];
+    b.translatesAutoresizingMaskIntoConstraints = NO;
+    b.bezelStyle = NSBezelStyleInline;
+    b.bordered = NO;
+    b.imagePosition = img ? NSImageOnly : NSImageOverlaps;
+    b.imageScaling = NSImageScaleProportionallyDown;
+    b.toolTip = tip;
+    if (@available(macOS 10.14, *)) {
+        b.contentTintColor = NSColor.secondaryLabelColor;
+    }
+    [b.widthAnchor constraintEqualToConstant:24].active = YES;
+    [b.heightAnchor constraintEqualToConstant:24].active = YES;
+    return b;
+}
+
+- (void)applySendStopButtonAppearance {
+    BOOL stop = self.inFlight;
+    NSString *symbol = stop ? @"stop.fill" : @"arrow.up.circle.fill";
+    NSString *fallback = stop ? @"■" : @"↑";
+    NSString *tip = stop ? @"停止" : @"发送";
+    NSImage *img = [self symbolNamed:symbol];
+    if (img) {
+        self.sendButton.image = img;
+        self.sendButton.title = @"";
+        self.sendButton.imagePosition = NSImageOnly;
+    } else {
+        self.sendButton.image = nil;
+        self.sendButton.title = fallback;
+        self.sendButton.imagePosition = NSImageOverlaps;
+    }
+    self.sendButton.toolTip = tip;
+    if (@available(macOS 10.14, *)) {
+        self.sendButton.contentTintColor = stop
+            ? NSColor.systemOrangeColor
+            : NSColor.controlAccentColor;
+    }
+}
+
+- (void)updateComposerHeight {
+    CGFloat h = kComposerToolbarHeight + kComposerTextAreaHeight
+        + self.citationHeightConstraint.constant
+        + self.attachChipHeightConstraint.constant;
+    self.inputBoxHeightConstraint.constant = MAX(h, kComposerToolbarHeight + kComposerTextAreaHeight);
 }
 
 - (NSButton *)railButtonSymbol:(NSString *)symbol
@@ -878,25 +932,6 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self.resourceStack.widthAnchor constraintEqualToAnchor:self.resourceScroll.contentView.widthAnchor],
     ]];
 
-    self.citationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    self.citationScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    self.citationScroll.hasHorizontalScroller = NO;
-    self.citationScroll.hasVerticalScroller = YES;
-    self.citationScroll.autohidesScrollers = YES;
-    self.citationScroll.borderType = NSNoBorder;
-    self.citationScroll.drawsBackground = NO;
-    self.citationScroll.horizontalScrollElasticity = NSScrollElasticityNone;
-    self.citationScroll.hidden = YES;
-
-    self.citationStack = [NSStackView stackViewWithViews:@[]];
-    self.citationStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.citationStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    self.citationStack.alignment = NSLayoutAttributeLeading;
-    self.citationStack.spacing = kCitationChipSpacing;
-    self.citationStack.edgeInsets = NSEdgeInsetsMake(2, 0, 2, 0);
-    self.citationScroll.documentView = self.citationStack;
-    self.citationHeightConstraint = [self.citationScroll.heightAnchor constraintEqualToConstant:0];
-
     NSBox *inputBox = [[NSBox alloc] initWithFrame:NSZeroRect];
     inputBox.translatesAutoresizingMaskIntoConstraints = NO;
     inputBox.titlePosition = NSNoTitle;
@@ -929,6 +964,25 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [weakSelf addAttachmentURLs:urls];
     };
 
+    self.citationScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    self.citationScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    self.citationScroll.hasHorizontalScroller = NO;
+    self.citationScroll.hasVerticalScroller = YES;
+    self.citationScroll.autohidesScrollers = YES;
+    self.citationScroll.borderType = NSNoBorder;
+    self.citationScroll.drawsBackground = NO;
+    self.citationScroll.horizontalScrollElasticity = NSScrollElasticityNone;
+    self.citationScroll.hidden = YES;
+
+    self.citationStack = [NSStackView stackViewWithViews:@[]];
+    self.citationStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.citationStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.citationStack.alignment = NSLayoutAttributeLeading;
+    self.citationStack.spacing = kCitationChipSpacing;
+    self.citationStack.edgeInsets = NSEdgeInsetsMake(4, 8, 0, 8);
+    self.citationScroll.documentView = self.citationStack;
+    self.citationHeightConstraint = [self.citationScroll.heightAnchor constraintEqualToConstant:0];
+
     NSScrollView *attachChipScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     attachChipScroll.translatesAutoresizingMaskIntoConstraints = NO;
     attachChipScroll.hasHorizontalScroller = YES;
@@ -957,7 +1011,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     input.font = [NSFont systemFontOfSize:12];
     input.delegate = self;
     input.drawsBackground = NO;
-    input.textContainerInset = NSMakeSize(8, 8);
+    input.textContainerInset = NSMakeSize(8, 6);
     input.canAcceptFileURLs = ^BOOL(NSArray<NSURL *> *urls) {
         return [weakSelf attachmentsSupportedForCurrentSession] && urls.count > 0;
     };
@@ -969,47 +1023,68 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     };
     inputScroll.documentView = input;
 
+    self.attachButton = [self composerIconButtonSymbol:@"paperclip"
+                                              fallback:@"📎"
+                                               tooltip:@"添加本地附件（DeepSeek）"
+                                                action:@selector(attachClicked:)];
+    self.sendButton = [self composerIconButtonSymbol:@"arrow.up.circle.fill"
+                                            fallback:@"↑"
+                                             tooltip:@"发送"
+                                              action:@selector(sendOrStopClicked:)];
+    [self applySendStopButtonAppearance];
+
     [inputBox.contentView addSubview:drop];
+    [drop addSubview:self.citationScroll];
     [drop addSubview:attachChipScroll];
     [drop addSubview:inputScroll];
+    [drop addSubview:self.attachButton];
+    [drop addSubview:self.sendButton];
     [NSLayoutConstraint activateConstraints:@[
         [drop.topAnchor constraintEqualToAnchor:inputBox.contentView.topAnchor],
         [drop.leadingAnchor constraintEqualToAnchor:inputBox.contentView.leadingAnchor],
         [drop.trailingAnchor constraintEqualToAnchor:inputBox.contentView.trailingAnchor],
         [drop.bottomAnchor constraintEqualToAnchor:inputBox.contentView.bottomAnchor],
-        [attachChipScroll.topAnchor constraintEqualToAnchor:drop.topAnchor],
+
+        [self.citationScroll.topAnchor constraintEqualToAnchor:drop.topAnchor],
+        [self.citationScroll.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor],
+        [self.citationScroll.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor],
+        self.citationHeightConstraint,
+
+        [self.citationStack.topAnchor constraintEqualToAnchor:self.citationScroll.contentView.topAnchor],
+        [self.citationStack.leadingAnchor constraintEqualToAnchor:self.citationScroll.contentView.leadingAnchor],
+        [self.citationStack.widthAnchor constraintEqualToAnchor:self.citationScroll.contentView.widthAnchor],
+
+        [attachChipScroll.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor],
         [attachChipScroll.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor],
         [attachChipScroll.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor],
         self.attachChipHeightConstraint,
+
         [inputScroll.topAnchor constraintEqualToAnchor:attachChipScroll.bottomAnchor],
         [inputScroll.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor],
         [inputScroll.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor],
-        [inputScroll.bottomAnchor constraintEqualToAnchor:drop.bottomAnchor],
+        [inputScroll.bottomAnchor constraintEqualToAnchor:self.attachButton.topAnchor constant:-2],
+        [inputScroll.heightAnchor constraintGreaterThanOrEqualToConstant:kComposerTextAreaHeight],
+
+        [self.attachButton.leadingAnchor constraintEqualToAnchor:drop.leadingAnchor constant:6],
+        [self.attachButton.bottomAnchor constraintEqualToAnchor:drop.bottomAnchor constant:-4],
+        [self.attachButton.heightAnchor constraintEqualToConstant:kComposerToolbarHeight - 4],
+
+        [self.sendButton.trailingAnchor constraintEqualToAnchor:drop.trailingAnchor constant:-6],
+        [self.sendButton.bottomAnchor constraintEqualToAnchor:drop.bottomAnchor constant:-4],
+        [self.sendButton.centerYAnchor constraintEqualToAnchor:self.attachButton.centerYAnchor],
     ]];
     self.inputBox = inputBox;
+    self.inputBoxHeightConstraint =
+        [inputBox.heightAnchor constraintEqualToConstant:kComposerToolbarHeight + kComposerTextAreaHeight];
     self.composerDropView = drop;
     self.attachChipScroll = attachChipScroll;
     self.attachChipStack = attachChipStack;
     self.inputScroll = inputScroll;
     self.inputView = input;
 
-    self.attachButton = [NSButton buttonWithTitle:@"附件" target:self action:@selector(attachClicked:)];
-    self.attachButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.attachButton.bezelStyle = NSBezelStyleRounded;
-    self.attachButton.toolTip = @"添加本地附件（DeepSeek）";
-
-    self.sendButton = [NSButton buttonWithTitle:@"发送" target:self action:@selector(sendClicked:)];
-    self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.sendButton.bezelStyle = NSBezelStyleRounded;
-
-    self.cancelButton = [NSButton buttonWithTitle:@"停止" target:self action:@selector(cancelClicked:)];
-    self.cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.cancelButton.bezelStyle = NSBezelStyleRounded;
-    self.cancelButton.enabled = NO;
-
     for (NSView *v in @[self.statusRow, self.moreButton,
                         self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton, self.pageContextRecaptureButton,
-                        self.pageContextPanel, self.citationScroll, inputBox, self.attachButton, self.sendButton, self.cancelButton]) {
+                        self.pageContextPanel, inputBox]) {
         [pane addSubview:v];
     }
 
@@ -1042,29 +1117,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self.pageContextPanel.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
         self.pageContextPanelHeightConstraint,
 
-        [self.citationScroll.topAnchor constraintEqualToAnchor:self.pageContextPanel.bottomAnchor constant:6],
-        [self.citationScroll.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.citationScroll.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
-        self.citationHeightConstraint,
-
-        [self.citationStack.topAnchor constraintEqualToAnchor:self.citationScroll.contentView.topAnchor],
-        [self.citationStack.leadingAnchor constraintEqualToAnchor:self.citationScroll.contentView.leadingAnchor],
-        [self.citationStack.widthAnchor constraintEqualToAnchor:self.citationScroll.contentView.widthAnchor],
-
-        [inputBox.topAnchor constraintEqualToAnchor:self.citationScroll.bottomAnchor constant:6],
+        [inputBox.topAnchor constraintEqualToAnchor:self.pageContextPanel.bottomAnchor constant:6],
         [inputBox.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [inputBox.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
-        [inputBox.heightAnchor constraintEqualToConstant:96],
-
-        [self.attachButton.topAnchor constraintEqualToAnchor:inputBox.bottomAnchor constant:8],
-        [self.attachButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.attachButton.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
-
-        [self.sendButton.centerYAnchor constraintEqualToAnchor:self.attachButton.centerYAnchor],
-        [self.sendButton.leadingAnchor constraintEqualToAnchor:self.attachButton.trailingAnchor constant:8],
-
-        [self.cancelButton.centerYAnchor constraintEqualToAnchor:self.sendButton.centerYAnchor],
-        [self.cancelButton.leadingAnchor constraintEqualToAnchor:self.sendButton.trailingAnchor constant:8],
+        self.inputBoxHeightConstraint,
+        [inputBox.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-14],
     ]];
     return pane;
 }
@@ -1271,13 +1328,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.statusLabel.stringValue = @"未连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
-        self.sendButton.enabled = NO;
+        self.sendButton.enabled = self.inFlight; // 飞行中仍可点停止
         self.attachButton.enabled = NO;
         self.connectButton.hidden = NO;
         self.connectButton.enabled = YES;
         self.connectButton.title = @"连接";
         self.focusTabButton.hidden = YES;
-        self.cancelButton.enabled = self.inFlight;
+        [self applySendStopButtonAppearance];
         [self refreshAttachmentChips];
         [self refreshPageContextTray];
         return;
@@ -1316,28 +1373,28 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             : @"未连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
-        self.sendButton.enabled = NO;
+        self.sendButton.enabled = self.inFlight;
     } else if (ready) {
         self.statusLabel.stringValue = platform.length
             ? [NSString stringWithFormat:@"已连接 · %@", platform]
             : @"已连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGreenColor.CGColor;
-        self.sendButton.enabled = !self.inFlight;
+        self.sendButton.enabled = YES; // 发送或停止
     } else if (opening) {
         self.statusLabel.stringValue = @"连接中…";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
-        self.sendButton.enabled = NO;
+        self.sendButton.enabled = self.inFlight;
     } else {
         self.statusLabel.stringValue = platform.length
             ? [NSString stringWithFormat:@"未连接 · %@", platform]
             : @"未连接";
         self.statusLabel.textColor = NSColor.secondaryLabelColor;
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
-        self.sendButton.enabled = NO;
+        self.sendButton.enabled = self.inFlight;
     }
-    self.cancelButton.enabled = self.inFlight;
+    [self applySendStopButtonAppearance];
     [self refreshAttachmentChips];
     [self refreshPageContextTray];
 }
@@ -1430,7 +1487,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         BOOL shift = (e.modifierFlags & NSEventModifierFlagShift) != 0;
         if (shift) return NO;
         if (!self.inFlight && self.sendButton.enabled) {
-            [self sendClicked:nil];
+            [self sendOrStopClicked:nil];
         }
         return YES;
     }
@@ -1466,6 +1523,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     BOOL has = self.pendingAttachments.count > 0;
     self.attachChipScroll.hidden = !has;
     self.attachChipHeightConstraint.constant = has ? 28 : 0;
+    [self updateComposerHeight];
     NSInteger idx = 0;
     for (NSDictionary *att in self.pendingAttachments) {
         NSString *name = att[@"name"] ?: @"file";
@@ -2131,11 +2189,21 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self.historyPopover performClose:nil];
 }
 
+- (void)sendOrStopClicked:(id)sender {
+    if (self.inFlight) {
+        [self cancelClicked:sender];
+    } else {
+        [self sendClicked:sender];
+    }
+}
+
 - (void)cancelClicked:(id)sender {
     (void)sender;
+    if (!self.inFlight) return;
     [[BrowserAIAssistantClient sharedClient] cancelInFlight];
     self.inFlight = NO;
     self.inFlightSessionId = nil;
+    [self.chatPanel hideThinkingStatus];
     AIAssistantSession *s = [self currentSession];
     if (s) {
         AIAssistantMessage *m = [AIAssistantMessage messageWithRole:@"system" content:@"已取消"];
@@ -2419,24 +2487,17 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         if (uiAttachments.count >= 10) break;
     }
 
-    NSString *displayText = text;
-    if (self.citations.count > 0 && text.length > 0) {
-        BOOL onlyImageCitations = YES;
-        for (AIAssistantCitation *c in self.citations) {
-            if (c.kind != AIAssistantCitationKindImage) {
-                onlyImageCitations = NO;
-                break;
-            }
-        }
-        if (!onlyImageCitations) {
-            displayText = [NSString stringWithFormat:@"引用 %lu 条 · %@",
-                           (unsigned long)self.citations.count, text];
-        }
-    } else if (self.citations.count > 0 && text.length == 0 && uiAttachments.count == 0) {
-        displayText = [NSString stringWithFormat:@"引用 %lu 条", (unsigned long)self.citations.count];
-    } else if (displayText.length == 0 && uiAttachments.count == 0) {
-        displayText = @"（引用上下文）";
+    NSMutableArray<NSDictionary *> *uiCitations = [NSMutableArray array];
+    for (AIAssistantCitation *c in self.citations) {
+        NSString *label = c.chipLabel.length ? c.chipLabel : c.kindDisplayName;
+        if (label.length == 0) continue;
+        NSMutableDictionary *one = [@{ @"label": label } mutableCopy];
+        if (c.kindDisplayName.length) one[@"kind"] = c.kindDisplayName;
+        [uiCitations addObject:one];
     }
+
+    // 引用以芯片展示，文案只保留用户输入（空则交由气泡芯片/附件表达）
+    NSString *displayText = text ?: @"";
     // 非图片附件已用图标条展示，不再把文件名塞进文案
 
     BOOL firstUser = YES;
@@ -2445,6 +2506,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
     AIAssistantMessage *userMsg = [AIAssistantMessage messageWithRole:@"user" content:apiPrompt];
     userMsg.displayContent = displayText;
+    if (uiCitations.count) userMsg.uiCitations = uiCitations;
     if (uiAttachments.count) userMsg.uiAttachments = uiAttachments;
     // 兼容：仍写 imageDataURLs，旧逻辑可读
     NSMutableArray<NSString *> *legacyImgs = [NSMutableArray array];
@@ -2458,13 +2520,15 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (firstUser && [s.title isEqualToString:@"新对话"]) {
         NSString *t = displayText.length
             ? [displayText stringByReplacingOccurrencesOfString:@"\n" withString:@" "]
-            : (imageCount ? @"图片附件" : (fileCount ? @"文件附件" : @"新对话"));
+            : (uiCitations.count
+               ? (uiCitations.firstObject[@"label"] ?: @"引用上下文")
+               : (imageCount ? @"图片附件" : (fileCount ? @"文件附件" : @"新对话")));
         if (t.length > 24) t = [[t substringToIndex:24] stringByAppendingString:@"…"];
         s.title = t;
         self.titleLabel.stringValue = t;
     }
     [AIAssistantSessionStore.sharedStore touchAndPersist:s];
-    [self.chatPanel appendUserText:displayText uiAttachments:uiAttachments];
+    [self.chatPanel appendUserText:displayText uiCitations:uiCitations uiAttachments:uiAttachments];
     if (clearInput) {
         self.inputView.string = @"";
         [self.citations removeAllObjects];
@@ -2480,7 +2544,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.inFlight = YES;
     self.inFlightSessionId = sid;
     [self reloadUI];
-    self.statusLabel.stringValue = attachPaths.count ? @"上传附件并请求中…" : @"请求中…";
+    NSString *thinking = attachPaths.count ? @"正在阅读附件…" : @"正在思考…";
+    self.statusLabel.stringValue = thinking;
+    self.statusLabel.textColor = NSColor.secondaryLabelColor;
+    [self.chatPanel showThinkingStatus:thinking];
 
     __weak typeof(self) weakSelf = self;
     [[BrowserAIAssistantClient sharedClient] chatWithModel:model
@@ -2490,13 +2557,17 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         weakSelf.inFlight = NO;
         weakSelf.inFlightSessionId = nil;
         AIAssistantSession *sess = [AIAssistantSessionStore.sharedStore sessionForId:sid];
+        BOOL sameSession = [[weakSelf currentSession].sessionId isEqualToString:sid];
+        if (sameSession) {
+            [weakSelf.chatPanel hideThinkingStatus];
+        }
         if (errorMessage.length) {
             NSString *sys = [NSString stringWithFormat:@"HTTP %ld · %@", (long)httpStatus, errorMessage];
             if (sess) {
                 [sess.messages addObject:[AIAssistantMessage messageWithRole:@"system" content:sys]];
                 [AIAssistantSessionStore.sharedStore touchAndPersist:sess];
             }
-            if ([[weakSelf currentSession].sessionId isEqualToString:sid]) {
+            if (sameSession) {
                 [weakSelf.chatPanel appendSystemText:sys];
             }
             weakSelf.statusLabel.stringValue = errorMessage;
@@ -2507,7 +2578,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                 [sess.messages addObject:[AIAssistantMessage messageWithRole:@"assistant" content:reply]];
                 [AIAssistantSessionStore.sharedStore touchAndPersist:sess];
             }
-            if ([[weakSelf currentSession].sessionId isEqualToString:sid]) {
+            if (sameSession) {
                 [weakSelf.chatPanel appendAssistantMarkdown:reply];
             }
             weakSelf.statusLabel.stringValue = [NSString stringWithFormat:@"完成 · HTTP %ld", (long)httpStatus];
@@ -3807,6 +3878,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.citationScroll.hidden = !has;
     if (!has) {
         self.citationHeightConstraint.constant = 0;
+        [self updateComposerHeight];
         return;
     }
 
@@ -3847,6 +3919,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         + 4;
     self.citationScroll.hasVerticalScroller = (contentH > maxH + 0.5);
     self.citationHeightConstraint.constant = MIN(contentH, maxH);
+    [self updateComposerHeight];
 }
 
 - (NSView *)chipViewForCitation:(AIAssistantCitation *)citation {

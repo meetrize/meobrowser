@@ -46,6 +46,22 @@
         }
         if (safeAtts.count) m.uiAttachments = safeAtts;
     }
+    NSArray *cites = dict[@"uiCitations"];
+    if ([cites isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSDictionary *> *safeCites = [NSMutableArray array];
+        for (id item in cites) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *c = (NSDictionary *)item;
+            NSString *label = [c[@"label"] isKindOfClass:[NSString class]] ? c[@"label"] : @"";
+            if (label.length == 0) continue;
+            NSMutableDictionary *one = [@{ @"label": label } mutableCopy];
+            if ([c[@"kind"] isKindOfClass:[NSString class]] && [c[@"kind"] length]) {
+                one[@"kind"] = c[@"kind"];
+            }
+            [safeCites addObject:one];
+        }
+        if (safeCites.count) m.uiCitations = safeCites;
+    }
     m.createdAt = [dict[@"createdAt"] doubleValue];
     if (m.createdAt <= 0) {
         m.createdAt = [NSDate date].timeIntervalSince1970;
@@ -62,6 +78,7 @@
     if (self.displayContent.length) d[@"displayContent"] = self.displayContent;
     if (self.imageDataURLs.count) d[@"imageDataURLs"] = self.imageDataURLs;
     if (self.uiAttachments.count) d[@"uiAttachments"] = self.uiAttachments;
+    if (self.uiCitations.count) d[@"uiCitations"] = self.uiCitations;
     return d;
 }
 
@@ -126,6 +143,15 @@
         if (![m.role isEqualToString:@"user"]) continue;
         NSString *src = m.displayContent.length ? m.displayContent : m.content;
         if (src.length == 0 && (m.imageDataURLs.count || m.uiAttachments.count)) return @"附件";
+        if (src.length == 0 && m.uiCitations.count) {
+            NSString *lab = m.uiCitations.firstObject[@"label"];
+            if ([lab isKindOfClass:[NSString class]] && lab.length) {
+                return m.uiCitations.count > 1
+                    ? [NSString stringWithFormat:@"%@ 等 %lu 条引用", lab, (unsigned long)m.uiCitations.count]
+                    : lab;
+            }
+            return @"引用上下文";
+        }
         if (src.length == 0) continue;
         NSString *t = [src stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         if (t.length > 48) {

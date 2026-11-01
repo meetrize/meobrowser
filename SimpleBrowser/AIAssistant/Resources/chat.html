@@ -52,6 +52,28 @@
     word-break: break-word;
   }
   .bubble-text { white-space: pre-wrap; word-break: break-word; }
+  .bubble-citations {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .bubble-citation {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.35;
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.28);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bubble-citations + .bubble-images,
+  .bubble-citations + .bubble-files,
+  .bubble-citations + .bubble-text { margin-top: 8px; }
   .bubble-images {
     display: flex;
     flex-wrap: wrap;
@@ -181,6 +203,18 @@
     color: var(--muted);
     font-size: 12px;
     white-space: pre-wrap;
+  }
+  .thinking-body {
+    max-width: 100%;
+    color: var(--muted);
+    font-size: 13px;
+    font-style: italic;
+    letter-spacing: 0.01em;
+    animation: meo-thinking-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes meo-thinking-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
   }
   .empty {
     color: var(--muted);
@@ -476,6 +510,27 @@
     return out;
   }
 
+  function appendBubbleCitations(bubble, citations) {
+    var list = Array.isArray(citations) ? citations : [];
+    if (!list.length) return 0;
+    var wrap = document.createElement('div');
+    wrap.className = 'bubble-citations';
+    var n = 0;
+    list.forEach(function (c) {
+      if (!c || typeof c !== 'object') return;
+      var label = String(c.label || '').trim();
+      if (!label) return;
+      var chip = document.createElement('span');
+      chip.className = 'bubble-citation';
+      chip.textContent = label;
+      if (c.kind) chip.title = String(c.kind);
+      wrap.appendChild(chip);
+      n += 1;
+    });
+    if (n) bubble.appendChild(wrap);
+    return n;
+  }
+
   function appendBubbleImages(bubble, images) {
     var imgs = normalizeImages(images);
     if (!imgs.length) return 0;
@@ -547,7 +602,7 @@
     return n;
   }
 
-  function appendRow(role, text, images, files) {
+  function appendRow(role, text, images, files, citations) {
     var log = ensureLog();
     var row = document.createElement('div');
     var src = text == null ? '' : String(text);
@@ -575,6 +630,7 @@
       row.className = 'row user';
       var bubble = document.createElement('div');
       bubble.className = 'bubble';
+      var citeN = appendBubbleCitations(bubble, citations);
       var imgN = appendBubbleImages(bubble, images);
       var fileN = appendBubbleFiles(bubble, files);
       if (src.length) {
@@ -586,11 +642,32 @@
       if (!bubble.childNodes.length) {
         var empty = document.createElement('div');
         empty.className = 'bubble-text';
-        empty.textContent = imgN || fileN ? '（附件）' : '（空）';
+        empty.textContent = citeN ? '（引用上下文）' : (imgN || fileN ? '（附件）' : '（空）');
         bubble.appendChild(empty);
       }
       row.appendChild(bubble);
     }
+    log.appendChild(row);
+    scrollBottom();
+  }
+
+  function removeThinkingRow() {
+    var log = document.getElementById('log');
+    if (!log) return;
+    var row = log.querySelector('.row.thinking');
+    if (row) row.remove();
+  }
+
+  function showThinking(text) {
+    removeThinkingRow();
+    var log = ensureLog();
+    var row = document.createElement('div');
+    row.className = 'row assistant thinking';
+    var body = document.createElement('div');
+    body.className = 'thinking-body';
+    var label = String(text == null || !String(text).length ? '正在思考…' : text);
+    body.textContent = label;
+    row.appendChild(body);
     log.appendChild(row);
     scrollBottom();
   }
@@ -603,10 +680,18 @@
     appendUser: function (text) { appendRow('user', text); },
     appendUserPayload: function (obj) {
       var o = obj || {};
-      appendRow('user', o.text || '', o.images || [], o.files || []);
+      appendRow('user', o.text || '', o.images || [], o.files || [], o.citations || []);
     },
-    appendAssistant: function (markdown) { appendRow('assistant', markdown); },
-    appendSystem: function (text) { appendRow('system', text); },
+    appendAssistant: function (markdown) {
+      removeThinkingRow();
+      appendRow('assistant', markdown);
+    },
+    appendSystem: function (text) {
+      removeThinkingRow();
+      appendRow('system', text);
+    },
+    showThinking: function (text) { showThinking(text); },
+    hideThinking: function () { removeThinkingRow(); },
     setMessages: function (items) {
       var log = document.getElementById('log');
       log.innerHTML = '';
@@ -617,7 +702,7 @@
       }
       for (var i = 0; i < list.length; i++) {
         var it = list[i] || {};
-        appendRow(it.role || 'user', it.content || '', it.images || [], it.files || []);
+        appendRow(it.role || 'user', it.content || '', it.images || [], it.files || [], it.citations || []);
       }
       scrollBottom();
     },

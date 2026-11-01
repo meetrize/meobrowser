@@ -20,6 +20,8 @@ typedef NS_ENUM(NSInteger, AIAssistantSessionConnection) {
 @property (nonatomic, copy, nullable) NSArray<NSString *> *imageDataURLs;
 /// 气泡附件：[{kind:image|file, name?, path?, preview?, icon?}]；path 供系统打开
 @property (nonatomic, copy, nullable) NSArray<NSDictionary *> *uiAttachments;
+/// 气泡内引用标签：[{label, kind?}]，与输入区芯片对应
+@property (nonatomic, copy, nullable) NSArray<NSDictionary *> *uiCitations;
 @property (nonatomic, assign) NSTimeInterval createdAt;
 - (NSDictionary *)dictionaryRepresentation;
 + (instancetype)messageFromDictionary:(NSDictionary *)dict;

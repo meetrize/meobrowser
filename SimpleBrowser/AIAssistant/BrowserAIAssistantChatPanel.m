@@ -76,8 +76,10 @@ static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
                       "<script>window.MeoAIChat={clear:function(){log.innerHTML=''},"
                       "appendUser:function(t){var d=document.createElement('div');d.textContent='我: '+t;log.appendChild(d);},"
                       "appendUserPayload:function(o){MeoAIChat.appendUser((o&&o.text)||'');},"
-                      "appendAssistant:function(t){var d=document.createElement('div');d.textContent=t;log.appendChild(d);},"
-                      "appendSystem:function(t){var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);},"
+                      "appendAssistant:function(t){MeoAIChat.hideThinking();var d=document.createElement('div');d.textContent=t;log.appendChild(d);},"
+                      "appendSystem:function(t){MeoAIChat.hideThinking();var d=document.createElement('div');d.style.opacity=.6;d.textContent=t;log.appendChild(d);},"
+                      "showThinking:function(t){MeoAIChat.hideThinking();var d=document.createElement('div');d.id='thinking';d.style.opacity=.6;d.style.fontStyle='italic';d.textContent=t||'正在思考…';log.appendChild(d);},"
+                      "hideThinking:function(){var d=document.getElementById('thinking');if(d)d.remove();},"
                       "setMessages:function(){}};</script>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
@@ -174,9 +176,21 @@ static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
 }
 
 - (NSDictionary *)sanitizedUserPayloadText:(NSString *)text
-                            uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
+                               uiCitations:(NSArray<NSDictionary *> *)uiCitations
+                             uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
     NSMutableArray *images = [NSMutableArray array];
     NSMutableArray *files = [NSMutableArray array];
+    NSMutableArray *citations = [NSMutableArray array];
+    for (NSDictionary *c in uiCitations ?: @[]) {
+        if (![c isKindOfClass:[NSDictionary class]]) continue;
+        NSString *label = [c[@"label"] isKindOfClass:[NSString class]] ? c[@"label"] : @"";
+        if (label.length == 0) continue;
+        NSMutableDictionary *one = [@{ @"label": label } mutableCopy];
+        if ([c[@"kind"] isKindOfClass:[NSString class]] && [c[@"kind"] length]) {
+            one[@"kind"] = c[@"kind"];
+        }
+        [citations addObject:one];
+    }
     for (NSDictionary *a in uiAttachments ?: @[]) {
         if (![a isKindOfClass:[NSDictionary class]]) continue;
         NSString *kind = [a[@"kind"] isKindOfClass:[NSString class]] ? a[@"kind"] : @"";
@@ -202,18 +216,27 @@ static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
     }
     return @{
         @"text": text ?: @"",
+        @"citations": citations,
         @"images": images,
         @"files": files,
     };
 }
 
 - (void)appendUserText:(NSString *)text uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
+    [self appendUserText:text uiCitations:nil uiAttachments:uiAttachments];
+}
+
+- (void)appendUserText:(NSString *)text
+           uiCitations:(NSArray<NSDictionary *> *)uiCitations
+         uiAttachments:(NSArray<NSDictionary *> *)uiAttachments {
     __weak typeof(self) weakSelf = self;
-    NSDictionary *payload = [self sanitizedUserPayloadText:text uiAttachments:uiAttachments];
+    NSDictionary *payload = [self sanitizedUserPayloadText:text
+                                               uiCitations:uiCitations
+                                             uiAttachments:uiAttachments];
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
     NSString *json = jsonData
         ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding]
-        : @"{\"text\":\"\",\"images\":[],\"files\":[]}";
+        : @"{\"text\":\"\",\"citations\":[],\"images\":[],\"files\":[]}";
     [self runWhenReady:^{
         [weakSelf enqueueJS:^(void (^done)(void)) {
             NSString *js = [NSString stringWithFormat:
@@ -236,6 +259,30 @@ static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
     [self runWhenReady:^{
         [weakSelf enqueueJS:^(void (^done)(void)) {
             [weakSelf callChatMethod:@"appendAssistant" utf8Text:copy done:done];
+        }];
+    }];
+}
+
+- (void)showThinkingStatus:(NSString *)text {
+    __weak typeof(self) weakSelf = self;
+    NSString *copy = [(text.length ? text : @"正在思考…") copy];
+    [self runWhenReady:^{
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf callChatMethod:@"showThinking" utf8Text:copy done:done];
+        }];
+    }];
+}
+
+- (void)hideThinkingStatus {
+    __weak typeof(self) weakSelf = self;
+    [self runWhenReady:^{
+        [weakSelf enqueueJS:^(void (^done)(void)) {
+            [weakSelf.webView evaluateJavaScript:
+                @"(function(){try{if(window.MeoAIChat&&typeof window.MeoAIChat.hideThinking==='function')"
+                 "window.MeoAIChat.hideThinking();return 'ok';}catch(e){return 'err';}})()"
+                                   completionHandler:^(__unused id r, __unused NSError *e) {
+                if (done) done();
+            }];
         }];
     }];
 }
@@ -270,10 +317,12 @@ static NSString * const kMeoAIChatHandlerName = @"meoAIChat";
         NSString *role = m.role.length ? m.role : @"user";
         NSString *ui = m.displayContent.length ? m.displayContent : (m.content ?: @"");
         NSDictionary *userPayload = [self sanitizedUserPayloadText:ui
+                                                      uiCitations:m.uiCitations
                                                     uiAttachments:[self uiAttachmentsForMessage:m]];
         NSMutableDictionary *item = [@{
             @"role": role,
             @"content": ui,
+            @"citations": userPayload[@"citations"] ?: @[],
             @"images": userPayload[@"images"] ?: @[],
             @"files": userPayload[@"files"] ?: @[],
         } mutableCopy];
