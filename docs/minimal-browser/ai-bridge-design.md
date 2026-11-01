@@ -432,6 +432,7 @@ ChatGPT 选择器已于 2026-10-28 登录态实测（见 Spike/`adapters/chatgpt
 | 路径 | 说明 |
 |------|------|
 | `docs/minimal-browser/ai-bridge-design.md` | 本文 |
+| `docs/minimal-browser/ai-bridge-api.md` | **外部接入 API 手册**（地址 / 鉴权 / 端点 / curl·SDK） |
 | `docs/minimal-browser/ai-bridge-development-plan.md` | 分阶段计划 |
 | `SimpleBrowser/AIBridge/` | 实现目录（BR-1+） |
 | `SimpleBrowser/AIBridge/Spike/` | BR-0 探针与 mock 页 |
