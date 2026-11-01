@@ -8,6 +8,7 @@ static NSString * const kWidthKey = @"AIAssistant.sidebarWidth";
 static NSString * const kModelKey = @"AIAssistant.lastModelId";
 static NSString * const kProviderKey = @"AIAssistant.lastProviderId";
 static NSString * const kAutoConnectKey = @"AIAssistant.autoConnect";
+static NSString * const kPageContextAutoRecaptureKey = @"AIAssistant.pageContextAutoRecapture";
 static NSString * const kPrivacyKey = @"AIAssistant.pageContextPrivacyMode";
 static const CGFloat kDefaultWidth = 380.0;
 static const CGFloat kMinWidth = 300.0;
@@ -46,6 +47,7 @@ static const CGFloat kMaxWidth = 4000.0;
         } else {
             _autoConnect = [ud boolForKey:kAutoConnectKey];
         }
+        _pageContextAutoRecapture = [ud boolForKey:kPageContextAutoRecaptureKey];
         NSString *priv = [ud stringForKey:kPrivacyKey];
         if (![priv isEqualToString:@"strict"] && ![priv isEqualToString:@"developer"]) {
             priv = @"standard";
@@ -59,6 +61,13 @@ static const CGFloat kMaxWidth = 4000.0;
     if (_autoConnect == autoConnect) return;
     _autoConnect = autoConnect;
     [NSUserDefaults.standardUserDefaults setBool:autoConnect forKey:kAutoConnectKey];
+    [self notify];
+}
+
+- (void)setPageContextAutoRecapture:(BOOL)pageContextAutoRecapture {
+    if (_pageContextAutoRecapture == pageContextAutoRecapture) return;
+    _pageContextAutoRecapture = pageContextAutoRecapture;
+    [NSUserDefaults.standardUserDefaults setBool:pageContextAutoRecapture forKey:kPageContextAutoRecaptureKey];
     [self notify];
 }
 

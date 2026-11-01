@@ -376,6 +376,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSButton *summarizePageButton;
 @property (nonatomic, strong) NSButton *askPageButton;
 @property (nonatomic, strong) NSButton *pageContextToggleButton;
+@property (nonatomic, strong) NSButton *pageContextAutoRecaptureCheckbox;
 @property (nonatomic, strong) NSButton *pageContextRecaptureButton;
 @property (nonatomic, strong) NSView *pageContextPanel;
 @property (nonatomic, strong) NSLayoutConstraint *pageContextPanelHeightConstraint;
@@ -384,6 +385,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSScrollView *resourceScroll;
 @property (nonatomic, strong) NSStackView *resourceStack;
 @property (nonatomic, assign) BOOL pageContextExpanded;
+@property (nonatomic, strong, nullable) NSUUID *lastPageContextTabID;
+/// 切标签后待标题就绪再自动重采的目标 tab（避免页面未加载完就采到空/旧内容）。
+@property (nonatomic, strong, nullable) NSUUID *pendingAutoRecaptureTabID;
+@property (nonatomic, assign) BOOL pageContextCaptureInFlight;
 @property (nonatomic, strong, nullable) AIPageContextBundle *currentPageBundle;
 @property (nonatomic, copy, nullable) NSDictionary *lastPagePickResult;
 @property (nonatomic, copy, nullable) NSString *pendingRegexPatternOverride;
@@ -838,7 +843,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.recipeButtonStack.spacing = 6;
     self.recipeButtonStack.alignment = NSLayoutAttributeCenterY;
 
-    self.pageContextToggleButton = [NSButton buttonWithTitle:@"本页上下文 · 未采集"
+    self.pageContextToggleButton = [NSButton buttonWithTitle:@"▸ 当前网页"
                                                       target:self
                                                       action:@selector(pageContextToggleClicked:)];
     self.pageContextToggleButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -846,7 +851,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.pageContextToggleButton.bordered = NO;
     self.pageContextToggleButton.font = [NSFont systemFontOfSize:11];
     self.pageContextToggleButton.alignment = NSTextAlignmentLeft;
+    self.pageContextToggleButton.lineBreakMode = NSLineBreakByTruncatingTail;
     self.pageContextToggleButton.toolTip = @"展开资源盘，勾选要引用的层";
+    [self.pageContextToggleButton setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                           forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.pageContextAutoRecaptureCheckbox =
+        [NSButton checkboxWithTitle:@"自动重采"
+                             target:self
+                             action:@selector(pageContextAutoRecaptureToggled:)];
+    self.pageContextAutoRecaptureCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.pageContextAutoRecaptureCheckbox.controlSize = NSControlSizeMini;
+    self.pageContextAutoRecaptureCheckbox.font = [NSFont systemFontOfSize:10];
+    self.pageContextAutoRecaptureCheckbox.toolTip = @"切换标签页后自动重新采集当前网页上下文";
+    self.pageContextAutoRecaptureCheckbox.state =
+        BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture
+            ? NSControlStateValueOn : NSControlStateValueOff;
 
     self.pageContextRecaptureButton = [NSButton buttonWithTitle:@"重采"
                                                          target:self
@@ -855,6 +875,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.pageContextRecaptureButton.bezelStyle = NSBezelStyleRounded;
     self.pageContextRecaptureButton.controlSize = NSControlSizeMini;
     self.pageContextRecaptureButton.toolTip = @"重新采集当前标签页";
+    if (@available(macOS 11.0, *)) {
+        self.pageContextRecaptureButton.bezelColor = NSColor.systemBlueColor;
+    }
 
     self.pageContextPanel = [[NSView alloc] initWithFrame:NSZeroRect];
     self.pageContextPanel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1083,7 +1106,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.inputView = input;
 
     for (NSView *v in @[self.statusRow, self.moreButton,
-                        self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton, self.pageContextRecaptureButton,
+                        self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton,
+                        self.pageContextAutoRecaptureCheckbox, self.pageContextRecaptureButton,
                         self.pageContextPanel, inputBox]) {
         [pane addSubview:v];
     }
@@ -1107,7 +1131,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
         [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
         [self.pageContextToggleButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.pageContextToggleButton.trailingAnchor constraintLessThanOrEqualToAnchor:self.pageContextRecaptureButton.leadingAnchor constant:-6],
+        [self.pageContextToggleButton.trailingAnchor constraintLessThanOrEqualToAnchor:self.pageContextAutoRecaptureCheckbox.leadingAnchor constant:-6],
+
+        [self.pageContextAutoRecaptureCheckbox.centerYAnchor constraintEqualToAnchor:self.pageContextToggleButton.centerYAnchor],
+        [self.pageContextAutoRecaptureCheckbox.trailingAnchor constraintEqualToAnchor:self.pageContextRecaptureButton.leadingAnchor constant:-6],
 
         [self.pageContextRecaptureButton.centerYAnchor constraintEqualToAnchor:self.pageContextToggleButton.centerYAnchor],
         [self.pageContextRecaptureButton.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
@@ -2713,10 +2740,23 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     return nil;
 }
 
+- (NSString *)currentBrowsePageTitle {
+    id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
+    if ([del respondsToSelector:@selector(aiAssistantSidebarCurrentPageTitle:)]) {
+        NSString *t = [del aiAssistantSidebarCurrentPageTitle:self];
+        if (t.length) return t;
+    }
+    WKWebView *wv = [self currentBrowseWebView];
+    if (wv.title.length) return wv.title;
+    if (self.currentPageBundle.title.length) return self.currentPageBundle.title;
+    return @"当前网页";
+}
+
 - (void)setPageContextButtonsEnabled:(BOOL)enabled {
     self.summarizePageButton.enabled = enabled;
     self.askPageButton.enabled = enabled;
-    self.pageContextRecaptureButton.enabled = enabled;
+    self.pageContextRecaptureButton.enabled = enabled && !self.pageContextCaptureInFlight;
+    self.pageContextAutoRecaptureCheckbox.enabled = YES;
 }
 
 - (void)refreshPageContextTray {
@@ -2729,27 +2769,37 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     } else if (tabID) {
         AIPageContextBundle *stored = [[AIPageContextStore sharedStore] bundleForTabID:tabID];
         if (stored) self.currentPageBundle = stored;
+    } else {
+        self.currentPageBundle = nil;
     }
 
     AIPageContextBundle *b = self.currentPageBundle;
+    NSString *pageTitle = [self currentBrowsePageTitle];
+    if (pageTitle.length > 36) {
+        pageTitle = [[pageTitle substringToIndex:36] stringByAppendingString:@"…"];
+    }
+    NSString *chevron = self.pageContextExpanded ? @"▾" : @"▸";
     NSString *title;
     if (!b) {
-        title = @"▸ 本页上下文 · 未采集";
+        title = [NSString stringWithFormat:@"%@ %@ · 未采集", chevron, pageTitle];
         self.pageContextToggleButton.contentTintColor = NSColor.secondaryLabelColor;
     } else if (b.stale) {
-        title = [NSString stringWithFormat:@"%@ 本页上下文 · 已过期 · %@",
-                 self.pageContextExpanded ? @"▾" : @"▸", [b ageDescription]];
+        title = [NSString stringWithFormat:@"%@ %@ · 已过期", chevron, pageTitle];
         if (@available(macOS 10.14, *)) {
             self.pageContextToggleButton.contentTintColor = NSColor.systemOrangeColor;
         }
     } else {
-        title = [NSString stringWithFormat:@"%@ 本页上下文 · %@",
-                 self.pageContextExpanded ? @"▾" : @"▸", [b ageDescription]];
+        title = [NSString stringWithFormat:@"%@ %@", chevron, pageTitle];
         if (@available(macOS 10.14, *)) {
             self.pageContextToggleButton.contentTintColor = NSColor.secondaryLabelColor;
         }
     }
     self.pageContextToggleButton.title = title;
+    self.pageContextToggleButton.toolTip =
+        [NSString stringWithFormat:@"%@\n点击展开资源盘，勾选要引用的层", [self currentBrowsePageTitle]];
+    self.pageContextAutoRecaptureCheckbox.state =
+        BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture
+            ? NSControlStateValueOn : NSControlStateValueOff;
 
     for (NSString *layerId in self.layerCheckboxes) {
         NSButton *cb = self.layerCheckboxes[layerId];
@@ -2936,9 +2986,66 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self refreshPageContextTray];
 }
 
+- (void)pageContextAutoRecaptureToggled:(NSButton *)sender {
+    BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture =
+        (sender.state == NSControlStateValueOn);
+}
+
 - (void)pageContextRecaptureClicked:(id)sender {
     (void)sender;
     [self capturePageContextOnlyUpdatingTray:YES];
+}
+
+- (BOOL)shouldAutoRecaptureCurrentTab {
+    if (!BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture) return NO;
+    if (!self.visible) return NO;
+    if (![self currentBrowseWebView]) return NO;
+    NSUUID *tabID = [self currentBrowseTabID];
+    if (!tabID) return NO;
+    if (self.pendingAutoRecaptureTabID && [self.pendingAutoRecaptureTabID isEqual:tabID]) {
+        return YES;
+    }
+    AIPageContextBundle *b = self.currentPageBundle;
+    if (!b || b.stale || ![b.tabID isEqual:tabID]) {
+        return YES;
+    }
+    return NO;
+}
+
+- (void)autoRecaptureCurrentTabIfNeeded {
+    if (![self shouldAutoRecaptureCurrentTab]) return;
+    if (self.pageContextCaptureInFlight) return;
+    [self capturePageContextOnlyUpdatingTray:YES];
+}
+
+- (void)noteSelectedTabDidChange {
+    NSUUID *tabID = [self currentBrowseTabID];
+    BOOL changed = (tabID != nil || self.lastPageContextTabID != nil)
+        && ![tabID isEqual:self.lastPageContextTabID];
+    self.lastPageContextTabID = tabID;
+    [self refreshPageContextTray];
+    if (!changed || !self.visible) {
+        if (!changed) self.pendingAutoRecaptureTabID = nil;
+        return;
+    }
+    if (!BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture) {
+        self.pendingAutoRecaptureTabID = nil;
+        return;
+    }
+    // 记下待采标签：真正采集放到标题就绪回调，避免新标签尚在加载时采到空页/旧 stale。
+    self.pendingAutoRecaptureTabID = tabID;
+    // 若标题已就绪（切回已加载标签），立刻采；否则等 noteSelectedTabTitleDidChange。
+    WKWebView *wv = [self currentBrowseWebView];
+    if (wv.title.length > 0) {
+        [self autoRecaptureCurrentTabIfNeeded];
+    }
+}
+
+- (void)noteSelectedTabTitleDidChange {
+    if (!self.visible) return;
+    [self refreshPageContextTray];
+    // 标题加载出来后补一次自动重采，清掉切标签后仍显示的「过期」。
+    [self autoRecaptureCurrentTabIfNeeded];
 }
 
 - (void)pageContextOnlyArticleClicked:(id)sender {
@@ -3044,6 +3151,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.statusLabel.textColor = NSColor.systemOrangeColor;
         return;
     }
+    if (self.pageContextCaptureInFlight) return;
+    self.pageContextCaptureInFlight = YES;
     self.statusLabel.stringValue = @"正在采集页面上下文…";
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
     [self setPageContextButtonsEnabled:NO];
@@ -3054,13 +3163,33 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
                                                     completion:^(AIPageContextBundle *bundle, NSString *errorMessage) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        strongSelf.pageContextCaptureInFlight = NO;
         [strongSelf setPageContextButtonsEnabled:YES];
+        NSUUID *nowTab = [strongSelf currentBrowseTabID];
+        if (tabID && nowTab && ![tabID isEqual:nowTab]) {
+            // 采集期间已切走标签：丢弃过期结果，若仍开启自动重采则对当前页再采一次
+            if ([strongSelf.pendingAutoRecaptureTabID isEqual:nowTab]
+                || BrowserAIAssistantPreferences.sharedPreferences.pageContextAutoRecapture) {
+                strongSelf.pendingAutoRecaptureTabID = nowTab;
+            }
+            if ([strongSelf shouldAutoRecaptureCurrentTab]) {
+                [strongSelf capturePageContextOnlyUpdatingTray:YES];
+            } else {
+                [strongSelf refreshPageContextTray];
+            }
+            return;
+        }
         if (!bundle) {
             strongSelf.statusLabel.stringValue = errorMessage.length ? errorMessage : @"采集失败";
             strongSelf.statusLabel.textColor = NSColor.systemRedColor;
+            // 失败仍保留 pending，标题后续变化时可再试
             return;
         }
         strongSelf.currentPageBundle = bundle;
+        strongSelf.lastPageContextTabID = tabID ?: nowTab;
+        if (tabID && [strongSelf.pendingAutoRecaptureTabID isEqual:tabID]) {
+            strongSelf.pendingAutoRecaptureTabID = nil;
+        }
         if (updateTray) {
             // 刷新已挂载页层内容
             NSArray *layers = [[strongSelf.citations valueForKey:@"kind"] copy];

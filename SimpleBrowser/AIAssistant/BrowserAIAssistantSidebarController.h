@@ -28,6 +28,7 @@ reopenAndBindProviderId:(NSString *)providerId
 /// 当前浏览标签（非 Bridge 绑定页）的 WebView / tabID，供页面上下文采集。
 - (nullable WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller;
 - (nullable NSUUID *)aiAssistantSidebarCurrentTabID:(BrowserAIAssistantSidebarController *)controller;
+- (nullable NSString *)aiAssistantSidebarCurrentPageTitle:(BrowserAIAssistantSidebarController *)controller;
 
 /// 打开页面爬虫侧栏并套用草稿配方。
 - (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
@@ -42,6 +43,10 @@ applyScraperDraftRecipe:(id)recipe;
 
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated;
 - (void)reloadUI;
+/// 浏览标签选中变化时调用：刷新本页标题，勾选「自动重采」时触发采集。
+- (void)noteSelectedTabDidChange;
+/// 当前页 document.title / WKWebView.title 就绪或变更时调用：只刷新标题展示，不触发重采。
+- (void)noteSelectedTabTitleDidChange;
 
 /// 划词 / 页面入口。pageContext=YES 时 context 为页面信息（标题+URL）。
 /// pageContext + summarize 会走正文采集（Page Context）。

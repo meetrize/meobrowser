@@ -3162,6 +3162,22 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     return self.tabController.selectedTab.tabID;
 }
 
+- (NSString *)aiAssistantSidebarCurrentPageTitle:(BrowserAIAssistantSidebarController *)controller {
+    (void)controller;
+    BrowserTab *tab = self.tabController.selectedTab;
+    if (!tab) return nil;
+    // 优先实时 WKWebView.title：导航初期 tab.title 常是 host/URL，真正标题晚到。
+    NSString *live = [tab.webView.title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (live.length) return live;
+    NSString *t = [tab.title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return t.length ? t : nil;
+}
+
+- (void)notifyAIAssistantSelectedTabTitleDidChange {
+    if (!self.aiAssistantSidebarController.visible) return;
+    [self.aiAssistantSidebarController noteSelectedTabTitleDidChange];
+}
+
 - (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
 applyScraperDraftRecipe:(id)recipe {
     (void)controller;
@@ -4045,6 +4061,7 @@ applyScraperDraftRecipe:(id)recipe {
         [strongSelf updateTabStripDisplay];
         if (changedTab.webView == strongSelf.webView) {
             [strongSelf setDisplayedWindowTitle:changedTab.displayTitle];
+            [strongSelf notifyAIAssistantSelectedTabTitleDidChange];
         }
         [strongSelf schedulePersistTabSession];
     };
@@ -5007,6 +5024,7 @@ applyScraperDraftRecipe:(id)recipe {
     (void)controller;
     // DOM 探针气泡按标签隔离：选中标签变化时立刻隐藏（内部会比对 tabID）。
     [self.domInspectorController noteSelectedTabDidChange];
+    [self.aiAssistantSidebarController noteSelectedTabDidChange];
     if (self.autoScrollController.enabled) {
         self.autoScrollController.enabled = NO;
     }
@@ -7679,6 +7697,7 @@ didBecomeDownload:(WKDownload *)download {
         [self updateTabStripDisplay];
         if (webView == self.webView) {
             [self setDisplayedWindowTitle:tab.displayTitle];
+            [self notifyAIAssistantSelectedTabTitleDidChange];
         }
     }
 
@@ -7735,6 +7754,9 @@ didBecomeDownload:(WKDownload *)download {
         [self reloadPagePackSidebarIfVisible];
         [self reloadPageScraperSidebarIfVisible];
         [self reloadAssistSidebarIfVisible];
+        // 加载完成后标题通常已就绪；再拉一次 document.title，并刷新 AI 侧栏展示。
+        [tab pullDocumentTitleFromWebView];
+        [self notifyAIAssistantSelectedTabTitleDidChange];
         if (self.transparentModeEnabled) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
         }
@@ -7876,6 +7898,9 @@ didFailNavigation:(WKNavigation *)navigation
 
     if (webView == self.webView) {
         [self setDisplayedWindowTitle:tab.displayTitle];
+        if (titleChanged) {
+            [self notifyAIAssistantSelectedTabTitleDidChange];
+        }
     }
 
     if (titleChanged) {
