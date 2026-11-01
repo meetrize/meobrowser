@@ -91,12 +91,28 @@ static const NSUInteger kSelectionFillMaxLength = 200;
 
 - (BOOL)canFindInCurrentPage {
     BrowserTab *tab = self.windowController.tabController.selectedTab;
-    if (tab == nil || tab.isNewTabPage) {
+    if (tab == nil || tab.isNewTabPage || tab.pendingHardRecover) {
         return NO;
     }
-    if (tab.webView == nil) {
-        [self.windowController refreshTabsUI];
+    // 切勿在此调用 refreshTabsUI：refreshTabsUI → syncWithSelectedTab → canFind
+    // 会无限递归直至栈溢出（⌘+点击开新标签时必现）。
+    return tab.webView != nil;
+}
+
+/// 查找需要活 WebView；若当前标签已休眠则唤醒并挂载一次（仅主动查找入口调用）。
+- (BOOL)ensureFindableSelectedTab {
+    BrowserTab *tab = self.windowController.tabController.selectedTab;
+    if (tab == nil || tab.isNewTabPage || tab.pendingHardRecover) {
+        return NO;
     }
+    if (tab.webView != nil) {
+        return YES;
+    }
+    if (!tab.isHibernated && tab.restorableURL == nil) {
+        return NO;
+    }
+    [tab wakeFromHibernationIfNeeded];
+    [self.windowController refreshTabsUI];
     return tab.webView != nil;
 }
 
@@ -120,7 +136,7 @@ static const NSUInteger kSelectionFillMaxLength = 200;
 
 - (IBAction)showFindBar:(id)sender {
     (void)sender;
-    if (![self canFindInCurrentPage]) {
+    if (![self ensureFindableSelectedTab]) {
         return;
     }
     BrowserTab *tab = self.windowController.tabController.selectedTab;
@@ -265,7 +281,7 @@ static const NSUInteger kSelectionFillMaxLength = 200;
 
 - (IBAction)useSelectionForFind:(id)sender {
     (void)sender;
-    if (![self canFindInCurrentPage]) {
+    if (![self ensureFindableSelectedTab]) {
         return;
     }
     WKWebView *webView = self.windowController.webView;

@@ -290,6 +290,9 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong, nullable) NSUUID *lastSelectedTabIDForAddressFocus;
 /// refreshTabsUI 代际：延后 chrome 刷新时校验仍指向同一选中标签。
 @property (nonatomic, assign) NSInteger refreshTabsUIGeneration;
+/// 防止 refreshTabsUI ↔ findBar sync 等路径重入导致栈溢出。
+@property (nonatomic, assign) BOOL refreshTabsUIInProgress;
+@property (nonatomic, assign) BOOL refreshTabsUINeedsRetry;
 /// estimatedProgress UI 合并。
 @property (nonatomic, assign) NSTimeInterval lastProgressUIUpdateTime;
 @property (nonatomic, assign) double lastProgressUIValue;
@@ -4151,6 +4154,13 @@ applyScraperDraftRecipe:(id)recipe {
 }
 
 - (void)refreshTabsUI {
+    if (self.refreshTabsUIInProgress) {
+        self.refreshTabsUINeedsRetry = YES;
+        return;
+    }
+    self.refreshTabsUIInProgress = YES;
+    self.refreshTabsUINeedsRetry = NO;
+
     CFTimeInterval tAll = CACurrentMediaTime();
     BrowserTab *selectedTab = self.tabController.selectedTab;
     self.refreshTabsUIGeneration += 1;
@@ -4493,6 +4503,12 @@ applyScraperDraftRecipe:(id)recipe {
                         shouldDeferredColdWake ? 1 : 0,
                         showLP ? 1 : 0);
     });
+
+    self.refreshTabsUIInProgress = NO;
+    if (self.refreshTabsUINeedsRetry) {
+        self.refreshTabsUINeedsRetry = NO;
+        [self refreshTabsUI];
+    }
 }
 
 #pragma mark - Loading Progress
@@ -6141,7 +6157,12 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
         action == @selector(findNext:) ||
         action == @selector(findPrevious:) ||
         action == @selector(useSelectionForFind:)) {
-        return [self.findBarController canFindInCurrentPage];
+        // 休眠标签也可点查找（动作里会唤醒）；勿在 validate 里 refreshTabsUI。
+        BrowserTab *tab = self.tabController.selectedTab;
+        if (tab == nil || tab.isNewTabPage || tab.pendingHardRecover) {
+            return NO;
+        }
+        return tab.webView != nil || tab.isHibernated || tab.restorableURL != nil;
     }
     if (action == @selector(restoreRecentlyClosedBrowserTab:)) {
         return self.tabController.canRestoreRecentlyClosedTab;
