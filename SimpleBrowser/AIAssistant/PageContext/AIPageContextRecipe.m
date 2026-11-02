@@ -35,8 +35,18 @@ NSString * const AIPageContextRecipeIDRegexExtract = @"regex-extract";
         recipes = @[
             [self makeId:AIPageContextRecipeIDSummarizePage
                    title:@"总结该网页"
-              userPrompt:@"请总结该网页的正文要点，用简洁中文分条列出；不要复述导航、页脚或广告。"
-             systemHint:@"你只会看到用户勾选的引用。若有「正文」层，请主要依据正文；不要臆造未出现的信息。"
+              userPrompt:
+                   @"请用简体中文总结该网页正文，严格按下面结构回复（不要复述导航、页脚或广告）：\n"
+                   @"\n"
+                   @"1. 核心（必须放在最前）：用 1～2 句写出全文最重要、最有价值、不可忽略的信息，"
+                   @"或整文纲领性结论；整段用 Markdown 加粗（**……**），控制在约 40～80 字，不要列表。\n"
+                   @"2. 要点：空一行后，用简洁条目列出其余关键内容（事实、结论、步骤等）。\n"
+                   @"\n"
+                   @"只依据引用中出现的信息，不要臆造。"
+             systemHint:
+                   @"你只会看到用户勾选的引用。若有「正文」层，请主要依据正文；不要臆造未出现的信息。"
+                   @"回复必须以一行加粗的「核心」开头（Markdown **…**），再跟分条要点；"
+                   @"核心段不要用列表或标题前缀，直接加粗正文即可。"
                  layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
            maxArticleChars:24000],
             [self makeId:AIPageContextRecipeIDAskPage
