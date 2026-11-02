@@ -104,6 +104,108 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     return NO;
 }
 
+/// 配方快捷按钮：能排一行就一行，宽度不够再换行。
+@interface AIAssistantRecipeFlowView : NSView
+@property (nonatomic, assign) CGFloat spacing;
+@property (nonatomic, assign) CGFloat lineSpacing;
+@property (nonatomic, strong) NSArray<NSButton *> *buttons;
+- (void)setButtonsEnabled:(BOOL)enabled;
+@end
+
+@implementation AIAssistantRecipeFlowView {
+    CGFloat _laidOutHeight;
+    CGFloat _laidOutWidth;
+}
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        _spacing = 6.0;
+        _lineSpacing = 4.0;
+        _buttons = @[];
+        _laidOutHeight = 28.0;
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        [self setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                         forOrientation:NSLayoutConstraintOrientationVertical];
+        [self setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                       forOrientation:NSLayoutConstraintOrientationVertical];
+    }
+    return self;
+}
+
+- (void)setButtons:(NSArray<NSButton *> *)buttons {
+    for (NSView *v in [self.subviews copy]) {
+        [v removeFromSuperview];
+    }
+    _buttons = [buttons copy] ?: @[];
+    for (NSButton *b in _buttons) {
+        b.translatesAutoresizingMaskIntoConstraints = YES;
+        [self addSubview:b];
+    }
+    _laidOutWidth = -1;
+    [self invalidateIntrinsicContentSize];
+    [self setNeedsLayout:YES];
+}
+
+- (void)setButtonsEnabled:(BOOL)enabled {
+    for (NSButton *b in self.buttons) {
+        b.enabled = enabled;
+    }
+}
+
+- (NSSize)intrinsicContentSize {
+    CGFloat w = NSWidth(self.bounds);
+    if (w < 1) w = 320;
+    [self meo_layoutButtonsInWidth:w applyFrames:NO];
+    return NSMakeSize(NSViewNoIntrinsicMetric, MAX(_laidOutHeight, 1));
+}
+
+- (void)layout {
+    [super layout];
+    CGFloat w = NSWidth(self.bounds);
+    CGFloat oldH = _laidOutHeight;
+    [self meo_layoutButtonsInWidth:w applyFrames:YES];
+    if (fabs(oldH - _laidOutHeight) > 0.5) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self invalidateIntrinsicContentSize];
+        });
+    }
+}
+
+- (void)meo_layoutButtonsInWidth:(CGFloat)width applyFrames:(BOOL)apply {
+    if (width < 1) width = 320;
+    CGFloat x = 0;
+    CGFloat y = 0;
+    CGFloat rowH = 0;
+    CGFloat maxY = 0;
+    for (NSButton *b in self.buttons) {
+        [b sizeToFit];
+        NSSize sz = b.fittingSize;
+        if (sz.width < 1) sz = b.frame.size;
+        if (sz.height < 1) sz.height = 22;
+        // 略收一点，避免贴边误换行
+        if (x > 0 && x + sz.width > width - 0.5) {
+            x = 0;
+            y += rowH + self.lineSpacing;
+            rowH = 0;
+        }
+        if (apply) {
+            b.frame = NSMakeRect(floor(x), floor(y), ceil(sz.width), ceil(sz.height));
+        }
+        x += sz.width + self.spacing;
+        rowH = MAX(rowH, sz.height);
+        maxY = y + rowH;
+    }
+    _laidOutHeight = self.buttons.count ? maxY : 0;
+    _laidOutWidth = width;
+}
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+@end
+
 /// 输入区拖放宿主：高亮 + 把文件 URL 交给侧栏（子视图未接手时兜底）。
 @interface AIAssistantComposerDropView : NSView
 @property (nonatomic, copy, nullable) BOOL (^canAcceptURLs)(NSArray<NSURL *> *urls);
@@ -377,7 +479,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong, nullable) NSTimer *autoReconnectTimer;
 @property (nonatomic, assign) NSInteger autoReconnectSecondsLeft;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
-@property (nonatomic, strong) NSStackView *recipeButtonStack;
+@property (nonatomic, strong) AIAssistantRecipeFlowView *recipeButtonStack;
 @property (nonatomic, strong) NSButton *pageContextToggleButton;
 @property (nonatomic, strong) NSButton *pageContextAutoRecaptureCheckbox;
 @property (nonatomic, strong) NSButton *pageContextRecaptureButton;
@@ -830,11 +932,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.chatPanel = [[BrowserAIAssistantChatPanel alloc] initWithFrame:NSZeroRect];
     self.chatPanel.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.recipeButtonStack = [NSStackView stackViewWithViews:@[]];
-    self.recipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    self.recipeButtonStack.spacing = 4;
-    self.recipeButtonStack.alignment = NSLayoutAttributeLeading;
+    self.recipeButtonStack = [[AIAssistantRecipeFlowView alloc] initWithFrame:NSZeroRect];
     [self rebuildRecipeButtons];
 
     self.pageContextToggleButton = [NSButton buttonWithTitle:@"▸ 当前网页"
@@ -1123,7 +1221,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
         [self.recipeButtonStack.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
         [self.recipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-        [self.recipeButtonStack.trailingAnchor constraintLessThanOrEqualToAnchor:pane.trailingAnchor constant:-12],
+        [self.recipeButtonStack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-12],
 
         [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
         [self.pageContextToggleButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
@@ -2702,38 +2800,22 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
 - (void)rebuildRecipeButtons {
     if (!self.recipeButtonStack) return;
-    for (NSView *v in [self.recipeButtonStack.arrangedSubviews copy]) {
-        [self.recipeButtonStack removeArrangedSubview:v];
-        [v removeFromSuperview];
-    }
-    NSMutableArray<AIPageContextRecipe *> *sidebar = [NSMutableArray array];
+    NSMutableArray<NSButton *> *btns = [NSMutableArray array];
     for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] allRecipesSorted]) {
-        if (r.showInSidebar) [sidebar addObject:r];
+        if (!r.showInSidebar) continue;
+        NSButton *b = [NSButton buttonWithTitle:r.title ?: r.recipeId
+                                         target:self
+                                         action:@selector(recipeShortcutClicked:)];
+        b.bezelStyle = NSBezelStyleRounded;
+        b.controlSize = NSControlSizeSmall;
+        b.identifier = r.recipeId;
+        b.toolTip = r.systemHint.length
+            ? [[r.systemHint substringToIndex:MIN(r.systemHint.length, (NSUInteger)80)]
+                   stringByAppendingString:r.systemHint.length > 80 ? @"…" : @""]
+            : r.title;
+        [btns addObject:b];
     }
-    const NSUInteger perRow = 3;
-    for (NSUInteger i = 0; i < sidebar.count; i += perRow) {
-        NSMutableArray *rowBtns = [NSMutableArray array];
-        NSUInteger end = MIN(i + perRow, sidebar.count);
-        for (NSUInteger j = i; j < end; j++) {
-            AIPageContextRecipe *r = sidebar[j];
-            NSButton *b = [NSButton buttonWithTitle:r.title ?: r.recipeId
-                                             target:self
-                                             action:@selector(recipeShortcutClicked:)];
-            b.bezelStyle = NSBezelStyleRounded;
-            b.controlSize = NSControlSizeSmall;
-            b.identifier = r.recipeId;
-            b.toolTip = r.systemHint.length
-                ? [[r.systemHint substringToIndex:MIN(r.systemHint.length, (NSUInteger)80)]
-                       stringByAppendingString:r.systemHint.length > 80 ? @"…" : @""]
-                : r.title;
-            [rowBtns addObject:b];
-        }
-        NSStackView *row = [NSStackView stackViewWithViews:rowBtns];
-        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-        row.spacing = 6;
-        row.alignment = NSLayoutAttributeCenterY;
-        [self.recipeButtonStack addArrangedSubview:row];
-    }
+    self.recipeButtonStack.buttons = btns;
 }
 
 - (void)recipeShortcutClicked:(NSButton *)sender {
@@ -2841,14 +2923,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 }
 
 - (void)setPageContextButtonsEnabled:(BOOL)enabled {
-    for (NSView *row in self.recipeButtonStack.arrangedSubviews) {
-        if (![row isKindOfClass:[NSStackView class]]) continue;
-        for (NSView *v in ((NSStackView *)row).arrangedSubviews) {
-            if ([v isKindOfClass:[NSButton class]]) {
-                ((NSButton *)v).enabled = enabled;
-            }
-        }
-    }
+    [self.recipeButtonStack setButtonsEnabled:enabled];
     self.pageContextRecaptureButton.enabled = enabled && !self.pageContextCaptureInFlight;
     self.pageContextAutoRecaptureCheckbox.enabled = YES;
 }
