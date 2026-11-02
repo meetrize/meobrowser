@@ -15,6 +15,7 @@
 #import "AIPageContextStore.h"
 #import "AIPageContextRecipe.h"
 #import "AIPageContextRecipeStore.h"
+#import "AIPageContextRecipeEditorController.h"
 #import "AIPageContextPromptBuilder.h"
 #import "AIPageContextBundleExporter.h"
 #import "AIPageContextScraperBridge.h"
@@ -377,13 +378,6 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, assign) NSInteger autoReconnectSecondsLeft;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
 @property (nonatomic, strong) NSStackView *recipeButtonStack;
-@property (nonatomic, strong) NSStackView *financeRecipeButtonStack;
-@property (nonatomic, strong) NSButton *summarizePageButton;
-@property (nonatomic, strong) NSButton *askPageButton;
-@property (nonatomic, strong) NSButton *backgroundDigButton;
-@property (nonatomic, strong) NSButton *investmentThesisButton;
-@property (nonatomic, strong) NSButton *riskScanButton;
-@property (nonatomic, strong) NSButton *marketTrendButton;
 @property (nonatomic, strong) NSButton *pageContextToggleButton;
 @property (nonatomic, strong) NSButton *pageContextAutoRecaptureCheckbox;
 @property (nonatomic, strong) NSButton *pageContextRecaptureButton;
@@ -433,6 +427,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong, nullable) id registryObserver;
 @property (nonatomic, strong, nullable) id serviceObserver;
 @property (nonatomic, strong, nullable) id storeObserver;
+@property (nonatomic, strong, nullable) id recipeStoreObserver;
 @end
 
 @implementation BrowserAIAssistantSidebarController
@@ -471,6 +466,12 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             [weakSelf.historyPanel reload];
             [weakSelf reloadUI];
         }];
+        _recipeStoreObserver = [nc addObserverForName:AIPageContextRecipeStoreDidChangeNotification
+                                                object:nil
+                                                 queue:NSOperationQueue.mainQueue
+                                            usingBlock:^(__unused NSNotification *n) {
+            [weakSelf rebuildRecipeButtons];
+        }];
         [self refreshConnectionState];
     }
     return self;
@@ -482,6 +483,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (self.registryObserver) [nc removeObserver:self.registryObserver];
     if (self.serviceObserver) [nc removeObserver:self.serviceObserver];
     if (self.storeObserver) [nc removeObserver:self.storeObserver];
+    if (self.recipeStoreObserver) [nc removeObserver:self.recipeStoreObserver];
 }
 
 #pragma mark - Symbols / rail buttons
@@ -828,63 +830,12 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.chatPanel = [[BrowserAIAssistantChatPanel alloc] initWithFrame:NSZeroRect];
     self.chatPanel.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.summarizePageButton = [NSButton buttonWithTitle:@"总结该网页"
-                                                  target:self
-                                                  action:@selector(summarizePageClicked:)];
-    self.summarizePageButton.bezelStyle = NSBezelStyleRounded;
-    self.summarizePageButton.controlSize = NSControlSizeSmall;
-    self.summarizePageButton.toolTip = @"采集当前标签页正文并总结";
-
-    self.askPageButton = [NSButton buttonWithTitle:@"问答本页"
-                                            target:self
-                                            action:@selector(askPageClicked:)];
-    self.askPageButton.bezelStyle = NSBezelStyleRounded;
-    self.askPageButton.controlSize = NSControlSizeSmall;
-    self.askPageButton.toolTip = @"采集正文并填入问答提示（不自动发送）";
-
-    self.backgroundDigButton = [NSButton buttonWithTitle:@"背景挖掘"
-                                                  target:self
-                                                  action:@selector(backgroundDigClicked:)];
-    self.backgroundDigButton.bezelStyle = NSBezelStyleRounded;
-    self.backgroundDigButton.controlSize = NSControlSizeSmall;
-    self.backgroundDigButton.toolTip = @"抽取文中关键实体，智能挖掘背景/行业/趋势/风险并生成研究报告";
-
-    self.investmentThesisButton = [NSButton buttonWithTitle:@"投资研判"
-                                                     target:self
-                                                     action:@selector(investmentThesisClicked:)];
-    self.investmentThesisButton.bezelStyle = NSBezelStyleRounded;
-    self.investmentThesisButton.controlSize = NSControlSizeSmall;
-    self.investmentThesisButton.toolTip = @"多空逻辑、催化剂、关键假设与证伪条件（非投资建议）";
-
-    self.riskScanButton = [NSButton buttonWithTitle:@"风险扫描"
-                                             target:self
-                                             action:@selector(riskScanClicked:)];
-    self.riskScanButton.bezelStyle = NSBezelStyleRounded;
-    self.riskScanButton.controlSize = NSControlSizeSmall;
-    self.riskScanButton.toolTip = @"扫描财务/治理/监管/条款等雷点";
-
-    self.marketTrendButton = [NSButton buttonWithTitle:@"趋势框架"
-                                                target:self
-                                                action:@selector(marketTrendClicked:)];
-    self.marketTrendButton.bezelStyle = NSBezelStyleRounded;
-    self.marketTrendButton.controlSize = NSControlSizeSmall;
-    self.marketTrendButton.toolTip = @"驱动拆解、周期位置与情景推演（非投资建议）";
-
-    self.recipeButtonStack = [NSStackView stackViewWithViews:@[
-        self.summarizePageButton, self.askPageButton, self.backgroundDigButton
-    ]];
+    self.recipeButtonStack = [NSStackView stackViewWithViews:@[]];
     self.recipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    self.recipeButtonStack.spacing = 6;
-    self.recipeButtonStack.alignment = NSLayoutAttributeCenterY;
-
-    self.financeRecipeButtonStack = [NSStackView stackViewWithViews:@[
-        self.investmentThesisButton, self.riskScanButton, self.marketTrendButton
-    ]];
-    self.financeRecipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
-    self.financeRecipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    self.financeRecipeButtonStack.spacing = 6;
-    self.financeRecipeButtonStack.alignment = NSLayoutAttributeCenterY;
+    self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.recipeButtonStack.spacing = 4;
+    self.recipeButtonStack.alignment = NSLayoutAttributeLeading;
+    [self rebuildRecipeButtons];
 
     self.pageContextToggleButton = [NSButton buttonWithTitle:@"▸ 当前网页"
                                                       target:self
@@ -1149,7 +1100,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.inputView = input;
 
     for (NSView *v in @[self.statusRow, self.moreButton,
-                        self.chatPanel, self.recipeButtonStack, self.financeRecipeButtonStack,
+                        self.chatPanel, self.recipeButtonStack,
                         self.pageContextToggleButton,
                         self.pageContextAutoRecaptureCheckbox, self.pageContextRecaptureButton,
                         self.pageContextPanel, inputBox]) {
@@ -1172,11 +1123,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
         [self.recipeButtonStack.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
         [self.recipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+        [self.recipeButtonStack.trailingAnchor constraintLessThanOrEqualToAnchor:pane.trailingAnchor constant:-12],
 
-        [self.financeRecipeButtonStack.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
-        [self.financeRecipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
-
-        [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.financeRecipeButtonStack.bottomAnchor constant:4],
+        [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
         [self.pageContextToggleButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.pageContextToggleButton.trailingAnchor constraintLessThanOrEqualToAnchor:self.pageContextAutoRecaptureCheckbox.leadingAnchor constant:-6],
 
@@ -2239,7 +2188,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     runRecipes.submenu = recipeMenu;
     [menu addItem:runRecipes];
 
-    [menu addItemWithTitle:@"管理用户配方…" action:@selector(manageRecipesClicked:) keyEquivalent:@""];
+    [menu addItemWithTitle:@"管理配方…" action:@selector(manageRecipesClicked:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
 
     NSMenu *privMenu = [[NSMenu alloc] init];
@@ -2288,7 +2237,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)runRecipeFromMenu:(NSMenuItem *)sender {
     NSString *rid = sender.representedObject;
     if (![rid isKindOfClass:[NSString class]]) return;
-    [self presentPageRecipe:rid autoSend:[AIPageContextRecipe shouldAutoSendRecipeId:rid]];
+    AIPageContextRecipe *r = [[AIPageContextRecipeStore sharedStore] recipeWithId:rid];
+    [self presentPageRecipe:rid autoSend:r.autoSend];
 }
 
 - (void)privacyModeClicked:(NSMenuItem *)sender {
@@ -2301,40 +2251,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
 - (void)manageRecipesClicked:(id)sender {
     (void)sender;
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"管理用户配方";
-    alert.informativeText = @"可将内置配方复制为可编辑的用户配方（保存到 Application Support）。";
-    [alert addButtonWithTitle:@"复制「总结该网页」"];
-    [alert addButtonWithTitle:@"删除全部用户配方"];
-    [alert addButtonWithTitle:@"关闭"];
-    NSModalResponse resp = [alert runModal];
-    if (resp == NSAlertFirstButtonReturn) {
-        AIPageContextRecipe *src = [[AIPageContextRecipeStore sharedStore] recipeWithId:AIPageContextRecipeIDSummarizePage];
-        AIPageContextRecipe *dup = [[AIPageContextRecipeStore sharedStore] duplicateRecipe:src withTitle:@"我的总结提示"];
-        // 简单编辑提示词
-        NSAlert *edit = [[NSAlert alloc] init];
-        edit.messageText = @"编辑用户提示词";
-        SBTextField *field = [SBTextField standardField];
-        field.frame = NSMakeRect(0, 0, 360, 24);
-        field.stringValue = dup.userPrompt ?: @"";
-        edit.accessoryView = field;
-        [edit addButtonWithTitle:@"保存"];
-        [edit addButtonWithTitle:@"取消"];
-        if ([edit runModal] == NSAlertFirstButtonReturn) {
-            dup.userPrompt = field.stringValue ?: @"";
-            NSError *err = nil;
-            if ([[AIPageContextRecipeStore sharedStore] saveUserRecipe:dup error:&err]) {
-                [self setStatusTip:@"已保存用户配方「我的总结提示」"];
-            } else {
-                [self setStatusTip:err.localizedDescription ?: @"保存失败"];
-            }
-        }
-    } else if (resp == NSAlertSecondButtonReturn) {
-        for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] userRecipes]) {
-            [[AIPageContextRecipeStore sharedStore] deleteUserRecipeId:r.recipeId error:nil];
-        }
-        [self setStatusTip:@"已删除全部用户配方"];
-    }
+    [[AIPageContextRecipeEditorController sharedController] showEditor];
 }
 
 - (void)exportClicked:(id)sender {
@@ -2505,7 +2422,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             [m replaceCharactersInRange:NSMakeRange(loc, len) withString:@""];
             self.inputView.string = m;
             self.suppressMention = NO;
-            [self presentPageRecipe:oid autoSend:[AIPageContextRecipe shouldAutoSendRecipeId:oid]];
+            AIPageContextRecipe *rr = [[AIPageContextRecipeStore sharedStore] recipeWithId:oid];
+            [self presentPageRecipe:oid autoSend:rr.autoSend];
             return;
         }
         // @ 层/资源：删 token，挂引用
@@ -2782,34 +2700,47 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
 }
 
-- (void)summarizePageClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDSummarizePage autoSend:YES];
+- (void)rebuildRecipeButtons {
+    if (!self.recipeButtonStack) return;
+    for (NSView *v in [self.recipeButtonStack.arrangedSubviews copy]) {
+        [self.recipeButtonStack removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    NSMutableArray<AIPageContextRecipe *> *sidebar = [NSMutableArray array];
+    for (AIPageContextRecipe *r in [[AIPageContextRecipeStore sharedStore] allRecipesSorted]) {
+        if (r.showInSidebar) [sidebar addObject:r];
+    }
+    const NSUInteger perRow = 3;
+    for (NSUInteger i = 0; i < sidebar.count; i += perRow) {
+        NSMutableArray *rowBtns = [NSMutableArray array];
+        NSUInteger end = MIN(i + perRow, sidebar.count);
+        for (NSUInteger j = i; j < end; j++) {
+            AIPageContextRecipe *r = sidebar[j];
+            NSButton *b = [NSButton buttonWithTitle:r.title ?: r.recipeId
+                                             target:self
+                                             action:@selector(recipeShortcutClicked:)];
+            b.bezelStyle = NSBezelStyleRounded;
+            b.controlSize = NSControlSizeSmall;
+            b.identifier = r.recipeId;
+            b.toolTip = r.systemHint.length
+                ? [[r.systemHint substringToIndex:MIN(r.systemHint.length, (NSUInteger)80)]
+                       stringByAppendingString:r.systemHint.length > 80 ? @"…" : @""]
+                : r.title;
+            [rowBtns addObject:b];
+        }
+        NSStackView *row = [NSStackView stackViewWithViews:rowBtns];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.spacing = 6;
+        row.alignment = NSLayoutAttributeCenterY;
+        [self.recipeButtonStack addArrangedSubview:row];
+    }
 }
 
-- (void)askPageClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDAskPage autoSend:NO];
-}
-
-- (void)backgroundDigClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDBackgroundDig autoSend:YES];
-}
-
-- (void)investmentThesisClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDInvestmentThesis autoSend:YES];
-}
-
-- (void)riskScanClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDRiskScan autoSend:YES];
-}
-
-- (void)marketTrendClicked:(id)sender {
-    (void)sender;
-    [self presentPageRecipe:AIPageContextRecipeIDMarketTrend autoSend:YES];
+- (void)recipeShortcutClicked:(NSButton *)sender {
+    NSString *rid = sender.identifier;
+    if (!rid.length) return;
+    AIPageContextRecipe *r = [[AIPageContextRecipeStore sharedStore] recipeWithId:rid];
+    [self presentPageRecipe:rid autoSend:r.autoSend];
 }
 
 - (BOOL)isPageContextCitationKind:(AIAssistantCitationKind)kind {
@@ -2910,12 +2841,14 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 }
 
 - (void)setPageContextButtonsEnabled:(BOOL)enabled {
-    self.summarizePageButton.enabled = enabled;
-    self.askPageButton.enabled = enabled;
-    self.backgroundDigButton.enabled = enabled;
-    self.investmentThesisButton.enabled = enabled;
-    self.riskScanButton.enabled = enabled;
-    self.marketTrendButton.enabled = enabled;
+    for (NSView *row in self.recipeButtonStack.arrangedSubviews) {
+        if (![row isKindOfClass:[NSStackView class]]) continue;
+        for (NSView *v in ((NSStackView *)row).arrangedSubviews) {
+            if ([v isKindOfClass:[NSButton class]]) {
+                ((NSButton *)v).enabled = enabled;
+            }
+        }
+    }
     self.pageContextRecaptureButton.enabled = enabled && !self.pageContextCaptureInFlight;
     self.pageContextAutoRecaptureCheckbox.enabled = YES;
 }

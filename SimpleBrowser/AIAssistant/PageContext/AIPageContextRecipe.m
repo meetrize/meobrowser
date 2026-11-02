@@ -16,6 +16,44 @@ static NSString * const kFinanceDisclaimer =
 
 @implementation AIPageContextRecipe
 
++ (void)applyBundledPlacement:(AIPageContextRecipe *)r {
+    NSString *rid = r.recipeId ?: @"";
+    r.showInSidebar = NO;
+    r.showInContextMenu = YES;
+    r.contextMenuTopLevel = NO;
+    r.autoSend = YES;
+    r.sortOrder = 500;
+
+    if ([rid isEqualToString:AIPageContextRecipeIDSummarizePage]) {
+        r.showInSidebar = YES;
+        r.contextMenuTopLevel = YES;
+        r.sortOrder = 10;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDAskPage]) {
+        r.showInSidebar = YES;
+        r.autoSend = NO;
+        r.sortOrder = 20;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDBackgroundDig]) {
+        r.showInSidebar = YES;
+        r.sortOrder = 30;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDInvestmentThesis]) {
+        r.showInSidebar = YES;
+        r.sortOrder = 40;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDRiskScan]) {
+        r.showInSidebar = YES;
+        r.sortOrder = 50;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDMarketTrend]) {
+        r.showInSidebar = YES;
+        r.sortOrder = 60;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDOutlinePage]) {
+        r.sortOrder = 100;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDExtractFacts]) {
+        r.sortOrder = 110;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDRegexExtract]) {
+        r.autoSend = NO;
+        r.sortOrder = 120;
+    }
+}
+
 + (AIPageContextRecipe *)makeId:(NSString *)rid
                           title:(NSString *)title
                      userPrompt:(NSString *)userPrompt
@@ -32,14 +70,15 @@ static NSString * const kFinanceDisclaimer =
     r.maxHtmlChars = 100000;
     r.userDefined = NO;
     r.preprocessScript = nil;
+    [self applyBundledPlacement:r];
     return r;
 }
 
 + (NSArray<AIPageContextRecipe *> *)bundledRecipes {
-    static NSArray *recipes;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        recipes = @[
+    static NSArray *realRecipes;
+    static dispatch_once_t once2;
+    dispatch_once(&once2, ^{
+        realRecipes = @[
             [self makeId:AIPageContextRecipeIDSummarizePage
                    title:@"总结该网页"
               userPrompt:
@@ -188,50 +227,87 @@ static NSString * const kFinanceDisclaimer =
            maxArticleChars:24000],
         ];
     });
-    return recipes;
+    return realRecipes;
+}
+
++ (BOOL)isBundledRecipeId:(NSString *)recipeId {
+    return [self recipeWithId:recipeId] != nil;
 }
 
 + (BOOL)shouldAutoSendRecipeId:(NSString *)recipeId {
-    if (recipeId.length == 0) return NO;
-    static NSSet *ids;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        ids = [NSSet setWithArray:@[
-            AIPageContextRecipeIDSummarizePage,
-            AIPageContextRecipeIDBackgroundDig,
-            AIPageContextRecipeIDInvestmentThesis,
-            AIPageContextRecipeIDRiskScan,
-            AIPageContextRecipeIDMarketTrend,
-            AIPageContextRecipeIDOutlinePage,
-            AIPageContextRecipeIDExtractFacts,
-        ]];
-    });
-    return [ids containsObject:recipeId];
+    AIPageContextRecipe *b = [self recipeWithId:recipeId];
+    if (b) return b.autoSend;
+    return NO;
 }
 
 + (AIPageContextRecipe *)recipeFromDictionary:(NSDictionary *)dict {
     if (![dict isKindOfClass:[NSDictionary class]]) return nil;
     NSString *rid = dict[@"id"];
     if (![rid isKindOfClass:[NSString class]] || rid.length == 0) return nil;
+
+    AIPageContextRecipe *bundled = [self recipeWithId:rid];
     AIPageContextRecipe *r = [[AIPageContextRecipe alloc] init];
     r.recipeId = rid;
-    r.title = [dict[@"title"] isKindOfClass:[NSString class]] ? dict[@"title"] : rid;
-    r.userPrompt = [dict[@"userPrompt"] isKindOfClass:[NSString class]] ? dict[@"userPrompt"] : @"";
-    r.systemHint = [dict[@"systemHint"] isKindOfClass:[NSString class]] ? dict[@"systemHint"] : @"";
+    r.title = [dict[@"title"] isKindOfClass:[NSString class]] ? dict[@"title"] : (bundled.title ?: rid);
+    r.userPrompt = [dict[@"userPrompt"] isKindOfClass:[NSString class]] ? dict[@"userPrompt"] : (bundled.userPrompt ?: @"");
+    r.systemHint = [dict[@"systemHint"] isKindOfClass:[NSString class]] ? dict[@"systemHint"] : (bundled.systemHint ?: @"");
     NSArray *layers = dict[@"autoAttach"] ?: dict[@"autoAttachLayers"];
     if ([layers isKindOfClass:[NSArray class]]) {
         r.autoAttachLayers = layers;
+    } else if (bundled.autoAttachLayers.count) {
+        r.autoAttachLayers = bundled.autoAttachLayers;
     } else {
         r.autoAttachLayers = @[ AIPageContextLayerMeta, AIPageContextLayerArticle ];
     }
     id maxA = dict[@"maxArticleChars"];
-    r.maxArticleChars = [maxA respondsToSelector:@selector(unsignedIntegerValue)] ? [maxA unsignedIntegerValue] : 24000;
+    r.maxArticleChars = [maxA respondsToSelector:@selector(unsignedIntegerValue)]
+        ? [maxA unsignedIntegerValue]
+        : (bundled.maxArticleChars ?: 24000);
     id maxH = dict[@"maxHtmlChars"];
-    r.maxHtmlChars = [maxH respondsToSelector:@selector(unsignedIntegerValue)] ? [maxH unsignedIntegerValue] : 100000;
+    r.maxHtmlChars = [maxH respondsToSelector:@selector(unsignedIntegerValue)]
+        ? [maxH unsignedIntegerValue]
+        : (bundled.maxHtmlChars ?: 100000);
     id ud = dict[@"userDefined"];
     r.userDefined = [ud respondsToSelector:@selector(boolValue)] ? [ud boolValue] : YES;
     NSString *pre = dict[@"preprocessScript"];
-    r.preprocessScript = [pre isKindOfClass:[NSString class]] ? pre : nil;
+    r.preprocessScript = [pre isKindOfClass:[NSString class]] ? pre : bundled.preprocessScript;
+
+    // Placement: explicit JSON wins; else bundled defaults; else sensible user defaults
+    if (dict[@"showInSidebar"] != nil) {
+        r.showInSidebar = [dict[@"showInSidebar"] boolValue];
+    } else if (bundled) {
+        r.showInSidebar = bundled.showInSidebar;
+    } else {
+        r.showInSidebar = YES;
+    }
+    if (dict[@"showInContextMenu"] != nil) {
+        r.showInContextMenu = [dict[@"showInContextMenu"] boolValue];
+    } else if (bundled) {
+        r.showInContextMenu = bundled.showInContextMenu;
+    } else {
+        r.showInContextMenu = YES;
+    }
+    if (dict[@"contextMenuTopLevel"] != nil) {
+        r.contextMenuTopLevel = [dict[@"contextMenuTopLevel"] boolValue];
+    } else if (bundled) {
+        r.contextMenuTopLevel = bundled.contextMenuTopLevel;
+    } else {
+        r.contextMenuTopLevel = NO;
+    }
+    if (dict[@"autoSend"] != nil) {
+        r.autoSend = [dict[@"autoSend"] boolValue];
+    } else if (bundled) {
+        r.autoSend = bundled.autoSend;
+    } else {
+        r.autoSend = YES;
+    }
+    if (dict[@"sortOrder"] != nil) {
+        r.sortOrder = [dict[@"sortOrder"] integerValue];
+    } else if (bundled) {
+        r.sortOrder = bundled.sortOrder;
+    } else {
+        r.sortOrder = 200;
+    }
     return r;
 }
 
@@ -245,11 +321,20 @@ static NSString * const kFinanceDisclaimer =
         @"maxArticleChars": @(self.maxArticleChars),
         @"maxHtmlChars": @(self.maxHtmlChars),
         @"userDefined": @(self.userDefined),
+        @"showInSidebar": @(self.showInSidebar),
+        @"showInContextMenu": @(self.showInContextMenu),
+        @"contextMenuTopLevel": @(self.contextMenuTopLevel),
+        @"autoSend": @(self.autoSend),
+        @"sortOrder": @(self.sortOrder),
     } mutableCopy];
     if (self.preprocessScript.length) {
         d[@"preprocessScript"] = self.preprocessScript;
     }
     return d;
+}
+
+- (instancetype)copyRecipe {
+    return [[self class] recipeFromDictionary:[self dictionaryRepresentation]] ?: [[AIPageContextRecipe alloc] init];
 }
 
 + (AIPageContextRecipe *)recipeWithId:(NSString *)recipeId {

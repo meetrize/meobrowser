@@ -177,6 +177,7 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextStore.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextRecipe.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextRecipeStore.m \
+                   $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextRecipeEditorController.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextCapturer.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextPromptBuilder.m \
                    $(BROWSER_SRC_DIR)/AIAssistant/PageContext/AIPageContextBundleExporter.m \

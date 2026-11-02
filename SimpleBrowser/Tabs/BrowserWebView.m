@@ -3,6 +3,8 @@
 #import "MeoContextMenuLocalizer.h"
 #import "BrowserWindowController.h"
 #import "BrowserAIAssistantPrompts.h"
+#import "AIPageContextRecipe.h"
+#import "AIPageContextRecipeStore.h"
 
 #import <objc/message.h>
 
@@ -961,47 +963,43 @@ static NSString *MeoScrollToFragmentJS(void) {
         return;
     }
     (void)nearItem;
-    // 顶层第一项：总结该网页（一键可达）
-    NSMenuItem *sumPage = [[NSMenuItem alloc] initWithTitle:@"总结该网页"
-                                                     action:@selector(meo_aiAssistantSummarizePage:)
-                                              keyEquivalent:@""];
-    sumPage.target = self;
-    sumPage.toolTip = @"采集当前页正文并总结（忽略选区）";
-    [menu insertItem:sumPage atIndex:0];
+    NSArray<AIPageContextRecipe *> *all = [[AIPageContextRecipeStore sharedStore] allRecipesSorted];
+    AIPageContextRecipe *top = nil;
+    for (AIPageContextRecipe *r in all) {
+        if (r.contextMenuTopLevel) {
+            top = r;
+            break;
+        }
+    }
+    NSInteger insertAt = 0;
+    if (top) {
+        NSMenuItem *topItem = [[NSMenuItem alloc] initWithTitle:top.title ?: top.recipeId
+                                                         action:@selector(meo_aiAssistantRunRecipe:)
+                                                  keyEquivalent:@""];
+        topItem.target = self;
+        topItem.representedObject = top.recipeId;
+        topItem.toolTip = @"采集当前页正文并运行配方（忽略选区）";
+        [menu insertItem:topItem atIndex:insertAt++];
+    }
 
-    // 「问问 AI」子菜单——有选区针对选区，无选区针对当前页。
     NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"问问 AI"];
-    NSMenuItem *askPage = [[NSMenuItem alloc] initWithTitle:@"问答本页…"
-                                                     action:@selector(meo_aiAssistantAskPage:)
-                                              keyEquivalent:@""];
-    askPage.target = self;
-    askPage.toolTip = @"采集正文并打开助手，自行补充问题后发送";
-    [submenu addItem:askPage];
-    NSMenuItem *digPage = [[NSMenuItem alloc] initWithTitle:@"背景挖掘"
-                                                     action:@selector(meo_aiAssistantBackgroundDig:)
-                                              keyEquivalent:@""];
-    digPage.target = self;
-    digPage.toolTip = @"抽取文中关键实体，挖掘背景/行业/趋势/风险并生成研究报告";
-    [submenu addItem:digPage];
-    NSMenuItem *investPage = [[NSMenuItem alloc] initWithTitle:@"投资研判"
-                                                        action:@selector(meo_aiAssistantInvestmentThesis:)
-                                                 keyEquivalent:@""];
-    investPage.target = self;
-    investPage.toolTip = @"多空逻辑、催化剂、关键假设与证伪条件（非投资建议）";
-    [submenu addItem:investPage];
-    NSMenuItem *riskPage = [[NSMenuItem alloc] initWithTitle:@"风险扫描"
-                                                      action:@selector(meo_aiAssistantRiskScan:)
-                                               keyEquivalent:@""];
-    riskPage.target = self;
-    riskPage.toolTip = @"扫描财务/治理/监管/条款等雷点（非投资建议）";
-    [submenu addItem:riskPage];
-    NSMenuItem *trendPage = [[NSMenuItem alloc] initWithTitle:@"趋势框架"
-                                                       action:@selector(meo_aiAssistantMarketTrend:)
-                                                keyEquivalent:@""];
-    trendPage.target = self;
-    trendPage.toolTip = @"驱动拆解、周期位置与情景推演（非投资建议）";
-    [submenu addItem:trendPage];
-    [submenu addItem:[NSMenuItem separatorItem]];
+    for (AIPageContextRecipe *r in all) {
+        if (!r.showInContextMenu) continue;
+        if (top && [r.recipeId isEqualToString:top.recipeId]) continue; // 顶层已有，子菜单不重复
+        NSString *title = r.title ?: r.recipeId;
+        if ([r.recipeId isEqualToString:AIPageContextRecipeIDAskPage]) {
+            title = [title stringByAppendingString:@"…"];
+        }
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:title
+                                                    action:@selector(meo_aiAssistantRunRecipe:)
+                                             keyEquivalent:@""];
+        it.target = self;
+        it.representedObject = r.recipeId;
+        [submenu addItem:it];
+    }
+    if (submenu.numberOfItems > 0) {
+        [submenu addItem:[NSMenuItem separatorItem]];
+    }
     NSArray<NSDictionary *> *actions = @[
         @{@"title": @"直接问问", @"key": BrowserAIAssistantActionAsk},
         @{@"title": @"解释", @"key": BrowserAIAssistantActionExplain},
@@ -1026,8 +1024,8 @@ static NSString *MeoScrollToFragmentJS(void) {
 
     NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"问问 AI" action:nil keyEquivalent:@""];
     aiItem.submenu = submenu;
-    [menu insertItem:aiItem atIndex:1];
-    [menu insertItem:[NSMenuItem separatorItem] atIndex:2];
+    [menu insertItem:aiItem atIndex:insertAt++];
+    [menu insertItem:[NSMenuItem separatorItem] atIndex:insertAt];
 }
 
 - (nullable NSString *)meo_pageContextString {
@@ -1652,51 +1650,13 @@ static NSString *MeoScrollToFragmentJS(void) {
     }];
 }
 
-- (void)meo_aiAssistantSummarizePage:(id)sender {
-#pragma unused(sender)
+- (void)meo_aiAssistantRunRecipe:(id)sender {
+    NSMenuItem *item = [sender isKindOfClass:[NSMenuItem class]] ? (NSMenuItem *)sender : nil;
+    NSString *rid = [item.representedObject isKindOfClass:[NSString class]] ? item.representedObject : nil;
+    if (!rid.length) return;
     id wc = self.window.windowController;
     if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantSummarizeCurrentPage];
-    }
-}
-
-- (void)meo_aiAssistantAskPage:(id)sender {
-#pragma unused(sender)
-    id wc = self.window.windowController;
-    if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantAskCurrentPage];
-    }
-}
-
-- (void)meo_aiAssistantBackgroundDig:(id)sender {
-#pragma unused(sender)
-    id wc = self.window.windowController;
-    if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantBackgroundDigCurrentPage];
-    }
-}
-
-- (void)meo_aiAssistantInvestmentThesis:(id)sender {
-#pragma unused(sender)
-    id wc = self.window.windowController;
-    if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantInvestmentThesisCurrentPage];
-    }
-}
-
-- (void)meo_aiAssistantRiskScan:(id)sender {
-#pragma unused(sender)
-    id wc = self.window.windowController;
-    if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantRiskScanCurrentPage];
-    }
-}
-
-- (void)meo_aiAssistantMarketTrend:(id)sender {
-#pragma unused(sender)
-    id wc = self.window.windowController;
-    if ([wc isKindOfClass:[BrowserWindowController class]]) {
-        [(BrowserWindowController *)wc openAIAssistantMarketTrendCurrentPage];
+        [(BrowserWindowController *)wc openAIAssistantWithRecipeId:rid];
     }
 }
 

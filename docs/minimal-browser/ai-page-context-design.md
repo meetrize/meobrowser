@@ -151,16 +151,15 @@ AIPageContextBundle
 {
   "id": "summarize-page",
   "title": "总结该网页",
-  "symbol": "doc.text",
-  "description": "提炼正文要点，忽略导航与广告",
-  "userPrompt": "请总结该网页的正文要点，用简洁中文分条列出；不要复述导航、页脚或广告。",
-  "systemHint": "你只会看到用户勾选的引用。若有「正文」层，请主要依据正文；不要臆造未出现的信息。",
-  "requiredLayers": ["article"],
-  "optionalLayers": ["meta", "outline"],
+  "userPrompt": "……",
+  "systemHint": "……",
   "autoAttach": ["article", "meta"],
-  "captureIfMissing": true,
   "maxArticleChars": 24000,
-  "outputFormat": "bullets"
+  "showInSidebar": true,
+  "showInContextMenu": true,
+  "contextMenuTopLevel": true,
+  "autoSend": true,
+  "sortOrder": 10
 }
 ```
 
@@ -168,13 +167,18 @@ AIPageContextBundle
 |------|------|
 | `title` | 侧栏快捷按钮 / 右键菜单显示名 |
 | `userPrompt` | 填入输入框、可编辑的那句「人类话」 |
-| `systemHint` | 拼在引用区之前的固定约束（可折叠进发送包，侧栏可不展示全文） |
+| `systemHint` | 拼在引用区之前的固定约束 |
 | `autoAttach` | 执行时自动勾选并采集的层 |
-| `requiredLayers` | 缺层则先采集；失败则提示 |
-| `captureIfMissing` | 无新鲜 Bundle 时自动采 |
+| `showInSidebar` | 是否出现在助手侧栏快捷行 |
+| `showInContextMenu` | 是否出现在右键「问问 AI」子菜单 |
+| `contextMenuTopLevel` | 是否作为右键顶层第一项（全局至多一个；后保存者胜出） |
+| `autoSend` | 运行配方后是否自动发送 |
+| `sortOrder` | 侧栏/菜单排序（升序） |
 
-用户自定义 Recipe：复制内置 → 改 `userPrompt` / `autoAttach` → 存  
-`~/Library/Application Support/MeoBrowser/AIAssistant/Recipes/*.json`。
+**覆盖规则（1A）**：同 `id` 的用户 JSON 覆盖内置；删除该文件即「恢复默认」。  
+路径：`~/Library/Application Support/MeoBrowser/AIAssistant/Recipes/<id>.json`。  
+入口：助手「更多 ▾ → 管理配方…」（可新建 / 改提示词 / 开关菜单位置 / 导入导出）。  
+AI IDE 仍可在 `AIPageContextRecipe.bundledRecipes` 加代码内置，或直接写入上述 JSON。
 
 ### 5.2 内置 Recipe 建议（PC-0～PC-2）
 

@@ -47,6 +47,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openAIAssistantWithAction:(NSString *)actionKey
                           context:(nullable NSString *)context
                       pageContext:(BOOL)pageContext;
+/// 采集当前标签页正文并运行指定配方（autoSend 读配方配置）。
+- (void)openAIAssistantWithRecipeId:(NSString *)recipeId;
 /// 采集当前标签页正文并运行「总结该网页」配方。
 - (void)openAIAssistantSummarizeCurrentPage;
 /// 采集当前标签页正文并填入「问答本页」（不自动发送）。

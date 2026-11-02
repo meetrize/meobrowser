@@ -61,6 +61,7 @@
 #import "BrowserAIAssistantSidebarController.h"
 #import "BrowserAIAssistantPrompts.h"
 #import "AIPageContextRecipe.h"
+#import "AIPageContextRecipeStore.h"
 #import "AIPageContextStore.h"
 #import "BrowserFindBarController.h"
 #import "BrowserFindBarView.h"
@@ -3130,58 +3131,40 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
 }
 
-- (void)openAIAssistantSummarizeCurrentPage {
+- (void)openAIAssistantWithRecipeId:(NSString *)recipeId {
+    if (!recipeId.length) return;
+    AIPageContextRecipe *r = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
+    BOOL autoSend = r ? r.autoSend : YES;
     [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
     [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDSummarizePage autoSend:YES];
+    [self.aiAssistantSidebarController presentPageRecipe:recipeId autoSend:autoSend];
     [self updateAIAssistantButtonAppearance];
     [self updateAIBridgeButtonAppearance];
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (void)openAIAssistantSummarizeCurrentPage {
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDSummarizePage];
 }
 
 - (void)openAIAssistantAskCurrentPage {
-    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
-    [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDAskPage autoSend:NO];
-    [self updateAIAssistantButtonAppearance];
-    [self updateAIBridgeButtonAppearance];
-    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDAskPage];
 }
 
 - (void)openAIAssistantBackgroundDigCurrentPage {
-    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
-    [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDBackgroundDig autoSend:YES];
-    [self updateAIAssistantButtonAppearance];
-    [self updateAIBridgeButtonAppearance];
-    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDBackgroundDig];
 }
 
 - (void)openAIAssistantInvestmentThesisCurrentPage {
-    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
-    [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDInvestmentThesis autoSend:YES];
-    [self updateAIAssistantButtonAppearance];
-    [self updateAIBridgeButtonAppearance];
-    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDInvestmentThesis];
 }
 
 - (void)openAIAssistantRiskScanCurrentPage {
-    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
-    [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDRiskScan autoSend:YES];
-    [self updateAIAssistantButtonAppearance];
-    [self updateAIBridgeButtonAppearance];
-    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDRiskScan];
 }
 
 - (void)openAIAssistantMarketTrendCurrentPage {
-    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
-    [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDMarketTrend autoSend:YES];
-    [self updateAIAssistantButtonAppearance];
-    [self updateAIBridgeButtonAppearance];
-    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+    [self openAIAssistantWithRecipeId:AIPageContextRecipeIDMarketTrend];
 }
 
 - (WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller {
@@ -5520,8 +5503,9 @@ didRequestTransferTabID:(NSUUID *)tabID
             autoSend = YES;
         } else if (q[@"recipe"].length) {
             recipeId = q[@"recipe"];
-            autoSend = [AIPageContextRecipe shouldAutoSendRecipeId:recipeId];
         }
+        AIPageContextRecipe *cfg = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
+        if (cfg) autoSend = cfg.autoSend;
         [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
         [self.aiAssistantSidebarController reloadUI];
         [self.aiAssistantSidebarController presentPageRecipe:recipeId autoSend:autoSend];
