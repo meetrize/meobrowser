@@ -377,9 +377,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, assign) NSInteger autoReconnectSecondsLeft;
 @property (nonatomic, strong) BrowserAIAssistantChatPanel *chatPanel;
 @property (nonatomic, strong) NSStackView *recipeButtonStack;
+@property (nonatomic, strong) NSStackView *financeRecipeButtonStack;
 @property (nonatomic, strong) NSButton *summarizePageButton;
 @property (nonatomic, strong) NSButton *askPageButton;
 @property (nonatomic, strong) NSButton *backgroundDigButton;
+@property (nonatomic, strong) NSButton *investmentThesisButton;
+@property (nonatomic, strong) NSButton *riskScanButton;
+@property (nonatomic, strong) NSButton *marketTrendButton;
 @property (nonatomic, strong) NSButton *pageContextToggleButton;
 @property (nonatomic, strong) NSButton *pageContextAutoRecaptureCheckbox;
 @property (nonatomic, strong) NSButton *pageContextRecaptureButton;
@@ -845,6 +849,27 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.backgroundDigButton.controlSize = NSControlSizeSmall;
     self.backgroundDigButton.toolTip = @"抽取文中关键实体，智能挖掘背景/行业/趋势/风险并生成研究报告";
 
+    self.investmentThesisButton = [NSButton buttonWithTitle:@"投资研判"
+                                                     target:self
+                                                     action:@selector(investmentThesisClicked:)];
+    self.investmentThesisButton.bezelStyle = NSBezelStyleRounded;
+    self.investmentThesisButton.controlSize = NSControlSizeSmall;
+    self.investmentThesisButton.toolTip = @"多空逻辑、催化剂、关键假设与证伪条件（非投资建议）";
+
+    self.riskScanButton = [NSButton buttonWithTitle:@"风险扫描"
+                                             target:self
+                                             action:@selector(riskScanClicked:)];
+    self.riskScanButton.bezelStyle = NSBezelStyleRounded;
+    self.riskScanButton.controlSize = NSControlSizeSmall;
+    self.riskScanButton.toolTip = @"扫描财务/治理/监管/条款等雷点";
+
+    self.marketTrendButton = [NSButton buttonWithTitle:@"趋势框架"
+                                                target:self
+                                                action:@selector(marketTrendClicked:)];
+    self.marketTrendButton.bezelStyle = NSBezelStyleRounded;
+    self.marketTrendButton.controlSize = NSControlSizeSmall;
+    self.marketTrendButton.toolTip = @"驱动拆解、周期位置与情景推演（非投资建议）";
+
     self.recipeButtonStack = [NSStackView stackViewWithViews:@[
         self.summarizePageButton, self.askPageButton, self.backgroundDigButton
     ]];
@@ -852,6 +877,14 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.recipeButtonStack.spacing = 6;
     self.recipeButtonStack.alignment = NSLayoutAttributeCenterY;
+
+    self.financeRecipeButtonStack = [NSStackView stackViewWithViews:@[
+        self.investmentThesisButton, self.riskScanButton, self.marketTrendButton
+    ]];
+    self.financeRecipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
+    self.financeRecipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.financeRecipeButtonStack.spacing = 6;
+    self.financeRecipeButtonStack.alignment = NSLayoutAttributeCenterY;
 
     self.pageContextToggleButton = [NSButton buttonWithTitle:@"▸ 当前网页"
                                                       target:self
@@ -1116,7 +1149,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.inputView = input;
 
     for (NSView *v in @[self.statusRow, self.moreButton,
-                        self.chatPanel, self.recipeButtonStack, self.pageContextToggleButton,
+                        self.chatPanel, self.recipeButtonStack, self.financeRecipeButtonStack,
+                        self.pageContextToggleButton,
                         self.pageContextAutoRecaptureCheckbox, self.pageContextRecaptureButton,
                         self.pageContextPanel, inputBox]) {
         [pane addSubview:v];
@@ -1139,7 +1173,10 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         [self.recipeButtonStack.topAnchor constraintEqualToAnchor:self.chatPanel.bottomAnchor constant:6],
         [self.recipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
 
-        [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
+        [self.financeRecipeButtonStack.topAnchor constraintEqualToAnchor:self.recipeButtonStack.bottomAnchor constant:4],
+        [self.financeRecipeButtonStack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
+
+        [self.pageContextToggleButton.topAnchor constraintEqualToAnchor:self.financeRecipeButtonStack.bottomAnchor constant:4],
         [self.pageContextToggleButton.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:12],
         [self.pageContextToggleButton.trailingAnchor constraintLessThanOrEqualToAnchor:self.pageContextAutoRecaptureCheckbox.leadingAnchor constant:-6],
 
@@ -2251,9 +2288,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)runRecipeFromMenu:(NSMenuItem *)sender {
     NSString *rid = sender.representedObject;
     if (![rid isKindOfClass:[NSString class]]) return;
-    BOOL autoSend = [rid isEqualToString:AIPageContextRecipeIDSummarizePage]
-        || [rid isEqualToString:AIPageContextRecipeIDBackgroundDig];
-    [self presentPageRecipe:rid autoSend:autoSend];
+    [self presentPageRecipe:rid autoSend:[AIPageContextRecipe shouldAutoSendRecipeId:rid]];
 }
 
 - (void)privacyModeClicked:(NSMenuItem *)sender {
@@ -2470,9 +2505,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             [m replaceCharactersInRange:NSMakeRange(loc, len) withString:@""];
             self.inputView.string = m;
             self.suppressMention = NO;
-            BOOL autoSend = [oid isEqualToString:AIPageContextRecipeIDSummarizePage]
-                || [oid isEqualToString:AIPageContextRecipeIDBackgroundDig];
-            [self presentPageRecipe:oid autoSend:autoSend];
+            [self presentPageRecipe:oid autoSend:[AIPageContextRecipe shouldAutoSendRecipeId:oid]];
             return;
         }
         // @ 层/资源：删 token，挂引用
@@ -2764,6 +2797,21 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self presentPageRecipe:AIPageContextRecipeIDBackgroundDig autoSend:YES];
 }
 
+- (void)investmentThesisClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDInvestmentThesis autoSend:YES];
+}
+
+- (void)riskScanClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDRiskScan autoSend:YES];
+}
+
+- (void)marketTrendClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDMarketTrend autoSend:YES];
+}
+
 - (BOOL)isPageContextCitationKind:(AIAssistantCitationKind)kind {
     switch (kind) {
         case AIAssistantCitationKindPageMeta:
@@ -2865,6 +2913,9 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.summarizePageButton.enabled = enabled;
     self.askPageButton.enabled = enabled;
     self.backgroundDigButton.enabled = enabled;
+    self.investmentThesisButton.enabled = enabled;
+    self.riskScanButton.enabled = enabled;
+    self.marketTrendButton.enabled = enabled;
     self.pageContextRecaptureButton.enabled = enabled && !self.pageContextCaptureInFlight;
     self.pageContextAutoRecaptureCheckbox.enabled = YES;
 }

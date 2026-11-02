@@ -960,14 +960,17 @@ static NSString *MeoScrollToFragmentJS(void) {
     if (!menu) {
         return;
     }
-    // 菜单名：「问问 AI」——有选区针对选区，无选区针对当前页。
-    NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"问问 AI"];
+    (void)nearItem;
+    // 顶层第一项：总结该网页（一键可达）
     NSMenuItem *sumPage = [[NSMenuItem alloc] initWithTitle:@"总结该网页"
                                                      action:@selector(meo_aiAssistantSummarizePage:)
                                               keyEquivalent:@""];
     sumPage.target = self;
     sumPage.toolTip = @"采集当前页正文并总结（忽略选区）";
-    [submenu addItem:sumPage];
+    [menu insertItem:sumPage atIndex:0];
+
+    // 「问问 AI」子菜单——有选区针对选区，无选区针对当前页。
+    NSMenu *submenu = [[NSMenu alloc] initWithTitle:@"问问 AI"];
     NSMenuItem *askPage = [[NSMenuItem alloc] initWithTitle:@"问答本页…"
                                                      action:@selector(meo_aiAssistantAskPage:)
                                               keyEquivalent:@""];
@@ -980,6 +983,24 @@ static NSString *MeoScrollToFragmentJS(void) {
     digPage.target = self;
     digPage.toolTip = @"抽取文中关键实体，挖掘背景/行业/趋势/风险并生成研究报告";
     [submenu addItem:digPage];
+    NSMenuItem *investPage = [[NSMenuItem alloc] initWithTitle:@"投资研判"
+                                                        action:@selector(meo_aiAssistantInvestmentThesis:)
+                                                 keyEquivalent:@""];
+    investPage.target = self;
+    investPage.toolTip = @"多空逻辑、催化剂、关键假设与证伪条件（非投资建议）";
+    [submenu addItem:investPage];
+    NSMenuItem *riskPage = [[NSMenuItem alloc] initWithTitle:@"风险扫描"
+                                                      action:@selector(meo_aiAssistantRiskScan:)
+                                               keyEquivalent:@""];
+    riskPage.target = self;
+    riskPage.toolTip = @"扫描财务/治理/监管/条款等雷点（非投资建议）";
+    [submenu addItem:riskPage];
+    NSMenuItem *trendPage = [[NSMenuItem alloc] initWithTitle:@"趋势框架"
+                                                       action:@selector(meo_aiAssistantMarketTrend:)
+                                                keyEquivalent:@""];
+    trendPage.target = self;
+    trendPage.toolTip = @"驱动拆解、周期位置与情景推演（非投资建议）";
+    [submenu addItem:trendPage];
     [submenu addItem:[NSMenuItem separatorItem]];
     NSArray<NSDictionary *> *actions = @[
         @{@"title": @"直接问问", @"key": BrowserAIAssistantActionAsk},
@@ -1005,15 +1026,8 @@ static NSString *MeoScrollToFragmentJS(void) {
 
     NSMenuItem *aiItem = [[NSMenuItem alloc] initWithTitle:@"问问 AI" action:nil keyEquivalent:@""];
     aiItem.submenu = submenu;
-
-    NSInteger insertIndex = 0;
-    if (nearItem) {
-        NSInteger idx = [menu indexOfItem:nearItem];
-        if (idx != NSNotFound) {
-            insertIndex = idx;
-        }
-    }
-    [menu insertItem:aiItem atIndex:insertIndex];
+    [menu insertItem:aiItem atIndex:1];
+    [menu insertItem:[NSMenuItem separatorItem] atIndex:2];
 }
 
 - (nullable NSString *)meo_pageContextString {
@@ -1659,6 +1673,30 @@ static NSString *MeoScrollToFragmentJS(void) {
     id wc = self.window.windowController;
     if ([wc isKindOfClass:[BrowserWindowController class]]) {
         [(BrowserWindowController *)wc openAIAssistantBackgroundDigCurrentPage];
+    }
+}
+
+- (void)meo_aiAssistantInvestmentThesis:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantInvestmentThesisCurrentPage];
+    }
+}
+
+- (void)meo_aiAssistantRiskScan:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantRiskScanCurrentPage];
+    }
+}
+
+- (void)meo_aiAssistantMarketTrend:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantMarketTrendCurrentPage];
     }
 }
 

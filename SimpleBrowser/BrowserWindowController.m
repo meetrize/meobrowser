@@ -3157,6 +3157,33 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
 }
 
+- (void)openAIAssistantInvestmentThesisCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDInvestmentThesis autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (void)openAIAssistantRiskScanCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDRiskScan autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
+- (void)openAIAssistantMarketTrendCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDMarketTrend autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
 - (WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller {
     (void)controller;
     BrowserTab *tab = self.tabController.selectedTab;
@@ -5481,9 +5508,19 @@ didRequestTransferTabID:(NSUUID *)tabID
                    || [action isEqualToString:@"background-dig"]) {
             recipeId = AIPageContextRecipeIDBackgroundDig;
             autoSend = YES;
+        } else if ([action isEqualToString:@"invest"] || [action isEqualToString:@"thesis"]
+                   || [action isEqualToString:@"investment-thesis"]) {
+            recipeId = AIPageContextRecipeIDInvestmentThesis;
+            autoSend = YES;
+        } else if ([action isEqualToString:@"risk"] || [action isEqualToString:@"risk-scan"]) {
+            recipeId = AIPageContextRecipeIDRiskScan;
+            autoSend = YES;
+        } else if ([action isEqualToString:@"trend"] || [action isEqualToString:@"market-trend"]) {
+            recipeId = AIPageContextRecipeIDMarketTrend;
+            autoSend = YES;
         } else if (q[@"recipe"].length) {
             recipeId = q[@"recipe"];
-            autoSend = ![recipeId isEqualToString:AIPageContextRecipeIDAskPage];
+            autoSend = [AIPageContextRecipe shouldAutoSendRecipeId:recipeId];
         }
         [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
         [self.aiAssistantSidebarController reloadUI];

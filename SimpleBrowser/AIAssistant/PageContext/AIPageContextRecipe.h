@@ -8,6 +8,9 @@ FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDOutlinePage;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDExtractFacts;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDRegexExtract;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDBackgroundDig;
+FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDInvestmentThesis;
+FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDRiskScan;
+FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDMarketTrend;
 
 @interface AIPageContextRecipe : NSObject
 
@@ -24,6 +27,8 @@ FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDBackgroundDig;
 
 + (nullable AIPageContextRecipe *)recipeWithId:(NSString *)recipeId;
 + (NSArray<AIPageContextRecipe *> *)bundledRecipes;
+/// 侧栏快捷 / 右键一键运行后是否自动发送（总结、背景挖掘、投研类等）。
++ (BOOL)shouldAutoSendRecipeId:(NSString *)recipeId;
 + (nullable instancetype)recipeFromDictionary:(NSDictionary *)dict;
 - (NSDictionary *)dictionaryRepresentation;
 

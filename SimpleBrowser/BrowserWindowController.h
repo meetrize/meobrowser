@@ -53,6 +53,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)openAIAssistantAskCurrentPage;
 /// 采集当前标签页正文并运行「背景挖掘」配方。
 - (void)openAIAssistantBackgroundDigCurrentPage;
+/// 采集当前标签页正文并运行「投资研判」配方。
+- (void)openAIAssistantInvestmentThesisCurrentPage;
+/// 采集当前标签页正文并运行「风险扫描」配方。
+- (void)openAIAssistantRiskScanCurrentPage;
+/// 采集当前标签页正文并运行「趋势框架」配方。
+- (void)openAIAssistantMarketTrendCurrentPage;
 /// 处理 meobrowser:// AI / 打开类 URL Scheme。
 - (BOOL)handleMeoBrowserURL:(NSURL *)url;
 /// 加入引用：打开助手侧栏，把 payload 加入输入区引用条（不自动发送）。

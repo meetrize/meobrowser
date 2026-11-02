@@ -7,6 +7,12 @@ NSString * const AIPageContextRecipeIDOutlinePage = @"outline-page";
 NSString * const AIPageContextRecipeIDExtractFacts = @"extract-facts";
 NSString * const AIPageContextRecipeIDRegexExtract = @"regex-extract";
 NSString * const AIPageContextRecipeIDBackgroundDig = @"background-dig";
+NSString * const AIPageContextRecipeIDInvestmentThesis = @"investment-thesis";
+NSString * const AIPageContextRecipeIDRiskScan = @"risk-scan";
+NSString * const AIPageContextRecipeIDMarketTrend = @"market-trend";
+
+static NSString * const kFinanceDisclaimer =
+    @"文末固定一行免责：以上为信息整理与逻辑推演，不构成投资建议。";
 
 @implementation AIPageContextRecipe
 
@@ -98,6 +104,82 @@ NSString * const AIPageContextRecipeIDBackgroundDig = @"background-dig";
                    @"回复必须以加粗的「核心研判」开头，再按标题输出报告；不要复述采集过程。"
                  layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
            maxArticleChars:32000],
+            [self makeId:AIPageContextRecipeIDInvestmentThesis
+                   title:@"投资研判"
+              userPrompt:[NSString stringWithFormat:
+                   @"请基于本页正文，输出一份简体中文《投资研判备忘》（偏股票/行业/金融产品视角）。\n"
+                   @"\n"
+                   @"先识别：标的或主题是什么、文章立场（多/空/中性/营销）、信息类型（研报/公告解读/自媒体/产品软文等）。\n"
+                   @"有搜索能力可先核实关键专有名词与事件；无搜索则用已有知识并标明局限。\n"
+                   @"\n"
+                   @"输出结构：\n"
+                   @"**核心结论**（开篇 1～2 句加粗：多空倾向与最关键依据，勿给目标价）\n"
+                   @"## 标的 / 主题定位\n"
+                   @"## 多方逻辑\n"
+                   @"## 空方 / 质疑逻辑\n"
+                   @"## 催化剂与时间窗\n"
+                   @"## 关键假设（哪些成立研判才成立）\n"
+                   @"## 风险与证伪条件\n"
+                   @"## 需核实清单（3～7 条数据或口径）\n"
+                   @"\n"
+                   @"规则：数字尽量保留文中原口径（同比/扣非/指引等）；文外补充标「文外补充」，不确定标「待核实」；"
+                   @"禁止假装精确预测点位；情景用「若…则…」。\n"
+                   @"%@",
+                   kFinanceDisclaimer]
+             systemHint:
+                   @"面向投研阅读助手：依据页面引用整理可讨论的多空框架，不是荐股。"
+                   @"必须以加粗核心结论开头；区分文中明示与文外推断；文末免责声明不可省略。"
+                 layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
+           maxArticleChars:32000],
+            [self makeId:AIPageContextRecipeIDRiskScan
+                   title:@"风险扫描"
+              userPrompt:[NSString stringWithFormat:
+                   @"请基于本页正文，做「风险与雷点扫描」，输出简体中文风险备忘（偏投资/金融产品语境）。\n"
+                   @"\n"
+                   @"重点查找：财务与现金流、治理与关联交易、监管与合规、流动性与质押、估值叙事泡沫、"
+                   @"产品条款陷阱（费率/杠杆/敲入敲出/底层暴露）、夸大宣传与未证实承诺。\n"
+                   @"对每条风险标注来源：文中明示 / 文外推断 / 待核实。\n"
+                   @"\n"
+                   @"输出结构：\n"
+                   @"**核心风险**（开篇 1～2 句加粗：最该警惕的 1～2 个点）\n"
+                   @"## 高优先级雷点\n"
+                   @"## 中低优先级关注\n"
+                   @"## 条款 / 口径陷阱（若有）\n"
+                   @"## 证据不足但仍需追问\n"
+                   @"## 建议优先核实的问题\n"
+                   @"\n"
+                   @"不要为凑章节硬写无关风险；没有明显雷点就如实写「文中未见显著雷点」并说明仍缺什么信息。\n"
+                   @"%@",
+                   kFinanceDisclaimer]
+             systemHint:
+                   @"专门找坑：优先列出可能造成本金或决策失误的风险，而非复述看多故事。"
+                   @"每条风险标明文中明示/文外推断/待核实；开篇加粗核心风险；文末免责不可省。"
+                 layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
+           maxArticleChars:32000],
+            [self makeId:AIPageContextRecipeIDMarketTrend
+                   title:@"趋势框架"
+              userPrompt:[NSString stringWithFormat:
+                   @"请基于本页正文，输出简体中文《趋势与行情框架》分析（宏观/行业/主题/个股皆可，按文中层次选）。\n"
+                   @"\n"
+                   @"先判断讨论层次（宏观、行业、主题、个股、产品），再组织驱动与情景，勿机械套模板。\n"
+                   @"\n"
+                   @"输出结构：\n"
+                   @"**核心判断**（开篇 1～2 句加粗：当前可能处于什么阶段、主驱动是什么）\n"
+                   @"## 主驱动拆解（基本面 / 资金 / 政策 / 情绪，按文取舍）\n"
+                   @"## 周期位置（若可判断；否则写不确定及原因）\n"
+                   @"## 关键节点（事件、数据、价位或政策窗口——仅文中出现或可合理推断）\n"
+                   @"## 情景推演（2～3 个：若…则…；禁止假装精确点位预测）\n"
+                   @"## 跟踪指标（3～6 个）\n"
+                   @"## 与旧叙事是否矛盾（若文中可判断）\n"
+                   @"\n"
+                   @"文外补充标「文外补充」，不确定标「待核实」。\n"
+                   @"%@",
+                   kFinanceDisclaimer]
+             systemHint:
+                   @"趋势框架助手：拆驱动、定层次、给情景，不给买卖指令。"
+                   @"开篇加粗核心判断；禁止伪装精确预测；文末免责不可省。"
+                 layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
+           maxArticleChars:32000],
             [self makeId:AIPageContextRecipeIDRegexExtract
                    title:@"按正则提取"
               userPrompt:@"请根据下面的正则（或规则）从引用内容中提取匹配项，列出全部命中并去重。\n正则：\n\n"
@@ -107,6 +189,24 @@ NSString * const AIPageContextRecipeIDBackgroundDig = @"background-dig";
         ];
     });
     return recipes;
+}
+
++ (BOOL)shouldAutoSendRecipeId:(NSString *)recipeId {
+    if (recipeId.length == 0) return NO;
+    static NSSet *ids;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        ids = [NSSet setWithArray:@[
+            AIPageContextRecipeIDSummarizePage,
+            AIPageContextRecipeIDBackgroundDig,
+            AIPageContextRecipeIDInvestmentThesis,
+            AIPageContextRecipeIDRiskScan,
+            AIPageContextRecipeIDMarketTrend,
+            AIPageContextRecipeIDOutlinePage,
+            AIPageContextRecipeIDExtractFacts,
+        ]];
+    });
+    return [ids containsObject:recipeId];
 }
 
 + (AIPageContextRecipe *)recipeFromDictionary:(NSDictionary *)dict {
