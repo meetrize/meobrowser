@@ -974,6 +974,12 @@ static NSString *MeoScrollToFragmentJS(void) {
     askPage.target = self;
     askPage.toolTip = @"采集正文并打开助手，自行补充问题后发送";
     [submenu addItem:askPage];
+    NSMenuItem *digPage = [[NSMenuItem alloc] initWithTitle:@"背景挖掘"
+                                                     action:@selector(meo_aiAssistantBackgroundDig:)
+                                              keyEquivalent:@""];
+    digPage.target = self;
+    digPage.toolTip = @"抽取文中关键实体，挖掘背景/行业/趋势/风险并生成研究报告";
+    [submenu addItem:digPage];
     [submenu addItem:[NSMenuItem separatorItem]];
     NSArray<NSDictionary *> *actions = @[
         @{@"title": @"直接问问", @"key": BrowserAIAssistantActionAsk},
@@ -1645,6 +1651,14 @@ static NSString *MeoScrollToFragmentJS(void) {
     id wc = self.window.windowController;
     if ([wc isKindOfClass:[BrowserWindowController class]]) {
         [(BrowserWindowController *)wc openAIAssistantAskCurrentPage];
+    }
+}
+
+- (void)meo_aiAssistantBackgroundDig:(id)sender {
+#pragma unused(sender)
+    id wc = self.window.windowController;
+    if ([wc isKindOfClass:[BrowserWindowController class]]) {
+        [(BrowserWindowController *)wc openAIAssistantBackgroundDigCurrentPage];
     }
 }
 

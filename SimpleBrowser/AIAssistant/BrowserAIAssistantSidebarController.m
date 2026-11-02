@@ -379,6 +379,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, strong) NSStackView *recipeButtonStack;
 @property (nonatomic, strong) NSButton *summarizePageButton;
 @property (nonatomic, strong) NSButton *askPageButton;
+@property (nonatomic, strong) NSButton *backgroundDigButton;
 @property (nonatomic, strong) NSButton *pageContextToggleButton;
 @property (nonatomic, strong) NSButton *pageContextAutoRecaptureCheckbox;
 @property (nonatomic, strong) NSButton *pageContextRecaptureButton;
@@ -837,7 +838,16 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     self.askPageButton.controlSize = NSControlSizeSmall;
     self.askPageButton.toolTip = @"采集正文并填入问答提示（不自动发送）";
 
-    self.recipeButtonStack = [NSStackView stackViewWithViews:@[self.summarizePageButton, self.askPageButton]];
+    self.backgroundDigButton = [NSButton buttonWithTitle:@"背景挖掘"
+                                                  target:self
+                                                  action:@selector(backgroundDigClicked:)];
+    self.backgroundDigButton.bezelStyle = NSBezelStyleRounded;
+    self.backgroundDigButton.controlSize = NSControlSizeSmall;
+    self.backgroundDigButton.toolTip = @"抽取文中关键实体，智能挖掘背景/行业/趋势/风险并生成研究报告";
+
+    self.recipeButtonStack = [NSStackView stackViewWithViews:@[
+        self.summarizePageButton, self.askPageButton, self.backgroundDigButton
+    ]];
     self.recipeButtonStack.translatesAutoresizingMaskIntoConstraints = NO;
     self.recipeButtonStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.recipeButtonStack.spacing = 6;
@@ -2241,7 +2251,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)runRecipeFromMenu:(NSMenuItem *)sender {
     NSString *rid = sender.representedObject;
     if (![rid isKindOfClass:[NSString class]]) return;
-    BOOL autoSend = [rid isEqualToString:AIPageContextRecipeIDSummarizePage];
+    BOOL autoSend = [rid isEqualToString:AIPageContextRecipeIDSummarizePage]
+        || [rid isEqualToString:AIPageContextRecipeIDBackgroundDig];
     [self presentPageRecipe:rid autoSend:autoSend];
 }
 
@@ -2459,7 +2470,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             [m replaceCharactersInRange:NSMakeRange(loc, len) withString:@""];
             self.inputView.string = m;
             self.suppressMention = NO;
-            BOOL autoSend = [oid isEqualToString:AIPageContextRecipeIDSummarizePage];
+            BOOL autoSend = [oid isEqualToString:AIPageContextRecipeIDSummarizePage]
+                || [oid isEqualToString:AIPageContextRecipeIDBackgroundDig];
             [self presentPageRecipe:oid autoSend:autoSend];
             return;
         }
@@ -2747,6 +2759,11 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self presentPageRecipe:AIPageContextRecipeIDAskPage autoSend:NO];
 }
 
+- (void)backgroundDigClicked:(id)sender {
+    (void)sender;
+    [self presentPageRecipe:AIPageContextRecipeIDBackgroundDig autoSend:YES];
+}
+
 - (BOOL)isPageContextCitationKind:(AIAssistantCitationKind)kind {
     switch (kind) {
         case AIAssistantCitationKindPageMeta:
@@ -2847,6 +2864,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (void)setPageContextButtonsEnabled:(BOOL)enabled {
     self.summarizePageButton.enabled = enabled;
     self.askPageButton.enabled = enabled;
+    self.backgroundDigButton.enabled = enabled;
     self.pageContextRecaptureButton.enabled = enabled && !self.pageContextCaptureInFlight;
     self.pageContextAutoRecaptureCheckbox.enabled = YES;
 }

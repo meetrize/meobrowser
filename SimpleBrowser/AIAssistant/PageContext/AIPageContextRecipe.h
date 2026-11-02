@@ -7,6 +7,7 @@ FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDAskPage;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDOutlinePage;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDExtractFacts;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDRegexExtract;
+FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDBackgroundDig;
 
 @interface AIPageContextRecipe : NSObject
 

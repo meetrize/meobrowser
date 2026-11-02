@@ -3148,6 +3148,15 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
 }
 
+- (void)openAIAssistantBackgroundDigCurrentPage {
+    [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
+    [self.aiAssistantSidebarController reloadUI];
+    [self.aiAssistantSidebarController presentPageRecipe:AIPageContextRecipeIDBackgroundDig autoSend:YES];
+    [self updateAIAssistantButtonAppearance];
+    [self updateAIBridgeButtonAppearance];
+    [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
+}
+
 - (WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller {
     (void)controller;
     BrowserTab *tab = self.tabController.selectedTab;
@@ -5468,6 +5477,10 @@ didRequestTransferTabID:(NSUUID *)tabID
         } else if ([action isEqualToString:@"regex"]) {
             recipeId = AIPageContextRecipeIDRegexExtract;
             autoSend = NO;
+        } else if ([action isEqualToString:@"background"] || [action isEqualToString:@"dig"]
+                   || [action isEqualToString:@"background-dig"]) {
+            recipeId = AIPageContextRecipeIDBackgroundDig;
+            autoSend = YES;
         } else if (q[@"recipe"].length) {
             recipeId = q[@"recipe"];
             autoSend = ![recipeId isEqualToString:AIPageContextRecipeIDAskPage];
