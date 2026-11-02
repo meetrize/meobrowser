@@ -23,6 +23,7 @@
 #import "BrowserDownloadManager.h"
 #import "SBTextView.h"
 #import "SBTextField.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static const NSUInteger kPageContextPromptBudget = 32000;
 static const CGFloat kPageContextPanelHeight = 210.0;
@@ -30,7 +31,8 @@ static const CGFloat kPageContextPanelHeight = 210.0;
 static const CGFloat kSidebarDefaultWidth = 400.0;
 static const CGFloat kSidebarMinWidth = 320.0;
 static const CGFloat kSidebarMaxWidthFraction = 0.80;
-static const CGFloat kRailWidth = 44.0;
+static const CGFloat kRailWidth = 30.0;
+static const CGFloat kRailButtonSize = 24.0;
 static const CGFloat kCitationChipRowHeight = 24.0;
 static const CGFloat kCitationChipSpacing = 4.0;
 static const CGFloat kCitationMaxVisibleRows = 3.0;
@@ -71,6 +73,17 @@ static NSArray<NSURL *> *MeoAIAssistantFileURLsFromPasteboard(NSPasteboard *pb) 
         }
     }
     return urls;
+}
+
+static NSImage *MeoIconForFilenameExtension(NSString *ext) {
+    if (ext.length == 0) return nil;
+    if (@available(macOS 11.0, *)) {
+        UTType *type = [UTType typeWithFilenameExtension:ext.lowercaseString];
+        if (type) {
+            return [[NSWorkspace sharedWorkspace] iconForContentType:type];
+        }
+    }
+    return nil;
 }
 
 /// 剪贴板是否含截图/图片（系统 ⌘⌃⇧4 多为 TIFF，纯文本 NSTextView 默认会因此禁用「粘贴」）
@@ -672,8 +685,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         b.contentTintColor = enabled ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
     }
     [NSLayoutConstraint activateConstraints:@[
-        [b.widthAnchor constraintEqualToConstant:32],
-        [b.heightAnchor constraintEqualToConstant:32],
+        [b.widthAnchor constraintEqualToConstant:kRailButtonSize],
+        [b.heightAnchor constraintEqualToConstant:kRailButtonSize],
     ]];
     return b;
 }
@@ -1051,7 +1064,6 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     inputBox.translatesAutoresizingMaskIntoConstraints = NO;
     inputBox.titlePosition = NSNoTitle;
     inputBox.boxType = NSBoxCustom;
-    inputBox.borderType = NSLineBorder;
     inputBox.borderWidth = 1.0;
     inputBox.cornerRadius = kInputCornerRadius;
     inputBox.contentViewMargins = NSZeroSize;
@@ -1689,8 +1701,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         chip.tag = idx;
         chip.toolTip = path.length ? path : name;
         NSImage *icon = path.length ? [[NSWorkspace sharedWorkspace] iconForFile:path] : nil;
-        if (!icon && name.pathExtension.length) {
-            icon = [[NSWorkspace sharedWorkspace] iconForFileType:name.pathExtension.lowercaseString];
+        if (!icon) {
+            icon = MeoIconForFilenameExtension(name.pathExtension);
         }
         if (icon) {
             icon = [icon copy];
@@ -3930,8 +3942,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 - (nullable NSString *)pngDataURLForFileIconAtPath:(NSString *)path {
     if (path.length == 0) return nil;
     NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:path];
-    if (!icon && path.pathExtension.length) {
-        icon = [[NSWorkspace sharedWorkspace] iconForFileType:path.pathExtension.lowercaseString];
+    if (!icon) {
+        icon = MeoIconForFilenameExtension(path.pathExtension);
     }
     if (!icon) return nil;
     NSInteger side = 64;
