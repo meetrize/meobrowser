@@ -408,19 +408,42 @@
 
 #pragma mark - Prompt build
 
++ (BOOL)messagesEndWithToolResult:(NSArray *)messages {
+    for (NSInteger i = (NSInteger)messages.count - 1; i >= 0; i--) {
+        id m = messages[(NSUInteger)i];
+        if (![m isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSString *role = ((NSDictionary *)m)[@"role"];
+        if ([role isEqualToString:@"tool"]) {
+            return YES;
+        }
+        if ([role isEqualToString:@"user"] || [role isEqualToString:@"assistant"]) {
+            return NO;
+        }
+    }
+    return NO;
+}
+
 + (NSString *)instructionBlockRequiringTools:(BOOL)require
-                              forcedFunction:(NSString *)forcedName {
+                              forcedFunction:(NSString *)forcedName
+                            afterToolResults:(BOOL)afterToolResults {
     // 尽量短：网页上下文昂贵；细则靠 tools schema + 最新任务。
     NSMutableString *s = [NSMutableString string];
     [s appendString:
      @"Coding agent. Output ONE JSON only (no markdown).\n"
      @"A:{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"N\",\"arguments\":{...}}]}\n"
-     @"B:{\"mode\":\"message\",\"content\":\"...\"}\n"
-     @"Escape \" as \\\" inside strings. Prefer print('...') in code snippets.\n"
+     @"B:{\"mode\":\"message\",\"content\":\"Done.\"}\n"
+     @"In JSON strings: escape \" as \\\", put real newlines as \\n (never raw line breaks). Prefer print('...').\n"
      @"Paths: project-relative (test/hello.py), never /Volumes/...\n"
      @"Example:{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"edit_file\",\"arguments\":{\"path\":\"test/hello.py\",\"edits\":[{\"old_text\":\"print('Hello, World!')\",\"new_text\":\"print('你好，世界！')\"}]}}]}\n"];
     if (require) {
         [s appendString:@"Must use mode=tool_calls.\n"];
+    } else if (afterToolResults) {
+        // 第二轮及以后：工具已跑完时优先收尾，避免再写一遍文件
+        [s appendString:
+         @"Tool results follow. If the task is already done: mode=message with ONE short plain sentence "
+         @"(no markdown, no ```, no code dump). Only mode=tool_calls if another tool is still needed.\n"];
     } else {
         [s appendString:@"File/code tasks => mode=tool_calls (not prose).\n"];
     }
@@ -428,6 +451,13 @@
         [s appendFormat:@"Must call \"%@\".\n", forcedName];
     }
     return s;
+}
+
++ (NSString *)instructionBlockRequiringTools:(BOOL)require
+                              forcedFunction:(NSString *)forcedName {
+    return [self instructionBlockRequiringTools:require
+                                  forcedFunction:forcedName
+                                afterToolResults:NO];
 }
 
 #pragma mark - Message filter / path rewrite
@@ -704,6 +734,55 @@
     return out;
 }
 
+/// 修复字符串内的裸换行/制表符（DeepSeek 写 mode=message 时常见），转成 \\n / \\r / \\t。
++ (NSString *)repairControlCharsInJSONStrings:(NSString *)input {
+    if (input.length == 0) {
+        return input;
+    }
+    NSMutableString *out = [NSMutableString stringWithCapacity:input.length + 32];
+    BOOL inString = NO;
+    BOOL escape = NO;
+    for (NSUInteger i = 0; i < input.length; i++) {
+        unichar c = [input characterAtIndex:i];
+        if (!inString) {
+            [out appendFormat:@"%C", c];
+            if (c == '"') {
+                inString = YES;
+            }
+            continue;
+        }
+        if (escape) {
+            [out appendFormat:@"%C", c];
+            escape = NO;
+            continue;
+        }
+        if (c == '\\') {
+            [out appendFormat:@"%C", c];
+            escape = YES;
+            continue;
+        }
+        if (c == '"') {
+            inString = NO;
+            [out appendFormat:@"%C", c];
+            continue;
+        }
+        if (c == '\n') {
+            [out appendString:@"\\n"];
+            continue;
+        }
+        if (c == '\r') {
+            [out appendString:@"\\r"];
+            continue;
+        }
+        if (c == '\t') {
+            [out appendString:@"\\t"];
+            continue;
+        }
+        [out appendFormat:@"%C", c];
+    }
+    return out;
+}
+
 + (nullable id)parseJSONObjectString:(NSString *)jsonStr error:(NSString **)outError {
     if (!jsonStr.length) {
         if (outError) *outError = @"empty json";
@@ -715,9 +794,18 @@
     if ([obj isKindOfClass:[NSDictionary class]] || [obj isKindOfClass:[NSArray class]]) {
         return obj;
     }
-    NSString *repaired = [self repairUnescapedQuotesInJSON:jsonStr];
-    if (![repaired isEqualToString:jsonStr]) {
-        NSData *d2 = [repaired dataUsingEncoding:NSUTF8StringEncoding];
+    // 先修裸换行，再修未转义引号（第二轮 mode=message 常见）
+    NSArray *candidates = @[
+        [self repairControlCharsInJSONStrings:jsonStr],
+        [self repairUnescapedQuotesInJSON:jsonStr],
+        [self repairUnescapedQuotesInJSON:[self repairControlCharsInJSONStrings:jsonStr]],
+        [self repairControlCharsInJSONStrings:[self repairUnescapedQuotesInJSON:jsonStr]],
+    ];
+    for (NSString *candidate in candidates) {
+        if ([candidate isEqualToString:jsonStr]) {
+            continue;
+        }
+        NSData *d2 = [candidate dataUsingEncoding:NSUTF8StringEncoding];
         obj = [NSJSONSerialization JSONObjectWithData:d2 options:0 error:&err];
         if ([obj isKindOfClass:[NSDictionary class]] || [obj isKindOfClass:[NSArray class]]) {
             return obj;
@@ -849,9 +937,6 @@
     NSString *forced = [self forcedFunctionNameFromRequest:json];
     NSUInteger budget = [self maxPromptChars];
 
-    NSString *instructions = [self instructionBlockRequiringTools:require forcedFunction:forced];
-    NSString *footer = @"\n\n## Reply\nONE JSON now. Escape \\\". Relative paths only.\n";
-
     id rawTools = json[@"tools"];
     NSArray *toolArr = [rawTools isKindOfClass:[NSArray class]] ? (NSArray *)rawTools : @[];
     id messages = json[@"messages"];
@@ -860,6 +945,13 @@
     // 先抽 roots，再合成极短 system（丢弃 IDE 长 system）
     NSArray<NSString *> *roots = [self projectRootsFromRequest:json];
     NSArray *msgArr = [self filterMessagesForAgent:rawMsgs roots:roots];
+    BOOL afterTools = [self messagesEndWithToolResult:msgArr];
+    NSString *instructions = [self instructionBlockRequiringTools:require
+                                                   forcedFunction:forced
+                                                 afterToolResults:afterTools];
+    NSString *footer = afterTools
+        ? @"\n\n## Reply\nONE JSON. If done: {\"mode\":\"message\",\"content\":\"...\"} with \\n escapes, no markdown.\n"
+        : @"\n\n## Reply\nONE JSON now. Escape \\\". Relative paths only.\n";
 
     // tools 硬顶：给代码附件留额度（网页上下文紧）
     const NSUInteger kToolsHardCap = 3500;
@@ -948,34 +1040,56 @@
                               previousText:(NSString *)previousText {
     BOOL require = [self requiresToolCallsForRequest:json];
     NSString *forced = [self forcedFunctionNameFromRequest:json];
+    id messages = json[@"messages"];
+    NSArray *rawMsgs = [messages isKindOfClass:[NSArray class]] ? (NSArray *)messages : @[];
+    BOOL afterTools = [self messagesEndWithToolResult:rawMsgs];
+    NSString *prev = previousText ?: @"";
+    BOOL prevLooksMessage =
+        [prev rangeOfString:@"\"mode\":\"message\""].location != NSNotFound
+        || [prev rangeOfString:@"\"mode\": \"message\""].location != NSNotFound;
+
     NSMutableString *prompt = [NSMutableString string];
     [prompt appendString:
-     @"Your previous reply was NOT valid JSON (often because \" inside strings was not escaped as \\\"). "
+     @"Your previous reply was NOT valid JSON "
+     @"(often raw newlines inside strings, or \" not escaped as \\\"). "
      @"Reply again with ONLY one valid JSON object. No markdown.\n"
-     @"上一轮 JSON 非法（常见原因：字符串里的 \" 未写成 \\\"）。请只输出一个合法 JSON。\n\n"
-     @"VALID:\n"
-     @"{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"edit_file\",\"arguments\":{\"path\":\"test/hello.py\",\"edits\":[{\"old_text\":\"print(\\\"Hello, World!\\\")\",\"new_text\":\"print(\\\"你好，世界！\\\")\"}]}}]}\n\n"];
-    [prompt appendString:[self instructionBlockRequiringTools:require forcedFunction:forced]];
+     @"上一轮 JSON 非法（常见：字符串里直接换行，或 \" 未写成 \\\"）。请只输出一个合法 JSON。\n\n"];
+    if (prevLooksMessage && !require) {
+        // 上一轮其实是在收尾，不要用 tool_calls 示例把模型带回写文件
+        [prompt appendString:
+         @"You were close: use mode=message. Put newlines as \\n. Example:\n"
+         @"{\"mode\":\"message\",\"content\":\"Done. Updated test/hello.py.\"}\n"
+         @"Do NOT call write_file/edit_file again unless a tool is still needed.\n\n"];
+    } else {
+        [prompt appendString:
+         @"VALID tool_calls:\n"
+         @"{\"mode\":\"tool_calls\",\"tool_calls\":[{\"name\":\"edit_file\",\"arguments\":{\"path\":\"test/hello.py\",\"edits\":[{\"old_text\":\"print('Hello')\",\"new_text\":\"print('你好')\"}]}}]}\n"
+         @"VALID message:\n"
+         @"{\"mode\":\"message\",\"content\":\"Done.\"}\n\n"];
+    }
+    [prompt appendString:[self instructionBlockRequiringTools:require
+                                                forcedFunction:forced
+                                              afterToolResults:afterTools || prevLooksMessage]];
     NSArray *names = [self allowedToolNamesFromRequest:json];
     [prompt appendFormat:@"Allowed tool names: %@\n\n", [self jsonString:names pretty:NO]];
-    // 带上最新用户任务，避免 repair 轮丢掉上下文
-    id messages = json[@"messages"];
-    if ([messages isKindOfClass:[NSArray class]]) {
-        for (NSInteger i = (NSInteger)((NSArray *)messages).count - 1; i >= 0; i--) {
-            id m = ((NSArray *)messages)[(NSUInteger)i];
+    // 收尾 repair：只给极短任务摘要，避免再贴整份文件诱发重复 write
+    if (!(prevLooksMessage && afterTools && !require)) {
+        for (NSInteger i = (NSInteger)rawMsgs.count - 1; i >= 0; i--) {
+            id m = rawMsgs[(NSUInteger)i];
             if ([m isKindOfClass:[NSDictionary class]] && [m[@"role"] isEqualToString:@"user"]) {
                 NSString *u = [self stringifyContent:m[@"content"]];
-                if (u.length > 2500) {
-                    u = [[u substringToIndex:2500] stringByAppendingString:@"…"];
+                if (u.length > 800) {
+                    u = [[u substringToIndex:800] stringByAppendingString:@"…"];
                 }
                 [prompt appendFormat:@"Latest user task:\n%@\n\n", u];
                 break;
             }
         }
+    } else {
+        [prompt appendString:@"Context: prior tool call already succeeded; finish with mode=message.\n\n"];
     }
-    NSString *prev = previousText ?: @"";
-    if (prev.length > 2500) {
-        prev = [[prev substringToIndex:2500] stringByAppendingString:@"…"];
+    if (prev.length > 1200) {
+        prev = [[prev substringToIndex:1200] stringByAppendingString:@"…"];
     }
     [prompt appendString:@"Previous invalid reply:\n"];
     [prompt appendString:prev];

@@ -154,6 +154,44 @@ int main(int argc, const char *argv[]) {
             expect(r.kind == AIBridgeToolSimKindToolCalls, "openai-ish kind");
         }
 
+        // mode=message with raw newlines / markdown fences (post-tool completion) must parse
+        {
+            NSString *text =
+                @"{\"mode\":\"message\",\"content\":\"已完成。`test/hello.py` 输出宋词：\n\n"
+                @"```py\nprint('十年生死两茫茫，')\nprint('不思量，自难忘。')\n```\"}";
+            AIBridgeToolSimResult *r = [AIBridgeToolSimulator parseWebpageText:text forRequest:req];
+            expect(r.parseError.length == 0, "message with raw newlines repaired");
+            expect(r.kind == AIBridgeToolSimKindMessage, "repaired message kind");
+            expect([r.content containsString:@"十年生死"], "message content kept");
+        }
+
+        // After tool results, prompt should nudge mode=message finish (not re-edit)
+        {
+            NSDictionary *afterTool = @{
+                @"tools": @[
+                    @{@"type": @"function", @"function": @{@"name": @"write_file", @"parameters": @{}}}
+                ],
+                @"messages": @[
+                    @{@"role": @"user", @"content": @"改 hello.py"},
+                    @{@"role": @"assistant", @"tool_calls": @[
+                         @{@"id": @"call_1", @"function": @{@"name": @"write_file", @"arguments": @"{\"path\":\"test/hello.py\"}"}}
+                     ]},
+                    @{@"role": @"tool", @"tool_call_id": @"call_1", @"content": @"Edited test/hello.py successfully"}
+                ]
+            };
+            NSString *p = [AIBridgeToolSimulator buildWebpagePromptFromRequest:afterTool];
+            expect([p containsString:@"If the task is already done"], "post-tool finish hint");
+            expect([p containsString:@"mode=message"], "post-tool prefers message");
+            NSString *repair = [AIBridgeToolSimulator buildRepairPromptFromRequest:afterTool
+                                                                     previousText:
+                @"{\"mode\":\"message\",\"content\":\"已完成。\n代码如下：\n```py\nx\n```\"}"];
+            expect([p containsString:@"Edited test/hello.py"] || [p containsString:@"successfully"],
+                   "tool result in messages");
+            expect([repair containsString:@"mode=message"], "repair nudges message after tool");
+            expect(![repair containsString:@"Latest user task"], "repair skips re-pasting task when finishing");
+            expect([repair containsString:@"already succeeded"], "repair notes prior success");
+        }
+
         // Unescaped quotes in LLM JSON must still parse (edit_file case)
         {
             NSString *broken =
