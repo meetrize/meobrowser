@@ -11,6 +11,7 @@ FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDBackgroundDig;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDInvestmentThesis;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDRiskScan;
 FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDMarketTrend;
+FOUNDATION_EXPORT NSString * const AIPageContextRecipeIDVentureDeepDive;
 
 @interface AIPageContextRecipe : NSObject
 

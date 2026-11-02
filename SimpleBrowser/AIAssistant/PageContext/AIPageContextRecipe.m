@@ -10,6 +10,7 @@ NSString * const AIPageContextRecipeIDBackgroundDig = @"background-dig";
 NSString * const AIPageContextRecipeIDInvestmentThesis = @"investment-thesis";
 NSString * const AIPageContextRecipeIDRiskScan = @"risk-scan";
 NSString * const AIPageContextRecipeIDMarketTrend = @"market-trend";
+NSString * const AIPageContextRecipeIDVentureDeepDive = @"venture-deep-dive";
 
 static NSString * const kFinanceDisclaimer =
     @"文末固定一行免责：以上为信息整理与逻辑推演，不构成投资建议。";
@@ -44,6 +45,9 @@ static NSString * const kFinanceDisclaimer =
     } else if ([rid isEqualToString:AIPageContextRecipeIDMarketTrend]) {
         r.showInSidebar = YES;
         r.sortOrder = 60;
+    } else if ([rid isEqualToString:AIPageContextRecipeIDVentureDeepDive]) {
+        r.showInSidebar = YES;
+        r.sortOrder = 70;
     } else if ([rid isEqualToString:AIPageContextRecipeIDOutlinePage]) {
         r.sortOrder = 100;
     } else if ([rid isEqualToString:AIPageContextRecipeIDExtractFacts]) {
@@ -219,6 +223,46 @@ static NSString * const kFinanceDisclaimer =
                    @"开篇加粗核心判断；禁止伪装精确预测；文末免责不可省。"
                  layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
            maxArticleChars:32000],
+            [self makeId:AIPageContextRecipeIDVentureDeepDive
+                   title:@"创投研报"
+              userPrompt:[NSString stringWithFormat:
+                   @"请基于本页正文，对企业/产品/行业做创投视角的综合研判，输出详尽简体中文《企业与产品未来研报》。\n"
+                   @"\n"
+                   @"【检索要求】若具备联网或搜索能力：先识别文中的公司、产品、赛道与关键竞品，检索最新公开资讯"
+                   @"（融资、财报/经营数据、政策、竞品动态、市场规模报告摘要），再写报告；"
+                   @"检索要点请在「信息来源与检索清单」中列出。若无搜索能力，用已有知识补充并标明局限与时效风险。\n"
+                   @"\n"
+                   @"【方法（综合运用，勿只堆概念）】\n"
+                   @"1) TAM / SAM / SOM：定义口径、数量级、假设与漏斗；标「文中数据 / 文外估算 / 待核实」；\n"
+                   @"2) 波士顿矩阵（BCG）：明星/现金牛/问题/瘦狗——说明落点依据（相对份额×市场增速，可用定性近似）；\n"
+                   @"3) 安索夫矩阵：现有/新市场 × 现有/新产品，判断当前打法与下一招增长路径；\n"
+                   @"4) 吸引力–竞争力矩阵（或 GE/麦肯锡九宫格思想）：行业吸引力维度 vs 企业相对竞争力维度，给出象限建议；\n"
+                   @"5) 可补充：价值链/护城河、竞争格局、单位经济（若信息不足则写「缺什么数据」）。\n"
+                   @"矩阵结论必须互相印证或指出冲突，禁止空谈框架名而无判断。\n"
+                   @"\n"
+                   @"【输出结构】\n"
+                   @"**核心研判**（开篇 2～3 句加粗：企业/产品一句话定位 + 最关键的未来判断）\n"
+                   @"## 标的画像（公司/产品/赛道）\n"
+                   @"## 行业与趋势（驱动力、周期、政策与技术变量）\n"
+                   @"## 市场规模：TAM / SAM / SOM\n"
+                   @"## BCG 矩阵研判\n"
+                   @"## 安索夫增长路径\n"
+                   @"## 吸引力–竞争力定位\n"
+                   @"## 竞争与护城河\n"
+                   @"## 未来情景（乐观 / 基准 / 悲观，各用「若…则…」）\n"
+                   @"## 关键风险与证伪条件\n"
+                   @"## 创投视角结论（值得跟踪的信号；非投资建议）\n"
+                   @"## 信息来源与检索清单（关键词/问题；文外补充须标注）\n"
+                   @"\n"
+                   @"规则：正文优先；数字保留口径；不编造精确财报；不给目标价或买卖指令。\n"
+                   @"%@",
+                   kFinanceDisclaimer]
+             systemHint:
+                   @"你是创投/战略分析助手：综合 TAM-SAM-SOM、BCG、安索夫、吸引力-竞争力等框架，"
+                   @"对企业与产品做结构化未来研判。有搜索则先检索再写；框架必须落到结论。"
+                   @"开篇加粗核心研判；文外知识标「文外补充」或「待核实」；文末免责不可省。"
+                 layers:@[ AIPageContextLayerMeta, AIPageContextLayerArticle ]
+           maxArticleChars:40000],
             [self makeId:AIPageContextRecipeIDRegexExtract
                    title:@"按正则提取"
               userPrompt:@"请根据下面的正则（或规则）从引用内容中提取匹配项，列出全部命中并去重。\n正则：\n\n"

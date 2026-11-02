@@ -5501,6 +5501,10 @@ didRequestTransferTabID:(NSUUID *)tabID
         } else if ([action isEqualToString:@"trend"] || [action isEqualToString:@"market-trend"]) {
             recipeId = AIPageContextRecipeIDMarketTrend;
             autoSend = YES;
+        } else if ([action isEqualToString:@"venture"] || [action isEqualToString:@"venture-deep-dive"]
+                   || [action isEqualToString:@"deep-dive"]) {
+            recipeId = AIPageContextRecipeIDVentureDeepDive;
+            autoSend = YES;
         } else if (q[@"recipe"].length) {
             recipeId = q[@"recipe"];
         }
