@@ -73,11 +73,16 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
 @property (nonatomic, strong) NSView *statusDot;
 @property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSTextField *urlLabel;
+@property (nonatomic, strong) NSTextField *baseURLCaption;
+@property (nonatomic, strong) SBTextField *baseURLField;
+@property (nonatomic, strong) NSButton *baseURLCopyButton;
 @property (nonatomic, strong) NSButton *autoStartCheckbox;
 @property (nonatomic, strong) SBTextField *tokenField;
 @property (nonatomic, strong) NSPopUpButton *providerPopup;
 @property (nonatomic, strong) NSTextField *bindLabel;
+@property (nonatomic, strong) NSTextField *modelCaption;
+@property (nonatomic, strong) SBTextField *modelIdField;
+@property (nonatomic, strong) NSButton *modelCopyButton;
 @property (nonatomic, strong) NSTextField *bindingsSummaryLabel;
 @property (nonatomic, strong) NSTextView *logView;
 
@@ -200,10 +205,23 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.statusLabel.font = [NSFont systemFontOfSize:12];
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
 
-    self.urlLabel = [NSTextField labelWithString:@"http://127.0.0.1:3921"];
-    self.urlLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.urlLabel.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
-    self.urlLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.baseURLCaption = [NSTextField labelWithString:@"Base URL（含 /v1，点字段或按钮复制）"];
+    self.baseURLCaption.translatesAutoresizingMaskIntoConstraints = NO;
+    self.baseURLCaption.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.baseURLCaption.textColor = NSColor.secondaryLabelColor;
+
+    self.baseURLField = [SBTextField standardField];
+    self.baseURLField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.baseURLField.editable = NO;
+    self.baseURLField.selectable = YES;
+    self.baseURLField.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
+    self.baseURLField.stringValue = @"http://127.0.0.1:3921/v1";
+    self.baseURLField.toolTip = @"点击复制带 /v1 的 Base URL";
+
+    self.baseURLCopyButton = [NSButton buttonWithTitle:@"复制 Base URL" target:self action:@selector(copyBaseURL:)];
+    self.baseURLCopyButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.baseURLCopyButton.bezelStyle = NSBezelStyleRounded;
+    self.baseURLCopyButton.toolTip = @"复制 http://127.0.0.1:端口/v1";
 
     self.startStopButton = [NSButton buttonWithTitle:@"启动服务" target:self action:@selector(toggleServer:)];
     self.startStopButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -268,6 +286,24 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.bindLabel.font = [NSFont systemFontOfSize:11];
     self.bindLabel.textColor = NSColor.secondaryLabelColor;
 
+    self.modelCaption = [NSTextField labelWithString:@"Model ID（IDE 填这个，点字段或按钮复制）"];
+    self.modelCaption.translatesAutoresizingMaskIntoConstraints = NO;
+    self.modelCaption.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.modelCaption.textColor = NSColor.secondaryLabelColor;
+
+    self.modelIdField = [SBTextField standardField];
+    self.modelIdField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.modelIdField.editable = NO;
+    self.modelIdField.selectable = YES;
+    self.modelIdField.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightSemibold];
+    self.modelIdField.stringValue = @"未绑定";
+    self.modelIdField.toolTip = @"点击复制完整 modelId（如 bridge__deepseek__bc84ad）";
+
+    self.modelCopyButton = [NSButton buttonWithTitle:@"复制 Model" target:self action:@selector(copyModelId:)];
+    self.modelCopyButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.modelCopyButton.bezelStyle = NSBezelStyleRounded;
+    self.modelCopyButton.enabled = NO;
+
     self.bindingsSummaryLabel = [NSTextField wrappingLabelWithString:@"已绑定：无"];
     self.bindingsSummaryLabel.translatesAutoresizingMaskIntoConstraints = NO;
     self.bindingsSummaryLabel.font = [NSFont systemFontOfSize:11];
@@ -280,10 +316,6 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     NSButton *cancelBtn = [NSButton buttonWithTitle:@"取消任务" target:self action:@selector(cancelClicked:)];
     cancelBtn.translatesAutoresizingMaskIntoConstraints = NO;
     cancelBtn.bezelStyle = NSBezelStyleRounded;
-
-    NSButton *copyURL = [NSButton buttonWithTitle:@"复制 Base URL" target:self action:@selector(copyBaseURL:)];
-    copyURL.translatesAutoresizingMaskIntoConstraints = NO;
-    copyURL.bezelStyle = NSBezelStyleRounded;
 
     NSButton *copyCurl = [NSButton buttonWithTitle:@"复制 curl 示例" target:self action:@selector(copyCurl:)];
     copyCurl.translatesAutoresizingMaskIntoConstraints = NO;
@@ -353,18 +385,29 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     hint.textColor = NSColor.tertiaryLabelColor;
 
     NSArray *subs = @[
-        title, close, self.statusDot, self.statusLabel, self.urlLabel,
+        title, close, self.statusDot, self.statusLabel,
+        self.baseURLCaption, self.baseURLField, self.baseURLCopyButton,
         self.startStopButton, self.autoStartCheckbox,
         tokenCaption, self.tokenField, copyToken, regen,
         bindCaption, self.providerPopup, bindBtn, unbindBtn, unbindAllBtn, probeBtn,
-        self.bindLabel, self.bindingsSummaryLabel,
-        newChatBtn, cancelBtn, copyURL, copyCurl,
+        self.bindLabel,
+        self.modelCaption, self.modelIdField, self.modelCopyButton,
+        self.bindingsSummaryLabel,
+        newChatBtn, cancelBtn, copyCurl,
         testCaption, testHint, promptScroll, self.testSendButton, self.testStatusLabel, resultScroll,
         logCaption, logScroll, hint
     ];
     for (NSView *v in subs) {
         [content addSubview:v];
     }
+
+    // 字段点击复制
+    NSClickGestureRecognizer *urlClick =
+        [[NSClickGestureRecognizer alloc] initWithTarget:self action:@selector(copyBaseURL:)];
+    [self.baseURLField addGestureRecognizer:urlClick];
+    NSClickGestureRecognizer *modelClick =
+        [[NSClickGestureRecognizer alloc] initWithTarget:self action:@selector(copyModelId:)];
+    [self.modelIdField addGestureRecognizer:modelClick];
 
     [NSLayoutConstraint activateConstraints:@[
         [title.topAnchor constraintEqualToAnchor:content.topAnchor constant:12],
@@ -381,11 +424,19 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [self.statusLabel.leadingAnchor constraintEqualToAnchor:self.statusDot.trailingAnchor constant:8],
         [self.statusLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
-        [self.urlLabel.topAnchor constraintEqualToAnchor:self.statusDot.bottomAnchor constant:8],
-        [self.urlLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
-        [self.urlLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
+        [self.baseURLCaption.topAnchor constraintEqualToAnchor:self.statusDot.bottomAnchor constant:12],
+        [self.baseURLCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.baseURLCaption.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
-        [self.startStopButton.topAnchor constraintEqualToAnchor:self.urlLabel.bottomAnchor constant:8],
+        [self.baseURLField.topAnchor constraintEqualToAnchor:self.baseURLCaption.bottomAnchor constant:4],
+        [self.baseURLField.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.baseURLField.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
+        [self.baseURLField.heightAnchor constraintEqualToConstant:24],
+
+        [self.baseURLCopyButton.topAnchor constraintEqualToAnchor:self.baseURLField.bottomAnchor constant:6],
+        [self.baseURLCopyButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+
+        [self.startStopButton.topAnchor constraintEqualToAnchor:self.baseURLCopyButton.bottomAnchor constant:10],
         [self.startStopButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
 
         [self.autoStartCheckbox.centerYAnchor constraintEqualToAnchor:self.startStopButton.centerYAnchor],
@@ -426,7 +477,19 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [self.bindLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
         [self.bindLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
-        [self.bindingsSummaryLabel.topAnchor constraintEqualToAnchor:self.bindLabel.bottomAnchor constant:6],
+        [self.modelCaption.topAnchor constraintEqualToAnchor:self.bindLabel.bottomAnchor constant:10],
+        [self.modelCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.modelCaption.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
+
+        [self.modelIdField.topAnchor constraintEqualToAnchor:self.modelCaption.bottomAnchor constant:4],
+        [self.modelIdField.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [self.modelIdField.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
+        [self.modelIdField.heightAnchor constraintEqualToConstant:26],
+
+        [self.modelCopyButton.topAnchor constraintEqualToAnchor:self.modelIdField.bottomAnchor constant:6],
+        [self.modelCopyButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+
+        [self.bindingsSummaryLabel.topAnchor constraintEqualToAnchor:self.modelCopyButton.bottomAnchor constant:10],
         [self.bindingsSummaryLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
         [self.bindingsSummaryLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-14],
 
@@ -435,12 +498,10 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         [cancelBtn.centerYAnchor constraintEqualToAnchor:newChatBtn.centerYAnchor],
         [cancelBtn.leadingAnchor constraintEqualToAnchor:newChatBtn.trailingAnchor constant:8],
 
-        [copyURL.topAnchor constraintEqualToAnchor:newChatBtn.bottomAnchor constant:8],
-        [copyURL.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
-        [copyCurl.centerYAnchor constraintEqualToAnchor:copyURL.centerYAnchor],
-        [copyCurl.leadingAnchor constraintEqualToAnchor:copyURL.trailingAnchor constant:8],
+        [copyCurl.topAnchor constraintEqualToAnchor:newChatBtn.bottomAnchor constant:8],
+        [copyCurl.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
 
-        [testCaption.topAnchor constraintEqualToAnchor:copyURL.bottomAnchor constant:16],
+        [testCaption.topAnchor constraintEqualToAnchor:copyCurl.bottomAnchor constant:16],
         [testCaption.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
         [testHint.topAnchor constraintEqualToAnchor:testCaption.bottomAnchor constant:2],
         [testHint.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
@@ -587,7 +648,8 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.statusDot.layer.backgroundColor = (listening
                                             ? NSColor.systemGreenColor
                                             : NSColor.systemRedColor).CGColor;
-    self.urlLabel.stringValue = svc.baseURLString;
+    NSString *baseV1 = [NSString stringWithFormat:@"%@/v1", svc.baseURLString ?: @"http://127.0.0.1:3921"];
+    self.baseURLField.stringValue = baseV1;
     self.tokenField.stringValue = prefs.bearerToken ?: @"";
     self.startStopButton.title = listening ? @"停止服务" : @"启动服务";
     self.autoStartCheckbox.state = prefs.autoStartWithBrowser ? NSControlStateValueOn : NSControlStateValueOff;
@@ -596,15 +658,26 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
     NSString *pid = [self selectedProviderId];
     NSUInteger nPid = [self liveBindingCountForProviderId:pid];
+    NSString *modelId = nil;
     if (nPid > 0) {
         AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:pid];
+        modelId = b.modelId;
         self.bindLabel.stringValue = [NSString stringWithFormat:
-            @"该平台 ● %lu 个绑定（最新 %@）\n主路径请用 AI 助手新建会话自动绑定；此处为高级手动绑定。",
-            (unsigned long)nPid, b.modelId ?: @""];
+            @"该平台 ● %lu 个绑定。主路径请用 AI 助手「＋」新建会话自动绑定；此处为高级手动绑定。",
+            (unsigned long)nPid];
         self.bindLabel.textColor = NSColor.systemGreenColor;
     } else {
         self.bindLabel.stringValue = @"该平台 ○ 无绑定。推荐在 AI 助手点「＋」新建会话自动开页绑定。";
         self.bindLabel.textColor = NSColor.secondaryLabelColor;
+    }
+    if (modelId.length) {
+        self.modelIdField.stringValue = modelId;
+        self.modelIdField.textColor = NSColor.labelColor;
+        self.modelCopyButton.enabled = YES;
+    } else {
+        self.modelIdField.stringValue = @"未绑定 — 绑定后显示 bridge__…";
+        self.modelIdField.textColor = NSColor.tertiaryLabelColor;
+        self.modelCopyButton.enabled = NO;
     }
 
     NSArray<AIBridgeBinding *> *all = AIBridgeRegistry.sharedRegistry.allBindings;
@@ -796,11 +869,44 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     [pb setString:curl forType:NSPasteboardTypeString];
 }
 
+- (NSString *)baseURLWithV1 {
+    NSString *base = AIBridgeService.sharedService.baseURLString ?: @"http://127.0.0.1:3921";
+    if ([base hasSuffix:@"/v1"] || [base hasSuffix:@"/v1/"]) {
+        return base;
+    }
+    return [base stringByAppendingString:@"/v1"];
+}
+
+- (void)flashCopyButton:(NSButton *)button doneTitle:(NSString *)doneTitle {
+    if (![button isKindOfClass:[NSButton class]]) return;
+    NSString *prev = button.title;
+    button.title = doneTitle.length ? doneTitle : @"已复制";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if ([button.title isEqualToString:doneTitle] || [button.title isEqualToString:@"已复制"]) {
+            button.title = prev;
+        }
+    });
+}
+
 - (void)copyBaseURL:(id)sender {
     (void)sender;
+    NSString *url = [self baseURLWithV1];
     NSPasteboard *pb = NSPasteboard.generalPasteboard;
     [pb clearContents];
-    [pb setString:AIBridgeService.sharedService.baseURLString forType:NSPasteboardTypeString];
+    [pb setString:url forType:NSPasteboardTypeString];
+    [self flashCopyButton:self.baseURLCopyButton doneTitle:@"已复制 /v1"];
+}
+
+- (void)copyModelId:(id)sender {
+    (void)sender;
+    NSString *mid = self.modelIdField.stringValue ?: @"";
+    if (!mid.length || [mid hasPrefix:@"未绑定"]) {
+        return;
+    }
+    NSPasteboard *pb = NSPasteboard.generalPasteboard;
+    [pb clearContents];
+    [pb setString:mid forType:NSPasteboardTypeString];
+    [self flashCopyButton:self.modelCopyButton doneTitle:@"已复制"];
 }
 
 - (void)newChatClicked:(id)sender {
