@@ -141,6 +141,10 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
 }
 
 - (BrowserTab *)addTabWithURL:(NSURL *)url {
+    return [self addTabWithURL:url select:YES];
+}
+
+- (BrowserTab *)addTabWithURL:(NSURL *)url select:(BOOL)select {
     BrowserTab *tab = [BrowserTab tabWithConfiguration:self.configuration];
     url = [BrowserWebView publicURLFromInternalURL:url] ?: url;
     // 只占位，不在此处 load：等 refreshTabsUI 挂上 navigationDelegate 后再加载。
@@ -153,7 +157,12 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
         tab.title = url.host.length > 0 ? url.host : (url.absoluteString.length > 0 ? url.absoluteString : @"新标签页");
     }
     [self.mutableTabs addObject:tab];
-    [self selectTabInternal:tab notify:YES];
+    if (select) {
+        [self selectTabInternal:tab notify:YES];
+    } else {
+        // 后台插入：仍通知 UI 刷新标签条，但不切换选中。
+        [self notifyChange];
+    }
     return tab;
 }
 

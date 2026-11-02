@@ -46,6 +46,12 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
 - (nullable AIBridgeBinding *)resolveBindingForModelId:(NSString *)modelId
                                                  error:(NSError *_Nullable *_Nullable)error;
 
+/// 等待已绑定 model 的网页文档域名 + 对话输入框就绪（冷启动自动发送前调用）。
+/// completion 在主线程回调。
+- (void)waitUntilModelPageReady:(NSString *)modelId
+                        timeout:(NSTimeInterval)timeout
+                     completion:(void (^)(BOOL ok, NSString *_Nullable errorDetail))completion;
+
 - (NSString *)baseURLString;
 - (NSString *)curlExampleForModel:(NSString *)modelId;
 

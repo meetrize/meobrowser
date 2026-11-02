@@ -6,9 +6,12 @@
 #import "AIBridgeDOMProvider.h"
 #import "AIBridgeUpstreamClient.h"
 #import "AIBridgeToolSimulator.h"
+#import "AIBridgeSidebarController.h"
 #import "BrowserTab.h"
 #import "BrowserWebView.h"
+#import "BrowserWindowController.h"
 #import <WebKit/WebKit.h>
+#import <AppKit/AppKit.h>
 
 NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeServiceStateDidChangeNotification";
 
@@ -456,6 +459,11 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
 
+    if ([pathOnly isEqualToString:@"/v1/bridge/bind"] && [method isEqualToString:@"POST"]) {
+        [self handleBindProvider:body respond:respond];
+        return;
+    }
+
     [self respondJSON:respond status:404 object:@{@"error": @{@"message": @"not found", @"type": @"invalid_request"}}];
 }
 
@@ -797,89 +805,70 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         }];
         return;
     }
-    [binding.tab wakeFromHibernationIfNeeded];
-    if (binding.tab.pendingRestorableLoad) {
-        [binding.tab loadPendingRestorableURLIfNeeded];
-    }
-    WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
-    if (!wv) {
-        [self respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable", @"type": @"bridge_error"}}];
-        return;
-    }
-
-    NSURL *liveURL = [self resolvedURLForTab:binding.tab fallback:nil];
-    NSString *liveHost = liveURL.host ?: @"";
-    NSString *liveAbs = liveURL.absoluteString ?: @"";
-    BOOL pageBlank = liveAbs.length == 0 || [liveAbs isEqualToString:@"about:blank"];
-    if (pageBlank) {
-        NSString *msg = @"绑定标签页面尚未加载（about:blank）。请先切换到该标签激活一次，再重试。";
-        [self appendLogModel:model status:503 duration:0 detail:msg];
-        [self respondJSON:respond status:503 object:@{@"error": @{@"message": msg, @"type": @"bridge_error"}}];
-        return;
-    }
-    if (![self host:liveHost matchesProviderId:providerId]) {
-        NSString *msg = [self hostMismatchMessageForProviderId:providerId actualHost:liveHost];
-        [self appendLogModel:model status:409 duration:0 detail:msg];
-        [self respondJSON:respond status:409 object:@{
-            @"error": @{
-                @"message": msg,
-                @"type": @"host_mismatch",
-                @"host": liveHost ?: @"",
-                @"url": liveAbs ?: @"",
-                @"provider": providerId ?: @""
-            }
-        }];
-        return;
-    }
-    // 刷新绑定摘要，便于侧栏/health 看到真实 URL
-    binding.pageURL = liveAbs;
-    binding.tabTitle = binding.tab.title;
-
+    // HTTP 在 meo.aibridge.http 后台队列；WKWebView / evaluateJavaScript 必须回主线程。
     NSTimeInterval t0 = [NSDate date].timeIntervalSince1970;
     __weak typeof(self) weakSelf = self;
-    [[AIBridgeDOMProvider sharedProvider] ensureReadyOnWebView:wv providerId:providerId completion:^(NSError *readyErr) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongBoot = weakSelf;
+        if (!strongBoot) return;
+        // 请求窗口选中绑定标签，避免后台页冷启动被取消 / 文档一直 blank。
+        if (binding.tab) {
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:@"AIBridgeRequestSelectBoundTabNotification"
+                              object:strongBoot
+                            userInfo:@{ @"tab": binding.tab }];
+        }
+        [binding.tab wakeFromHibernationIfNeeded];
+        if (binding.tab.pendingRestorableLoad) {
+            [binding.tab loadPendingRestorableURLIfNeeded];
+        }
+        WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
+        if (!wv) {
+            [strongBoot respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable", @"type": @"bridge_error"}}];
+            return;
+        }
+    // 加载周期内轮询 document.location（不能只看 webView.URL，临时导航期仍可能是 blank 文档）。
+    [strongBoot waitUntilDocumentHostReadyOnWebView:wv
+                                          tab:binding.tab
+                                   providerId:providerId
+                                      timeout:45.0
+                                   completion:^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        if (readyErr) {
-            [strongSelf appendLogModel:model status:503 duration:0 detail:readyErr.localizedDescription];
-            [strongSelf respondJSON:respond status:503 object:@{@"error": @{@"message": readyErr.localizedDescription ?: @"inject failed", @"type": @"bridge_error"}}];
-            return;
-        }
-        [[AIBridgeDOMProvider sharedProvider] probeOnWebView:wv completion:^(NSDictionary *probe, NSError *probeErr) {
-            BOOL hostOk = YES;
-            if (probe[@"hostOk"] != nil) {
-                hostOk = [probe[@"hostOk"] boolValue];
-            }
-            BOOL okFlag = [probe[@"ok"] boolValue];
-            BOOL hasInput = [probe[@"loggedIn"] boolValue] || [probe[@"hasInput"] boolValue];
-            BOOL ready = okFlag || (hasInput && hostOk);
-            if (probeErr || !hostOk || !ready) {
-                NSString *detail = nil;
-                NSString *type = @"login_required";
-                if (!hostOk || [probe[@"detail"] isEqual:@"host mismatch"]) {
-                    NSString *probeHost = [probe[@"host"] isKindOfClass:[NSString class]] ? probe[@"host"] : liveHost;
-                    detail = [strongSelf hostMismatchMessageForProviderId:providerId actualHost:probeHost];
-                    type = @"host_mismatch";
-                } else if (probeErr) {
-                    detail = probeErr.localizedDescription;
-                } else if ([probe[@"detail"] isKindOfClass:[NSString class]] && [probe[@"detail"] length]) {
-                    NSString *raw = probe[@"detail"];
-                    if ([raw containsString:@"input not found"] || [raw containsString:@"login"]) {
-                        detail = [NSString stringWithFormat:@"%@ 未就绪：找不到输入框，请确认已登录并打开对话页。",
-                                  [strongSelf displayNameForProviderId:providerId]];
-                    } else {
-                        detail = raw;
-                    }
-                } else {
-                    detail = @"login required";
+        if (!strongSelf) return;
+        if (!ok) {
+            NSString *msg = failDetail.length ? failDetail
+                : @"绑定标签页面尚未加载。请先切换到该标签激活一次，再重试。";
+            BOOL mismatch = [msg containsString:@"域名不匹配"];
+            NSInteger status = mismatch ? 409 : 503;
+            [strongSelf appendLogModel:model status:status duration:0 detail:msg];
+            [strongSelf respondJSON:respond status:status object:@{
+                @"error": @{
+                    @"message": msg,
+                    @"type": mismatch ? @"host_mismatch" : @"bridge_error",
+                    @"host": liveHost ?: @"",
+                    @"url": liveAbs ?: @"",
+                    @"provider": providerId ?: @""
                 }
-                [strongSelf appendLogModel:model status:409 duration:0 detail:detail];
-                [strongSelf respondJSON:respond status:409 object:@{
+            }];
+            return;
+        }
+        binding.pageURL = liveAbs;
+        binding.tabTitle = binding.tab.title;
+
+        // 冷启动 SPA 水合较慢：给足 probe 稳定窗口（连续两次 ok）。
+        [strongSelf ensureReadyAndProbeUntilReadyOnWebView:wv
+                                                providerId:providerId
+                                                   timeout:45.0
+                                                completion:^(NSDictionary *probe, NSString *errorDetail, NSString *errorType) {
+            __strong typeof(weakSelf) innerSelf = weakSelf;
+            if (!innerSelf) return;
+            if (errorDetail.length) {
+                NSInteger status = 409;
+                [innerSelf appendLogModel:model status:status duration:0 detail:errorDetail];
+                [innerSelf respondJSON:respond status:status object:@{
                     @"error": @{
-                        @"message": detail ?: @"login required",
-                        @"type": type,
+                        @"message": errorDetail,
+                        @"type": errorType.length ? errorType : @"login_required",
                         @"probe": probe ?: @{}
                     }
                 }];
@@ -892,8 +881,8 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
                                               completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
                 if (httpStatus != 200) {
                     NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
-                    [strongSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
-                    [strongSelf notify];
+                    [innerSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
+                    [innerSelf notify];
                     NSString *errType = @"bridge_error";
                     NSString *msg = errorMessage ?: @"failed";
                     if ([msg containsString:@"attachments_unsupported"]) {
@@ -903,7 +892,7 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
                     } else if ([msg containsString:@"attach"] || [result[@"phase"] isEqual:@"attach"]) {
                         errType = @"attach_failed";
                     }
-                    [strongSelf respondJSON:respond status:httpStatus object:@{
+                    [innerSelf respondJSON:respond status:httpStatus object:@{
                         @"error": @{
                             @"message": msg,
                             @"type": errType
@@ -913,26 +902,342 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
                 }
                 NSString *text = result[@"text"] ?: @"";
                 if (agentMode) {
-                    [strongSelf finishAgentCompletionWithText:text
-                                                        model:model
-                                                      request:json
-                                                       stream:stream
-                                                    startedAt:t0
-                                                 repairAttempted:NO
-                                                      respond:respond];
+                    [innerSelf finishAgentCompletionWithText:text
+                                                       model:model
+                                                     request:json
+                                                      stream:stream
+                                                   startedAt:t0
+                                              repairAttempted:NO
+                                                     respond:respond];
                 } else {
                     NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
-                    [strongSelf appendLogModel:model status:200 duration:dt detail:nil];
-                    [strongSelf notify];
+                    [innerSelf appendLogModel:model status:200 duration:dt detail:nil];
+                    [innerSelf notify];
                     if (stream) {
-                        [strongSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
+                        [innerSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
                     } else {
-                        [strongSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
+                        [innerSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
                     }
                 }
             }];
         }];
     }];
+    }); // dispatch_async main (WKWebView)
+}
+
+static NSString * const kMeoBridgeDocHostJS =
+    @"(function(){try{"
+     "  return JSON.stringify({"
+     "    host: String(location.hostname||''),"
+     "    href: String(location.href||''),"
+     "    ready: String(document.readyState||'')"
+     "  });"
+     "}catch(e){return JSON.stringify({host:'',href:'',ready:'',error:String(e)});}})()";
+
+/// 用 document.location.hostname 判断就绪（webView.URL 在临时导航期会「超前」于文档）。
+/// 必须在主线程调用（或由此方法自行跳转到主线程）。
+- (void)waitUntilDocumentHostReadyOnWebView:(WKWebView *)webView
+                                        tab:(BrowserTab *)tab
+                                 providerId:(NSString *)providerId
+                                    timeout:(NSTimeInterval)timeout
+                                 completion:(void (^)(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail))completion {
+    if (!completion) return;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self waitUntilDocumentHostReadyOnWebView:webView
+                                                  tab:tab
+                                           providerId:providerId
+                                              timeout:timeout
+                                           completion:completion];
+        });
+        return;
+    }
+    if (!webView) {
+        completion(NO, @"", @"", @"webView unavailable");
+        return;
+    }
+    NSTimeInterval deadline = NSDate.date.timeIntervalSince1970 + MAX(timeout, 1.0);
+    const NSTimeInterval interval = 0.5;
+    __weak typeof(self) weakSelf = self;
+    // 注意：不能用 __weak 递归 block。方法返回后 weak 会变 nil，轮询直接停死。
+    __block void (^poll)(void) = nil;
+    __block BOOL finished = NO;
+    void (^finishOnce)(BOOL, NSString *, NSString *, NSString *) =
+        ^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
+            if (finished) return;
+            finished = YES;
+            poll = nil; // 断开自引用
+            completion(ok, liveHost ?: @"", liveAbs ?: @"", failDetail);
+        };
+    // 硬超时：不依赖 evaluateJavaScript 一定回调
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(timeout, 1.0) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (finished) return;
+        NSURL *raw = webView.URL;
+        finishOnce(NO, raw.host ?: @"", raw.absoluteString ?: @"",
+                   @"绑定标签页面尚未加载完成。请稍候再试，或先切换到 AI 网页标签激活一次。");
+    });
+    poll = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || finished) return;
+        if (NSDate.date.timeIntervalSince1970 >= deadline) {
+            NSURL *raw = webView.URL;
+            finishOnce(NO, raw.host ?: @"", raw.absoluteString ?: @"",
+                       @"绑定标签页面尚未加载完成。请稍候再试，或先切换到 AI 网页标签激活一次。");
+            return;
+        }
+        NSURL *rawURL = webView.URL;
+        NSString *rawAbs = rawURL.absoluteString ?: @"";
+        BOOL urlBlank = rawAbs.length == 0 || [rawAbs isEqualToString:@"about:blank"];
+        if (urlBlank && !webView.isLoading) {
+            NSURL *target = tab.restorableURL ?: [strongSelf homeURLForProviderId:providerId];
+            if (target) {
+                if (tab) tab.restorableURL = target;
+                [webView loadRequest:[NSURLRequest requestWithURL:target]];
+            }
+        }
+        [webView evaluateJavaScript:kMeoBridgeDocHostJS completionHandler:^(id result, NSError *evalErr) {
+            typeof(self) inner = weakSelf;
+            if (!inner || finished) return;
+            NSString *host = @"";
+            NSString *href = @"";
+            if (!evalErr && [result isKindOfClass:[NSString class]]) {
+                NSData *data = [(NSString *)result dataUsingEncoding:NSUTF8StringEncoding];
+                id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+                if ([obj isKindOfClass:[NSDictionary class]]) {
+                    NSDictionary *dict = (NSDictionary *)obj;
+                    if ([dict[@"host"] isKindOfClass:[NSString class]]) host = dict[@"host"];
+                    if ([dict[@"href"] isKindOfClass:[NSString class]]) href = dict[@"href"];
+                }
+            }
+            if ([inner host:host matchesProviderId:providerId]) {
+                finishOnce(YES, host, href.length ? href : (webView.URL.absoluteString ?: @""), nil);
+                return;
+            }
+            void (^again)(void) = poll;
+            if (!again) return;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), again);
+        }];
+    };
+    poll();
+}
+
+/// 注入 adapter 后，在加载周期内反复 probe，直到 hostOk+输入框稳定就绪或超时。
+/// 要求连续两次 probe 成功，避免 SPA 水合瞬间误判。
+- (void)ensureReadyAndProbeUntilReadyOnWebView:(WKWebView *)webView
+                                    providerId:(NSString *)providerId
+                                       timeout:(NSTimeInterval)timeout
+                                    completion:(void (^)(NSDictionary *_Nullable probe, NSString *_Nullable errorDetail, NSString *_Nullable errorType))completion {
+    if (!completion) return;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self ensureReadyAndProbeUntilReadyOnWebView:webView
+                                              providerId:providerId
+                                                 timeout:timeout
+                                              completion:completion];
+        });
+        return;
+    }
+    NSTimeInterval deadline = NSDate.date.timeIntervalSince1970 + MAX(timeout, 1.0);
+    const NSTimeInterval interval = 0.6;
+    const NSInteger requiredConsecutiveOk = 2;
+    __weak typeof(self) weakSelf = self;
+    // 强引用自递归；finish 时置 nil。切勿 __weak，否则第一次成功后轮询会停。
+    __block void (^attempt)(void) = nil;
+    __block BOOL finished = NO;
+    __block NSInteger consecutiveOk = 0;
+    void (^finishOnce)(NSDictionary *, NSString *, NSString *) =
+        ^(NSDictionary *probe, NSString *errorDetail, NSString *errorType) {
+            if (finished) return;
+            finished = YES;
+            attempt = nil;
+            completion(probe, errorDetail, errorType);
+        };
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MAX(timeout, 1.0) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        finishOnce(nil, @"AI 网页就绪超时：找不到输入框或域名未匹配，请确认已登录 DeepSeek。", @"login_required");
+    });
+    attempt = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || finished) return;
+        if (NSDate.date.timeIntervalSince1970 >= deadline) {
+            finishOnce(nil, @"AI 网页就绪超时：找不到输入框或域名未匹配，请确认已登录 DeepSeek。", @"login_required");
+            return;
+        }
+        [[AIBridgeDOMProvider sharedProvider] ensureReadyOnWebView:webView providerId:providerId completion:^(NSError *readyErr) {
+            typeof(self) inner = weakSelf;
+            if (!inner || finished) return;
+            if (readyErr) {
+                consecutiveOk = 0;
+                void (^again)(void) = attempt;
+                if (!again) return;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), again);
+                return;
+            }
+            [[AIBridgeDOMProvider sharedProvider] probeOnWebView:webView completion:^(NSDictionary *probe, NSError *probeErr) {
+                typeof(self) probeSelf = weakSelf;
+                if (!probeSelf || finished) return;
+                BOOL hostOk = YES;
+                if (probe[@"hostOk"] != nil) {
+                    hostOk = [probe[@"hostOk"] boolValue];
+                }
+                BOOL okFlag = [probe[@"ok"] boolValue];
+                BOOL hasInput = [probe[@"loggedIn"] boolValue] || [probe[@"hasInput"] boolValue];
+                BOOL docReady = YES;
+                if (probe[@"docReady"] != nil) {
+                    docReady = [probe[@"docReady"] boolValue];
+                } else if ([probe[@"readyState"] isKindOfClass:[NSString class]]) {
+                    NSString *rs = probe[@"readyState"];
+                    docReady = [rs isEqualToString:@"interactive"] || [rs isEqualToString:@"complete"];
+                }
+                BOOL detailLoading = [probe[@"detail"] isEqual:@"document loading"];
+                BOOL ready = okFlag || (hasInput && hostOk && docReady && !detailLoading);
+                {
+                    NSString *line = [NSString stringWithFormat:
+                        @"%@ probe okFlag=%d hostOk=%d hasInput=%d docReady=%d ready=%d consec=%ld detail=%@ err=%@\n",
+                        [NSDate date], okFlag, hostOk, hasInput, docReady, ready, (long)consecutiveOk,
+                        probe[@"detail"] ?: @"",
+                        probeErr.localizedDescription ?: @""];
+                    NSString *logPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/MeoBrowser/aibridge.log"];
+                    [[NSFileManager defaultManager] createDirectoryAtPath:logPath.stringByDeletingLastPathComponent
+                                             withIntermediateDirectories:YES attributes:nil error:nil];
+                    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+                    if (!fh) {
+                        [line writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                    } else {
+                        [fh seekToEndOfFile];
+                        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+                        [fh closeFile];
+                    }
+                }
+                if (!probeErr && hostOk && ready) {
+                    consecutiveOk += 1;
+                    if (consecutiveOk >= requiredConsecutiveOk) {
+                        finishOnce(probe, nil, nil);
+                        return;
+                    }
+                    void (^again)(void) = attempt;
+                    if (!again) return;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), again);
+                    return;
+                }
+                consecutiveOk = 0;
+                BOOL stillLoading = !hostOk
+                    || !docReady
+                    || detailLoading
+                    || (probe[@"host"] && [probe[@"host"] isEqual:@""])
+                    || [probe[@"detail"] isEqual:@"host mismatch"]
+                    || [probe[@"detail"] isEqual:@"input not found (login?)"]
+                    || hasInput == NO;
+                if (stillLoading && NSDate.date.timeIntervalSince1970 < deadline) {
+                    void (^again)(void) = attempt;
+                    if (!again) return;
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), again);
+                    return;
+                }
+                NSString *detail = nil;
+                NSString *type = @"login_required";
+                if (!hostOk || [probe[@"detail"] isEqual:@"host mismatch"]) {
+                    NSString *probeHost = [probe[@"host"] isKindOfClass:[NSString class]] ? probe[@"host"] : @"";
+                    detail = [probeSelf hostMismatchMessageForProviderId:providerId actualHost:probeHost];
+                    type = @"host_mismatch";
+                } else if (probeErr) {
+                    detail = probeErr.localizedDescription;
+                    type = @"bridge_error";
+                } else if ([probe[@"detail"] isKindOfClass:[NSString class]] && [probe[@"detail"] length]) {
+                    NSString *raw = probe[@"detail"];
+                    if ([raw containsString:@"input not found"] || [raw containsString:@"login"]) {
+                        detail = [NSString stringWithFormat:@"%@ 未就绪：找不到输入框，请确认已登录并打开对话页。",
+                                  [probeSelf displayNameForProviderId:providerId]];
+                    } else if ([raw containsString:@"document loading"]) {
+                        detail = [NSString stringWithFormat:@"%@ 页面仍在加载，请稍候再试。",
+                                  [probeSelf displayNameForProviderId:providerId]];
+                    } else {
+                        detail = raw;
+                    }
+                } else {
+                    detail = @"login required";
+                }
+                finishOnce(probe, detail, type);
+            }];
+        }];
+    };
+    attempt();
+}
+
+- (void)waitUntilModelPageReady:(NSString *)modelId
+                        timeout:(NSTimeInterval)timeout
+                     completion:(void (^)(BOOL ok, NSString *_Nullable errorDetail))completion {
+    if (!completion) return;
+    void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *detail) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(ok, detail);
+        });
+    };
+    if (modelId.length == 0) {
+        finish(NO, @"model 为空");
+        return;
+    }
+    NSError *resolveErr = nil;
+    AIBridgeBinding *binding = [self resolveBindingForModelId:modelId error:&resolveErr];
+    if (!binding || !binding.tab) {
+        finish(NO, resolveErr.localizedDescription ?: @"model not bound");
+        return;
+    }
+    NSString *providerId = binding.providerId ?: @"deepseek";
+    NSTimeInterval t = MAX(timeout, 1.0);
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongBoot = weakSelf;
+        if (!strongBoot) return;
+        if (binding.tab) {
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:@"AIBridgeRequestSelectBoundTabNotification"
+                              object:strongBoot
+                            userInfo:@{ @"tab": binding.tab }];
+        }
+        [binding.tab wakeFromHibernationIfNeeded];
+        if (binding.tab.pendingRestorableLoad) {
+            [binding.tab loadPendingRestorableURLIfNeeded];
+        }
+        WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
+        if (!wv) {
+            finish(NO, @"webView unavailable");
+            return;
+        }
+        [strongBoot waitUntilDocumentHostReadyOnWebView:wv
+                                                    tab:binding.tab
+                                             providerId:providerId
+                                                timeout:MIN(t, 45.0)
+                                             completion:^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (!ok) {
+                finish(NO, failDetail.length ? failDetail : @"绑定标签页面尚未加载");
+                return;
+            }
+            binding.pageURL = liveAbs;
+            binding.tabTitle = binding.tab.title;
+            (void)liveHost;
+            NSTimeInterval remain = MAX(5.0, t - 5.0);
+            [strongSelf ensureReadyAndProbeUntilReadyOnWebView:wv
+                                                    providerId:providerId
+                                                       timeout:remain
+                                                    completion:^(NSDictionary *probe, NSString *errorDetail, NSString *errorType) {
+                (void)probe;
+                (void)errorType;
+                if (errorDetail.length) {
+                    finish(NO, errorDetail);
+                    return;
+                }
+                finish(YES, nil);
+            }];
+        }];
+    });
 }
 
 /// Agent 模式：解析网页 JSON；失败则自动 1 次 repair；再失败 502。
@@ -1054,6 +1359,73 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
     }];
 }
 
+- (nullable BrowserWindowController *)firstBrowserWindowController {
+    BrowserWindowController *keyWC = nil;
+    BrowserWindowController *anyWC = nil;
+    for (NSWindow *w in NSApp.windows) {
+        id wc = w.windowController;
+        if (![wc isKindOfClass:[BrowserWindowController class]]) continue;
+        if (!anyWC) anyWC = (BrowserWindowController *)wc;
+        if (w.isKeyWindow || w.isMainWindow) {
+            keyWC = (BrowserWindowController *)wc;
+            break;
+        }
+    }
+    return keyWC ?: anyWC;
+}
+
+/// 调试/自动化：绑定已有 DeepSeek 标签（或打开首页），便于 curl 复现发送链路。
+- (void)handleBindProvider:(NSData *)body respond:(AIBridgeHTTPRespondBlock)respond {
+    id obj = body.length ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : @{};
+    NSDictionary *json = [obj isKindOfClass:[NSDictionary class]] ? obj : @{};
+    NSString *providerId = [json[@"provider"] isKindOfClass:[NSString class]] ? json[@"provider"] : @"deepseek";
+    if (providerId.length == 0) providerId = @"deepseek";
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        BrowserWindowController *wc = [strongSelf firstBrowserWindowController];
+        if (!wc) {
+            [strongSelf respondJSON:respond status:503 object:@{
+                @"ok": @NO,
+                @"error": @{@"message": @"no browser window"}
+            }];
+            return;
+        }
+        id<AIBridgeSidebarControllerDelegate> del = (id<AIBridgeSidebarControllerDelegate>)wc;
+        if (![del respondsToSelector:@selector(aiBridgeSidebar:bindOrOpenProviderId:completion:)]) {
+            [strongSelf respondJSON:respond status:503 object:@{
+                @"ok": @NO,
+                @"error": @{@"message": @"window cannot bind"}
+            }];
+            return;
+        }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnonnull"
+        [del aiBridgeSidebar:(AIBridgeSidebarController *)nil
+       bindOrOpenProviderId:providerId
+                 completion:^(BOOL ok, NSString *detail) {
+#pragma clang diagnostic pop
+            AIBridgeBinding *b = [AIBridgeRegistry.sharedRegistry bindingForProviderId:providerId];
+            if (!ok || !b) {
+                [strongSelf respondJSON:respond status:503 object:@{
+                    @"ok": @NO,
+                    @"error": @{@"message": detail ?: @"bind failed"}
+                }];
+                return;
+            }
+            [strongSelf respondJSON:respond status:200 object:@{
+                @"ok": @YES,
+                @"model": b.modelId ?: @"",
+                @"binding_id": b.bindingId ?: @"",
+                @"provider": b.providerId ?: @"",
+                @"url": b.pageURL ?: @"",
+                @"detail": detail ?: @""
+            }];
+        }];
+    });
+}
+
 - (void)handleInspect:(NSData *)body respond:(AIBridgeHTTPRespondBlock)respond {
     id obj = body.length ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : @{};
     NSDictionary *json = [obj isKindOfClass:[NSDictionary class]] ? obj : @{};
@@ -1072,6 +1444,73 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
     WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
     if (!wv) {
         [self respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable"}}];
+        return;
+    }
+    NSString *what = [json[@"what"] isKindOfClass:[NSString class]] ? json[@"what"] : @"";
+    if ([what isEqualToString:@"composer"] || [what isEqualToString:@"probe"]) {
+        // 诊断：先 ensureReady 再 dump / probe，便于定位输入框选择器失效。
+        NSString *providerId = binding.providerId ?: @"deepseek";
+        [[AIBridgeDOMProvider sharedProvider] ensureReadyOnWebView:wv providerId:providerId completion:^(NSError *readyErr) {
+            if (readyErr) {
+                [self respondJSON:respond status:503 object:@{
+                    @"ok": @NO,
+                    @"error": readyErr.localizedDescription ?: @"ensureReady failed"
+                }];
+                return;
+            }
+            if ([what isEqualToString:@"probe"]) {
+                [[AIBridgeDOMProvider sharedProvider] probeOnWebView:wv completion:^(NSDictionary *probe, NSError *probeErr) {
+                    [self respondJSON:respond status:200 object:@{
+                        @"ok": @YES,
+                        @"probe": probe ?: @{},
+                        @"probeError": probeErr.localizedDescription ?: [NSNull null]
+                    }];
+                }];
+                return;
+            }
+            NSString *dumpJS =
+                @"(function(){"
+                 "  function info(el){"
+                 "    if(!el) return null;"
+                 "    var r=el.getBoundingClientRect();"
+                 "    return {"
+                 "      tag: el.tagName,"
+                 "      type: el.type||null,"
+                 "      role: el.getAttribute && el.getAttribute('role'),"
+                 "      contentEditable: el.isContentEditable||el.getAttribute('contenteditable'),"
+                 "      class: String(el.className||'').slice(0,120),"
+                 "      id: el.id||null,"
+                 "      placeholder: el.getAttribute && el.getAttribute('placeholder'),"
+                 "      aria: el.getAttribute && el.getAttribute('aria-label'),"
+                 "      w: Math.round(r.width), h: Math.round(r.height),"
+                 "      valueLen: (el.value!=null?String(el.value):String(el.innerText||'')).length"
+                 "    };"
+                 "  }"
+                 "  var tas=[].slice.call(document.querySelectorAll('textarea')).map(info);"
+                 "  var edits=[].slice.call(document.querySelectorAll('[contenteditable=\"true\"], [contenteditable=\"\"], div[role=\"textbox\"], [role=\"textbox\"]')).map(info);"
+                 "  var inputs=[].slice.call(document.querySelectorAll('input:not([type=hidden]):not([type=file])')).slice(0,20).map(info);"
+                 "  var composers=[].slice.call(document.querySelectorAll('.aaff8b8f, [class*=\"composer\"], [class*=\"Composer\"]')).slice(0,5).map(function(el){"
+                 "    return {class:String(el.className||'').slice(0,120), html:String(el.innerHTML||'').slice(0,500)};"
+                 "  });"
+                 "  var bridge = window.__MeoAIBridge ? window.__MeoAIBridge.probe() : {ok:false,detail:'no api'};"
+                 "  return JSON.stringify({ok:true,href:location.href||'',ready:document.readyState,tas:tas,edits:edits,inputs:inputs,composers:composers,probe:bridge});"
+                 "})()";
+            [wv evaluateJavaScript:dumpJS completionHandler:^(id result, NSError *error) {
+                if (error) {
+                    [self respondJSON:respond status:503 object:@{@"ok": @NO, @"error": error.localizedDescription ?: @"dump failed"}];
+                    return;
+                }
+                NSDictionary *dict = nil;
+                if ([result isKindOfClass:[NSString class]]) {
+                    NSData *data = [(NSString *)result dataUsingEncoding:NSUTF8StringEncoding];
+                    id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+                    if ([obj isKindOfClass:[NSDictionary class]]) dict = obj;
+                } else if ([result isKindOfClass:[NSDictionary class]]) {
+                    dict = result;
+                }
+                [self respondJSON:respond status:200 object:dict ?: @{@"ok": @NO, @"raw": result ?: [NSNull null]}];
+            }];
+        }];
         return;
     }
     [[AIBridgeDOMProvider sharedProvider] inspectAssistantDOMOnWebView:wv completion:^(NSDictionary *result, NSError *error) {

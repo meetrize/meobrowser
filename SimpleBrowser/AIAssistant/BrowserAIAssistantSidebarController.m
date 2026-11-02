@@ -539,6 +539,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 @property (nonatomic, assign) BOOL inFlight;
 @property (nonatomic, copy, nullable) NSString *inFlightSessionId;
 
+/// 会话尚未 Ready 时挂起的自动发送（冷启动右键 AI 总结等）。
+@property (nonatomic, assign) BOOL hasPendingAutoSend;
+@property (nonatomic, copy, nullable) NSString *pendingAutoSendPrompt;
+@property (nonatomic, assign) BOOL pendingAutoSendClearInput;
+/// 已在等待 AI 网页输入框就绪，避免重复启动 waiter。
+@property (nonatomic, assign) BOOL pendingAutoSendWaitingPageReady;
+
 @property (nonatomic, strong, nullable) id registryObserver;
 @property (nonatomic, strong, nullable) id serviceObserver;
 @property (nonatomic, strong, nullable) id storeObserver;
@@ -1493,7 +1500,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         self.titleLabel.stringValue = @"AI 助手";
         [self applyConnectionStatusTitle:@"未连接" clickable:YES tooltip:@"点击连接 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
-        self.sendButton.enabled = self.inFlight; // 飞行中仍可点停止
+        // 无会话也可点发送：会建会话并挂起，就绪后自动发出
+        self.sendButton.enabled = YES;
         self.attachButton.enabled = NO;
         self.focusTabButton.hidden = YES;
         [self applySendStopButtonAppearance];
@@ -1531,7 +1539,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         }
         [self applyConnectionStatusTitle:title clickable:YES tooltip:tip];
         self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
-        self.sendButton.enabled = self.inFlight;
+        // 允许发送：会排队并触发重连
+        self.sendButton.enabled = YES;
     } else if (ready) {
         NSString *connected = platform.length
             ? [NSString stringWithFormat:@"已连接 · %@", platform]
@@ -1542,7 +1551,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     } else if (opening) {
         [self applyConnectionStatusTitle:@"连接中…" clickable:NO tooltip:@"正在打开并绑定 AI 网页"];
         self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
-        self.sendButton.enabled = self.inFlight;
+        // 允许点击发送：未就绪时会挂起，连接成功后自动发出
+        self.sendButton.enabled = YES;
     } else {
         NSString *title = @"未连接";
         NSString *tip = platform.length
@@ -1554,12 +1564,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         }
         [self applyConnectionStatusTitle:title clickable:YES tooltip:tip];
         self.statusDot.layer.backgroundColor = NSColor.systemGrayColor.CGColor;
-        self.sendButton.enabled = self.inFlight;
+        self.sendButton.enabled = YES;
     }
     [self applySendStopButtonAppearance];
     [self refreshAttachmentChips];
     [self refreshPageContextTray];
     [self scheduleAutoReconnectCountdownIfNeeded];
+    [self flushPendingAutoSendIfNeeded];
 }
 
 #pragma mark - History popover
@@ -2076,7 +2087,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self syncChatFromCurrentSession];
     [self applyConnectionStatusTitle:@"连接中…" clickable:NO tooltip:@"正在打开并绑定 AI 网页"];
     self.statusDot.layer.backgroundColor = NSColor.systemYellowColor.CGColor;
-    self.sendButton.enabled = NO;
+    self.sendButton.enabled = YES; // 连接中也可点，提示词会挂起待发
 
     id<BrowserAIAssistantSidebarControllerDelegate> del = self.delegate;
     if (![del respondsToSelector:@selector(aiAssistantSidebar:openAndBindProviderId:sessionId:completion:)]) {
@@ -2102,7 +2113,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         s.connection = AIAssistantSessionConnectionReady;
         [AIAssistantSessionStore.sharedStore touchAndPersist:s];
         BrowserAIAssistantPreferences.sharedPreferences.lastModelId = binding.modelId ?: @"";
-        [weakSelf reloadUI];
+        [weakSelf reloadUI]; // 内含 flushPendingAutoSendIfNeeded
     }];
 }
 
@@ -2176,7 +2187,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         sess.connection = AIAssistantSessionConnectionReady;
         [AIAssistantSessionStore.sharedStore touchAndPersist:sess];
         [weakSelf cancelAutoReconnectCountdown];
-        [weakSelf reloadUI];
+        [weakSelf reloadUI]; // 内含 flushPendingAutoSendIfNeeded
     }];
 }
 
@@ -2579,6 +2590,61 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     [self sendPrompt:prompt clearInput:YES];
 }
 
+- (void)queuePendingAutoSend:(NSString *)prompt clearInput:(BOOL)clearInput {
+    self.hasPendingAutoSend = YES;
+    self.pendingAutoSendPrompt = prompt ?: @"";
+    self.pendingAutoSendClearInput = clearInput;
+    self.pendingAutoSendWaitingPageReady = NO;
+}
+
+- (void)clearPendingAutoSend {
+    self.hasPendingAutoSend = NO;
+    self.pendingAutoSendPrompt = nil;
+    self.pendingAutoSendClearInput = NO;
+    self.pendingAutoSendWaitingPageReady = NO;
+}
+
+/// 会话 Ready 后冲刷挂起发送（冷启动自动连接 / 手动点发送时排队）。
+/// 绑定成功 ≠ 网页输入框就绪：先等 document+composer，再真正 send，避免提示词丢失。
+- (void)flushPendingAutoSendIfNeeded {
+    if (!self.hasPendingAutoSend || self.inFlight) return;
+    if (self.pendingAutoSendWaitingPageReady) return;
+    AIAssistantSession *s = [self currentSession];
+    if (!s || s.connection != AIAssistantSessionConnectionReady || s.modelId.length == 0) {
+        return;
+    }
+    NSString *modelId = s.modelId;
+    NSString *sessionId = s.sessionId;
+    self.pendingAutoSendWaitingPageReady = YES;
+    [self setStatusTip:@"等待 AI 网页就绪后自动发送…"];
+    __weak typeof(self) weakSelf = self;
+    [AIBridgeService.sharedService waitUntilModelPageReady:modelId
+                                                   timeout:60.0
+                                                completion:^(BOOL ok, NSString *errorDetail) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.pendingAutoSendWaitingPageReady = NO;
+        if (!strongSelf.hasPendingAutoSend || strongSelf.inFlight) return;
+        AIAssistantSession *cur = [strongSelf currentSession];
+        if (!cur || ![cur.sessionId isEqualToString:sessionId]
+            || cur.connection != AIAssistantSessionConnectionReady
+            || cur.modelId.length == 0) {
+            return;
+        }
+        if (!ok) {
+            [strongSelf setStatusTip:errorDetail.length
+                                 ? errorDetail
+                                 : @"AI 网页未就绪，请打开对话页登录后重试"];
+            // 保留挂起内容，便于用户手动再点发送 / 网页加载好后 reloadUI 再冲刷
+            return;
+        }
+        NSString *prompt = strongSelf.pendingAutoSendPrompt ?: @"";
+        BOOL clearInput = strongSelf.pendingAutoSendClearInput;
+        [strongSelf clearPendingAutoSend];
+        [strongSelf sendPrompt:prompt clearInput:clearInput];
+    }];
+}
+
 - (NSString *)composePromptWithUserText:(NSString *)userText {
     NSString *q = [userText stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
     NSMutableString *out = [NSMutableString string];
@@ -2617,12 +2683,26 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (!s) {
         self.pendingProviderId = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
         self.inputView.string = text;
+        [self queuePendingAutoSend:text clearInput:clearInput];
         [self createSessionWithProviderId:self.pendingProviderId];
-        [self setStatusTip:@"已创建会话并开页，就绪后请再次发送"];
+        [self setStatusTip:@"已创建会话，连接就绪后自动发送"];
         return;
     }
-    if (s.connection != AIAssistantSessionConnectionReady || s.modelId.length == 0) {
-        [self setStatusTip:@"未连接，请点击上方「未连接」或开启自动连接"];
+    if (s.connection == AIAssistantSessionConnectionOpening || s.modelId.length == 0) {
+        self.inputView.string = text;
+        [self queuePendingAutoSend:text clearInput:clearInput];
+        // Ready 但无 modelId，或非 Opening 的异常态：主动重连，避免永远排队
+        if (s.connection != AIAssistantSessionConnectionOpening) {
+            [self reconnectCurrentSession];
+        }
+        [self setStatusTip:@"连接中，就绪后将自动发送"];
+        return;
+    }
+    if (s.connection != AIAssistantSessionConnectionReady) {
+        self.inputView.string = text;
+        [self queuePendingAutoSend:text clearInput:clearInput];
+        [self reconnectCurrentSession];
+        [self setStatusTip:@"正在重连，就绪后将自动发送"];
         return;
     }
 
@@ -2796,14 +2876,25 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     if (!s) {
         self.inputView.string = prompt;
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        if (autoSend) {
+            [self queuePendingAutoSend:prompt clearInput:YES];
+        }
         [self createSessionWithProviderId:pid];
-        [self setStatusTip:@"已创建会话，连接后可发送"];
+        [self setStatusTip:autoSend ? @"已创建会话，连接就绪后自动发送" : @"已创建会话，连接后可发送"];
         return;
     }
     self.inputView.string = prompt;
     [self reloadUI];
-    if (autoSend && s.connection == AIAssistantSessionConnectionReady && s.modelId.length) {
-        [self sendPrompt:prompt clearInput:YES];
+    if (autoSend) {
+        if (s.connection == AIAssistantSessionConnectionReady && s.modelId.length) {
+            [self sendPrompt:prompt clearInput:YES];
+        } else {
+            [self queuePendingAutoSend:prompt clearInput:YES];
+            if (s.connection != AIAssistantSessionConnectionOpening) {
+                [self reconnectCurrentSession];
+            }
+            [self setStatusTip:@"已填入提示，连接就绪后自动发送"];
+        }
     } else {
         NSString *title = [BrowserAIAssistantPrompts displayTitleForAction:actionKey pageContext:pageContext];
         [self setStatusTip:[NSString stringWithFormat:@"已填入「%@」，可编辑后发送", title]];
@@ -3197,8 +3288,15 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 
 - (void)noteSelectedTabDidChange {
     NSUUID *tabID = [self currentBrowseTabID];
-    BOOL changed = (tabID != nil || self.lastPageContextTabID != nil)
-        && ![tabID isEqual:self.lastPageContextTabID];
+    // 切到 AI Bridge 绑定页时不更新 page-context 选中源，避免冲掉文章引用 / 误采聊天页。
+    if (!tabID) {
+        [self refreshPageContextTray];
+        return;
+    }
+    BOOL changed = (self.lastPageContextTabID != nil) && ![tabID isEqual:self.lastPageContextTabID];
+    if (!self.lastPageContextTabID) {
+        changed = YES;
+    }
     self.lastPageContextTabID = tabID;
     [self refreshPageContextTray];
     if (!changed || !self.visible) {
@@ -3383,6 +3481,13 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
 }
 
 - (void)presentPageRecipe:(NSString *)recipeId autoSend:(BOOL)autoSend {
+    [self presentPageRecipe:recipeId autoSend:autoSend webView:nil tabID:nil];
+}
+
+- (void)presentPageRecipe:(NSString *)recipeId
+                 autoSend:(BOOL)autoSend
+                  webView:(WKWebView *)webView
+                    tabID:(NSUUID *)tabID {
     AIPageContextRecipe *recipe = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
     if (!recipe) {
         [self setStatusTip:@"未知配方"];
@@ -3390,20 +3495,25 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     }
     [self showPane:AIAssistantPaneChat];
 
-    WKWebView *webView = [self currentBrowseWebView];
-    NSUUID *tabID = [self currentBrowseTabID];
-    if (!webView) {
+    WKWebView *sourceView = webView ?: [self currentBrowseWebView];
+    NSUUID *sourceTabID = tabID ?: [self currentBrowseTabID];
+    if (!sourceView) {
         [self setStatusTip:@"当前没有可采集的网页标签"];
         self.inputView.string = recipe.userPrompt;
         return;
+    }
+    // 固定 lastPageContextTabID，避免自动连接切到 AI 页后 tray/重采跟丢文章标签。
+    if (sourceTabID) {
+        self.lastPageContextTabID = sourceTabID;
+        self.pendingAutoRecaptureTabID = nil;
     }
 
     [self setStatusTip:@"正在采集页面正文…"];
     [self setPageContextButtonsEnabled:NO];
 
     __weak typeof(self) weakSelf = self;
-    [[AIPageContextCapturer sharedCapturer] captureFromWebView:webView
-                                                         tabID:tabID
+    [[AIPageContextCapturer sharedCapturer] captureFromWebView:sourceView
+                                                         tabID:sourceTabID
                                               maxArticleChars:recipe.maxArticleChars
                                                     completion:^(AIPageContextBundle *bundle, NSString *errorMessage) {
         typeof(self) strongSelf = weakSelf;
@@ -3415,6 +3525,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
             return;
         }
         strongSelf.currentPageBundle = bundle;
+        if (sourceTabID) strongSelf.lastPageContextTabID = sourceTabID;
         if (![bundle hasUsableArticle]) {
             [self setStatusTip:@"未能提取到可用正文"];
             strongSelf.inputView.string = recipe.userPrompt;
@@ -3423,7 +3534,7 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
         }
         [strongSelf runPreprocessIfNeededForRecipe:recipe
                                            bundle:bundle
-                                          webView:webView
+                                          webView:sourceView
                                        completion:^(NSArray<AIAssistantCitation *> *extra) {
             [strongSelf finishPresentPageRecipe:recipe
                                          bundle:bundle
@@ -3566,14 +3677,27 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     AIAssistantSession *s = [self currentSession];
     if (!s) {
         NSString *pid = BrowserAIAssistantPreferences.sharedPreferences.lastProviderId ?: @"deepseek";
+        if (autoSend) {
+            [self queuePendingAutoSend:prompt clearInput:YES];
+        }
         [self createSessionWithProviderId:pid];
-        [self setStatusTip:@"已采集正文并创建会话，网页就绪后请发送"];
+        [self setStatusTip:autoSend
+            ? @"已采集正文并创建会话，连接就绪后自动发送"
+            : @"已采集正文并创建会话，网页就绪后请发送"];
         return;
     }
     [self reloadUI];
     [self refreshPageContextTray];
-    if (autoSend && s.connection == AIAssistantSessionConnectionReady && s.modelId.length) {
-        [self sendPrompt:prompt clearInput:YES];
+    if (autoSend) {
+        if (s.connection == AIAssistantSessionConnectionReady && s.modelId.length) {
+            [self sendPrompt:prompt clearInput:YES];
+        } else {
+            [self queuePendingAutoSend:prompt clearInput:YES];
+            if (s.connection != AIAssistantSessionConnectionOpening) {
+                [self reconnectCurrentSession];
+            }
+            [self setStatusTip:@"已采集正文，连接就绪后自动发送"];
+        }
     } else {
         NSString *msg = [NSString stringWithFormat:@"已填入「%@」，可编辑后发送", recipe.title];
         if (bundle.articleQuality == AIPageContextArticleQualityLow && warn.length) {

@@ -58,6 +58,12 @@ applyScraperDraftRecipe:(id)recipe;
 /// 运行内置页面 Recipe（如 summarize-page）：采集当前页 → 挂 Citation → 填提示 → 可选发送。
 - (void)presentPageRecipe:(NSString *)recipeId autoSend:(BOOL)autoSend;
 
+/// 同上，但固定采集源（冷启动自动连接会切到 AI 网页，需在打开侧栏前记下文章标签）。
+- (void)presentPageRecipe:(NSString *)recipeId
+                 autoSend:(BOOL)autoSend
+                  webView:(nullable WKWebView *)webView
+                    tabID:(nullable NSUUID *)tabID;
+
 /// 将当前 Bundle 草稿导入页面爬虫侧栏（由 WindowController 打开爬虫）。
 - (void)exportCurrentBundleToPasteboard;
 - (void)exportCurrentBundleToDownloads;

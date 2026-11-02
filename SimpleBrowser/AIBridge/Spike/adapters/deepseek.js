@@ -19,14 +19,73 @@
     return;
   }
 
+  function collectEditorNodes(root) {
+    var out = [];
+    if (!root) return out;
+    try {
+      var tas = root.querySelectorAll
+        ? root.querySelectorAll('textarea, [contenteditable="true"], [contenteditable=""], [role="textbox"]')
+        : [];
+      for (var i = 0; i < tas.length; i++) out.push(tas[i]);
+    } catch (e) {}
+    return out;
+  }
+
   function findInput() {
-    var list = AIBridgeRuntime.qsa('textarea');
-    for (var i = 0; i < list.length; i++) {
-      var el = list[i];
+    var list = [];
+    // 主文档
+    list = list.concat(collectEditorNodes(document));
+    // 开放 shadow root（一层）
+    try {
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].shadowRoot) {
+          list = list.concat(collectEditorNodes(all[i].shadowRoot));
+        }
+      }
+    } catch (e) {}
+    // 同源 iframe
+    try {
+      var frames = document.querySelectorAll('iframe');
+      for (var f = 0; f < frames.length; f++) {
+        try {
+          var doc = frames[f].contentDocument;
+          if (doc) list = list.concat(collectEditorNodes(doc));
+        } catch (e2) {}
+      }
+    } catch (e) {}
+
+    var visible = null;
+    var anyTextarea = null;
+    var anyEditor = null;
+    for (var j = 0; j < list.length; j++) {
+      var el = list[j];
+      if (!el || el.disabled) continue;
+      var tag = String(el.tagName || '').toLowerCase();
+      // 登录页手机号等 input 不算对话输入
+      if (tag === 'input') continue;
       var r = el.getBoundingClientRect();
-      if (r.width > 40 && r.height > 16) return el;
+      var sized = r.width > 20 && r.height > 8;
+      if (tag === 'textarea' && !anyTextarea) anyTextarea = el;
+      if (!anyEditor) anyEditor = el;
+      if (sized && !visible) {
+        // 优先可见 textarea，其次可见 contenteditable
+        if (tag === 'textarea') return el;
+        visible = el;
+      }
     }
-    return null;
+    if (visible) return visible;
+    // 后台标签可能未布局（宽高为 0）：仍返回 textarea，避免冷启动一直 probe 失败
+    return anyTextarea || anyEditor;
+  }
+
+  function readInputText(el) {
+    if (!el) return '';
+    var tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'input') {
+      return String(el.value || '').trim();
+    }
+    return String(el.innerText || el.textContent || '').trim();
   }
 
   function composerRoot(input) {
@@ -525,14 +584,76 @@
     return apiClearAttachmentsSync();
   };
 
-  // Race-safe: capture baseline before send, then wait
+  // 冷启动 / SPA 水合前：先等输入框，再粘性填入，再点发送；避免 setValue 落在未挂载的 React 输入上。
   api.sendAndWait = async function (text, opts) {
     opts = opts || {};
     var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 120000;
     var stableMs = opts.stableMs != null ? opts.stableMs : 1000;
+    var body = text == null ? '' : String(text);
+    var readyDeadline = Date.now() + Math.min(45000, timeoutMs);
+    while (Date.now() < readyDeadline && !findInput()) {
+      await sleep(200);
+    }
+    if (!findInput()) {
+      return { ok: false, phase: 'send', error: 'input not found' };
+    }
+
+    function fillPrompt() {
+      var el = findInput();
+      if (!el) return false;
+      var ok = AIBridgeRuntime.nativeSetValue(el, body);
+      try {
+        invokeReactChange(el);
+      } catch (e) {}
+      return ok;
+    }
+
+    if (!fillPrompt()) return { ok: false, phase: 'send', error: 'setInput failed' };
+    await sleep(300);
+    var peek = readInputText(findInput());
+    var needle = body.trim().slice(0, Math.min(12, body.trim().length));
+    if (needle && peek.indexOf(needle) === -1) {
+      var stickyOk = false;
+      for (var r = 0; r < 12; r++) {
+        await sleep(250);
+        if (!findInput()) continue;
+        fillPrompt();
+        await sleep(200);
+        peek = readInputText(findInput());
+        if (peek.indexOf(needle) !== -1) {
+          stickyOk = true;
+          break;
+        }
+      }
+      if (!stickyOk) {
+        return { ok: false, phase: 'send', error: 'setInput not sticky' };
+      }
+    }
+
     var baseline = readLastAssistant();
-    var sent = api.send(text);
-    if (!sent.ok) return { ok: false, phase: 'send', error: sent.error };
+    var clicked = false;
+    for (var s = 0; s < 40; s++) {
+      var btn = findSendButton();
+      if (btn) {
+        btn.click();
+        clicked = true;
+        break;
+      }
+      await sleep(150);
+    }
+    if (!clicked) {
+      var el2 = findInput();
+      if (el2) {
+        try {
+          el2.focus();
+          var keyOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+          el2.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+          el2.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+          clicked = true;
+        } catch (e) {}
+      }
+    }
+    if (!clicked) return { ok: false, phase: 'send', error: 'send button not ready' };
 
     var start = Date.now();
     var lastText = baseline.text;
@@ -634,12 +755,12 @@
 
     if (!fillPrompt()) return { ok: false, phase: 'send', error: 'setInput failed' };
     await sleep(300);
-    var peek = ((findInput() && findInput().value) || '').trim();
+    var peek = readInputText(findInput());
     var needle = body.trim().slice(0, Math.min(12, body.trim().length));
     if (needle && peek.indexOf(needle) === -1) {
       fillPrompt();
       await sleep(200);
-      peek = ((findInput() && findInput().value) || '').trim();
+      peek = readInputText(findInput());
       if (peek.indexOf(needle) === -1) {
         return { ok: false, phase: 'send', error: 'setInput not sticky' };
       }
@@ -707,13 +828,18 @@
     var input = findInput();
     var host = location.hostname || '';
     var hostOk = host === 'chat.deepseek.com' || host.endsWith('.deepseek.com');
+    var readyState = String(document.readyState || '');
+    var docReady = readyState === 'interactive' || readyState === 'complete';
     var send = findSendButton();
     var att = api.probeAttachments();
+    var ready = !!(hostOk && docReady && input);
     return {
-      ok: !!(hostOk && input),
+      ok: ready,
       id: 'deepseek',
       host: host,
       hostOk: hostOk,
+      readyState: readyState,
+      docReady: docReady,
       loggedIn: !!input,
       hasInput: !!input,
       hasSend: !!send,
@@ -723,7 +849,13 @@
       attachmentsSupported: !!att.supported,
       hasFileInput: !!att.hasFileInput,
       href: location.href || '',
-      detail: !hostOk ? 'host mismatch' : !input ? 'input not found (login?)' : 'ok'
+      detail: !hostOk
+        ? 'host mismatch'
+        : !docReady
+          ? 'document loading'
+          : !input
+            ? 'input not found (login?)'
+            : 'ok'
     };
   };
 

@@ -98,54 +98,76 @@
                   providerId:(NSString *)providerId
                   completion:(void (^)(NSError *_Nullable))completion {
     NSString *key = [self keyForWebView:webView providerId:providerId];
-    NSString *runtime = [self loadResourceNamed:@"runtime.js" subdirectory:@"AIBridge"];
-    if (!runtime) {
-        runtime = [self loadResourceNamed:@"runtime.js" subdirectory:nil];
-    }
-    NSString *adapterName = @"deepseek.js";
-    if ([providerId isEqualToString:@"mock"]) {
-        adapterName = @"mock.js";
-    } else if ([providerId isEqualToString:@"kimi"]) {
-        adapterName = @"kimi.js";
-    } else if ([providerId isEqualToString:@"iwencai"]) {
-        adapterName = @"iwencai.js";
-    } else if ([providerId isEqualToString:@"doubao"]) {
-        adapterName = @"doubao.js";
-    } else if ([providerId isEqualToString:@"gemini"]) {
-        adapterName = @"gemini.js";
-    } else if ([providerId isEqualToString:@"chatgpt"]) {
-        adapterName = @"chatgpt.js";
-    } else if ([providerId isEqualToString:@"deepseek"]) {
-        adapterName = @"deepseek.js";
-    }
-    NSString *adapter = [self loadResourceNamed:adapterName subdirectory:@"AIBridge/Adapters"];
-    if (!adapter) {
-        adapter = [self loadResourceNamed:adapterName subdirectory:@"Adapters"];
-    }
-    if (!runtime.length || !adapter.length) {
-        if (completion) {
-            completion([NSError errorWithDomain:@"AIBridgeDOMProvider" code:2
-                                      userInfo:@{NSLocalizedDescriptionKey:
-                                                     @"缺少 AIBridge runtime/adapter 资源，请重新构建"}]);
+    NSString *pid = providerId.length ? providerId : @"deepseek";
+    // 已注入则跳过整包重注入（冷启动 probe 轮询时反复注入会卡住 WebKit 队列）。
+    NSString *checkJS = [NSString stringWithFormat:
+        @"(function(){ try {"
+         "  var a=window.__MeoAIBridge;"
+         "  if(!a||typeof a.probe!=='function') return 'missing';"
+         "  var p=a.probe();"
+         "  if(p&&p.id&&p.id!=='%@') return 'wrong';"
+         "  return 'ok';"
+         "} catch(e){ return 'err'; } })()",
+        pid];
+    __weak typeof(self) weakSelf = self;
+    [self evaluate:checkJS onWebView:webView completion:^(id checkResult, NSError *checkErr) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSString *status = [checkResult isKindOfClass:[NSString class]] ? checkResult : @"";
+        if (!checkErr && [status isEqualToString:@"ok"]) {
+            [strongSelf.readyKeys addObject:key];
+            if (completion) completion(nil);
+            return;
         }
-        return;
-    }
-    // 包一层并返回字符串，避免脚本末尾表达式类型无法桥接。
-    NSString *combined = [NSString stringWithFormat:
-                          @"(function(){\n%@\n%@\nreturn 'ready';\n})();", runtime, adapter];
-    [self evaluate:combined onWebView:webView completion:^(id result, NSError *error) {
-        BOOL ok = !error && [result isKindOfClass:[NSString class]] && [result isEqualToString:@"ready"];
-        // 有些 WebKit 对返回值挑剔：只要无 error 且全局已装上，也算成功。
-        if (!error) {
-            [self.readyKeys addObject:key];
+        NSString *runtime = [strongSelf loadResourceNamed:@"runtime.js" subdirectory:@"AIBridge"];
+        if (!runtime) {
+            runtime = [strongSelf loadResourceNamed:@"runtime.js" subdirectory:nil];
         }
-        if (completion) {
-            if (error && !ok) {
-                completion(error);
-            } else {
-                completion(nil);
+        NSString *adapterName = @"deepseek.js";
+        if ([pid isEqualToString:@"mock"]) {
+            adapterName = @"mock.js";
+        } else if ([pid isEqualToString:@"kimi"]) {
+            adapterName = @"kimi.js";
+        } else if ([pid isEqualToString:@"iwencai"]) {
+            adapterName = @"iwencai.js";
+        } else if ([pid isEqualToString:@"doubao"]) {
+            adapterName = @"doubao.js";
+        } else if ([pid isEqualToString:@"gemini"]) {
+            adapterName = @"gemini.js";
+        } else if ([pid isEqualToString:@"chatgpt"]) {
+            adapterName = @"chatgpt.js";
+        } else if ([pid isEqualToString:@"deepseek"]) {
+            adapterName = @"deepseek.js";
+        }
+        NSString *adapter = [strongSelf loadResourceNamed:adapterName subdirectory:@"AIBridge/Adapters"];
+        if (!adapter) {
+            adapter = [strongSelf loadResourceNamed:adapterName subdirectory:@"Adapters"];
+        }
+        if (!runtime.length || !adapter.length) {
+            if (completion) {
+                completion([NSError errorWithDomain:@"AIBridgeDOMProvider" code:2
+                                          userInfo:@{NSLocalizedDescriptionKey:
+                                                         @"缺少 AIBridge runtime/adapter 资源，请重新构建"}]);
             }
+            return;
         }
+        // 包一层并返回字符串，避免脚本末尾表达式类型无法桥接。
+        NSString *combined = [NSString stringWithFormat:
+                              @"(function(){\n%@\n%@\nreturn 'ready';\n})();", runtime, adapter];
+        [strongSelf evaluate:combined onWebView:webView completion:^(id result, NSError *error) {
+            BOOL ok = !error && [result isKindOfClass:[NSString class]] && [result isEqualToString:@"ready"];
+            // 有些 WebKit 对返回值挑剔：只要无 error 且全局已装上，也算成功。
+            if (!error) {
+                [strongSelf.readyKeys addObject:key];
+            }
+            if (completion) {
+                if (error && !ok) {
+                    completion(error);
+                } else {
+                    completion(nil);
+                }
+            }
+        }];
     }];
 }
 

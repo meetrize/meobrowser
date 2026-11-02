@@ -525,6 +525,10 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
                                                  selector:@selector(handleMemoryWarning:)
                                                      name:BrowserMemoryPressureNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(aiBridgeRequestSelectBoundTab:)
+                                                     name:@"AIBridgeRequestSelectBoundTabNotification"
+                                                   object:nil];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
         _downloadManager = [BrowserDownloadManager sharedManager];
@@ -3117,9 +3121,38 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     [self.chromeActionsView setOn:NO forItemID:BrowserChromeActionAIAssistantID];
 }
 
+- (BOOL)aiAssistantIsBridgeBoundTab:(BrowserTab *)tab {
+    if (!tab) return NO;
+    for (AIBridgeBinding *b in AIBridgeRegistry.sharedRegistry.allBindings) {
+        if (b.tab == tab) return YES;
+    }
+    return NO;
+}
+
+/// 供页面上下文采集：跳过 AI Bridge 绑定页，回落到最近活跃的普通浏览标签。
+- (BrowserTab *)aiAssistantBrowseTab {
+    BrowserTab *sel = self.tabController.selectedTab;
+    if (sel && !sel.isNewTabPage && ![self aiAssistantIsBridgeBoundTab:sel]) {
+        return sel;
+    }
+    BrowserTab *best = nil;
+    for (BrowserTab *t in self.tabController.tabs) {
+        if (!t || t.isNewTabPage || [self aiAssistantIsBridgeBoundTab:t]) continue;
+        if (!best || t.lastActiveTimestamp > best.lastActiveTimestamp) {
+            best = t;
+        }
+    }
+    return best;
+}
+
 - (void)openAIAssistantWithAction:(NSString *)actionKey
                           context:(NSString *)context
                       pageContext:(BOOL)pageContext {
+    // 冷启动自动连接会切到 AI 网页；pageContext 总结改走 Recipe，并固定采集源。
+    if (pageContext && [actionKey isEqualToString:BrowserAIAssistantActionSummarize]) {
+        [self openAIAssistantWithRecipeId:AIPageContextRecipeIDSummarizePage];
+        return;
+    }
     [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
     [self.aiAssistantSidebarController reloadUI];
     [self.aiAssistantSidebarController presentAction:actionKey
@@ -3135,9 +3168,16 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (!recipeId.length) return;
     AIPageContextRecipe *r = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
     BOOL autoSend = r ? r.autoSend : YES;
+    // 必须在 setVisible/自动连接之前记下文章标签，否则会采到刚打开的 AI 网页。
+    BrowserTab *sourceTab = [self aiAssistantBrowseTab];
+    WKWebView *sourceView = sourceTab.webView;
+    NSUUID *sourceTabID = sourceTab.tabID;
     [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
     [self.aiAssistantSidebarController reloadUI];
-    [self.aiAssistantSidebarController presentPageRecipe:recipeId autoSend:autoSend];
+    [self.aiAssistantSidebarController presentPageRecipe:recipeId
+                                               autoSend:autoSend
+                                                webView:sourceView
+                                                  tabID:sourceTabID];
     [self updateAIAssistantButtonAppearance];
     [self updateAIBridgeButtonAppearance];
     [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
@@ -3169,21 +3209,18 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
 
 - (WKWebView *)aiAssistantSidebarCurrentWebView:(BrowserAIAssistantSidebarController *)controller {
     (void)controller;
-    BrowserTab *tab = self.tabController.selectedTab;
-    if (!tab || tab.isNewTabPage) {
-        return nil;
-    }
+    BrowserTab *tab = [self aiAssistantBrowseTab];
     return tab.webView;
 }
 
 - (NSUUID *)aiAssistantSidebarCurrentTabID:(BrowserAIAssistantSidebarController *)controller {
     (void)controller;
-    return self.tabController.selectedTab.tabID;
+    return [self aiAssistantBrowseTab].tabID;
 }
 
 - (NSString *)aiAssistantSidebarCurrentPageTitle:(BrowserAIAssistantSidebarController *)controller {
     (void)controller;
-    BrowserTab *tab = self.tabController.selectedTab;
+    BrowserTab *tab = [self aiAssistantBrowseTab];
     if (!tab) return nil;
     // 优先实时 WKWebView.title：导航初期 tab.title 常是 host/URL，真正标题晚到。
     NSString *live = [tab.webView.title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -3356,6 +3393,51 @@ applyScraperDraftRecipe:(id)recipe {
 
 #pragma mark - AI Assistant Session (open / focus / reopen)
 
+- (void)aiBridgeRequestSelectBoundTab:(NSNotification *)note {
+    BrowserTab *tab = note.userInfo[@"tab"];
+    if (![tab isKindOfClass:[BrowserTab class]]) return;
+    if (![self.tabController.tabs containsObject:tab]) return;
+    NSString *providerId = nil;
+    for (AIBridgeBinding *b in AIBridgeRegistry.sharedRegistry.allBindings) {
+        if (b.tab == tab) {
+            providerId = b.providerId;
+            break;
+        }
+    }
+    [self aiAssistantPrepareTabForBinding:tab providerId:providerId.length ? providerId : @"deepseek"];
+}
+
+- (void)aiAssistantPrepareTabForBinding:(BrowserTab *)tab providerId:(NSString *)providerId {
+    if (!tab) return;
+    // 必须保持选中：后台标签的 deferred cold-wake 会在切走后被取消，导致永远 about:blank。
+    if (self.tabController.selectedTab != tab) {
+        [self.tabController selectTab:tab];
+    }
+    [tab wakeFromHibernationIfNeeded];
+    WKWebView *wv = tab.webView;
+    if (!wv) {
+        wv = [tab ensureWebView];
+    }
+    if (!wv) return;
+    // 同步挂载并加载，不依赖 refreshTabsUI 延后冷唤醒。
+    [self attachWebViewForTab:tab];
+    if (tab.pendingRestorableLoad) {
+        [tab loadPendingRestorableURLIfNeeded];
+        return;
+    }
+    NSURL *live = [BrowserWebView publicURLFromInternalURL:wv.URL] ?: wv.URL;
+    NSString *abs = live.absoluteString ?: @"";
+    BOOL blank = abs.length == 0 || [abs isEqualToString:@"about:blank"];
+    if (blank) {
+        NSURL *target = tab.restorableURL
+            ?: [AIBridgeService.sharedService homeURLForProviderId:providerId];
+        if (target) {
+            tab.restorableURL = target;
+            [wv loadRequest:[NSURLRequest requestWithURL:target]];
+        }
+    }
+}
+
 - (void)aiAssistantOpenHomeAndBindProviderId:(NSString *)providerId
                                   sessionId:(NSString *)sessionId
                                  completion:(void (^)(AIBridgeBinding *_Nullable, NSString *_Nullable))completion {
@@ -3377,7 +3459,15 @@ applyScraperDraftRecipe:(id)recipe {
         finish(nil, @"无法确定该平台首页");
         return;
     }
-    BrowserTab *tab = [self.tabController addTabWithURL:home];
+
+    // 立刻打开并选中 AI 页、同步加载、绑定后马上 Ready。
+    // 文档域名等待放到发送链路；这里不阻塞 Ready，避免一直「连接中」无法提交。
+    BrowserTab *tab = [self aiBridgeFindTabMatchingProviderId:providerId];
+    if (!tab) {
+        tab = [self.tabController addTabWithURL:home select:YES];
+    }
+    [self aiAssistantPrepareTabForBinding:tab providerId:providerId];
+
     NSURL *url = [self aiBridgeResolvedURLForTab:tab] ?: home;
     NSError *err = nil;
     AIBridgeBinding *binding = [svc bindCurrentTab:tab
@@ -3385,7 +3475,12 @@ applyScraperDraftRecipe:(id)recipe {
                                         providerId:providerId
                                          sessionId:sessionId
                                              error:&err];
-    finish(binding, err.localizedDescription);
+    if (!binding) {
+        finish(nil, err.localizedDescription ?: @"绑定失败");
+        return;
+    }
+    // 保持 AI 标签选中，避免 deferred cold-wake 被取消；发送时会再确认文档域名。
+    finish(binding, nil);
 }
 
 - (void)aiAssistantSidebar:(BrowserAIAssistantSidebarController *)controller
@@ -5510,9 +5605,15 @@ didRequestTransferTabID:(NSUUID *)tabID
         }
         AIPageContextRecipe *cfg = [[AIPageContextRecipeStore sharedStore] recipeWithId:recipeId];
         if (cfg) autoSend = cfg.autoSend;
+        BrowserTab *sourceTab = [self aiAssistantBrowseTab];
+        WKWebView *sourceView = sourceTab.webView;
+        NSUUID *sourceTabID = sourceTab.tabID;
         [self.trailingSidebarSlot setAIAssistantVisible:YES animated:YES];
         [self.aiAssistantSidebarController reloadUI];
-        [self.aiAssistantSidebarController presentPageRecipe:recipeId autoSend:autoSend];
+        [self.aiAssistantSidebarController presentPageRecipe:recipeId
+                                                   autoSend:autoSend
+                                                    webView:sourceView
+                                                      tabID:sourceTabID];
         [self updateAIAssistantButtonAppearance];
         [self.chromeActionsView setOn:YES forItemID:BrowserChromeActionAIAssistantID];
         return YES;

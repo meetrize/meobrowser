@@ -22,6 +22,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (BrowserTab *)addNewTab;
 - (BrowserTab *)addTabWithURL:(NSURL *)url;
+/// @param select YES 时选中新标签（默认行为）；NO 时仅插入，保持当前选中不变。
+- (BrowserTab *)addTabWithURL:(NSURL *)url select:(BOOL)select;
 /// 打开只读 HTML 内容标签（查看源代码等）；不进入会话恢复。
 - (BrowserTab *)addTabWithHTMLString:(NSString *)html title:(NSString *)title;
 /// 接入 createWebView 返回的 related WebView；会选中该标签并保留与 opener 的关联。
