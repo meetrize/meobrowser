@@ -38,8 +38,12 @@ static NSString *BrowserTabToolTipString(BrowserTab *tab) {
     if (urlString.length == 0) {
         return title;
     }
-    // Chrome 式：完整标题 + 完整网址（两行）
-    return [NSString stringWithFormat:@"%@\n%@", title, urlString];
+    // Chrome 式：完整标题 + 完整网址（两行）；已连接 AI 时补一行状态。
+    NSString *tip = [NSString stringWithFormat:@"%@\n%@", title, urlString];
+    if (tab.bridgeKeepsAlive) {
+        tip = [tip stringByAppendingString:@"\n已连接 AI 助手"];
+    }
+    return tip;
 }
 
 static NSString *BrowserTabPageURLString(BrowserTab *tab) {
@@ -1906,6 +1910,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     item.tabToolTip = BrowserTabToolTipString(tab);
     item.showsAudioIndicator = tab.isAudible || tab.isPageMutedByUser;
     item.audioMuted = tab.isPageMutedByUser;
+    item.showsAIBindingIndicator = tab.bridgeKeepsAlive;
 
     __weak typeof(self) weakSelf = self;
     __weak BrowserTabItemView *weakItem = item;
@@ -2286,6 +2291,9 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         BOOL showAudio = tab.isAudible || tab.isPageMutedByUser;
         if (item.showsAudioIndicator != showAudio) {
             item.showsAudioIndicator = showAudio;
+        }
+        if (item.showsAIBindingIndicator != tab.bridgeKeepsAlive) {
+            item.showsAIBindingIndicator = tab.bridgeKeepsAlive;
         }
         if (item.audioMuted != tab.isPageMutedByUser) {
             item.audioMuted = tab.isPageMutedByUser;

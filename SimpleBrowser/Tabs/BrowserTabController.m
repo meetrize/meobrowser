@@ -206,6 +206,9 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
     if (index == NSNotFound) {
         return;
     }
+    if (![self confirmClosingTabs:@[ tab ]]) {
+        return;
+    }
 
     if (self.mutableTabs.count <= 1) {
         [self rememberClosedTab:tab atIndex:index];
@@ -297,6 +300,16 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
         return;
     }
 
+    NSMutableArray<BrowserTab *> *toClose = [NSMutableArray array];
+    for (BrowserTab *t in self.mutableTabs) {
+        if (t != tab) {
+            [toClose addObject:t];
+        }
+    }
+    if (![self confirmClosingTabs:toClose]) {
+        return;
+    }
+
     NSMutableIndexSet *indexes = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.mutableTabs.count)];
     [indexes removeIndex:keepIndex];
     [self removeTabsAtIndexes:indexes];
@@ -309,7 +322,23 @@ static BOOL BrowserTabIsEligibleForBudgetHibernation(BrowserTab *tab,
     }
 
     NSRange range = NSMakeRange(index + 1, self.mutableTabs.count - (index + 1));
+    NSArray<BrowserTab *> *toClose = [self.mutableTabs subarrayWithRange:range];
+    if (![self confirmClosingTabs:toClose]) {
+        return;
+    }
     [self removeTabsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:range]];
+}
+
+/// 关闭前询问代理（已绑定 AI 的标签由窗口弹确认框）。
+- (BOOL)confirmClosingTabs:(NSArray<BrowserTab *> *)tabs {
+    if (tabs.count == 0) {
+        return YES;
+    }
+    id<BrowserTabControllerDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:@selector(tabController:shouldCloseTabs:)]) {
+        return [delegate tabController:self shouldCloseTabs:tabs];
+    }
+    return YES;
 }
 
 - (nullable BrowserTab *)restoreRecentlyClosedTab {

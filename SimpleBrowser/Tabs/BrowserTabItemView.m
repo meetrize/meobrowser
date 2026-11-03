@@ -46,6 +46,7 @@ static const CGFloat kPinIconSize = 12.0;
 static const CGFloat kAudioButtonSize = 14.0;
 static const CGFloat kAudioBadgeSize = 10.0;
 static const CGFloat kAudioAfterFaviconGap = 2.0;
+static const CGFloat kAIBadgeSize = 10.0;
 static const NSTimeInterval kTabHoverTipDelay = 0.65;
 
 static const CGFloat kDefaultTabHeight = 31.0;
@@ -120,6 +121,50 @@ static const CGFloat kCloseAlwaysVisibleMinWidth = 120.0;
     return self;
 }
 @end
+
+@interface BrowserTabAIBadgeView : NSImageView
+@end
+
+@implementation BrowserTabAIBadgeView
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+@end
+
+/// 已连接 AI 的小徽标；优先用 SF Symbol，旧系统退回自绘「AI」圆点。
+static NSImage *BrowserTabAIBadgeImage(void) {
+    static NSImage *image = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        if (@available(macOS 11.0, *)) {
+            NSImage *symbol = [NSImage imageWithSystemSymbolName:@"sparkles"
+                                       accessibilityDescription:@"AI 已连接"];
+            if (symbol) {
+                NSImageSymbolConfiguration *cfg =
+                    [NSImageSymbolConfiguration configurationWithPointSize:9 weight:NSFontWeightBold];
+                image = [symbol imageWithSymbolConfiguration:cfg] ?: symbol;
+            }
+        }
+        if (image) {
+            return;
+        }
+        image = [NSImage imageWithSize:NSMakeSize(12, 12) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+            [[NSColor systemPurpleColor] setFill];
+            [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
+            NSDictionary<NSAttributedStringKey, id> *attrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:5 weight:NSFontWeightBold],
+                NSForegroundColorAttributeName: [NSColor whiteColor],
+            };
+            NSSize size = [@"AI" sizeWithAttributes:attrs];
+            [@"AI" drawAtPoint:NSMakePoint((rect.size.width - size.width) / 2.0,
+                                          (rect.size.height - size.height) / 2.0)
+                withAttributes:attrs];
+            return YES;
+        }];
+    });
+    return image;
+}
 
 NSColor *BrowserTabActiveFillColor(void) {
     if ([[NSApp effectiveAppearance].name containsString:@"Dark"]) {
@@ -322,6 +367,7 @@ NSColor *BrowserTabActiveFillColor(void) {
 @interface BrowserTabItemView ()
 @property (nonatomic, strong) NSImageView *faviconImageView;
 @property (nonatomic, strong) BrowserTabFaviconLetterBadgeView *faviconLetterBadge;
+@property (nonatomic, strong) BrowserTabAIBadgeView *aiBadgeView;
 @property (nonatomic, strong) NSButton *audioButton;
 @property (nonatomic, strong) NSTextField *titleLabel;
 @property (nonatomic, strong) NSImageView *pinIconView;
@@ -389,6 +435,16 @@ NSColor *BrowserTabActiveFillColor(void) {
         _faviconLetterBadge.translatesAutoresizingMaskIntoConstraints = NO;
         _faviconLetterBadge.hidden = YES;
         [self addSubview:_faviconLetterBadge];
+
+        _aiBadgeView = [[BrowserTabAIBadgeView alloc] initWithFrame:NSZeroRect];
+        _aiBadgeView.translatesAutoresizingMaskIntoConstraints = NO;
+        _aiBadgeView.imageScaling = NSImageScaleProportionallyDown;
+        _aiBadgeView.image = BrowserTabAIBadgeImage();
+        _aiBadgeView.hidden = YES;
+        if (@available(macOS 10.14, *)) {
+            _aiBadgeView.contentTintColor = [NSColor systemPurpleColor];
+        }
+        [self addSubview:_aiBadgeView];
 
         _audioButton = [[BrowserTabAudioButton alloc] initWithFrame:NSZeroRect];
         _audioButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -484,6 +540,11 @@ NSColor *BrowserTabActiveFillColor(void) {
             [_faviconLetterBadge.trailingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor],
             [_faviconLetterBadge.topAnchor constraintEqualToAnchor:_faviconImageView.topAnchor],
             [_faviconLetterBadge.bottomAnchor constraintEqualToAnchor:_faviconImageView.bottomAnchor],
+
+            [_aiBadgeView.trailingAnchor constraintEqualToAnchor:_faviconImageView.trailingAnchor constant:2.0],
+            [_aiBadgeView.bottomAnchor constraintEqualToAnchor:_faviconImageView.bottomAnchor constant:1.0],
+            [_aiBadgeView.widthAnchor constraintEqualToConstant:kAIBadgeSize],
+            [_aiBadgeView.heightAnchor constraintEqualToConstant:kAIBadgeSize],
 
             _audioWidthConstraint,
             _audioHeightConstraint,
@@ -630,6 +691,11 @@ NSColor *BrowserTabActiveFillColor(void) {
     if (self.pointerInside) {
         [self scheduleHoverTipIfNeeded];
     }
+}
+
+- (void)setShowsAIBindingIndicator:(BOOL)showsAIBindingIndicator {
+    _showsAIBindingIndicator = showsAIBindingIndicator;
+    self.aiBadgeView.hidden = !showsAIBindingIndicator;
 }
 
 - (void)setShowsAudioIndicator:(BOOL)showsAudioIndicator {

@@ -529,6 +529,10 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
                                                  selector:@selector(aiBridgeRequestPrepareBoundTab:)
                                                      name:@"AIBridgeRequestPrepareBoundTabNotification"
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(aiBridgeRegistryDidChange:)
+                                                     name:AIBridgeRegistryDidChangeNotification
+                                                   object:nil];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
         _downloadManager = [BrowserDownloadManager sharedManager];
@@ -3407,6 +3411,14 @@ applyScraperDraftRecipe:(id)recipe {
     [self aiAssistantPrepareTabForBinding:tab providerId:providerId.length ? providerId : @"deepseek"];
 }
 
+- (void)aiBridgeRegistryDidChange:(NSNotification *)note {
+    (void)note;
+    // 绑定/解绑后刷新标签条上的 AI 徽标（标签条可能还没重建）。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateTabStripDisplay];
+    });
+}
+
 - (void)aiAssistantPrepareTabForBinding:(BrowserTab *)tab providerId:(NSString *)providerId {
     if (!tab) return;
     // 后台准备：绝不切换选中标签。AI 请求只需在离屏 WebView 里执行，
@@ -5170,6 +5182,44 @@ applyScraperDraftRecipe:(id)recipe {
 - (void)tabControllerRequestsCloseWindow:(id)controller {
     (void)controller;
     [self.window close];
+}
+
+/// 关闭包含已绑定 AI 的标签前确认，避免误关后会话解绑。
+- (BOOL)tabController:(BrowserTabController *)controller shouldCloseTabs:(NSArray<BrowserTab *> *)tabs {
+    (void)controller;
+    NSMutableArray<BrowserTab *> *aiTabs = [NSMutableArray array];
+    for (BrowserTab *tab in tabs) {
+        if (tab.bridgeKeepsAlive) {
+            [aiTabs addObject:tab];
+        }
+    }
+    if (aiTabs.count == 0) {
+        return YES;
+    }
+
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = aiTabs.count == 1
+        ? @"关闭已连接 AI 的标签页？"
+        : [NSString stringWithFormat:@"关闭 %lu 个已连接 AI 的标签页？", (unsigned long)aiTabs.count];
+    NSMutableString *detail = [NSMutableString stringWithString:
+        @"以下标签页已连接 AI 助手，关闭后对应会话将解绑："];
+    NSInteger shown = MIN((NSInteger)aiTabs.count, 5);
+    for (NSInteger i = 0; i < shown; i++) {
+        BrowserTab *tab = aiTabs[(NSUInteger)i];
+        NSString *name = tab.displayTitle.length ? tab.displayTitle : nil;
+        if (name.length == 0) {
+            name = tab.webView.URL.host ?: @"AI 网页";
+        }
+        [detail appendFormat:@"\n• %@", name];
+    }
+    if (aiTabs.count > (NSUInteger)shown) {
+        [detail appendFormat:@"\n… 以及另外 %lu 个", (unsigned long)(aiTabs.count - (NSUInteger)shown)];
+    }
+    alert.informativeText = detail;
+    [alert addButtonWithTitle:@"取消"];
+    [alert addButtonWithTitle:@"关闭"];
+    return [alert runModal] == NSAlertSecondButtonReturn;
 }
 
 #pragma mark - BrowserTabStripViewDelegate

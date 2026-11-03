@@ -2,12 +2,17 @@
 #import <WebKit/WebKit.h>
 
 @class BrowserTab;
+@class BrowserTabController;
 
 NS_ASSUME_NONNULL_BEGIN
 
 @protocol BrowserTabControllerDelegate <NSObject>
 - (void)tabControllerDidChange:(id)controller;
 - (void)tabControllerRequestsCloseWindow:(id)controller;
+
+@optional
+/// 关闭前确认；返回 NO 则取消本次关闭。tabs 为本次操作将关闭的标签。
+- (BOOL)tabController:(BrowserTabController *)controller shouldCloseTabs:(NSArray<BrowserTab *> *)tabs;
 @end
 
 @interface BrowserTabController : NSObject

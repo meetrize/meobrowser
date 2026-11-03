@@ -62,6 +62,8 @@ FOUNDATION_EXPORT const CGFloat BrowserTabFaviconTitleGap;
 
 /// 是否显示出声/静音控件（isAudible || isPageMutedByUser）。
 @property (nonatomic, assign) BOOL showsAudioIndicator;
+/// 已连接 AI 平台（AI Bridge 绑定）：favicon 右下角显示 AI 徽标。
+@property (nonatomic, assign) BOOL showsAIBindingIndicator;
 /// 用户已页级静音（划线喇叭）。
 @property (nonatomic, assign) BOOL audioMuted;
 @property (nonatomic, copy, nullable) void (^onToggleMute)(void);
