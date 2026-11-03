@@ -1299,6 +1299,14 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     self.dragForeignMode = NO;
 }
 
+/// 本次拖拽不会新建窗口时，释放提前预热的隐藏窗口。
+- (void)discardPrewarmedAdoptionWindow {
+    id delegate = NSApp.delegate;
+    if ([delegate respondsToSelector:@selector(discardPrewarmedBrowserWindow)]) {
+        [(AppDelegate *)delegate discardPrewarmedBrowserWindow];
+    }
+}
+
 - (void)moveReorderDragForItem:(BrowserTabItemView *)item locationInWindow:(NSPoint)locationInWindow {
     if (item != self.draggingItem || self.dragEnding) {
         return;
@@ -1347,6 +1355,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
                         animated:YES];
         if (detach) {
             [self layoutTabsCollapsingDraggedItem:item];
+            // 已离开标签条：提前把“收养窗口”建好（隐藏），松手时只剩收养+显示，
+            // 避免 drop 时现场建整套 chrome 带来的明显延迟。
+            if ([appDelegate respondsToSelector:@selector(prewarmBrowserWindowForTabAdoption)]) {
+                [appDelegate prewarmBrowserWindowForTabAdoption];
+            }
         } else {
             [self layoutTabsExcludingDraggedItem:item];
         }
@@ -1374,6 +1387,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 /// 鼠标 X → 空位下标：按“去掉被拖项后”的紧凑坐标算边界，空位即鼠标正下方的槽。
+/// 返回值是去掉被拖项后的插入下标（0…count-1），与最终数组下标一致。
 - (NSUInteger)gapIndexForMouseX:(CGFloat)mouseX draggedItem:(BrowserTabItemView *)dragged {
     BOOL pinned = dragged.tabPinned;
     NSUInteger actualPinned = 0;
@@ -1382,28 +1396,41 @@ static const CGFloat kStripDragZoneOutset = 8.0;
             actualPinned++;
         }
     }
+    // 去掉被拖项后的紧凑下标：固定页只能落在固定段，普通页只能落在普通段。
+    NSUInteger compactCount = self.tabItems.count > 0 ? self.tabItems.count - 1 : 0;
     NSUInteger low = pinned ? 0 : actualPinned;
-    NSUInteger high = pinned ? actualPinned : self.tabItems.count;
-    // 紧凑坐标下可插入槽位数
-    NSMutableArray<NSNumber *> *boundaries = [NSMutableArray array];
+    NSUInteger high = pinned ? (actualPinned > 0 ? actualPinned - 1 : 0) : compactCount;
+    if (low > high) {
+        return low;
+    }
+
+    // boundaries[k] = 紧凑下标 low+k 处空位的左边界；末尾空位也必须有边界，
+    // 否则永远拖不到最后一个标签的右侧。
+    NSMutableArray<NSNumber *> *boundaries =
+        [NSMutableArray arrayWithCapacity:high - low + 1];
     CGFloat x = 0;
-    NSUInteger slot = 0;
+    NSUInteger gap = 0;
     for (BrowserTabItemView *item in self.tabItems) {
         if (item == dragged) {
             continue;
         }
-        if (slot >= low && slot <= high) {
+        if (gap >= low && gap <= high) {
             [boundaries addObject:@(x)];
         }
         if (!item.hidden) {
             x += [self layoutWidthForItem:item] + kTabSpacing;
         }
-        slot++;
+        gap++;
     }
-    [boundaries addObject:@(x)];
-    // boundaries[k] 是第 k 个槽的左边界，槽 k 区间 [b_k, b_{k+1})
-    NSUInteger slots = boundaries.count - 1;
-    for (NSUInteger k = 0; k < slots; k++) {
+    if (compactCount >= low && compactCount <= high) {
+        [boundaries addObject:@(x)];
+    }
+
+    NSUInteger slotCount = boundaries.count;
+    if (slotCount == 0) {
+        return low;
+    }
+    for (NSUInteger k = 0; k + 1 < slotCount; k++) {
         CGFloat left = boundaries[k].doubleValue;
         CGFloat right = boundaries[k + 1].doubleValue;
         CGFloat mid = (left + right) * 0.5;
@@ -1412,7 +1439,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
             return low + k;
         }
     }
-    return low + slots - 1;
+    // 越过所有中点：落在最右（末尾）空位
+    return low + slotCount - 1;
 }
 
 /// 当前空位保持住：鼠标仍在空位区间 ±10pt 内就不换位。
@@ -1816,6 +1844,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         }
         [strongSelf finishDragSessionRestoringItem:item];
         if (!tabID) {
+            [strongSelf discardPrewarmedAdoptionWindow];
             return;
         }
         NSUUID *movedID = tabID;
@@ -1830,6 +1859,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
                 [delegate tabStripView:inner
         didRequestMoveTabIDToNewWindow:movedID
                            screenPoint:dropPoint];
+            } else {
+                [inner discardPrewarmedAdoptionWindow];
             }
         });
     };
@@ -1866,6 +1897,8 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     };
 
     if (foreignDrop) {
+        // 跨窗迁移不需要新窗口：预热窗口直接释放，避免隐藏窗口长期驻留。
+        [self discardPrewarmedAdoptionWindow];
         [ghost fadeOutWithCompletion:^{
             commitForeign();
         }];
@@ -1876,21 +1909,12 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     BOOL detach = !NSPointInRect(screenPoint, [self stripEffectiveZoneInScreen]);
 
     if (detach && tabID) {
-        NSSize ghostSize = ghost.ghostSize;
-        if (ghostSize.width < 1) {
-            ghostSize = item.bounds.size;
-        }
-        NSRect flyRect = NSMakeRect(screenPoint.x - ghostSize.width * 0.25,
-                                    screenPoint.y - ghostSize.height * 0.5,
-                                    ghostSize.width,
-                                    ghostSize.height);
-        [ghost setStyle:BrowserTabDragGhostStyleDetach animated:NO];
-        [ghost animateToScreenRect:flyRect completion:^{
-            commitDetach();
-        }];
+        // 拖出窗口：不再等 ghost 飞行/淡出动画，松手立刻建窗（预热窗口已在拖拽时就绪）。
+        commitDetach();
         return;
     }
 
+    [self discardPrewarmedAdoptionWindow];
     NSUInteger slotIndex = (toIndex != NSNotFound) ? toIndex : fromIndex;
     NSRect slotRect = [self screenRectForTabSlotAtIndex:slotIndex size:ghost.ghostSize];
     [ghost setStyle:BrowserTabDragGhostStyleInStrip animated:NO];
@@ -2011,6 +2035,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         [self.dragGhost endAndRemoveImmediately];
         self.dragGhost = nil;
         [self clearForeignDropTarget];
+        [self discardPrewarmedAdoptionWindow];
     }
     [self hideForeignDropPlaceholder];
 

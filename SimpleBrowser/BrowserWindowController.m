@@ -294,6 +294,9 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 /// 防止 refreshTabsUI ↔ findBar sync 等路径重入导致栈溢出。
 @property (nonatomic, assign) BOOL refreshTabsUIInProgress;
 @property (nonatomic, assign) BOOL refreshTabsUINeedsRetry;
+/// 迁移标签时暂缓源窗口的 tabControllerDidChange 整窗刷新：
+/// 先把新窗口/目标窗口显示出来，再做源窗口刷新，避免拖出窗口时先等源窗重排。
+@property (nonatomic, assign) BOOL deferringTabChangeRefresh;
 /// estimatedProgress UI 合并。
 @property (nonatomic, assign) NSTimeInterval lastProgressUIUpdateTime;
 @property (nonatomic, assign) double lastProgressUIValue;
@@ -5163,6 +5166,10 @@ applyScraperDraftRecipe:(id)recipe {
     if (self.autoScrollController.enabled) {
         self.autoScrollController.enabled = NO;
     }
+    if (self.deferringTabChangeRefresh) {
+        // 调用方（拖出新建窗口 / 跨窗迁移）会在目标窗口显示后手动 refreshTabsUI。
+        return;
+    }
     // 选中标签未变且正在 Element Fullscreen：只刷标签栏，避免整页 refresh 扰动全屏层。
     NSUUID *selectedID = self.tabController.selectedTab.tabID;
     WKWebView *selectedWebView = self.tabController.selectedTab.webView;
@@ -5367,7 +5374,10 @@ didRequestTransferTabID:(NSUUID *)tabID
     [self detachWebViewIfNeeded:tab.webView];
 
     BOOL wasLastTab = (self.tabController.tabs.count <= 1);
+    // 先抑制源窗的整窗刷新：等目标窗口已接住并显示后再刷，避免拖放感知被源窗重排拖慢。
+    self.deferringTabChangeRefresh = YES;
     BrowserTab *moved = [self.tabController extractTabKeepingAlive:tab];
+    self.deferringTabChangeRefresh = NO;
     if (!moved) {
         return;
     }
@@ -5388,6 +5398,7 @@ didRequestTransferTabID:(NSUUID *)tabID
     if (!tab) {
         return;
     }
+    CFTimeInterval moveStart = CACurrentMediaTime();
 
     NSSize defaultSize = self.window ? self.window.frame.size : NSMakeSize(1024, 700);
     if (defaultSize.width < 200) {
@@ -5434,7 +5445,10 @@ didRequestTransferTabID:(NSUUID *)tabID
     [self detachWebViewIfNeeded:tab.webView];
 
     BOOL wasLastTab = (self.tabController.tabs.count <= 1);
+    // 先抑制源窗的整窗刷新：新建窗口显示后再刷，drop→新窗出现这一段不再等源窗重排。
+    self.deferringTabChangeRefresh = YES;
     BrowserTab *moved = [self.tabController extractTabKeepingAlive:tab];
+    self.deferringTabChangeRefresh = NO;
     if (!moved) {
         return;
     }
@@ -5449,6 +5463,10 @@ didRequestTransferTabID:(NSUUID *)tabID
     } else {
         [self refreshTabsUI];
         [self schedulePersistTabSession];
+    }
+    if (BrowserTabUIDiagnosticsEnabled()) {
+        BrowserTabUILog(@"moveTabToNewWindow total=%.1fms",
+                        (CACurrentMediaTime() - moveStart) * 1000.0);
     }
 }
 

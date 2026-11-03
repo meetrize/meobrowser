@@ -29,6 +29,8 @@
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
+    /// 拖拽标签出窗时预热的隐藏窗口；drop 时直接收养，保证新窗口瞬时出现。
+    BrowserWindowController *_prewarmedTabAdoptionWindow;
     BrowserSettingsWindowController *_settingsWindowController;
     BrowserLoginAssistSettingsWindowController *_loginAssistSettingsController;
     NSMutableArray<NSURL *> *_pendingExternalURLs;
@@ -188,19 +190,59 @@
 }
 
 - (BrowserWindowController *)createBrowserWindowAdoptingTab:(BrowserTab *)tab frame:(NSRect)frame {
-    BrowserWindowController *controller = [[BrowserWindowController alloc] initForTabAdoption];
+    BOOL hasValidFrame = (frame.size.width >= 200 && frame.size.height >= 300);
+    // 拖拽标签出窗时已在 drag 阶段预热过一套隐藏窗口：直接复用，drop 后无需现场建 chrome。
+    BrowserWindowController *controller = _prewarmedTabAdoptionWindow;
+    _prewarmedTabAdoptionWindow = nil;
+    BOOL prewarmed = (controller != nil);
+    if (!controller) {
+        controller = [[BrowserWindowController alloc] initForTabAdoption];
+    }
     [_browserWindows addObject:controller];
-    [controller adoptTab:tab];
-    [controller showWindow:nil];
-    if (frame.size.width >= 200 && frame.size.height >= 300) {
-        [controller.window setFrame:frame display:YES];
-    } else if (_browserWindows.count == 1) {
-        [controller.window center];
+
+    if (prewarmed) {
+        // 先定位置、再收养、最后显示：避免“先显示再改 frame”引起的一次整窗重排。
+        if (hasValidFrame) {
+            [controller.window setFrame:frame display:NO];
+        } else if (_browserWindows.count == 1) {
+            [controller.window center];
+        } else {
+            [self cascadeWindow:controller.window];
+        }
+        [controller adoptTab:tab];
+        [controller showWindow:nil];
     } else {
-        [self cascadeWindow:controller.window];
+        [controller adoptTab:tab];
+        [controller showWindow:nil];
+        if (hasValidFrame) {
+            [controller.window setFrame:frame display:YES];
+        } else if (_browserWindows.count == 1) {
+            [controller.window center];
+        } else {
+            [self cascadeWindow:controller.window];
+        }
     }
     [controller scheduleTrafficLightPositioning];
     return controller;
+}
+
+- (void)prewarmBrowserWindowForTabAdoption {
+    if (_prewarmedTabAdoptionWindow) {
+        return;
+    }
+    CFTimeInterval start = CFAbsoluteTimeGetCurrent();
+    BrowserWindowController *controller = [[BrowserWindowController alloc] initForTabAdoption];
+    // 隐藏窗口先跑一次布局，真正 drop 时只剩收养 + 显示 + 改 frame。
+    [controller.window.contentView layoutSubtreeIfNeeded];
+    _prewarmedTabAdoptionWindow = controller;
+    if (BrowserTabUIDiagnosticsEnabled()) {
+        BrowserTabUILog(@"adoptionPrewarm total=%.1fms",
+                        (CFAbsoluteTimeGetCurrent() - start) * 1000.0);
+    }
+}
+
+- (void)discardPrewarmedBrowserWindow {
+    _prewarmedTabAdoptionWindow = nil;
 }
 
 - (nullable BrowserWindowController *)browserWindowAtScreenPoint:(NSPoint)screenPoint
@@ -406,6 +448,12 @@
 
     BOOL isLastBrowserWindow = (_browserWindows.count == 1 &&
                                 [_browserWindows containsObject:controller]);
+
+    if (isLastBrowserWindow) {
+        // 预热窗口不在 _browserWindows 里，但隐藏窗口可能阻止“最后一窗关闭即退出”，
+        // 这里一并释放。
+        [self discardPrewarmedBrowserWindow];
+    }
 
     if (_isTerminating) {
         // ⌘Q 等路径已在 applicationShouldTerminate: 写过完整会话，勿再以空列表覆盖。
