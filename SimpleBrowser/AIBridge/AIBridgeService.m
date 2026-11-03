@@ -811,10 +811,10 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongBoot = weakSelf;
         if (!strongBoot) return;
-        // 请求窗口选中绑定标签，避免后台页冷启动被取消 / 文档一直 blank。
+        // 请求前在后台唤醒绑定标签（不应抢前台）；冷启动时让页面自己加载完成。
         if (binding.tab) {
             [[NSNotificationCenter defaultCenter]
-                postNotificationName:@"AIBridgeRequestSelectBoundTabNotification"
+                postNotificationName:@"AIBridgeRequestPrepareBoundTabNotification"
                               object:strongBoot
                             userInfo:@{ @"tab": binding.tab }];
         }
@@ -837,7 +837,7 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         if (!strongSelf) return;
         if (!ok) {
             NSString *msg = failDetail.length ? failDetail
-                : @"绑定标签页面尚未加载。请先切换到该标签激活一次，再重试。";
+                : @"绑定标签页面尚未加载。请稍候重试；若持续失败，可在侧栏点「显示」查看该网页。";
             BOOL mismatch = [msg containsString:@"域名不匹配"];
             NSInteger status = mismatch ? 409 : 503;
             [strongSelf appendLogModel:model status:status duration:0 detail:msg];
@@ -975,7 +975,7 @@ static NSString * const kMeoBridgeDocHostJS =
         if (finished) return;
         NSURL *raw = webView.URL;
         finishOnce(NO, raw.host ?: @"", raw.absoluteString ?: @"",
-                   @"绑定标签页面尚未加载完成。请稍候再试，或先切换到 AI 网页标签激活一次。");
+                   @"绑定标签页面尚未加载完成。请稍候重试；若持续失败，可在侧栏点「显示」查看该网页。");
     });
     poll = ^{
         typeof(self) strongSelf = weakSelf;
@@ -983,7 +983,7 @@ static NSString * const kMeoBridgeDocHostJS =
         if (NSDate.date.timeIntervalSince1970 >= deadline) {
             NSURL *raw = webView.URL;
             finishOnce(NO, raw.host ?: @"", raw.absoluteString ?: @"",
-                       @"绑定标签页面尚未加载完成。请稍候再试，或先切换到 AI 网页标签激活一次。");
+                       @"绑定标签页面尚未加载完成。请稍候重试；若持续失败，可在侧栏点「显示」查看该网页。");
             return;
         }
         NSURL *rawURL = webView.URL;
@@ -1196,7 +1196,7 @@ static NSString * const kMeoBridgeDocHostJS =
         if (!strongBoot) return;
         if (binding.tab) {
             [[NSNotificationCenter defaultCenter]
-                postNotificationName:@"AIBridgeRequestSelectBoundTabNotification"
+                postNotificationName:@"AIBridgeRequestPrepareBoundTabNotification"
                               object:strongBoot
                             userInfo:@{ @"tab": binding.tab }];
         }

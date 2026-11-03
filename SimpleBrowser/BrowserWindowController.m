@@ -526,8 +526,8 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
                                                      name:BrowserMemoryPressureNotification
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(aiBridgeRequestSelectBoundTab:)
-                                                     name:@"AIBridgeRequestSelectBoundTabNotification"
+                                                 selector:@selector(aiBridgeRequestPrepareBoundTab:)
+                                                     name:@"AIBridgeRequestPrepareBoundTabNotification"
                                                    object:nil];
         _tabController = [[BrowserTabController alloc] initWithConfiguration:_webViewConfiguration];
         _tabController.delegate = self;
@@ -3393,7 +3393,7 @@ applyScraperDraftRecipe:(id)recipe {
 
 #pragma mark - AI Assistant Session (open / focus / reopen)
 
-- (void)aiBridgeRequestSelectBoundTab:(NSNotification *)note {
+- (void)aiBridgeRequestPrepareBoundTab:(NSNotification *)note {
     BrowserTab *tab = note.userInfo[@"tab"];
     if (![tab isKindOfClass:[BrowserTab class]]) return;
     if (![self.tabController.tabs containsObject:tab]) return;
@@ -3409,18 +3409,27 @@ applyScraperDraftRecipe:(id)recipe {
 
 - (void)aiAssistantPrepareTabForBinding:(BrowserTab *)tab providerId:(NSString *)providerId {
     if (!tab) return;
-    // 必须保持选中：后台标签的 deferred cold-wake 会在切走后被取消，导致永远 about:blank。
-    if (self.tabController.selectedTab != tab) {
-        [self.tabController selectTab:tab];
-    }
+    // 后台准备：绝不切换选中标签。AI 请求只需在离屏 WebView 里执行，
+    // 抢前台会把用户正在浏览的页面顶掉。
+    // 绑定标签由 AIBridgeRegistry 置 bridgeKeepsAlive，不会在后台被休眠回收。
     [tab wakeFromHibernationIfNeeded];
     WKWebView *wv = tab.webView;
     if (!wv) {
         wv = [tab ensureWebView];
     }
     if (!wv) return;
-    // 同步挂载并加载，不依赖 refreshTabsUI 延后冷唤醒。
-    [self attachWebViewForTab:tab];
+    // 后台页没有走 attachWebViewForTab，需要手动挂导航/UI 委托，
+    // 否则 isLoading 与导航状态无法结算（标签条会一直转圈）。
+    wv.navigationDelegate = self;
+    wv.UIDelegate = self;
+    // 同步唤醒并加载，不依赖 refreshTabsUI 延后冷唤醒；也不挂到 contentContainer，
+    // 否则会盖住当前页面。离屏页给一个接近内容区的视口，避免 DeepSeek 按 0x0 布局。
+    if (wv.superview == nil) {
+        NSRect bounds = self.contentContainer.bounds;
+        if (bounds.size.width < 320) bounds.size.width = 320;
+        if (bounds.size.height < 240) bounds.size.height = 240;
+        wv.frame = bounds;
+    }
     if (tab.pendingRestorableLoad) {
         [tab loadPendingRestorableURLIfNeeded];
         return;
@@ -3460,11 +3469,11 @@ applyScraperDraftRecipe:(id)recipe {
         return;
     }
 
-    // 立刻打开并选中 AI 页、同步加载、绑定后马上 Ready。
+    // 后台打开 AI 页并同步加载，绑定后马上 Ready；不选中标签，避免打断当前浏览。
     // 文档域名等待放到发送链路；这里不阻塞 Ready，避免一直「连接中」无法提交。
     BrowserTab *tab = [self aiBridgeFindTabMatchingProviderId:providerId];
     if (!tab) {
-        tab = [self.tabController addTabWithURL:home select:YES];
+        tab = [self.tabController addTabWithURL:home select:NO];
     }
     [self aiAssistantPrepareTabForBinding:tab providerId:providerId];
 
@@ -3479,7 +3488,7 @@ applyScraperDraftRecipe:(id)recipe {
         finish(nil, err.localizedDescription ?: @"绑定失败");
         return;
     }
-    // 保持 AI 标签选中，避免 deferred cold-wake 被取消；发送时会再确认文档域名。
+    // AI 标签留在后台；发送时会再确认文档域名并唤醒。
     finish(binding, nil);
 }
 
