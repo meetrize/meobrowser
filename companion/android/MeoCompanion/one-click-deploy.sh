@@ -73,10 +73,18 @@ export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export PATH="${ANDROID_HOME}/platform-tools:${PATH}"
 
 if [[ -z "${JAVA_HOME:-}" ]]; then
-  if [[ -d "$HOME/Library/Java/JavaVirtualMachines/jbr-17.0.14/Contents/Home" ]]; then
+  if [[ -d "$HOME/.local/jdks/jdk-17.0.21+9/Contents/Home" ]]; then
+    export JAVA_HOME="$HOME/.local/jdks/jdk-17.0.21+9/Contents/Home"
+  elif [[ -d "$HOME/Library/Java/JavaVirtualMachines/jbr-17.0.14/Contents/Home" ]]; then
     export JAVA_HOME="$HOME/Library/Java/JavaVirtualMachines/jbr-17.0.14/Contents/Home"
   elif command -v /usr/libexec/java_home >/dev/null 2>&1; then
-    export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home 2>/dev/null || true)"
+    export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+  fi
+fi
+# Android Studio 自带 JBR 25 与当前 Kotlin 脚本不兼容，避免误选
+if [[ "${JAVA_HOME:-}" == *"Android Studio.app"* ]]; then
+  if [[ -d "$HOME/.local/jdks/jdk-17.0.21+9/Contents/Home" ]]; then
+    export JAVA_HOME="$HOME/.local/jdks/jdk-17.0.21+9/Contents/Home"
   fi
 fi
 
@@ -154,7 +162,21 @@ while IFS= read -r serial; do
   [[ -z "$serial" ]] && continue
   COUNT=$((COUNT + 1))
   log "安装到 ${serial} ..."
-  adb -s "$serial" install -r "$APK_DEBUG"
+  LISTENER_CN="${APP_ID}/com.meobrowser.companion.sms.OtpNotificationListener"
+  if ! adb -s "$serial" install -r "$APK_DEBUG"; then
+    log "覆盖安装失败（多为签名不一致），卸载后重装…"
+    adb -s "$serial" uninstall "$APP_ID" >/dev/null 2>&1 || true
+    adb -s "$serial" install "$APK_DEBUG"
+  fi
+
+  # 卸载/重装会清掉通知使用权；覆盖安装也可能短暂解绑。ADB 重新放行，避免每次手动开关
+  log "确保通知监听放行: ${LISTENER_CN}"
+  adb -s "$serial" shell cmd notification allow_listener "$LISTENER_CN" >/dev/null 2>&1 || true
+  # 小米后台 / 自启动相关 AppOps（失败则忽略）
+  adb -s "$serial" shell cmd appops set "$APP_ID" RUN_ANY_IN_BACKGROUND allow >/dev/null 2>&1 || true
+  adb -s "$serial" shell appops set "$APP_ID" 10008 allow >/dev/null 2>&1 || true
+  adb -s "$serial" shell appops set "$APP_ID" 10021 allow >/dev/null 2>&1 || true
+  adb -s "$serial" shell dumpsys deviceidle whitelist +"$APP_ID" >/dev/null 2>&1 || true
 
   if [[ $NO_LAUNCH -eq 0 ]]; then
     log "启动 ${LAUNCHER} @ ${serial}"

@@ -107,9 +107,9 @@ object SetupChecker {
                 id = SetupItemId.BATTERY,
                 title = "电池优化白名单",
                 detail = if (isIgnoringBatteryOptimizations(context)) {
-                    "已忽略优化，后台收短信更稳定"
+                    "已忽略优化。小米请再开「自启动 + 后台运行」，并在多任务锁定本 App，否则通知监听会被静默断开"
                 } else {
-                    "仍受省电限制，国产机上短信广播易被杀"
+                    "仍受省电限制；小米上通知监听易掉，请关电池优化并允许自启动"
                 },
                 ok = isIgnoringBatteryOptimizations(context),
                 required = false,

@@ -147,9 +147,13 @@ class SetupWizardActivity : AppCompatActivity() {
                 binding.wizardHeadline.text = "④ 电池优化"
                 binding.wizardBody.text =
                     "请将 Meo Companion 加入省电白名单 /「不优化」。\n\n" +
-                        "小米建议额外开启：自启动、后台运行，并在多任务里锁定本 App。"
+                        "小米必做（否则下次连 Mac 时通知监听常要重开）：\n" +
+                        "· 设置 → 应用设置 → 应用管理 → Meo Companion → 自启动 = 允许\n" +
+                        "· 省电策略 = 无限制\n" +
+                        "· 最近任务里下拉锁定本 App\n\n" +
+                        "通知使用权开关本身只需开一次；掉线时 App 会自动重绑。"
                 binding.wizardStatus.text = if (ok) "状态：已忽略电池优化 ✓" else "状态：仍受省电限制 ✗"
-                binding.wizardActionButton.text = if (ok) "已完成，可下一步" else "打开电池设置"
+                binding.wizardActionButton.text = if (ok) "打开自启动设置" else "打开电池设置"
                 binding.wizardNextButton.text = "下一步"
             }
             5 -> {
@@ -225,8 +229,15 @@ class SetupWizardActivity : AppCompatActivity() {
             }
             4 -> {
                 if (SetupChecker.isIgnoringBatteryOptimizations(this)) {
-                    step = 5
-                    refreshStepUi()
+                    // 电池已放行时，引导去小米自启动页（通知监听持久化关键）
+                    if (!openMiuiAutostartSettings()) {
+                        openAppSettings()
+                    }
+                    Toast.makeText(
+                        this,
+                        "请允许「自启动」与「后台运行」，然后返回点下一步",
+                        Toast.LENGTH_LONG,
+                    ).show()
                 } else {
                     requestBatteryExemption()
                 }
@@ -292,6 +303,32 @@ class SetupWizardActivity : AppCompatActivity() {
                 Uri.fromParts("package", packageName, null)
             )
         )
+    }
+
+    /** 打开小米「自启动管理」；失败返回 false。 */
+    private fun openMiuiAutostartSettings(): Boolean {
+        val candidates = listOf(
+            Intent().setClassName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+            Intent("miui.intent.action.OP_AUTO_START").setPackage("com.miui.securitycenter"),
+            Intent().setClassName(
+                "com.miui.securitycenter",
+                "com.miui.powercenter.PowerSettings",
+            ),
+        )
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return false
     }
 
     private fun finishWizard() {

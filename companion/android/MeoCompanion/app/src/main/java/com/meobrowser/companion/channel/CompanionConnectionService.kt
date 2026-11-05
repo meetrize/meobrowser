@@ -47,6 +47,8 @@ class CompanionConnectionService : Service() {
         CompanionSession.attachHandlers(this)
         com.meobrowser.companion.sms.SmsListenCoordinator.start(this)
         CallStateMonitor.start(this)
+        // 前台服务存活期间周期性重绑通知监听，避免小米静默断开后需手动开关
+        com.meobrowser.companion.sms.NotificationListenerKeepAlive.startPulsing(this)
         refreshInviteAdvertiser()
     }
 
@@ -310,6 +312,9 @@ class CompanionConnectionService : Service() {
                 CompanionSession.notifyStatus()
                 stopInviteAdvertiser()
                 SyncEngine.onConnected(applicationContext)
+                // 连上 Mac 时再确保通知监听已绑定（设置开关本身无需重开）
+                OtpNotificationListener.ensureBound(applicationContext)
+                com.meobrowser.companion.sms.NotificationListenerKeepAlive.startPulsing(applicationContext)
             }
             "otp_ok" -> {
                 CompanionSession.notifyStatus()
@@ -503,6 +508,7 @@ class CompanionConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        com.meobrowser.companion.sms.NotificationListenerKeepAlive.stopPulsing()
         stopInviteAdvertiser()
         if (CompanionSession.service === this) {
             CompanionSession.service = null

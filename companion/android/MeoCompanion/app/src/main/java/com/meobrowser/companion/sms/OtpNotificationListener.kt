@@ -274,9 +274,15 @@ class OtpNotificationListener : NotificationListenerService() {
             return ComponentName(context, OtpNotificationListener::class.java)
         }
 
+        private var lastRebindAtMs: Long = 0L
+
         fun ensureBound(context: Context) {
             if (instance != null) return
             if (!isEnabled(context)) return
+            val now = System.currentTimeMillis()
+            // 避免短时间反复 requestRebind 打扰系统
+            if (now - lastRebindAtMs < 2_000L) return
+            lastRebindAtMs = now
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     requestRebind(componentName(context))
