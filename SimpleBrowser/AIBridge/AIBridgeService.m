@@ -959,14 +959,16 @@ static NSString * const kMeoBridgeDocHostJS =
     NSTimeInterval deadline = NSDate.date.timeIntervalSince1970 + MAX(timeout, 1.0);
     const NSTimeInterval interval = 0.5;
     __weak typeof(self) weakSelf = self;
-    // 注意：不能用 __weak 递归 block。方法返回后 weak 会变 nil，轮询直接停死。
+    // 强引用 __block 保活；weak 仅用于自调度，避免 retain cycle 警告。
+    // 切勿只保留 weak：方法返回后若无强引用，轮询会停死。
     __block void (^poll)(void) = nil;
+    __weak __block void (^weakPoll)(void) = nil;
     __block BOOL finished = NO;
     void (^finishOnce)(BOOL, NSString *, NSString *, NSString *) =
         ^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
             if (finished) return;
             finished = YES;
-            poll = nil; // 断开自引用
+            poll = nil; // 断开强引用，结束轮询
             completion(ok, liveHost ?: @"", liveAbs ?: @"", failDetail);
         };
     // 硬超时：不依赖 evaluateJavaScript 一定回调
@@ -1014,12 +1016,13 @@ static NSString * const kMeoBridgeDocHostJS =
                 finishOnce(YES, host, href.length ? href : (webView.URL.absoluteString ?: @""), nil);
                 return;
             }
-            void (^again)(void) = poll;
+            void (^again)(void) = weakPoll;
             if (!again) return;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), again);
         }];
     };
+    weakPoll = poll;
     poll();
 }
 
@@ -1043,8 +1046,10 @@ static NSString * const kMeoBridgeDocHostJS =
     const NSTimeInterval interval = 0.6;
     const NSInteger requiredConsecutiveOk = 2;
     __weak typeof(self) weakSelf = self;
-    // 强引用自递归；finish 时置 nil。切勿 __weak，否则第一次成功后轮询会停。
+    // 强引用 __block 保活；weak 仅用于自调度，避免 retain cycle 警告。
+    // finish 时将强引用置 nil。切勿只保留 weak，否则轮询会停。
     __block void (^attempt)(void) = nil;
+    __weak __block void (^weakAttempt)(void) = nil;
     __block BOOL finished = NO;
     __block NSInteger consecutiveOk = 0;
     void (^finishOnce)(NSDictionary *, NSString *, NSString *) =
@@ -1070,7 +1075,7 @@ static NSString * const kMeoBridgeDocHostJS =
             if (!inner || finished) return;
             if (readyErr) {
                 consecutiveOk = 0;
-                void (^again)(void) = attempt;
+                void (^again)(void) = weakAttempt;
                 if (!again) return;
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), again);
@@ -1118,7 +1123,7 @@ static NSString * const kMeoBridgeDocHostJS =
                         finishOnce(probe, nil, nil);
                         return;
                     }
-                    void (^again)(void) = attempt;
+                    void (^again)(void) = weakAttempt;
                     if (!again) return;
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                                    dispatch_get_main_queue(), again);
@@ -1133,7 +1138,7 @@ static NSString * const kMeoBridgeDocHostJS =
                     || [probe[@"detail"] isEqual:@"input not found (login?)"]
                     || hasInput == NO;
                 if (stillLoading && NSDate.date.timeIntervalSince1970 < deadline) {
-                    void (^again)(void) = attempt;
+                    void (^again)(void) = weakAttempt;
                     if (!again) return;
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
                                    dispatch_get_main_queue(), again);
@@ -1166,6 +1171,7 @@ static NSString * const kMeoBridgeDocHostJS =
             }];
         }];
     };
+    weakAttempt = attempt;
     attempt();
 }
 
