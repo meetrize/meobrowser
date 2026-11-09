@@ -46,6 +46,21 @@
   </form>
   <div class="debug" id="otpDebug"></div>
 
+  <hr />
+
+  <h2>无 &lt;form&gt; 面板登录（宝塔风格）</h2>
+  <p class="hint">模拟宝塔等面板：没有 form 标签、URL/标题也不含 login。应仍出现「＋ / ⋯」。</p>
+  <div class="login-main" style="border:1px solid #ddd;border-radius:8px;padding:16px;background:#1e1e1e;color:#eee;">
+    <div class="login-title" style="font-size:18px;margin-bottom:12px;">测试宝塔</div>
+    <div class="login-form">
+      <label for="bt-user" style="color:#bbb;">账号</label>
+      <input id="bt-user" class="login-form-input" name="username" type="text" placeholder="账号" autocomplete="off" style="margin-bottom:10px;background:#2a2a2a;color:#fff;border:1px solid #444;" />
+      <label for="bt-pass" style="color:#bbb;">密码</label>
+      <input id="bt-pass" class="login-form-input" name="password" type="password" placeholder="密码" autocomplete="off" style="background:#2a2a2a;color:#fff;border:1px solid #444;" />
+      <button type="submit" class="login-submit" style="margin-top:12px;" onclick="document.getElementById('status').textContent='已点击宝塔登录（测试）'; return false;">登录</button>
+    </div>
+  </div>
+
   <div id="status"></div>
   <script>
     var expectedOtp = '';

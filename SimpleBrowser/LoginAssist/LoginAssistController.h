@@ -17,6 +17,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)configureWebViewConfiguration:(WKWebViewConfiguration *)configuration;
 - (void)updateForURL:(nullable NSURL *)url;
+/// 主框架 commit：尽早推送内联开关，避免 DocumentEnd 把开关打成 false 后、表单已挂载却不再扫描。
+- (void)noteNavigationCommittedInWebView:(WKWebView *)webView;
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(nullable NSURL *)url;
 
 - (IBAction)oneClickLogin:(nullable id)sender;

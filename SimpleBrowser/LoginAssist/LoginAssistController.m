@@ -773,18 +773,42 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
     }
 }
 
+- (void)noteNavigationCommittedInWebView:(WKWebView *)webView {
+    // DocumentEnd UserScript 可能尚未跑完；先推一次，finish / retry 还会再推。
+    [self applyInlineChromeVisibilityToWebView:webView];
+}
+
 - (void)noteNavigationFinishedInWebView:(WKWebView *)webView URL:(NSURL *)url {
-    // 必须先按当前偏好推送主开关：UserScript 每次导航都会重置为关闭，开了才由这里打开。
+    // 必须先按当前偏好推送主开关：UserScript 每次导航都会默认关闭，开了才由这里打开。
     [self applyInlineChromeVisibilityToWebView:webView];
     [self updateForURL:url];
     [self scheduleAutoLoginIfNeededForURL:url];
     [self.savePromptCoordinator noteNavigationFinishedInWebView:webView URL:url];
-    // SPA / 晚渲染：多次重试推送填入图标（内部已尊重 inline 开关）
+    // SPA / 晚渲染 / 刷新竞态：主开关与填入目标都重试几次
+    [self scheduleInlineChromeVisibilityRetriesForWebView:webView];
     if ([FormMemoPreferences inlineSaveEnabled]) {
         [self scheduleMemoFillTargetRetries];
     }
     if ([LoginAssistPreferences inlineAssistEnabled]) {
         [self scheduleFieldAssistTargetRetries];
+    }
+}
+
+- (void)scheduleInlineChromeVisibilityRetriesForWebView:(WKWebView *)webView {
+    if (!webView) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    for (NSNumber *delay in @[ @0.2, @0.6, @1.2, @2.5 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            WKWebView *strongWebView = weakWebView;
+            if (!strongSelf || !strongWebView) {
+                return;
+            }
+            [strongSelf applyInlineChromeVisibilityToWebView:strongWebView];
+        });
     }
 }
 
@@ -969,18 +993,57 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 }
 
 - (void)presentAssistMenuFromView:(NSView *)view context:(NSDictionary *)context {
+    // WK script message 已脱离鼠标跟踪：必须延后 + 锚定到 WebView/按钮，
+    // 直接用 mouseLocation 弹菜单经常一闪即关或完全不出现。
+    NSDictionary *ctx = [context isKindOfClass:[NSDictionary class]] ? [context copy] : nil;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            [strongSelf presentAssistMenuNowFromView:view context:ctx];
+        });
+    });
+}
+
+- (void)presentAssistMenuNowFromView:(NSView *)view context:(NSDictionary *)context {
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"登录助手"];
     [self addAssistMenuItemsToMenu:menu context:context];
+
+    NSWindow *window = self.windowController.window;
+    if (window) {
+        [window makeKeyAndOrderFront:nil];
+    }
 
     if (view) {
         NSPoint location = NSMakePoint(0, NSHeight(view.bounds));
         [menu popUpMenuPositioningItem:nil atLocation:location inView:view];
-    } else {
-        NSWindow *window = self.windowController.window;
-        NSPoint screen = [NSEvent mouseLocation];
-        NSPoint windowPoint = [window convertPointFromScreen:screen];
-        [menu popUpMenuPositioningItem:nil atLocation:windowPoint inView:window.contentView];
+        return;
     }
+
+    WKWebView *webView = self.windowController.webView;
+    NSNumber *leftNum = [context[@"left"] isKindOfClass:[NSNumber class]] ? context[@"left"] : nil;
+    NSNumber *topNum = [context[@"top"] isKindOfClass:[NSNumber class]] ? context[@"top"] : nil;
+    NSNumber *heightNum = [context[@"height"] isKindOfClass:[NSNumber class]] ? context[@"height"] : nil;
+    if (webView && leftNum && topNum) {
+        CGFloat left = leftNum.doubleValue;
+        CGFloat top = topNum.doubleValue;
+        CGFloat height = heightNum ? heightNum.doubleValue : 22.0;
+        // WKWebView.isFlipped == YES：getBoundingClientRect 的 viewport 坐标可直接用作 view 内点。
+        NSPoint inView = NSMakePoint(MAX(0, left), MAX(0, top + height));
+        [menu popUpMenuPositioningItem:nil atLocation:inView inView:webView];
+        return;
+    }
+
+    if (!window) {
+        return;
+    }
+    NSPoint screen = [NSEvent mouseLocation];
+    NSPoint windowPoint = [window convertPointFromScreen:screen];
+    [menu popUpMenuPositioningItem:nil atLocation:windowPoint inView:window.contentView];
 }
 
 - (void)addAssistMenuItemsToMenu:(NSMenu *)menu context:(NSDictionary *)context {

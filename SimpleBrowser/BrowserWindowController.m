@@ -7851,6 +7851,8 @@ didBecomeDownload:(WKDownload *)download {
     }
     if (webView == self.webView) {
         [self updateReloadStopButtonAppearance];
+        // 比 didFinish 更早推送登录助手开关，降低「刷新后 DocumentEnd 盖掉开关」的空窗期
+        [self.loginAssistController noteNavigationCommittedInWebView:webView];
     }
 
     [self.findBarController noteNavigationCommittedInWebView:webView];
@@ -7960,6 +7962,10 @@ didBecomeDownload:(WKDownload *)download {
     [[PagePackInjector sharedInjector] injectMatchingPacksIntoWebView:webView
                                                                    URL:finishURL
                                                                  phase:PagePackInjectionPhaseDocumentEnd];
+    // 非当前标签也要重推内联开关，避免后台刷新后切回来图标仍被 DocumentEnd 默认关掉
+    if (webView != self.webView) {
+        [self.loginAssistController noteNavigationCommittedInWebView:webView];
+    }
     if (webView == self.webView) {
         [self.loginAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
         [self.captchaAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];

@@ -262,6 +262,14 @@
                            [self jsonStringLiteral:formId],
                            [self jsonStringLiteral:formId]];
 
+    __block BOOL presented = NO;
+    void (^finishPrompt)(void) = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) {
+            strongSelf.promptVisible = NO;
+        }
+    };
+
     // 先收集本表字段，再用应用级模态确认（sheet 在 WK 点击后中间按钮经常点不动）。
     void (^presentConfirm)(NSArray *) = ^(NSArray *precollectedFields) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -271,6 +279,11 @@
             }
             return;
         }
+        if (presented) {
+            return;
+        }
+        presented = YES;
+
         NSWindow *hostWindow = strongSelf.windowController.window ?: window;
         if (hostWindow) {
             [hostWindow makeKeyAndOrderFront:nil];
@@ -318,7 +331,7 @@
 
         // 应用级模态：避免 beginSheet 在 WKWebView 触发后第二按钮无命中。
         NSModalResponse returnCode = [alert runModal];
-        strongSelf.promptVisible = NO;
+        finishPrompt();
 
         if (returnCode == NSAlertFirstButtonReturn) {
             BOOL ok = [strongSelf commitSingleSlot:slot
@@ -352,8 +365,9 @@
         }
     };
 
-    // 等鼠标抬起进入下一圈 runloop，再收集 + 弹窗。
-    dispatch_async(dispatch_get_main_queue(), ^{
+    // 等 WK 鼠标序列结束后再收集 + 弹窗；并设超时避免 evaluateJavaScript 卡住导致无法再次保存。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
             if (completion) {
@@ -361,15 +375,29 @@
             }
             return;
         }
+        __block BOOL collected = NO;
+        void (^presentOnce)(NSArray *) = ^(NSArray *fields) {
+            if (collected) {
+                return;
+            }
+            collected = YES;
+            presentConfirm(fields ?: @[]);
+        };
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!collected) {
+                presentOnce(@[]);
+            }
+        });
         if (!webView) {
-            presentConfirm(@[]);
+            presentOnce(@[]);
             return;
         }
         [webView evaluateJavaScript:collectJS completionHandler:^(id result, NSError *error) {
             (void)error;
             NSArray *fields = [result isKindOfClass:[NSArray class]] ? (NSArray *)result : @[];
             dispatch_async(dispatch_get_main_queue(), ^{
-                presentConfirm(fields);
+                presentOnce(fields);
             });
         }];
     });
