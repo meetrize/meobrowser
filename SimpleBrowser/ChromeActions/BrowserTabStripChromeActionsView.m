@@ -114,9 +114,28 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
 
 @implementation BrowserTabStripChromeActionButton
 
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    // 未激活窗口时也可直接按下并开始拖拽改序
+    return YES;
+}
+
+- (void)setEnabled:(BOOL)enabled {
+    // 一键登录用灰色表示未激活，但必须保持可点中，否则 AppKit 不派发 mouseDown，无法拖拽改序。
+    if ([self.itemID isEqualToString:BrowserChromeActionOneClickLoginID]) {
+        [super setEnabled:YES];
+        return;
+    }
+    [super setEnabled:enabled];
+}
+
 - (void)mouseDown:(NSEvent *)event {
     if ([self.itemID isEqualToString:BrowserChromeActionMoreMenuID]) {
         [super mouseDown:event];
+        return;
+    }
+    // 禁用态不走系统 mouseDown；一键登录已在 setEnabled: 锁死为 YES。
+    if (!self.isEnabled) {
         return;
     }
     [self.actionsView handleMouseDownOnActionButton:self event:event];
@@ -496,8 +515,10 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
         return NO;
     }
     NSRect buttonInClip = [button convertRect:button.bounds toView:self.clipView];
-    // 按钮右缘仍在裁剪区内才算可见（可点）
-    return NSMaxX(buttonInClip) <= NSWidth(self.clipView.bounds) + 0.5;
+    NSRect clipBounds = self.clipView.bounds;
+    // 与裁剪区有交集即算可见。原先要求「右缘完全在区内」，最右侧图标（如一键登录）
+    // 略被挤出时命中了鼠标却无法拖拽/点击。
+    return NSIntersectsRect(buttonInClip, clipBounds);
 }
 
 - (NSArray<NSString *> *)widthOverflowedActionIDs {
@@ -730,10 +751,8 @@ static const CGFloat kChromeActionSourceDragAlpha = 0.28;
     if (self.isResizingWidth || !self.window) {
         return;
     }
-    // 被宽度裁掉的图标不参与条上点击/改序（应从 ⋯ 菜单操作）
-    if (![self isCustomButtonVisibleOnStrip:button]) {
-        return;
-    }
+    // 能收到 mouseDown 说明 ClipView 已命中该按钮（至少露了一部分）。
+    // 不再用「右缘完全在区内」卡掉最右侧图标的拖拽。
 
     NSInteger fromIndex = [self indexOfCustomButton:button];
     if (fromIndex == NSNotFound) {

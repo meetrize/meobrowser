@@ -70,6 +70,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateAIAssistantCitationThumbnail:(NSString *)dataURL forImageURL:(NSString *)imageURL;
 - (void)updateAIAssistantCitationPreviewImage:(NSImage *)image forImageURL:(NSString *)imageURL;
 - (void)oneClickLogin:(nullable id)sender;
+/// 按当前页是否有登录/备忘配置，刷新「一键登录」Chrome 图标激活态。
+- (void)syncOneClickLoginChromeActionState;
 - (void)fillSiteMemo:(nullable id)sender;
 - (void)toggleCaptchaAssistPanel:(nullable id)sender;
 - (void)toggleDOMInspector:(nullable id)sender;

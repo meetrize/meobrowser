@@ -12,6 +12,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) BrowserWindowController *windowController;
 @property (nonatomic, weak, nullable) NSButton *loginButton;
 @property (nonatomic, assign, readonly) BOOL isRunning;
+/// 当前页有匹配的登录 Recipe 或站点备忘时可一键登录/填入。
+@property (nonatomic, assign, readonly) BOOL canOneClickLogin;
 
 - (instancetype)initWithWindowController:(BrowserWindowController *)windowController;
 
@@ -40,6 +42,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 打开设置并滚到互联状态卡片（工具栏「互联」入口）。
 - (void)presentCompanionSettings;
 - (void)wireLoginButton:(NSButton *)button;
+- (void)wireOneClickLoginButton:(NSButton *)button;
 - (nullable WKWebView *)activeWebViewForPicking;
 
 @end

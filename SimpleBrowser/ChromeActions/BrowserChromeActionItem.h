@@ -16,6 +16,7 @@ FOUNDATION_EXPORT NSString * const BrowserChromeActionFindInPageID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionHistoryID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionDownloadID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionLoginAssistID;
+FOUNDATION_EXPORT NSString * const BrowserChromeActionOneClickLoginID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionCompanionLinkID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionSendToPhoneID;
 FOUNDATION_EXPORT NSString * const BrowserChromeActionNotificationInboxID;

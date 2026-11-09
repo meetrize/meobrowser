@@ -96,7 +96,9 @@
 #import "AssistSidebarController.h"
 #import "AssistSidebarSettings.h"
 #import "LoginRecipe.h"
+#import "LoginRecipeStore.h"
 #import "FormMemo.h"
+#import "FormMemoStore.h"
 #import "PhoneNotificationInboxSettings.h"
 #import "PhoneNotificationInboxStore.h"
 #import "BrowserWebInspector.h"
@@ -1512,6 +1514,10 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (chromeLogin) {
         [self.loginAssistController wireLoginButton:chromeLogin];
     }
+    NSButton *chromeOneClick = [self.chromeActionsView buttonForItemID:BrowserChromeActionOneClickLoginID];
+    if (chromeOneClick) {
+        [self.loginAssistController wireOneClickLoginButton:chromeOneClick];
+    }
     NSButton *chromeCaptcha = [self.chromeActionsView buttonForItemID:BrowserChromeActionCaptchaAssistID];
     if (chromeCaptcha) {
         [self.captchaAssistController wireCaptchaButton:chromeCaptcha];
@@ -1551,6 +1557,44 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     BOOL fullscreen = (self.window.styleMask & NSWindowStyleMaskFullScreen) != 0;
     NSButton *layoutButton = [self.chromeActionsView buttonForItemID:BrowserChromeActionWindowLayoutID];
     layoutButton.enabled = !fullscreen;
+
+    [self syncOneClickLoginChromeActionState];
+}
+
+- (void)syncOneClickLoginChromeActionState {
+    if (!self.chromeActionsView) {
+        return;
+    }
+    BOOL can = self.loginAssistController.canOneClickLogin;
+    // 始终保持 enabled：否则 AppKit 不派发 mouseDown，钉在工具栏上无法拖动改序。
+    // 无配置时用灰色（setOn:NO）表示未激活；点击由 oneClickLogin / performChromeAction 自行忽略。
+    [self.chromeActionsView setOn:can forItemID:BrowserChromeActionOneClickLoginID];
+    NSButton *button = [self.chromeActionsView buttonForItemID:BrowserChromeActionOneClickLoginID];
+    if (!button) {
+        return;
+    }
+    button.enabled = YES;
+    if (can) {
+        LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.webView.URL];
+        FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.webView.URL];
+        if (recipe) {
+            NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
+            button.toolTip = [NSString stringWithFormat:@"一键登录：%@（⌘⇧L）", name ?: @"站点"];
+        } else if (memo) {
+            NSString *name = memo.title.length > 0 ? memo.title : memo.host;
+            button.toolTip = [NSString stringWithFormat:@"一键填入备忘：%@（⌘⇧L）", name ?: @"站点"];
+        } else {
+            button.toolTip = @"一键登录（⌘⇧L）";
+        }
+        if (@available(macOS 10.14, *)) {
+            button.contentTintColor = [NSColor controlAccentColor];
+        }
+    } else {
+        button.toolTip = @"当前页无一键登录配置";
+        if (@available(macOS 10.14, *)) {
+            button.contentTintColor = [NSColor disabledControlTextColor];
+        }
+    }
 }
 
 - (void)toggleCompactMode:(id)sender {
@@ -1641,6 +1685,9 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if ([itemID isEqualToString:BrowserChromeActionWindowLayoutID]) {
         return (self.window.styleMask & NSWindowStyleMaskFullScreen) == 0;
     }
+    if ([itemID isEqualToString:BrowserChromeActionOneClickLoginID]) {
+        return self.loginAssistController.canOneClickLogin;
+    }
     return YES;
 }
 
@@ -1694,6 +1741,12 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     }
     if ([itemID isEqualToString:BrowserChromeActionLoginAssistID]) {
         [self toggleAssistSidebar:nil];
+        return;
+    }
+    if ([itemID isEqualToString:BrowserChromeActionOneClickLoginID]) {
+        if (self.loginAssistController.canOneClickLogin) {
+            [self oneClickLogin:nil];
+        }
         return;
     }
     if ([itemID isEqualToString:BrowserChromeActionCaptchaAssistID]) {
@@ -6406,7 +6459,7 @@ static const CGFloat kBrowserPageZoomMax = 3.0;
             && [self currentSendableURL] != nil;
     }
     if (action == @selector(oneClickLogin:)) {
-        return self.loginAssistController.loginButton.enabled;
+        return self.loginAssistController.canOneClickLogin;
     }
     if (action == @selector(fillSiteMemo:)) {
         return YES;

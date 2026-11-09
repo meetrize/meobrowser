@@ -11,6 +11,7 @@ static NSString * const kSeededAddressBarToolsHiddenKey = @"BrowserChromeActionS
 static NSString * const kMigratedFromAddressBarKey = @"BrowserChromeActionMigratedFromAddressBar";
 static NSString * const kLegacyAddressBarOrderKey = @"BrowserAddressBarActionOrder";
 static NSString * const kLegacyAddressBarHiddenKey = @"BrowserAddressBarActionHidden";
+static NSString * const kOneClickLoginOrderMigratedKey = @"BrowserChromeActionOneClickLoginOrderMigrated";
 
 @implementation BrowserChromeActionLayoutStore
 
@@ -31,6 +32,13 @@ static NSString * const kLegacyAddressBarHiddenKey = @"BrowserAddressBarActionHi
         BrowserChromeActionPaneSyncID,
     ]];
     [ids addObjectsFromArray:[BrowserChromeActionItem addressBarMigratedActionIDs]];
+    // 紧挨「登录助手」，避免新装/补齐时落到最右侧而被宽度裁切误伤拖拽
+    NSUInteger loginIdx = [ids indexOfObject:BrowserChromeActionLoginAssistID];
+    if (loginIdx != NSNotFound) {
+        [ids insertObject:BrowserChromeActionOneClickLoginID atIndex:loginIdx + 1];
+    } else if (![ids containsObject:BrowserChromeActionOneClickLoginID]) {
+        [ids addObject:BrowserChromeActionOneClickLoginID];
+    }
     return [ids copy];
 }
 
@@ -94,21 +102,60 @@ static NSString * const kLegacyAddressBarHiddenKey = @"BrowserAddressBarActionHi
 
     for (NSString *itemID in [self defaultOrderedCustomActionIDs]) {
         if (![seen containsObject:itemID]) {
-            [ordered addObject:itemID];
+            // 补齐 oneClickLogin：插到登录助手后面，而不是甩到队尾（队尾易被宽度裁切）
+            if ([itemID isEqualToString:BrowserChromeActionOneClickLoginID]) {
+                NSUInteger loginIdx = [ordered indexOfObject:BrowserChromeActionLoginAssistID];
+                if (loginIdx != NSNotFound) {
+                    [ordered insertObject:itemID atIndex:loginIdx + 1];
+                } else {
+                    [ordered addObject:itemID];
+                }
+            } else {
+                [ordered addObject:itemID];
+            }
             [seen addObject:itemID];
         }
     }
     return [ordered copy];
 }
 
+/// 旧版把 oneClickLogin 追加在队尾，窄工具栏时最先被裁切导致无法拖拽；一次性挪到登录助手后。
++ (void)migrateOneClickLoginOrderIfNeeded {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if ([defaults boolForKey:kOneClickLoginOrderMigratedKey]) {
+        return;
+    }
+    NSArray *saved = [defaults arrayForKey:kOrderDefaultsKey];
+    if (![saved isKindOfClass:[NSArray class]] || saved.count == 0) {
+        [defaults setBool:YES forKey:kOneClickLoginOrderMigratedKey];
+        return;
+    }
+    NSMutableArray<NSString *> *ordered = [[self sanitizedOrderedIDsFromSaved:saved] mutableCopy];
+    NSUInteger oc = [ordered indexOfObject:BrowserChromeActionOneClickLoginID];
+    NSUInteger li = [ordered indexOfObject:BrowserChromeActionLoginAssistID];
+    if (oc != NSNotFound && li != NSNotFound && oc != li + 1) {
+        [ordered removeObjectAtIndex:oc];
+        li = [ordered indexOfObject:BrowserChromeActionLoginAssistID];
+        if (li != NSNotFound) {
+            [ordered insertObject:BrowserChromeActionOneClickLoginID atIndex:li + 1];
+        } else {
+            [ordered addObject:BrowserChromeActionOneClickLoginID];
+        }
+        [defaults setObject:ordered forKey:kOrderDefaultsKey];
+    }
+    [defaults setBool:YES forKey:kOneClickLoginOrderMigratedKey];
+}
+
 + (NSArray<NSString *> *)orderedCustomActionIDs {
     [self migrateFromAddressBarPreferencesIfNeeded];
+    [self migrateOneClickLoginOrderIfNeeded];
     NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kOrderDefaultsKey];
     return [self sanitizedOrderedIDsFromSaved:saved];
 }
 
 + (void)setOrderedCustomActionIDs:(NSArray<NSString *> *)orderedIDs {
     [self migrateFromAddressBarPreferencesIfNeeded];
+    [self migrateOneClickLoginOrderIfNeeded];
     NSArray<NSString *> *sanitized = [self sanitizedOrderedIDsFromSaved:orderedIDs];
     [[NSUserDefaults standardUserDefaults] setObject:sanitized forKey:kOrderDefaultsKey];
     [self postLayoutDidChange];

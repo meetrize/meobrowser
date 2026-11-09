@@ -13,6 +13,7 @@ NSString * const BrowserChromeActionFindInPageID = @"findInPage";
 NSString * const BrowserChromeActionHistoryID = @"history";
 NSString * const BrowserChromeActionDownloadID = @"download";
 NSString * const BrowserChromeActionLoginAssistID = @"loginAssist";
+NSString * const BrowserChromeActionOneClickLoginID = @"oneClickLogin";
 NSString * const BrowserChromeActionCompanionLinkID = @"companionLink";
 NSString * const BrowserChromeActionSendToPhoneID = @"sendToPhone";
 NSString * const BrowserChromeActionNotificationInboxID = @"notificationInbox";
@@ -140,6 +141,12 @@ NSString * const BrowserChromeActionMoreMenuID = @"moreMenu";
                                onSymbolName:nil
                                     toolTip:@"登录助手"
                                   onToolTip:nil
+                                    toggles:NO],
+        [BrowserChromeActionItem itemWithID:BrowserChromeActionOneClickLoginID
+                                 symbolName:@"person.badge.key"
+                               onSymbolName:@"person.badge.key.fill"
+                                    toolTip:@"一键登录"
+                                  onToolTip:@"一键登录"
                                     toggles:NO],
         [BrowserChromeActionItem itemWithID:BrowserChromeActionCompanionLinkID
                                  symbolName:@"link"

@@ -45,6 +45,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 @interface LoginAssistController ()
 @property (nonatomic, strong) NSArray<LoginRecipe *> *matchedRecipes;
 @property (nonatomic, strong) NSArray<FormMemo *> *matchedMemos;
+@property (nonatomic, weak, nullable) NSButton *oneClickLoginButton;
 @property (nonatomic, assign) BOOL isRunning;
 @property (nonatomic, assign) BOOL hasDetectedLoginForm;
 @property (nonatomic, assign) BOOL detectedHasOTP;
@@ -188,6 +189,23 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         }
     }
     [self refreshButtonAppearance];
+}
+
+- (BOOL)canOneClickLogin {
+    return self.matchedRecipes.count > 0 || self.matchedMemos.count > 0;
+}
+
+- (void)wireOneClickLoginButton:(NSButton *)button {
+    self.oneClickLoginButton = button;
+    button.target = self;
+    button.action = @selector(oneClickLogin:);
+    for (NSGestureRecognizer *gr in [button.gestureRecognizers copy]) {
+        if ([gr isKindOfClass:[NSClickGestureRecognizer class]] &&
+            ((NSClickGestureRecognizer *)gr).buttonMask == 0x2) {
+            [button removeGestureRecognizer:gr];
+        }
+    }
+    [self refreshOneClickLoginButtonAppearance];
 }
 
 - (void)recipesDidChange:(NSNotification *)notification {
@@ -743,34 +761,38 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 
 - (void)refreshButtonAppearance {
     NSButton *button = self.loginButton;
-    if (!button) {
-        return;
-    }
     BOOL hasRecipe = self.matchedRecipes.count > 0;
     BOOL hasMemo = self.matchedMemos.count > 0;
     BOOL useful = hasRecipe || hasMemo || self.hasDetectedLoginForm;
-    // 条上入口改为打开侧栏，始终可点（执行仍走 ⌘⇧L / 侧栏内按钮）。
-    button.enabled = YES;
-    if (@available(macOS 10.14, *)) {
-        button.contentTintColor = useful
-            ? [NSColor controlAccentColor]
-            : [NSColor secondaryLabelColor];
+    if (button) {
+        // 条上入口改为打开侧栏，始终可点（执行仍走 ⌘⇧L / 侧栏内按钮）。
+        button.enabled = YES;
+        if (@available(macOS 10.14, *)) {
+            button.contentTintColor = useful
+                ? [NSColor controlAccentColor]
+                : [NSColor secondaryLabelColor];
+        }
+        if (hasRecipe && hasMemo) {
+            button.toolTip = @"打开登录助手侧栏（⌘⇧A；⌘⇧L 一键登录）";
+        } else if (hasRecipe) {
+            LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
+            NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
+            button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可登录：%@；⌘⇧L）", name ?: @"站点"];
+        } else if (hasMemo) {
+            FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
+            NSString *name = memo.title.length > 0 ? memo.title : memo.host;
+            button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可填备忘：%@；⌘⇧M）", name ?: @"站点"];
+        } else if (self.hasDetectedLoginForm) {
+            button.toolTip = @"打开登录助手侧栏（检测到登录表单；⌘⇧A）";
+        } else {
+            button.toolTip = @"打开登录助手侧栏（⌘⇧A）";
+        }
     }
-    if (hasRecipe && hasMemo) {
-        button.toolTip = @"打开登录助手侧栏（⌘⇧A；⌘⇧L 一键登录）";
-    } else if (hasRecipe) {
-        LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
-        NSString *name = recipe.title.length > 0 ? recipe.title : recipe.host;
-        button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可登录：%@；⌘⇧L）", name ?: @"站点"];
-    } else if (hasMemo) {
-        FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
-        NSString *name = memo.title.length > 0 ? memo.title : memo.host;
-        button.toolTip = [NSString stringWithFormat:@"打开登录助手侧栏（可填备忘：%@；⌘⇧M）", name ?: @"站点"];
-    } else if (self.hasDetectedLoginForm) {
-        button.toolTip = @"打开登录助手侧栏（检测到登录表单；⌘⇧A）";
-    } else {
-        button.toolTip = @"打开登录助手侧栏（⌘⇧A）";
-    }
+    [self refreshOneClickLoginButtonAppearance];
+}
+
+- (void)refreshOneClickLoginButtonAppearance {
+    [self.windowController syncOneClickLoginChromeActionState];
 }
 
 - (void)noteNavigationCommittedInWebView:(WKWebView *)webView {
@@ -930,12 +952,20 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
 }
 
 - (IBAction)oneClickLogin:(id)sender {
-    (void)sender;
+    if (!self.canOneClickLogin) {
+        return;
+    }
     [self cancelPendingAutoLogin];
+    NSView *anchor = nil;
+    if ([sender isKindOfClass:[NSView class]]) {
+        anchor = (NSView *)sender;
+    } else {
+        anchor = self.oneClickLoginButton ?: self.loginButton;
+    }
     LoginRecipe *recipe = [[LoginRecipeStore sharedStore] defaultRecipeMatchingURL:self.windowController.webView.URL];
     FormMemo *memo = [[FormMemoStore sharedStore] defaultMemoMatchingURL:self.windowController.webView.URL];
     if (recipe && memo) {
-        [self presentAssistMenuFromView:self.loginButton context:nil];
+        [self presentAssistMenuFromView:anchor context:nil];
         return;
     }
     if (recipe) {
@@ -948,7 +978,7 @@ static const NSTimeInterval kOTPPasteThenEnterDelay = 0.45;
         [self runMemo:memo];
         return;
     }
-    [self presentAssistMenuFromView:self.loginButton context:nil];
+    [self presentAssistMenuFromView:anchor context:nil];
 }
 
 - (IBAction)fillSiteMemo:(id)sender {
