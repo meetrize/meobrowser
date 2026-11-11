@@ -77,6 +77,13 @@
 
   window.__meoBloombergPaywallRemover = state;
 
+  // 手动滚动修复入口：Console 里可执行 __meoBloombergPaywallRemover.fixScroll()
+  state.fixScroll = function () {
+    var root = null;
+    try { root = findArticleRoot(); } catch (e) {}
+    try { unlockScroll(root); } catch (e) {}
+  };
+
   function queryAll(selector, root) {
     try {
       return Array.prototype.slice.call((root || document).querySelectorAll(selector));
@@ -148,12 +155,27 @@
     el.style.setProperty('pointer-events', 'none', 'important');
   }
 
+  function isArticleLikePage() {
+    var path = (location.pathname || '').toLowerCase();
+    return /\/articles\//.test(path) ||
+           /\/newsletters\//.test(path) ||
+           /\/features\//.test(path) ||
+           /\/20\d{2}-\d{2}-\d{2}\//.test(path);
+  }
+
+  // 延迟加载的全屏 nav 遮罩：出现即隐藏；站点重新插入也会被 MutationObserver 再次清掉。
+  function hideDelayedNav(root) {
+    if (!isArticleLikePage()) return;
+    queryAll('nav.nav-ui-Nav__navContainer__TmF2X, nav[data-component="nav"], ' +
+             '[class*="nav-ui-Nav__navContainer" i]').forEach(function (el) {
+      hideElement(el, root);
+    });
+  }
+
   function hideKnown(root) {
     queryAll(HIDE_SELECTORS.join(',')).forEach(function (el) {
       hideElement(el, root);
     });
-
-    // class / id / data-testid 里带 paywall 的节点，需要区分“遮罩”和“正文容器”。
     queryAll('[class*="paywall" i], [id*="paywall" i], [data-testid*="paywall" i], ' +
              '[class*="regwall" i], [class*="metered" i]').forEach(function (el) {
       if (!el || el.nodeType !== 1) return;
@@ -217,6 +239,18 @@
       }
     });
 
+    // 强制视口出现垂直滚动条；body 不再自己滚，避免双滚动条。
+    if (document.documentElement) {
+      document.documentElement.style.setProperty('overflow-y', 'scroll', 'important');
+      document.documentElement.style.setProperty('height', 'auto', 'important');
+      document.documentElement.style.setProperty('min-height', '100%', 'important');
+    }
+    if (document.body) {
+      document.body.style.setProperty('overflow-y', 'visible', 'important');
+      document.body.style.setProperty('height', 'auto', 'important');
+      document.body.style.setProperty('min-height', '100vh', 'important');
+    }
+
     var node = root ? root.parentElement : null;
     var guard = 0;
     while (node && node !== document.body && node !== document.documentElement && guard < 24) {
@@ -224,12 +258,15 @@
       clearLockClasses(node);
       var cs = computedStyle(node);
       if (cs) {
-        if (cs.overflowY === 'hidden') {
-          node.style.setProperty('overflow-y', 'visible', 'important');
-        }
-        if (cs.maxHeight !== 'none' && (cs.overflowY === 'hidden' || cs.overflow === 'hidden')) {
-          node.style.setProperty('max-height', 'none', 'important');
+        // 正文祖先上的固定高度/overflow:hidden 都会阻止页面变高。
+        // 文章页上直接解除，让内容重新参与文档高度计算。
+        if (cs.overflowY === 'hidden' || cs.overflow === 'hidden' ||
+            cs.position === 'fixed' || cs.position === 'absolute' ||
+            (cs.height && cs.height !== 'auto')) {
           node.style.setProperty('overflow', 'visible', 'important');
+          node.style.setProperty('overflow-y', 'visible', 'important');
+          node.style.setProperty('height', 'auto', 'important');
+          node.style.setProperty('max-height', 'none', 'important');
         }
         if (cs.filter && /(blur|brightness|contrast|grayscale|saturate)/i.test(cs.filter)) {
           node.style.setProperty('filter', 'none', 'important');
@@ -255,6 +292,23 @@
         }
       }
       node = node.parentElement;
+    }
+
+    // 正文内部也可能有固定高度的裁切容器（例如被截断的文章区）。
+    if (root) {
+      var inner = [root].concat(Array.prototype.slice.call(root.querySelectorAll('div, section, article, main')));
+      for (var i = 0; i < inner.length; i++) {
+        var innerNode = inner[i];
+        var innerStyle = computedStyle(innerNode);
+        if (!innerStyle) continue;
+        if (innerStyle.overflowY === 'hidden' || innerStyle.overflow === 'hidden' ||
+            (innerStyle.maxHeight && innerStyle.maxHeight !== 'none')) {
+          innerNode.style.setProperty('overflow', 'visible', 'important');
+          innerNode.style.setProperty('overflow-y', 'visible', 'important');
+          innerNode.style.setProperty('height', 'auto', 'important');
+          innerNode.style.setProperty('max-height', 'none', 'important');
+        }
+      }
     }
   }
 
@@ -821,6 +875,7 @@
       var root = findArticleRoot();
       markArticlePage(root);
       hideKnown(root);
+      hideDelayedNav(root);
       hideNativeDialogs(root);
       unlockScroll(root);
       revealArticle(root);

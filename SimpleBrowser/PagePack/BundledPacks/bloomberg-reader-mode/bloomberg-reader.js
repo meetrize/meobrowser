@@ -719,17 +719,106 @@
     };
   }
 
+  function extractArticleBodyText() {
+    // Bloomberg 的正文段落：class 里带 ArticleBodyText_articleBodyContent。
+    var nodes = deepQueryAll('[class*="ArticleBodyText_articleBodyContent" i], [class*="articleBodyContent" i]');
+
+    if (!nodes.length) {
+      // data-component="paragraph" 是更稳定的回退，但只取文章正文区域里的。
+      nodes = deepQueryAll('[data-component="paragraph"]').filter(function (el) {
+        return !!(el.closest && el.closest('.body-content, [class*="articleBody" i], [class*="article-body" i], [class*="story-body" i]'));
+      });
+    }
+
+    if (!nodes.length) {
+      nodes = deepQueryAll('.body-content p');
+    }
+
+    if (!nodes.length) return null;
+
+    var filtered = [];
+    var seenText = [];
+
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!el || el.nodeType !== 1) continue;
+
+      if (el.closest && el.closest('nav, header, footer, aside, form, ' +
+          '[class*="paywall" i], [class*="related" i], [class*="morefrom" i], ' +
+          '[class*="storycard" i], [class*="story-card" i], [class*="topreads" i], ' +
+          '[class*="subscribe" i], [class*="advert" i], [class*="comment" i], ' +
+          '[class*="promo" i], [class*="newsletter-signup" i]')) {
+        continue;
+      }
+
+      var text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text.length < 20) continue;
+      if (seenText.indexOf(text) >= 0) continue;
+      seenText.push(text);
+      filtered.push(el);
+    }
+
+    if (!filtered.length) return null;
+
+    // 去掉被其他节点包含的重复节点，避免同一段出现两次。
+    var unique = [];
+    for (var j = 0; j < filtered.length; j++) {
+      var candidate = filtered[j];
+      var nested = false;
+      for (var k = 0; k < filtered.length; k++) {
+        if (k === j) continue;
+        if (filtered[k].contains(candidate)) {
+          nested = true;
+          break;
+        }
+      }
+      if (!nested) unique.push(candidate);
+    }
+
+    var content = document.createElement('div');
+    content.className = 'meo-bloomberg-reader-article';
+
+    var titleNode = extractTitle(null);
+    if (titleNode) content.appendChild(titleNode);
+
+    var bylineNode = extractByline(null);
+    if (bylineNode) content.appendChild(bylineNode);
+
+    for (var m = 0; m < unique.length; m++) {
+      var clone = unique[m].cloneNode(true);
+      cleanClone(clone);
+      if (textLengthOf(clone) >= 20) {
+        content.appendChild(clone);
+      }
+    }
+
+    var textLength = textLengthOf(content);
+    if (textLength < 100) return null;
+
+    return {
+      node: content,
+      textLength: textLength,
+      paragraphs: content.querySelectorAll('p').length,
+      root: null,
+      source: 'articleBodyContent'
+    };
+  }
+
   function extractArticle() {
+    var targeted = extractArticleBodyText();
     var dom = extractDomArticle();
     var fallback = extractParagraphFallback();
 
-    // 容器清洗可能删多了；如果段落级提取能拿到更长正文，就用段落级。
     var bestDom = dom;
     if (fallback && (!bestDom || fallback.textLength > bestDom.textLength + 200)) {
       bestDom = fallback;
     }
 
+    // 精确命中 ArticleBodyText 节点时优先用它，避免外层容器夹带推荐位/广告。
     var best = bestDom;
+    if (targeted && targeted.textLength >= 200) {
+      best = targeted;
+    }
 
     var json = buildJsonLdExtraction(extractJsonLdArticle());
     if (json && (!best || json.textLength > best.textLength + 200)) {
@@ -1007,13 +1096,7 @@
       if (button.parentNode) button.parentNode.removeChild(button);
       state.reopenButton = null;
       state.dismissed = false;
-      var extraction = extractArticle();
-      if (extraction) {
-        showReader(extraction);
-      } else {
-        try { console.log('[MeoReader] manual extraction: null'); } catch (e) {}
-        addTimer(showReopenButton, 1200);
-      }
+      openReaderWithRetry(0);
     });
 
     document.body.appendChild(button);
@@ -1055,6 +1138,24 @@
   }
 
   // ---------- 自动触发 ----------
+
+  function openReaderWithRetry(attempt) {
+    if (state.shown || state.destroyed) return;
+
+    var extraction = extractArticle();
+    if (extraction && extraction.textLength >= 100) {
+      showReader(extraction);
+      return;
+    }
+
+    // 正文可能是延迟加载的：点击后持续重试几秒。
+    if (attempt < 8) {
+      addTimer(function () { openReaderWithRetry(attempt + 1); }, 700);
+    } else {
+      try { console.log('[MeoReader] manual extraction: null after retries'); } catch (e) {}
+      addTimer(showReopenButton, 800);
+    }
+  }
 
   function attemptAutoShow() {
     if (state.shown || state.dismissed || state.destroyed) return;
@@ -1150,6 +1251,14 @@
       dom = { error: String(e) };
     }
 
+    var targeted = null;
+    try {
+      var t = extractArticleBodyText();
+      if (t) targeted = { textLength: t.textLength, paragraphs: t.paragraphs, source: t.source };
+    } catch (e) {
+      targeted = { error: String(e) };
+    }
+
     var jsonLd = null;
     try {
       var j = extractJsonLdArticle();
@@ -1190,6 +1299,7 @@
         p: root.querySelectorAll('p').length
       } : null,
       dom: dom,
+      targeted: targeted,
       jsonLd: jsonLd,
       embeddedJson: embeddedJson,
       best: best,

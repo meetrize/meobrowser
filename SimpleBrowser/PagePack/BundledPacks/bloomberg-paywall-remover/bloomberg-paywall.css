@@ -54,6 +54,18 @@ body {
   overscroll-behavior-y: auto !important;
 }
 
+/* 强制出现垂直滚动条；body 不自己滚，避免双滚动条。 */
+html {
+  overflow-y: scroll !important;
+  height: auto !important;
+}
+
+body {
+  overflow-y: visible !important;
+  height: auto !important;
+  min-height: 100vh !important;
+}
+
 /* ---------- 保证正文容器不被隐藏/裁切/模糊 ---------- */
 
 article,

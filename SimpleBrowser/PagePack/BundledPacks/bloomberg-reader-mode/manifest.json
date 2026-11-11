@@ -1,7 +1,7 @@
 {
   "id": "bloomberg-reader-mode",
   "name": "彭博阅读模式",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "提取 Bloomberg 文章正文，在独立的顶层阅读器中显示；打开时隐藏页面其余元素，绕开付费墙遮罩与滚动锁。",
   "author": "MeoBrowser",
   "sourceURL": "bundle://bloomberg-reader-mode",
@@ -26,5 +26,5 @@
     }
   ],
   "createdAt": 1794380000,
-  "updatedAt": 1794411600
+  "updatedAt": 1794415200
 }
