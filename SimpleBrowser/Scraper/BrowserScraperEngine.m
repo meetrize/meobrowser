@@ -21,6 +21,10 @@
 @property (nonatomic, assign) NSInteger pageIndex;
 @property (nonatomic, copy) NSString *ndjsonPath;
 @property (nonatomic, copy) NSString *logPath;
+- (void)startWithRecipe:(BrowserScraperRecipe *)recipe
+                webView:(WKWebView *)webView
+              trialMode:(BOOL)trialMode
+               feedMode:(BOOL)feedMode;
 @end
 
 static NSString *MeoScraperStringify(id value) {
@@ -68,16 +72,30 @@ static NSString *MeoScraperStringify(id value) {
 }
 
 - (void)startTrialWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView {
-    [self startWithRecipe:recipe webView:webView trialMode:YES];
+    [self startWithRecipe:recipe webView:webView trialMode:YES feedMode:NO];
+}
+
+- (void)startFeedPreviewWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView {
+    [self startWithRecipe:recipe webView:webView trialMode:YES feedMode:YES];
 }
 
 - (void)startWithRecipe:(BrowserScraperRecipe *)recipe webView:(WKWebView *)webView trialMode:(BOOL)trialMode {
+    [self startWithRecipe:recipe webView:webView trialMode:trialMode feedMode:NO];
+}
+
+- (void)startWithRecipe:(BrowserScraperRecipe *)recipe
+                webView:(WKWebView *)webView
+              trialMode:(BOOL)trialMode
+               feedMode:(BOOL)feedMode {
     if (self.running) {
         [self cancel];
     }
     BrowserScraperRecipe *runRecipe = [recipe copy];
     self.trialMode = trialMode;
-    if (trialMode) {
+    if (feedMode) {
+        runRecipe.pagination.maxPages = 1;
+        runRecipe.pagination.type = BrowserScraperPaginationTypeNone;
+    } else if (trialMode) {
         NSInteger pages = runRecipe.pagination.maxPages;
         if (pages < 1) pages = 10;
         runRecipe.pagination.maxPages = MIN(10, pages);
@@ -111,7 +129,9 @@ static NSString *MeoScraperStringify(id value) {
     NSData *metaData = [NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingPrettyPrinted error:nil];
     [metaData writeToFile:[runDir stringByAppendingPathComponent:@"meta.json"] atomically:YES];
 
-    if (trialMode) {
+    if (feedMode) {
+        [self log:@"RSS Feed 抽取开始（仅第 1 页）"];
+    } else if (trialMode) {
         [self log:[NSString stringWithFormat:@"试运行开始（最多 %ld 页，结果追加到预览）",
                    (long)runRecipe.pagination.maxPages]];
     } else {

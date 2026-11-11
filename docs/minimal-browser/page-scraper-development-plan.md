@@ -22,7 +22,7 @@
 | 落盘 | CSV / XLSX / JSON；MySQL append/replace/upsert |
 | 输入控件 | `SBTextField` / `SBSecureTextField` / `SBTextView` |
 
-**本期按 PS-0～PS-4 推进；Link follow（列表→详情）标为 PS-5，另开迭代。**
+**PS-0～PS-4 初版已完成；PS-6 本机 RSS API 已定稿实现；Link follow（列表→详情）标为 PS-5，另开迭代。**
 
 ---
 
@@ -36,6 +36,7 @@
 | **PS-3** | MySQL sink | **初版完成** | Keychain + mysql CLI 建表/写入 |
 | **PS-4** | Helper 定时 + 会话可配置 | **初版完成** | LaunchAgent；`MeoScrapeRunner` 入 bundle |
 | **PS-5** | Link follow（二期） | 未开始 | 列表 URL → 详情字段 |
+| **PS-6** | 本机 RSS 订阅 API | **初版完成** | loopback RSS 2.0；实时第一页；侧栏复制 URL |
 
 ---
 
@@ -163,6 +164,26 @@
 
 ---
 
+## Phase PS-6：本机 RSS 订阅 API
+
+### 任务
+
+1. `BrowserScraperFeedHTTPServer` + `BrowserScraperFeedPreferences`（默认 port 3922、enabled YES）  
+2. `BrowserScraperFeedService`：`GET /health`、`GET /scraper/feeds/{id}.xml`；60s 缓存；串行抽取队列  
+3. `BrowserScraperEngine startFeedPreviewWithRecipe:webView:`（maxPages=1，不写 sink）  
+4. `BrowserScraperRSSWriter`：行字典启发式映射 → RSS 2.0  
+5. 侧栏「RSS 订阅」：展示 URL + 复制；App 启动/退出起停服务  
+6. Makefile + design §12.5  
+
+### 验收
+
+- [x] App 运行中 curl / 阅读器可拉已保存策略的 feed，返回合法 RSS  
+- [x] 60s 内二次请求走 cache（日志 `cache hit`）  
+- [x] App 退出后订阅不可用  
+- [x] 不改动 `SimpleBrowser/Feed/` 对外行为  
+
+---
+
 ## 依赖与顺序
 
 ```text
@@ -170,6 +191,7 @@ PS-0 → PS-1 → PS-2 → PS-3
                 ↘
                  PS-4（可与 PS-3 并行，但 Engine spill 须先在 PS-2 就绪）
 PS-5 依赖 PS-1 字段模型 + PS-2 引擎循环
+PS-6 依赖 PS-1 RecipeStore + PS-2 Engine（单页抽取）
 ```
 
 ## 非目标（本计划不包含）
@@ -178,6 +200,7 @@ PS-5 依赖 PS-1 字段模型 + PS-2 引擎循环
 - 完整可视化 sitemap 画布  
 - Postgres / 云存储直连  
 - Chrome 扩展兼容层  
+- 关 App 常驻 RSS daemon / 字段映射 UI / feed 鉴权 token  
 
 ---
 

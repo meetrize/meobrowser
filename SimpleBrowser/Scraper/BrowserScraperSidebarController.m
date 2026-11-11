@@ -8,6 +8,7 @@
 #import "BrowserScraperEngine.h"
 #import "BrowserScraperMySQLWriter.h"
 #import "BrowserScraperScheduleManager.h"
+#import "BrowserScraperFeedService.h"
 #import "SBTextField.h"
 #import "SBSecureTextField.h"
 #import "SBTextView.h"
@@ -217,6 +218,9 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 @property (nonatomic, strong) SBSecureTextField *mysqlPasswordField;
 @property (nonatomic, strong) SBTextField *mysqlTableField;
 @property (nonatomic, strong) NSStackView *mysqlFieldsStack;
+@property (nonatomic, strong) SBTextField *feedURLField;
+@property (nonatomic, strong) NSButton *feedURLCopyButton;
+@property (nonatomic, strong) NSTextField *feedHintLabel;
 @property (nonatomic, strong) NSTableView *fieldsTable;
 @property (nonatomic, strong) BrowserScraperFieldsTableDelegate *fieldsTableDelegate;
 @property (nonatomic, strong) NSTableView *previewTable;
@@ -268,8 +272,17 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         _engine.delegate = self;
         _draft = [BrowserScraperRecipe blankRecipeNamed:@"新策略"];
         [self buildUI];
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self
+               selector:@selector(scraperFeedServiceStateDidChange:)
+                   name:BrowserScraperFeedServiceStateDidChangeNotification
+                 object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (NSView *)view {
@@ -1037,6 +1050,18 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     NSTextField *taskHint = [self makeLabel:@"定时由 MeoScrapeRunner / LaunchAgent 执行，不占用主窗口。"];
     taskHint.maximumNumberOfLines = 2;
 
+    self.feedURLField = [SBTextField standardField];
+    self.feedURLField.editable = NO;
+    self.feedURLField.selectable = YES;
+    self.feedURLField.placeholderString = @"保存策略后生成订阅链接";
+    self.feedURLCopyButton = [self scraperButton:@"复制订阅链接" symbol:@"link"
+                                            tone:BrowserScraperButtonToneSecondary
+                                          target:self action:@selector(copyFeedURLClicked:)];
+    self.feedHintLabel = [self makeLabel:@"本机 RSS：App 运行时实时抽第一页。"];
+    self.feedHintLabel.maximumNumberOfLines = 2;
+    NSStackView *feedURLRow = [self hrowLabel:@"订阅" field:self.feedURLField];
+    NSStackView *feedActionRow = [self hrowViews:@[self.feedURLCopyButton] spacing:6];
+
     self.sinkPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.sinkPopup addItemsWithTitles:@[ @"Excel (xlsx)", @"CSV", @"JSON", @"MySQL" ]];
     self.sinkPopup.target = self;
@@ -1081,6 +1106,9 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSZeroRect];
     sep2.boxType = NSBoxSeparator;
     sep2.translatesAutoresizingMaskIntoConstraints = NO;
+    NSBox *sep3 = [[NSBox alloc] initWithFrame:NSZeroRect];
+    sep3.boxType = NSBoxSeparator;
+    sep3.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSStackView *stack = [self vstack:@[
         [self makeSectionTitle:@"翻页"],
@@ -1089,6 +1117,9 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
         [self makeSectionTitle:@"任务"],
         sessionRow, schedRow, taskHint,
         sep2,
+        [self makeSectionTitle:@"RSS 订阅"],
+        feedURLRow, feedActionRow, self.feedHintLabel,
+        sep3,
         [self makeSectionTitle:@"导出"],
         sinkRow, pathRow, self.mysqlFieldsStack,
     ]];
@@ -1282,6 +1313,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     [self.fieldsTable reloadData];
     [self rebuildPreviewColumns];
     [self updateMySQLFieldsVisibility];
+    [self refreshFeedURLUI];
 }
 
 - (void)applyUIToDraft {
@@ -2486,7 +2518,63 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     [[BrowserScraperScheduleManager sharedManager] applyScheduleForRecipe:self.draft error:&schedErr];
     if (schedErr) [self appendLog:schedErr.localizedDescription];
     [self refreshRecipePopup];
+    [self refreshFeedURLUI];
     [self appendLog:@"策略已保存"];
+}
+
+- (BOOL)draftIsPersisted {
+    NSString *rid = self.draft.recipeID;
+    if (rid.length == 0) {
+        return NO;
+    }
+    return [[BrowserScraperRecipeStore sharedStore] recipeWithID:rid] != nil;
+}
+
+- (void)refreshFeedURLUI {
+    if (!self.feedURLField) {
+        return;
+    }
+    BrowserScraperFeedService *svc = BrowserScraperFeedService.sharedService;
+    BOOL saved = [self draftIsPersisted];
+    BOOL listening = svc.isListening;
+    if (saved) {
+        self.feedURLField.stringValue = [svc feedURLStringForRecipeID:self.draft.recipeID];
+    } else {
+        self.feedURLField.stringValue = @"";
+    }
+    self.feedURLCopyButton.enabled = saved && listening;
+    if (!saved) {
+        self.feedHintLabel.stringValue = @"先保存策略后可复制本机 RSS 订阅链接。";
+    } else if (!listening) {
+        self.feedHintLabel.stringValue = @"RSS 服务未启动（浏览器启动时默认开启）。";
+    } else {
+        self.feedHintLabel.stringValue = @"本机 RSS：请求时实时抽取第一页；App 退出后不可用。";
+    }
+}
+
+- (void)scraperFeedServiceStateDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshFeedURLUI];
+}
+
+- (void)copyFeedURLClicked:(id)sender {
+    (void)sender;
+    if (![self draftIsPersisted]) {
+        [self appendLog:@"请先保存策略"];
+        return;
+    }
+    if (!BrowserScraperFeedService.sharedService.isListening) {
+        [self appendLog:@"RSS 服务未启动"];
+        return;
+    }
+    NSString *url = [BrowserScraperFeedService.sharedService feedURLStringForRecipeID:self.draft.recipeID];
+    if (url.length == 0) {
+        return;
+    }
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:url forType:NSPasteboardTypeString];
+    [self appendLog:@"订阅链接已复制"];
 }
 
 - (void)setRunningControlsEnabled:(BOOL)enabled {

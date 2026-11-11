@@ -26,6 +26,8 @@
 #import "BrowserUserActivityMonitor.h"
 #import "AIBridgePreferences.h"
 #import "AIBridgeService.h"
+#import "BrowserScraperFeedPreferences.h"
+#import "BrowserScraperFeedService.h"
 
 @implementation AppDelegate {
     NSMutableArray<BrowserWindowController *> *_browserWindows;
@@ -105,6 +107,12 @@
         NSError *err = nil;
         if (![[AIBridgeService sharedService] startServer:&err]) {
             NSLog(@"[AIBridge] 随浏览器自动启动失败: %@", err.localizedDescription);
+        }
+    }
+    if (BrowserScraperFeedPreferences.sharedPreferences.isEnabled) {
+        NSError *feedErr = nil;
+        if (![[BrowserScraperFeedService sharedService] startServer:&feedErr]) {
+            NSLog(@"[ScraperFeed] 启动本机 RSS API 失败: %@", feedErr.localizedDescription);
         }
     }
 }
@@ -525,6 +533,7 @@
         [self persistAllBrowserWindowSessions];
         _isTerminating = YES;
     }
+    [[BrowserScraperFeedService sharedService] stopServer];
     [[BrowserHistoryStore sharedStore] clearIfConfiguredOnQuit];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }

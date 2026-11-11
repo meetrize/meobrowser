@@ -18,9 +18,10 @@
 | 多种翻页 | **可行**。下一页按钮、页码序列、Load More、无限滚动；页数/行数上限 + 延迟 |
 | 定时任务不影响主进程 | **定稿**：独立 helper `MeoScrapeRunner` + `launchd` LaunchAgent；结果流式 spill 到磁盘，跑完退出 |
 | 保存 Excel / MySQL | **定稿**：CSV / XLSX / JSON 文件导出；MySQL 连接配置 + Keychain 密码 + 自动建表/追加 |
+| 本机 RSS 订阅 API | **定稿（PS-6）**：App 运行时 `127.0.0.1:3922` 提供 RSS 2.0；每次请求实时抽第一页；与 `SimpleBrowser/Feed/`（发现外部 RSS）分离 |
 
 **产品名**：对外「页面爬虫」；代码目录 `SimpleBrowser/Scraper/`，类型前缀 `BrowserScraper*`。  
-**产品路径**：PS-0 壳与模型 → PS-1 点选与单页导出 → PS-2 翻页与运行控制 → PS-3 MySQL → PS-4 定时 helper。
+**产品路径**：PS-0 壳与模型 → PS-1 点选与单页导出 → PS-2 翻页与运行控制 → PS-3 MySQL → PS-4 定时 helper → PS-6 本机 RSS API。
 
 ---
 
@@ -95,7 +96,7 @@
 | `WKWebsiteDataStore.defaultDataStore` | 标签共享 Cookie | 定时/前台默认 **reuseProfile**；可选 ephemeral |
 | 下载目录偏好 | `BrowserDownloadPreferences` | 文件导出默认落下载目录，可改路径 |
 | SBKit | 强制 | 侧栏输入用 `SBTextField` / `SBTextView` |
-| PagePack / Feed | 注入与 RSS | **不接入**；爬虫独立模块 |
+| PagePack / Feed | 注入与发现外部 RSS | **不混用**：爬虫自建「发布 RSS」出口（`BrowserScraperFeed*`），不改 `SimpleBrowser/Feed/` |
 
 ### 4.3 做什么 / 不做什么
 
@@ -106,6 +107,7 @@
 | **PS-3** | MySQL 连接、建表、追加/upsert、Keychain | Postgres / SQLite UI（SQLite 可作为内部 spill 实现细节，不对用户暴露） |
 | **PS-4** | MeoScrapeRunner + LaunchAgent、流式 spill、会话可配置 | 分布式 worker |
 | **PS-5（二期）** | Link follow（列表→详情） | 完整 sitemap 画布、代理池、验证码 |
+| **PS-6** | 本机 loopback RSS 2.0 API（实时第一页） | 关 App 常驻 daemon、映射 UI、鉴权 token、分页 |
 
 ### 4.4 设计原则
 
@@ -481,6 +483,30 @@ window.__meoScraperExtract({
 
 ---
 
+## 12.5 RSS 订阅 API（PS-6）
+
+**定位**：把已保存的爬虫策略（Recipe）暴露为本机 RSS，供 Feed 阅读器订阅；每次拉取实时跑 Engine 第一页。
+
+| 项 | 定稿 |
+|----|------|
+| 运行时 | 仅 MeoBrowser 进程内；退出即不可用 |
+| 地址 | `http://127.0.0.1:3922/scraper/feeds/{recipeId}.xml`（端口可配，默认 3922） |
+| 健康检查 | `GET /health` → `{"ok":true}` |
+| 抽取 | 离屏 `WKWebView` + `startFeedPreviewWithRecipe:`（`maxPages=1`，不写 sink） |
+| 字段映射 | 启发式：`标题`/`title`→title，`链接`/`url`/`href`/`link`→link，`摘要`/`description`/`正文`→description，`时间`/`date`→pubDate |
+| 缓存 | 同 recipeId 内存缓存 60s |
+| 并发 | 串行排队；单次超时约 90s → 504 |
+| 侧栏 | 「RSS 订阅」区展示 URL +「复制订阅链接」 |
+| 边界 | **不**接入 `SimpleBrowser/Feed/`（那是发现/阅读外部源） |
+
+```text
+FeedReader → GET /scraper/feeds/{id}.xml
+          → RecipeStore → offscreen WKWebView → Engine(1 page)
+          → BrowserScraperRSSWriter → RSS 2.0
+```
+
+---
+
 ## 13. 验收标准（总）
 
 1. 打开示例列表页 → 检测或点选表格 → 预览列正确 → 导出 CSV/XLSX 可打开。  
@@ -489,7 +515,8 @@ window.__meoScraperExtract({
 4. 保存 Recipe，同 host 再开侧栏可一键加载。  
 5. MySQL：本地库建表并追加两轮运行，行数累加正确。  
 6. 启用 1 分钟间隔定时 → helper 独立进程出现并退出；主 App 内存不随次数线性上涨（Instruments 抽样）。  
-7. 侧栏与 PagePack/助手互斥；输入框支持系统编辑快捷键（SBKit）。
+7. 侧栏与 PagePack/助手互斥；输入框支持系统编辑快捷键（SBKit）。  
+8. App 运行中 curl / 阅读器打开已保存策略的 feed URL，返回合法 RSS；60s 内二次请求为 cache hit；App 退出后拉取失败。
 
 ---
 

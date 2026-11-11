@@ -27,6 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 试运行：沿用当前翻页配置，maxPages 上限 10，不写 sink。
 - (void)startTrialWithRecipe:(BrowserScraperRecipe *)recipe
                      webView:(WKWebView *)webView;
+/// RSS Feed：强制 maxPages=1，不写 sink，结果进入 previewRows。
+- (void)startFeedPreviewWithRecipe:(BrowserScraperRecipe *)recipe
+                           webView:(WKWebView *)webView;
 - (void)pause;
 - (void)resume;
 - (void)cancel;

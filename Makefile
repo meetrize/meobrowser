@@ -153,6 +153,10 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperMySQLWriter.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperEngine.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperScheduleManager.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperFeedPreferences.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperFeedHTTPServer.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperRSSWriter.m \
+                   $(BROWSER_SRC_DIR)/Scraper/BrowserScraperFeedService.m \
                    $(BROWSER_SRC_DIR)/Scraper/BrowserScraperSidebarController.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgePreferences.m \
                    $(BROWSER_SRC_DIR)/AIBridge/AIBridgeRegistry.m \
