@@ -1057,7 +1057,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     self.feedURLCopyButton = [self scraperButton:@"复制订阅链接" symbol:@"link"
                                             tone:BrowserScraperButtonToneSecondary
                                           target:self action:@selector(copyFeedURLClicked:)];
-    self.feedHintLabel = [self makeLabel:@"本机 RSS：App 运行时实时抽第一页。"];
+    self.feedHintLabel = [self makeLabel:@"本机 RSS：先秒回缓存，后台刷新标签页（适配短超时阅读器）。"];
     self.feedHintLabel.maximumNumberOfLines = 2;
     NSStackView *feedURLRow = [self hrowLabel:@"订阅" field:self.feedURLField];
     NSStackView *feedActionRow = [self hrowViews:@[self.feedURLCopyButton] spacing:6];
@@ -2552,7 +2552,7 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     } else if (!listening) {
         self.feedHintLabel.stringValue = @"RSS 服务未启动（浏览器启动时默认开启）。";
     } else {
-        self.feedHintLabel.stringValue = @"本机 RSS：请求时实时抽取第一页；App 退出后不可用。";
+        self.feedHintLabel.stringValue = @"本机 RSS：订阅请求先秒回缓存/上次结果，再后台刷新标签；适配 feedgen 等短超时。App 退出后不可用。";
     }
 }
 

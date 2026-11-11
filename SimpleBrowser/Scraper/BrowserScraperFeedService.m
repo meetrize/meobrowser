@@ -34,8 +34,10 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
 @property (nonatomic, strong, nullable) WKWebView *webView;
 @property (nonatomic, strong, nullable) NSWindow *hostWindow;
 @property (nonatomic, assign) BOOL ownsWebView;
+@property (nonatomic, assign) BOOL usedLiveTab;
 @property (nonatomic, assign) BOOL started;
 @property (nonatomic, assign) BOOL finished;
+@property (nonatomic, assign) NSInteger liveLoadPollGeneration;
 @property (nonatomic, copy, nullable) void (^completion)(NSArray<NSDictionary *> *_Nullable rows, NSError *_Nullable error);
 - (void)startOnExistingWebView:(WKWebView *)webView;
 - (void)beginOffscreenLoad;
@@ -49,6 +51,7 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
         return;
     }
     self.finished = YES;
+    self.liveLoadPollGeneration += 1;
     void (^completion)(NSArray<NSDictionary *> *, NSError *) = self.completion;
     self.completion = nil;
     self.engine.delegate = nil;
@@ -78,17 +81,120 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
     [self.engine startFeedPreviewWithRecipe:self.recipe webView:webView];
 }
 
-- (void)startOnExistingWebView:(WKWebView *)webView {
-    self.ownsWebView = NO;
-    self.webView = webView;
-    // 现有标签页已渲染，稍等一帧再抽，避开正在导航的瞬间。
+- (void)scheduleNavigationSettleTimeout {
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || strongSelf.finished) {
+        if (!strongSelf || strongSelf.finished || strongSelf.started) {
             return;
         }
-        [strongSelf startEngineOnWebView:webView];
+        NSLog(@"[ScraperFeed] navigation settle timeout, extract anyway");
+        [strongSelf startEngineOnWebView:strongSelf.webView];
+    });
+}
+
+/// live 标签不抢 navigationDelegate（窗口控制器会夺回）；轮询 isLoading + settle 后再抽。
+- (void)pollLiveLoadUntilReadyWithDeadline:(NSTimeInterval)deadline {
+    if (self.finished || self.started) {
+        return;
+    }
+    WKWebView *webView = self.webView;
+    if (!webView) {
+        [self finishWithRows:nil
+                       error:[NSError errorWithDomain:@"BrowserScraperFeed"
+                                                 code:500
+                                             userInfo:@{NSLocalizedDescriptionKey: @"live tab webView 已释放"}]];
+        return;
+    }
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (!webView.isLoading) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kFeedPostLoadSettleSec * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.finished || strongSelf.started) {
+                return;
+            }
+            // settle 后又开始加载（SPA 二次导航）则继续等。
+            if (strongSelf.webView.isLoading) {
+                [strongSelf pollLiveLoadUntilReadyWithDeadline:deadline];
+                return;
+            }
+            [strongSelf startEngineOnWebView:strongSelf.webView];
+        });
+        return;
+    }
+    if (now >= deadline) {
+        NSLog(@"[ScraperFeed] live load poll deadline, extract anyway");
+        [self startEngineOnWebView:webView];
+        return;
+    }
+    NSInteger generation = self.liveLoadPollGeneration;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.finished || strongSelf.started) {
+            return;
+        }
+        if (strongSelf.liveLoadPollGeneration != generation) {
+            return;
+        }
+        [strongSelf pollLiveLoadUntilReadyWithDeadline:deadline];
+    });
+}
+
+- (void)startOnExistingWebView:(WKWebView *)webView {
+    self.ownsWebView = NO;
+    self.usedLiveTab = YES;
+    self.webView = webView;
+    self.liveLoadPollGeneration += 1;
+
+    NSURL *url = nil;
+    if (self.recipe.startURL.length > 0) {
+        url = [NSURL URLWithString:self.recipe.startURL];
+    }
+    if (!url) {
+        url = webView.URL;
+    }
+    if (!url) {
+        [self finishWithRows:nil
+                       error:[NSError errorWithDomain:@"BrowserScraperFeed"
+                                                 code:400
+                                             userInfo:@{NSLocalizedDescriptionKey: @"匹配标签无有效 URL，且策略缺少 startURL"}]];
+        return;
+    }
+    NSString *currentAbs = webView.URL.absoluteString ?: @"";
+    NSString *targetAbs = url.absoluteString ?: @"";
+    BOOL samePath = NO;
+    if (webView.URL.host.length && url.host.length
+        && [webView.URL.host.lowercaseString isEqualToString:url.host.lowercaseString]
+        && [webView.URL.path isEqualToString:url.path]) {
+        // 忽略 query/utm 差异，视为同页。
+        samePath = YES;
+    }
+    BOOL sameURL = (currentAbs.length > 0 && [currentAbs isEqualToString:targetAbs]) || samePath;
+    if (webView.isLoading && sameURL) {
+        // 标签已在加载目标页：不要再 reload，避免互相取消。
+        NSLog(@"[ScraperFeed] live tab wait in-flight load %@", currentAbs.length ? currentAbs : targetAbs);
+    } else if (sameURL) {
+        NSLog(@"[ScraperFeed] live tab reload (same URL) %@", targetAbs);
+        [webView reload];
+    } else {
+        NSLog(@"[ScraperFeed] live tab navigate %@", targetAbs);
+        NSURLRequest *req = [NSURLRequest requestWithURL:url
+                                             cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                         timeoutInterval:60.0];
+        [webView loadRequest:req];
+    }
+    NSTimeInterval deadline = [NSDate date].timeIntervalSince1970 + 30.0;
+    // 给 reload/navigate 一点时间把 isLoading 置上，避免立刻误判「已完成」。
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.finished || strongSelf.started) {
+            return;
+        }
+        [strongSelf pollLiveLoadUntilReadyWithDeadline:deadline];
     });
 }
 
@@ -102,6 +208,7 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
         return;
     }
     self.ownsWebView = YES;
+    self.usedLiveTab = NO;
 
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.websiteDataStore = (self.recipe.session == BrowserScraperSessionEphemeral)
@@ -125,21 +232,18 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
     self.hostWindow = win;
 
     [webView loadRequest:[NSURLRequest requestWithURL:url]];
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || strongSelf.finished || strongSelf.started) {
-            return;
-        }
-        NSLog(@"[ScraperFeed] navigation settle timeout, extract anyway");
-        [strongSelf startEngineOnWebView:strongSelf.webView];
-    });
+    [self scheduleNavigationSettleTimeout];
+}
+
+- (BOOL)isNavigationCancellationError:(NSError *)error {
+    return [error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled;
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     (void)webView;
     (void)navigation;
-    if (self.started || self.finished) {
+    // 仅离屏 WebView 走 navigationDelegate；live 标签用 isLoading 轮询。
+    if (!self.ownsWebView || self.started || self.finished) {
         return;
     }
     // SPA 常在 didFinish 之后才插入列表节点；短暂 settle 再抽。
@@ -157,7 +261,11 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     (void)webView;
     (void)navigation;
-    if (self.started) {
+    if (!self.ownsWebView || self.started || self.finished) {
+        return;
+    }
+    if ([self isNavigationCancellationError:error]) {
+        NSLog(@"[ScraperFeed] ignore cancelled navigation");
         return;
     }
     [self finishWithRows:nil error:error];
@@ -166,7 +274,11 @@ static const NSTimeInterval kFeedPostLoadSettleSec = 1.2;
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     (void)webView;
     (void)navigation;
-    if (self.started) {
+    if (!self.ownsWebView || self.started || self.finished) {
+        return;
+    }
+    if ([self isNavigationCancellationError:error]) {
+        NSLog(@"[ScraperFeed] ignore cancelled provisional navigation");
         return;
     }
     [self finishWithRows:nil error:error];
@@ -196,6 +308,7 @@ didFinishWithRunDirectory:(NSString *)runDirectory
 @property (nonatomic, strong) NSMutableDictionary<NSString *, BrowserScraperFeedCacheEntry *> *cache;
 @property (nonatomic, strong, nullable) BrowserScraperFeedScrapeSession *activeSession;
 @property (nonatomic, strong) NSMutableArray<dispatch_block_t> *pendingJobs;
+@property (nonatomic, strong) NSMutableSet<NSString *> *backgroundRefreshIDs;
 @property (nonatomic, assign) BOOL draining;
 @end
 
@@ -217,6 +330,7 @@ didFinishWithRunDirectory:(NSString *)runDirectory
         _workQueue = dispatch_queue_create("meo.scraper.feed.service", DISPATCH_QUEUE_SERIAL);
         _cache = [NSMutableDictionary dictionary];
         _pendingJobs = [NSMutableArray array];
+        _backgroundRefreshIDs = [NSMutableSet set];
         __weak typeof(self) weakSelf = self;
         _server.requestHandler = ^(NSString *method, NSString *path,
                                    NSDictionary<NSString *, NSString *> *headers,
@@ -340,8 +454,66 @@ didFinishWithRunDirectory:(NSString *)runDirectory
     respond(404, @"text/plain; charset=utf-8", [@"not found" dataUsingEncoding:NSUTF8StringEncoding]);
 }
 
+- (void)storeCacheForRecipeID:(NSString *)recipeID body:(NSData *)body itemCount:(NSInteger)itemCount {
+    if (recipeID.length == 0 || body.length == 0 || itemCount <= 0) {
+        return;
+    }
+    dispatch_async(self.workQueue, ^{
+        BrowserScraperFeedCacheEntry *entry = [[BrowserScraperFeedCacheEntry alloc] init];
+        entry.body = body;
+        entry.itemCount = itemCount;
+        entry.expiresAt = [NSDate date].timeIntervalSince1970 + kFeedCacheTTL;
+        self.cache[recipeID] = entry;
+        NSLog(@"[ScraperFeed] cache store %@ (%ld items)", recipeID, (long)itemCount);
+    });
+}
+
+/// 后台刷新缓存；不阻塞当前 HTTP 响应（适配阅读器短超时）。
+- (void)enqueueBackgroundRefreshForRecipeID:(NSString *)recipeID {
+    NSAssert([NSThread isMainThread], @"background refresh must be main");
+    if (recipeID.length == 0) {
+        return;
+    }
+    if ([self.backgroundRefreshIDs containsObject:recipeID]) {
+        NSLog(@"[ScraperFeed] background refresh already queued %@", recipeID);
+        return;
+    }
+    [self.backgroundRefreshIDs addObject:recipeID];
+    __weak typeof(self) weakSelf = self;
+    NSLog(@"[ScraperFeed] background refresh enqueue %@", recipeID);
+    [self enqueueScrapeRecipeID:recipeID
+                     completion:^(NSData *rss, NSInteger itemCount, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        [strongSelf.backgroundRefreshIDs removeObject:recipeID];
+        if (error || rss.length == 0 || itemCount <= 0) {
+            NSLog(@"[ScraperFeed] background refresh failed %@: %@", recipeID, error.localizedDescription ?: @"empty");
+            return;
+        }
+        [strongSelf storeCacheForRecipeID:recipeID body:rss itemCount:itemCount];
+    }];
+}
+
+- (void)respondWithScrapeResultForRecipeID:(NSString *)recipeID
+                                   respond:(BrowserScraperFeedHTTPRespondBlock)respond {
+    __weak typeof(self) weakSelf = self;
+    [self enqueueScrapeRecipeID:recipeID
+                     completion:^(NSData *rss, NSInteger itemCount, NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (error || rss.length == 0) {
+            NSInteger code = error.code == 404 ? 404 : (error.code == 504 ? 504 : 500);
+            NSString *msg = error.localizedDescription ?: @"scrape failed";
+            respond(code, @"text/plain; charset=utf-8", [msg dataUsingEncoding:NSUTF8StringEncoding]);
+            return;
+        }
+        [strongSelf storeCacheForRecipeID:recipeID body:rss itemCount:itemCount];
+        respond(200, @"application/rss+xml; charset=utf-8", rss);
+    }];
+}
+
 - (void)serveFeedForRecipeID:(NSString *)recipeID respond:(BrowserScraperFeedHTTPRespondBlock)respond {
     __weak typeof(self) weakSelf = self;
+    // stale-while-revalidate：先秒回缓存/spill，再后台现抽。
+    // 阅读器（如 feedgen）连接测试常只有 5s，同步现抽会超时。
     dispatch_async(self.workQueue, ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -350,35 +522,50 @@ didFinishWithRunDirectory:(NSString *)runDirectory
         }
         BrowserScraperFeedCacheEntry *hit = strongSelf.cache[recipeID];
         NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-        if (hit && hit.expiresAt > now && hit.body.length > 0 && hit.itemCount > 0) {
-            NSLog(@"[ScraperFeed] cache hit %@ (%ld items)", recipeID, (long)hit.itemCount);
-            respond(200, @"application/rss+xml; charset=utf-8", hit.body);
-            return;
-        }
+        BOOL fresh = hit && hit.expiresAt > now && hit.body.length > 0 && hit.itemCount > 0;
+        BOOL usable = hit && hit.body.length > 0 && hit.itemCount > 0;
+        NSData *cachedBody = usable ? hit.body : nil;
+        NSInteger cachedCount = usable ? hit.itemCount : 0;
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            [strongSelf enqueueScrapeRecipeID:recipeID
-                                  completion:^(NSData *rss, NSInteger itemCount, NSError *error) {
-                if (error || rss.length == 0) {
-                    NSInteger code = error.code == 404 ? 404 : (error.code == 504 ? 504 : 500);
-                    NSString *msg = error.localizedDescription ?: @"scrape failed";
-                    respond(code, @"text/plain; charset=utf-8", [msg dataUsingEncoding:NSUTF8StringEncoding]);
-                    return;
+            __strong typeof(weakSelf) mainSelf = weakSelf;
+            if (!mainSelf) {
+                respond(503, @"text/plain; charset=utf-8", [@"unavailable" dataUsingEncoding:NSUTF8StringEncoding]);
+                return;
+            }
+            BrowserScraperRecipe *recipe = [[BrowserScraperRecipeStore sharedStore] recipeWithID:recipeID];
+            if (!recipe) {
+                respond(404, @"text/plain; charset=utf-8", [@"recipe not found" dataUsingEncoding:NSUTF8StringEncoding]);
+                return;
+            }
+            BOOL hasLive = [mainSelf liveWebViewMatchingRecipe:recipe] != nil;
+
+            if (cachedBody) {
+                NSLog(@"[ScraperFeed] %@ cache %@ (%ld items)%@",
+                      fresh ? @"fresh" : @"stale",
+                      recipeID,
+                      (long)cachedCount,
+                      hasLive ? @", refresh live" : @"");
+                respond(200, @"application/rss+xml; charset=utf-8", cachedBody);
+                if (!fresh || hasLive) {
+                    [mainSelf enqueueBackgroundRefreshForRecipeID:recipeID];
                 }
-                if (itemCount > 0) {
-                    dispatch_async(strongSelf.workQueue, ^{
-                        BrowserScraperFeedCacheEntry *entry = [[BrowserScraperFeedCacheEntry alloc] init];
-                        entry.body = rss;
-                        entry.itemCount = itemCount;
-                        entry.expiresAt = [NSDate date].timeIntervalSince1970 + kFeedCacheTTL;
-                        strongSelf.cache[recipeID] = entry;
-                        NSLog(@"[ScraperFeed] cache store %@ (%ld items)", recipeID, (long)itemCount);
-                    });
-                } else {
-                    NSLog(@"[ScraperFeed] skip cache empty feed %@", recipeID);
-                }
+                return;
+            }
+
+            // 冷启动：用最近一次 run spill 秒回合法 RSS，再后台刷新。
+            NSArray<NSDictionary *> *spill = [mainSelf latestSpillRowsForRecipeID:recipeID];
+            if (spill.count > 0) {
+                NSData *rss = [BrowserScraperRSSWriter RSS2DataFromRows:spill recipe:recipe];
+                NSLog(@"[ScraperFeed] spill fast-path %@ (%lu rows)", recipeID, (unsigned long)spill.count);
                 respond(200, @"application/rss+xml; charset=utf-8", rss);
-            }];
+                [mainSelf storeCacheForRecipeID:recipeID body:rss itemCount:(NSInteger)spill.count];
+                [mainSelf enqueueBackgroundRefreshForRecipeID:recipeID];
+                return;
+            }
+
+            NSLog(@"[ScraperFeed] cold scrape %@ (no cache/spill)", recipeID);
+            [mainSelf respondWithScrapeResultForRecipeID:recipeID respond:respond];
         });
     });
 }
@@ -519,6 +706,7 @@ didFinishWithRunDirectory:(NSString *)runDirectory
     session.recipe = recipe;
     session.engine = [[BrowserScraperEngine alloc] init];
     session.engine.delegate = session;
+    session.usedLiveTab = (live != nil);
     self.activeSession = session;
 
     __weak BrowserScraperFeedScrapeSession *weakSession = session;
@@ -531,20 +719,23 @@ didFinishWithRunDirectory:(NSString *)runDirectory
         completion(rss, itemCount, error);
     };
 
+    BOOL usedLive = (live != nil);
     session.completion = ^(NSArray<NSDictionary *> *rows, NSError *error) {
         NSArray<NSDictionary *> *finalRows = rows ?: @[];
         if (error) {
-            // 超时/失败时尽量用 spill 兜底，避免阅读器完全空白。
-            NSArray *spill = [self latestSpillRowsForRecipeID:recipeID];
-            if (spill.count > 0) {
-                NSData *rss = [BrowserScraperRSSWriter RSS2DataFromRows:spill recipe:recipe];
-                finishOnce(rss, (NSInteger)spill.count, nil);
-                return;
+            // 离屏失败可用 spill 兜底；live 标签必须反映当前页，禁止旧数据冒充实时。
+            if (!usedLive) {
+                NSArray *spill = [self latestSpillRowsForRecipeID:recipeID];
+                if (spill.count > 0) {
+                    NSData *rss = [BrowserScraperRSSWriter RSS2DataFromRows:spill recipe:recipe];
+                    finishOnce(rss, (NSInteger)spill.count, nil);
+                    return;
+                }
             }
             finishOnce(nil, 0, error);
             return;
         }
-        if (finalRows.count == 0) {
+        if (finalRows.count == 0 && !usedLive) {
             NSArray *spill = [self latestSpillRowsForRecipeID:recipeID];
             if (spill.count > 0) {
                 finalRows = spill;
