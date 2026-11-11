@@ -6,6 +6,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -41,6 +43,7 @@ class SettingsActivity : AppCompatActivity() {
         when (intent.getStringExtra(EXTRA_SECTION)) {
             SECTION_LINK -> openCompanion()
             SECTION_SYNC -> showFragment(SyncSettingsFragment())
+            SECTION_NEWTAB -> showFragment(NewTabLayoutFragment())
             SECTION_DOWNLOADS -> showFragment(DownloadsFragment())
             SECTION_HISTORY -> showFragment(HistoryFragment())
             SECTION_BOOKMARKS -> showFragment(BookmarksFragment())
@@ -62,6 +65,7 @@ class SettingsActivity : AppCompatActivity() {
         const val EXTRA_SECTION = "section"
         const val SECTION_LINK = "link"
         const val SECTION_SYNC = "sync"
+        const val SECTION_NEWTAB = "newtab"
         const val SECTION_DOWNLOADS = "downloads"
         const val SECTION_HISTORY = "history"
         const val SECTION_BOOKMARKS = "bookmarks"
@@ -72,6 +76,7 @@ class SettingsHomeFragment : Fragment() {
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val binding = FragmentSettingsHomeBinding.inflate(inflater, container, false)
         val act = activity as SettingsActivity
+        binding.openNewTabLayout.setOnClickListener { act.showFragment(NewTabLayoutFragment()) }
         binding.openNotificationSettings.setOnClickListener { act.openCompanion() }
         binding.openDownloadSettings.setOnClickListener { act.showFragment(DownloadsFragment()) }
         binding.openHistory.setOnClickListener { act.showFragment(HistoryFragment()) }
@@ -84,9 +89,67 @@ class SettingsHomeFragment : Fragment() {
             append("\n\n")
             append("省内存模式：${if (browserPrefs.lowMemoryMode) "开" else "关"}（⋮ → 自动同步）\n")
             append("标签上限：${browserPrefs.maxTabs}\n")
-            append("启动自动连接：${if (pairingPrefs.autoConnectOnLaunch) "开" else "关"}")
+            append("启动自动连接：${if (pairingPrefs.autoConnectOnLaunch) "开" else "关"}\n")
+            append(
+                "新标签页：${browserPrefs.shortcutColumns} 列 · " +
+                    "图标${browserPrefs.shortcutIconSizeLabel()} · " +
+                    "行距 ${browserPrefs.shortcutRowSpacingDp}dp"
+            )
         }
         return binding.root
+    }
+}
+
+/** 新标签页图标：列数 / 大小 / 行距（滑条）。 */
+class NewTabLayoutFragment : Fragment() {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        val ctx = requireContext()
+        val prefs = BrowserPrefs(ctx)
+        val root = LinearLayoutScroll(ctx)
+        root.addTitle(getString(R.string.settings_section_newtab))
+        root.addBody(getString(R.string.settings_newtab_hint))
+
+        root.addSeekBar(
+            label = "每行列数",
+            valueText = { "${it} 列" },
+            min = 3,
+            max = 6,
+            initial = prefs.shortcutColumns
+        ) { prefs.shortcutColumns = it }
+
+        root.addSeekBar(
+            label = "图标大小",
+            valueText = {
+                when (it) {
+                    0 -> "小"
+                    2 -> "大"
+                    else -> "中"
+                }
+            },
+            min = 0,
+            max = 2,
+            initial = prefs.shortcutIconSize
+        ) { prefs.shortcutIconSize = it }
+
+        root.addSeekBar(
+            label = "行距",
+            valueText = { "${it} dp" },
+            min = 0,
+            max = 28,
+            initial = prefs.shortcutRowSpacingDp
+        ) { prefs.shortcutRowSpacingDp = it }
+
+        root.addButton("恢复默认") {
+            prefs.shortcutColumns = 4
+            prefs.shortcutIconSize = 1
+            prefs.shortcutRowSpacingDp = 10
+            Toast.makeText(ctx, "已恢复默认：4 列 · 中 · 行距 10dp", Toast.LENGTH_SHORT).show()
+            (activity as? SettingsActivity)?.showFragment(NewTabLayoutFragment())
+        }
+        root.addButton("返回") {
+            (activity as? SettingsActivity)?.showFragment(SettingsHomeFragment())
+        }
+        return root
     }
 }
 
@@ -246,5 +309,52 @@ private class LinearLayoutScroll(context: android.content.Context) : android.wid
             text = label
             setOnClickListener { onClick() }
         })
+    }
+
+    fun addSeekBar(
+        label: String,
+        valueText: (Int) -> String,
+        min: Int,
+        max: Int,
+        initial: Int,
+        onChange: (Int) -> Unit
+    ) {
+        val title = TextView(context).apply {
+            textSize = 15f
+            setPadding(0, 20, 0, 4)
+        }
+        fun render(v: Int) {
+            title.text = "$label · ${valueText(v)}"
+        }
+        val clamped = initial.coerceIn(min, max)
+        render(clamped)
+        box.addView(title)
+        val seek = SeekBar(context).apply {
+            // API 26+ 支持 min；低版本用 max 偏移
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                this.min = min
+                this.max = max
+                progress = clamped
+            } else {
+                this.max = max - min
+                progress = clamped - min
+            }
+            setPadding(0, 8, 0, 8)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val value = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        progress
+                    } else {
+                        progress + min
+                    }
+                    render(value)
+                    if (fromUser) onChange(value)
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+        }
+        box.addView(seek)
     }
 }

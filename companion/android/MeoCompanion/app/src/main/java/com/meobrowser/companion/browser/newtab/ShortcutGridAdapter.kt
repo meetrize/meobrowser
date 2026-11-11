@@ -1,24 +1,28 @@
 package com.meobrowser.companion.browser.newtab
 
 import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.meobrowser.companion.R
 
 class ShortcutGridAdapter(
     private val items: List<ShortcutItem>,
+    private val style: ShortcutGridStyle,
     private val onOpen: (ShortcutItem) -> Unit,
     private val onLong: (ShortcutItem) -> Unit,
     private val onAdd: () -> Unit
 ) : RecyclerView.Adapter<ShortcutGridAdapter.VH>() {
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
+        val root: LinearLayout = view as LinearLayout
         val frame: FrameLayout = view.findViewById(R.id.shortcutIconFrame)
         val icon: ImageView = view.findViewById(R.id.shortcutIcon)
         val letter: TextView = view.findViewById(R.id.shortcutLetter)
@@ -35,8 +39,34 @@ class ShortcutGridAdapter(
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val density = holder.itemView.resources.displayMetrics.density
-        val radiusPx = 14f * density
-        val insetPad = (9 * density).toInt()
+        val iconPx = (style.iconSizeDp * density).toInt()
+        val radiusPx = style.cornerRadiusDp * density
+        val insetPad = (style.insetPadDp * density).toInt()
+        val rowPad = ((style.rowSpacingDp / 2f) * density).toInt().coerceAtLeast(0)
+
+        holder.root.setPadding(
+            (4 * density).toInt(),
+            rowPad,
+            (4 * density).toInt(),
+            rowPad
+        )
+        holder.frame.layoutParams = holder.frame.layoutParams.apply {
+            width = iconPx
+            height = iconPx
+        }
+        holder.letter.setTextSize(TypedValue.COMPLEX_UNIT_SP, style.letterTextSp)
+        holder.title.setTextSize(TypedValue.COMPLEX_UNIT_SP, style.titleTextSp)
+        // 标题略宽于图标、单行裁切，不显示省略号
+        val titleWidth = iconPx + (8 * density).toInt()
+        holder.title.layoutParams = holder.title.layoutParams.apply {
+            width = titleWidth
+            if (this is ViewGroup.MarginLayoutParams) {
+                topMargin = (8 * density).toInt()
+            }
+        }
+        holder.title.maxLines = 1
+        holder.title.isSingleLine = true
+        holder.title.ellipsize = null
 
         if (position == items.size) {
             holder.title.text = "添加"
@@ -89,7 +119,6 @@ class ShortcutGridAdapter(
                 holder.letter.visibility = View.GONE
                 when (cached.fit) {
                     ShortcutIconHelper.FitStyle.INSET -> {
-                        // 透明/异形：白底 + 四周留白
                         val white = GradientDrawable().apply {
                             shape = GradientDrawable.RECTANGLE
                             cornerRadius = radiusPx
@@ -101,7 +130,6 @@ class ShortcutGridAdapter(
                         holder.icon.scaleType = ImageView.ScaleType.FIT_CENTER
                     }
                     ShortcutIconHelper.FitStyle.FILL -> {
-                        // 矩形色块：铺满圆角矩形
                         holder.frame.background = letterBg
                         holder.frame.clipToOutline = true
                         holder.icon.setPadding(0, 0, 0, 0)

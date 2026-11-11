@@ -46,6 +46,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.meobrowser.companion.R
 import com.meobrowser.companion.browser.download.DownloadHub
 import com.meobrowser.companion.browser.newtab.ShortcutGridAdapter
+import com.meobrowser.companion.browser.newtab.ShortcutGridStyle
 import com.meobrowser.companion.browser.newtab.ShortcutIconHelper
 import com.meobrowser.companion.browser.newtab.ShortcutIconPalette
 import com.meobrowser.companion.browser.newtab.ShortcutItem
@@ -164,8 +165,8 @@ class BrowserActivity : AppCompatActivity() {
             } else false
         }
 
-        binding.newTabGrid.layoutManager = GridLayoutManager(this, 4)
         binding.newTabGrid.itemAnimator = null
+        applyShortcutGridLayout()
         refreshShortcutGrid()
 
         binding.root.post {
@@ -843,27 +844,43 @@ class BrowserActivity : AppCompatActivity() {
         return wv
     }
 
+    private fun applyShortcutGridLayout() {
+        val style = ShortcutGridStyle.from(browserPrefs)
+        val lm = binding.newTabGrid.layoutManager as? GridLayoutManager
+        if (lm == null) {
+            binding.newTabGrid.layoutManager = GridLayoutManager(this, style.columns)
+        } else if (lm.spanCount != style.columns) {
+            lm.spanCount = style.columns
+        }
+    }
+
     private fun refreshShortcutGrid() {
+        applyShortcutGridLayout()
+        val style = ShortcutGridStyle.from(browserPrefs)
         val items = shortcutStore.loadActive()
         // 后台预热磁盘/网络图标，网格滚动时更快命中内存
         ShortcutIconHelper.prefetch(items)
-        binding.newTabGrid.adapter = ShortcutGridAdapter(items, onOpen = { item ->
-            navigate(item.url)
-        }, onLong = { item ->
-            AlertDialog.Builder(this)
-                .setTitle(item.title)
-                .setItems(arrayOf("编辑", "删除")) { _, which ->
-                    when (which) {
-                        0 -> editShortcut(item)
-                        1 -> {
-                            shortcutStore.softDelete(item.id)
-                            refreshShortcutGrid()
-                            SyncEngine.schedulePush(this)
+        binding.newTabGrid.adapter = ShortcutGridAdapter(
+            items = items,
+            style = style,
+            onOpen = { item -> navigate(item.url) },
+            onLong = { item ->
+                AlertDialog.Builder(this)
+                    .setTitle(item.title)
+                    .setItems(arrayOf("编辑", "删除")) { _, which ->
+                        when (which) {
+                            0 -> editShortcut(item)
+                            1 -> {
+                                shortcutStore.softDelete(item.id)
+                                refreshShortcutGrid()
+                                SyncEngine.schedulePush(this)
+                            }
                         }
                     }
-                }
-                .show()
-        }, onAdd = { editShortcut(null) })
+                    .show()
+            },
+            onAdd = { editShortcut(null) }
+        )
     }
 
     private fun editShortcut(existing: ShortcutItem?) {

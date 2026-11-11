@@ -31,6 +31,15 @@
             android:background="#33000000" />
 
         <TextView
+            android:id="@+id/openNewTabLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:paddingVertical="12dp"
+            android:text="@string/settings_section_newtab"
+            android:textSize="16sp" />
+
+        <TextView
             android:id="@+id/openNotificationSettings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

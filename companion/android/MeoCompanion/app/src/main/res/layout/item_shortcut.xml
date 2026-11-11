@@ -40,12 +40,13 @@
 
     <TextView
         android:id="@+id/shortcutTitle"
-        android:layout_width="match_parent"
+        android:layout_width="64dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:ellipsize="end"
+        android:ellipsize="none"
         android:gravity="center_horizontal"
-        android:maxLines="2"
+        android:maxLines="1"
+        android:singleLine="true"
         android:shadowColor="#99000000"
         android:shadowDx="0"
         android:shadowDy="1"

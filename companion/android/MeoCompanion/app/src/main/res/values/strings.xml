@@ -51,6 +51,8 @@
     <string name="settings_title">设置</string>
     <string name="settings_section_general">通用</string>
     <string name="settings_general_hint">默认搜索引擎：Google。主页为新标签页。下载保存到系统「下载」目录。</string>
+    <string name="settings_section_newtab">新标签页图标</string>
+    <string name="settings_newtab_hint">调整每行列数、图标大小与行距。返回新标签页即可看到效果。</string>
     <string name="settings_section_link">互联与配对</string>
     <string name="settings_section_notification">通知与验证码</string>
     <string name="settings_section_sync">自动同步</string>

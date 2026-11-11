@@ -63,6 +63,33 @@ class BrowserPrefs(context: Context) {
         return next
     }
 
+    /** 新标签页每行图标数：3～6，默认 4 */
+    var shortcutColumns: Int
+        get() = prefs.getInt(KEY_SHORTCUT_COLUMNS, 4).coerceIn(3, 6)
+        set(value) = prefs.edit().putInt(KEY_SHORTCUT_COLUMNS, value.coerceIn(3, 6)).apply()
+
+    /** 新标签页图标尺寸：0 小 / 1 中 / 2 大 */
+    var shortcutIconSize: Int
+        get() = prefs.getInt(KEY_SHORTCUT_ICON_SIZE, 1).coerceIn(0, 2)
+        set(value) = prefs.edit().putInt(KEY_SHORTCUT_ICON_SIZE, value.coerceIn(0, 2)).apply()
+
+    /** 新标签页行距（dp）：0～28，默认 10 */
+    var shortcutRowSpacingDp: Int
+        get() = prefs.getInt(KEY_SHORTCUT_ROW_SPACING, 10).coerceIn(0, 28)
+        set(value) = prefs.edit().putInt(KEY_SHORTCUT_ROW_SPACING, value.coerceIn(0, 28)).apply()
+
+    fun shortcutIconSizeDp(): Int = when (shortcutIconSize) {
+        0 -> 44
+        2 -> 72
+        else -> 56
+    }
+
+    fun shortcutIconSizeLabel(): String = when (shortcutIconSize) {
+        0 -> "小"
+        2 -> "大"
+        else -> "中"
+    }
+
     fun saveSession(entries: List<Pair<String, String>>, activeIndex: Int) {
         val arr = JSONArray()
         entries.forEach { (url, title) ->
@@ -96,6 +123,9 @@ class BrowserPrefs(context: Context) {
         private const val KEY_FULLSCREEN = "fullscreen"
         private const val KEY_ORIENTATION = "orientation_mode"
         private const val KEY_TEXT_ZOOM = "text_zoom"
+        private const val KEY_SHORTCUT_COLUMNS = "shortcut_columns"
+        private const val KEY_SHORTCUT_ICON_SIZE = "shortcut_icon_size"
+        private const val KEY_SHORTCUT_ROW_SPACING = "shortcut_row_spacing_dp"
         private const val KEY_SESSION = "session_tabs"
         private const val KEY_ACTIVE = "session_active"
         val TEXT_ZOOM_STEPS = listOf(85, 100, 125, 150)
