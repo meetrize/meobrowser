@@ -15,6 +15,7 @@
 @property (nonatomic, strong) BrowserScraperRecipe *recipe;
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, assign) BOOL cancelRequested;
+@property (nonatomic, assign) NSUInteger runGeneration;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *mutablePreview;
 @property (nonatomic, strong) NSMutableSet<NSString *> *seenKeys;
 @property (nonatomic, assign) NSInteger totalRows;
@@ -87,14 +88,25 @@ static NSString *MeoScraperStringify(id value) {
                 webView:(WKWebView *)webView
               trialMode:(BOOL)trialMode
                feedMode:(BOOL)feedMode {
-    if (self.running) {
-        [self cancel];
-    }
+    // 作废进行中的异步回调，避免「取消未完成又立刻开跑」导致双重 finish / 写盘崩溃。
+    self.runGeneration += 1;
+    NSUInteger generation = self.runGeneration;
+    self.cancelRequested = YES;
+    self.paused = NO;
+    self.running = NO;
+
     BrowserScraperRecipe *runRecipe = [recipe copy];
     self.trialMode = trialMode;
     if (feedMode) {
         runRecipe.pagination.maxPages = 1;
         runRecipe.pagination.type = BrowserScraperPaginationTypeNone;
+        // 离屏重载时 SPA 常晚于 didFinishNavigation；无 wait 时用容器 path 兜底等待。
+        if (runRecipe.pagination.waitForSelector.length == 0 && runRecipe.containerPath.length > 0) {
+            runRecipe.pagination.waitForSelector = runRecipe.containerPath;
+        }
+        if (runRecipe.pagination.waitTimeoutMs < 1000) {
+            runRecipe.pagination.waitTimeoutMs = 10000;
+        }
     } else if (trialMode) {
         NSInteger pages = runRecipe.pagination.maxPages;
         if (pages < 1) pages = 10;
@@ -105,6 +117,9 @@ static NSString *MeoScraperStringify(id value) {
     self.cancelRequested = NO;
     self.paused = NO;
     self.running = YES;
+    if (generation != self.runGeneration) {
+        return;
+    }
     self.totalRows = 0;
     self.pageIndex = 0;
     [self.mutablePreview removeAllObjects];
@@ -173,11 +188,18 @@ static NSString *MeoScraperStringify(id value) {
         return;
     }
 
+    NSUInteger generation = self.runGeneration;
     if (recipe.pagination.waitForSelector.length > 0) {
         NSString *waitJS = [BrowserScraperDetector waitForSelectorJavaScript:recipe.pagination.waitForSelector
                                                                    timeoutMs:recipe.pagination.waitTimeoutMs];
         [webView evaluateJavaScript:waitJS completionHandler:^(id result, NSError *error) {
             (void)result; (void)error;
+            if (generation != self.runGeneration || !self.running || self.cancelRequested) {
+                if (self.cancelRequested && self.running && generation == self.runGeneration) {
+                    [self finishWithError:[NSError errorWithDomain:@"BrowserScraper" code:20 userInfo:@{NSLocalizedDescriptionKey:@"已停止"}]];
+                }
+                return;
+            }
             [self extractCurrentPage];
         }];
     } else {
@@ -227,6 +249,7 @@ static NSString *MeoScraperStringify(id value) {
         [self finishWithError:nil];
         return;
     }
+    NSUInteger generation = self.runGeneration;
     NSString *mode = [BrowserScraperRecipe stringFromMode:recipe.mode];
     [BrowserScraperDetector extractRowsInWebView:self.webView
                                             mode:mode
@@ -236,6 +259,16 @@ static NSString *MeoScraperStringify(id value) {
                                    absoluteURLs:recipe.absoluteURLs
                                          maxRows:MIN(500, remaining)
                                       completion:^(NSArray<NSDictionary *> *rows, NSError *error) {
+        if (generation != self.runGeneration) {
+            return;
+        }
+        if (!self.running) {
+            return;
+        }
+        if (self.cancelRequested) {
+            [self finishWithError:[NSError errorWithDomain:@"BrowserScraper" code:20 userInfo:@{NSLocalizedDescriptionKey:@"已停止"}]];
+            return;
+        }
         if (error) {
             [self log:error.localizedDescription ?: @"抽取失败"];
             [self finishWithError:error];
@@ -292,7 +325,11 @@ static NSString *MeoScraperStringify(id value) {
         if (recipe.pagination.type == BrowserScraperPaginationTypeInfiniteScroll) {
             delay = MAX(delay, 400);
         }
+        NSUInteger pageGeneration = generation;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            if (pageGeneration != self.runGeneration || !self.running) {
+                return;
+            }
             if (self.cancelRequested) {
                 [self finishWithError:[NSError errorWithDomain:@"BrowserScraper" code:20 userInfo:@{NSLocalizedDescriptionKey:@"已停止"}]];
                 return;
@@ -370,8 +407,9 @@ static NSString *MeoScraperStringify(id value) {
     if (!self.running) return;
     self.running = NO;
     self.paused = NO;
+    BOOL cancelled = (error != nil && error.code == 20);
     NSString *status = error ? @"failed" : @"ok";
-    if (error && error.code == 20) status = @"cancelled";
+    if (cancelled) status = @"cancelled";
     NSDictionary *meta = @{
         @"recipeId": self.recipe.recipeID ?: @"",
         @"finishedAt": @([NSDate date].timeIntervalSince1970),
@@ -381,24 +419,32 @@ static NSString *MeoScraperStringify(id value) {
         @"runDirectory": self.currentRunDirectory ?: @"",
     };
     NSData *metaData = [NSJSONSerialization dataWithJSONObject:meta options:NSJSONWritingPrettyPrinted error:nil];
-    [metaData writeToFile:[self.currentRunDirectory stringByAppendingPathComponent:@"meta.json"] atomically:YES];
+    if (self.currentRunDirectory.length > 0) {
+        [metaData writeToFile:[self.currentRunDirectory stringByAppendingPathComponent:@"meta.json"] atomically:YES];
+    }
     [self log:error ? (error.localizedDescription ?: @"失败") : (self.trialMode ? @"试运行完成" : @"完成")];
 
-    if (!self.trialMode && (!error || error.code == 20)) {
+    // 仅成功结束时写 sink；取消/失败不导出，避免半成品路径触发 zip 崩溃。
+    if (!self.trialMode && error == nil) {
         [self writeSink];
     }
 
     [self pruneOldRuns];
 
     NSString *runDir = self.currentRunDirectory;
+    NSError *delegateError = cancelled ? nil : error;
     if ([self.delegate respondsToSelector:@selector(scraperEngine:didFinishWithRunDirectory:error:)]) {
-        [self.delegate scraperEngine:self didFinishWithRunDirectory:runDir error:(error.code == 20 ? nil : error)];
+        [self.delegate scraperEngine:self didFinishWithRunDirectory:runDir error:delegateError];
     }
     self.trialMode = NO;
 }
 
 - (void)writeSink {
     BrowserScraperSink *sink = self.recipe.sink;
+    if (!sink) {
+        [self log:@"无导出目标"];
+        return;
+    }
     NSError *err = nil;
     NSArray<NSString *> *columnNames = [BrowserScraperField orderedColumnNamesFromFields:self.recipe.fields];
     if (sink.type == BrowserScraperSinkTypeMySQL) {
@@ -416,17 +462,27 @@ static NSString *MeoScraperStringify(id value) {
                                                         appropriateForURL:nil
                                                                    create:YES
                                                                     error:nil];
+        if (downloads.path.length == 0) {
+            [self log:@"无法定位下载文件夹，导出取消"];
+            return;
+        }
         NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
         fmt.dateFormat = @"yyyyMMdd-HHmmss";
         NSString *ext = @"xlsx";
         if (sink.type == BrowserScraperSinkTypeCSV) ext = @"csv";
         else if (sink.type == BrowserScraperSinkTypeJSON) ext = @"json";
-        NSString *safeName = [[self.recipe.name stringByReplacingOccurrencesOfString:@"/" withString:@"-"]
+        NSString *rawName = self.recipe.name.length ? self.recipe.name : @"scrape";
+        NSString *safeName = [[rawName stringByReplacingOccurrencesOfString:@"/" withString:@"-"]
                               stringByReplacingOccurrencesOfString:@":" withString:@"-"];
+        if (safeName.length == 0) safeName = @"scrape";
         path = [[downloads.path stringByAppendingPathComponent:
                  [NSString stringWithFormat:@"%@-%@", safeName, [fmt stringFromDate:[NSDate date]]]]
                 stringByAppendingPathExtension:ext];
         sink.filePath = path;
+    }
+    if (path.length == 0) {
+        [self log:@"导出路径无效"];
+        return;
     }
     BOOL ok = [BrowserScraperExcelWriter writeNDJSONAtPath:self.ndjsonPath
                                               outputPath:path

@@ -2502,6 +2502,10 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
 - (void)saveRecipeClicked:(id)sender {
     (void)sender;
     [self applyUIToDraft];
+    WKWebView *wv = [self currentWebView];
+    if (wv.URL.absoluteString.length > 0) {
+        self.draft.startURL = wv.URL.absoluteString;
+    }
     if (self.mysqlPasswordField.stringValue.length > 0) {
         NSError *err = nil;
         [BrowserScraperMySQLWriter setPassword:self.mysqlPasswordField.stringValue
@@ -2621,6 +2625,19 @@ typedef NS_ENUM(NSInteger, BrowserScraperButtonTone) {
     if (self.draft.fields.count == 0) {
         [self appendLog:@"请先配置字段"];
         return;
+    }
+    if (self.draft.containerPath.length == 0 && self.draft.mode == BrowserScraperModeTable) {
+        [self appendLog:@"请先智能检测或点选数据区（容器 path 为空）"];
+        return;
+    }
+    if (self.engine.running) {
+        [self appendLog:@"已有任务在运行，请先停止"];
+        return;
+    }
+    // 保存当前页为 startURL，供 RSS / 定时与本页一致
+    NSURL *pageURL = wv.URL;
+    if (pageURL.absoluteString.length > 0) {
+        self.draft.startURL = pageURL.absoluteString;
     }
     self.logView.string = @"";
     [self setRunningControlsEnabled:NO];
