@@ -1,0 +1,294 @@
+/*
+ * 彭博阅读模式（Page Pack）
+ *
+ * 阅读器本身是一个 <dialog>，通过 showModal() 进入浏览器 top layer，
+ * 因此普通 z-index 遮罩、付费墙 ::backdrop、滚动锁都盖不住它。
+ */
+
+/* ---------- 打开阅读器时隐藏页面其余内容 ---------- */
+
+html.meo-bloomberg-reader-open,
+html.meo-bloomberg-reader-open body {
+  overflow: hidden !important;
+  height: 100% !important;
+  background: #fff !important;
+}
+
+html.meo-bloomberg-reader-open body > *:not(dialog.meo-bloomberg-reader-dialog) {
+  display: none !important;
+}
+
+/* ---------- 顶层阅读器 ---------- */
+
+/* 站点自己的 dialog / popover / fullscreen 遮罩：尽量透明。
+ * 阅读器自身的 ::backdrop 在下面单独设为白色，优先级更高。
+ * 注意分开写，避免某个伪元素不被支持时整组规则失效。 */
+html.meo-bloomberg-reader-open dialog::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.meo-bloomberg-reader-open [popover]::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html.meo-bloomberg-reader-open :fullscreen::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+dialog.meo-bloomberg-reader-dialog {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  color: #111 !important;
+  overflow: hidden !important;
+  z-index: 2147483647 !important;
+}
+
+dialog.meo-bloomberg-reader-dialog::backdrop {
+  background: #fff !important;
+  opacity: 1 !important;
+}
+
+.meo-bloomberg-reader-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.meo-bloomberg-reader-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 18px;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid #e6e6e6;
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+.meo-bloomberg-reader-bar-title {
+  font: 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  font-weight: 600;
+  color: #555;
+  letter-spacing: 0.02em;
+}
+
+.meo-bloomberg-reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meo-bloomberg-reader-close {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid #d8d8d8;
+  background: #fff;
+  color: #333;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  cursor: pointer;
+}
+
+.meo-bloomberg-reader-close:hover {
+  background: #f2f2f2;
+}
+
+.meo-bloomberg-reader-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #fff;
+}
+
+.meo-bloomberg-reader-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 24px 120px;
+}
+
+/* ---------- 正文排版 ---------- */
+
+.meo-bloomberg-reader-article {
+  font: 19px/1.8 Georgia, "Times New Roman", "Songti SC", serif;
+  color: #171717;
+  word-wrap: break-word;
+}
+
+.meo-bloomberg-reader-title {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  font-size: 36px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 14px;
+  color: #000;
+}
+
+.meo-bloomberg-reader-byline {
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color: #666;
+  margin: 0 0 28px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e6e6e6;
+}
+
+.meo-bloomberg-reader-article p {
+  margin: 0 0 1.1em;
+}
+
+.meo-bloomberg-reader-article h2,
+.meo-bloomberg-reader-article h3,
+.meo-bloomberg-reader-article h4 {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: #000;
+}
+
+.meo-bloomberg-reader-article h2 {
+  font-size: 27px;
+  margin: 1.6em 0 0.6em;
+}
+
+.meo-bloomberg-reader-article h3 {
+  font-size: 22px;
+  margin: 1.4em 0 0.5em;
+}
+
+.meo-bloomberg-reader-article h4 {
+  font-size: 19px;
+  margin: 1.3em 0 0.4em;
+}
+
+.meo-bloomberg-reader-article a {
+  color: #0a66c2;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.meo-bloomberg-reader-article img,
+.meo-bloomberg-reader-article picture {
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 6px;
+  display: block;
+}
+
+.meo-bloomberg-reader-article figure {
+  margin: 28px 0;
+}
+
+.meo-bloomberg-reader-article figcaption {
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color: #666;
+  margin-top: 8px;
+}
+
+.meo-bloomberg-reader-article blockquote {
+  margin: 1.4em 0;
+  padding: 2px 0 2px 18px;
+  border-left: 3px solid #d8d8d8;
+  color: #444;
+  font-style: italic;
+}
+
+.meo-bloomberg-reader-article ul,
+.meo-bloomberg-reader-article ol {
+  padding-left: 1.4em;
+  margin: 0 0 1.1em;
+}
+
+.meo-bloomberg-reader-article li {
+  margin: 0.35em 0;
+}
+
+.meo-bloomberg-reader-article pre,
+.meo-bloomberg-reader-article code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+.meo-bloomberg-reader-article pre {
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.meo-bloomberg-reader-article code {
+  padding: 1px 4px;
+}
+
+.meo-bloomberg-reader-article table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.2em 0;
+  font-size: 15px;
+}
+
+.meo-bloomberg-reader-article th,
+.meo-bloomberg-reader-article td {
+  border: 1px solid #e0e0e0;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.meo-bloomberg-reader-article hr {
+  border: 0;
+  border-top: 1px solid #e6e6e6;
+  margin: 2em 0;
+}
+
+/* ---------- 关闭后的重新打开按钮 ---------- */
+
+.meo-bloomberg-reader-reopen {
+  position: fixed;
+  inset: auto 20px 20px auto !important;
+  margin: 0 !important;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483647;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #111;
+  color: #fff;
+  font: 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .meo-bloomberg-reader-content {
+    padding: 28px 18px 100px;
+  }
+
+  .meo-bloomberg-reader-title {
+    font-size: 30px;
+  }
+
+  .meo-bloomberg-reader-article {
+    font-size: 18px;
+  }
+}

@@ -2,7 +2,7 @@
  * 纽约时报去付费墙（Page Pack）
  *
  * 设计目标：
- * - 只解除“页面已经拿到手”的显示限制：付费墙遮罩、订阅弹层、滚动锁、正文裁切；
+ * - 只解除“页面已经拿到手”的显示限制：付费墙遮罩、订阅弹层、滚动锁、正文裁切、渐变遮罩；
  * - 不请求任何额外接口，也不伪造订阅状态；
  * - 对 NYT 的 React 重渲染保持幂等，脚本保存后热更新可重复执行。
  *
@@ -55,6 +55,7 @@
     observer: null,
     sweepTimer: null,
     timers: [],
+    lastGradientScan: 0,
     destroyed: false
   };
 
@@ -237,6 +238,138 @@
     });
   }
 
+  function markArticlePage(root) {
+    var html = document.documentElement;
+    if (!html || !html.classList) return;
+    if (root) {
+      html.classList.add('meo-nyt-article');
+    } else {
+      html.classList.remove('meo-nyt-article');
+    }
+  }
+
+  function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function backgroundHasGradient(cs) {
+    var bg = (cs.backgroundImage || '') + ' ' + (cs.background || '');
+    return bg.indexOf('gradient') >= 0;
+  }
+
+  // 检测 ::before / ::after 是否是绝对定位的渐变层。
+  function hasGradientPseudo(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var pseudos = ['::before', '::after'];
+    for (var i = 0; i < pseudos.length; i++) {
+      var cs = null;
+      try { cs = window.getComputedStyle ? window.getComputedStyle(el, pseudos[i]) : null; } catch (e) { cs = null; }
+      if (!cs) continue;
+      var content = cs.content;
+      if (content === 'none' || content === 'normal') continue;
+      if (cs.position !== 'absolute' && cs.position !== 'fixed') continue;
+      if (backgroundHasGradient(cs)) return true;
+    }
+    return false;
+  }
+
+  function markNoPseudoGradient(el) {
+    if (!el || el.nodeType !== 1) return;
+    if (el.getAttribute('data-meo-nyt-no-pseudo-gradient') === '1') return;
+    el.setAttribute('data-meo-nyt-no-pseudo-gradient', '1');
+    if (el.classList) {
+      el.classList.add('meo-nyt-no-pseudo-gradient');
+    }
+  }
+
+  // 只收集“可能在正文附近”的候选，避免整页 getAllComputedStyle。
+  function collectGradientCandidates(root) {
+    var list = [];
+    var seen = [];
+    function add(el) {
+      if (!el || el.nodeType !== 1) return;
+      if (seen.indexOf(el) >= 0) return;
+      seen.push(el);
+      list.push(el);
+    }
+
+    // 正文内部
+    queryAll('div, section, aside', root).forEach(add);
+
+    // 正文祖先的兄弟节点（渐变遮罩常与正文平级）
+    var node = root;
+    var guard = 0;
+    while (node && node !== document.body && node !== document.documentElement && guard < 8) {
+      guard++;
+      var parent = node.parentElement;
+      if (parent) {
+        Array.prototype.slice.call(parent.children).forEach(add);
+      }
+      node = parent;
+    }
+
+    // body 顶层的全屏遮罩
+    if (document.body) {
+      Array.prototype.slice.call(document.body.children).forEach(add);
+    }
+
+    // 带 gradient / fade 语义的节点，层级可能更深
+    queryAll('[class*="gradient" i], [class*="fade" i], [data-testid*="gradient" i], [data-testid*="fade" i]').forEach(add);
+
+    return list;
+  }
+
+  function hideGradientOverlays(root) {
+    if (!root || state.destroyed) return;
+    var now = Date.now ? Date.now() : new Date().getTime();
+    if (now - state.lastGradientScan < 400) return;
+    state.lastGradientScan = now;
+
+    var rootRect = root.getBoundingClientRect();
+    if (rootRect.width < 80 || rootRect.height < 80) return;
+
+    var candidates = collectGradientCandidates(root);
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (!el || el.nodeType !== 1) continue;
+      if (el === document.documentElement || el === document.body) continue;
+
+      // 包含正文的容器不能隐藏，但可以去掉它身上的渐变伪元素。
+      if (el === root || el.contains(root)) {
+        if (hasGradientPseudo(el)) markNoPseudoGradient(el);
+        continue;
+      }
+
+      if (el.getAttribute('data-meo-nyt-hidden') === '1') continue;
+
+      var cs = computedStyle(el);
+      if (!cs) continue;
+
+      var rect = el.getBoundingClientRect();
+      if (rect.width < 80 || rect.height < 6) continue;
+      if (!rectsOverlap(rect, rootRect)) continue;
+
+      var text = '';
+      try { text = (el.innerText || '').trim(); } catch (e) { text = ''; }
+      if (text.length > 160) continue;
+      if (el.closest && el.closest('figure, picture, video, nav, form')) continue;
+
+      var coversWidth = rect.width >= rootRect.width * 0.55;
+      var nearBottom = rect.top >= rootRect.top + rootRect.height * 0.4;
+      var nearTop = rect.bottom <= rootRect.top + rootRect.height * 0.25;
+      var coversViewport = rect.height >= (window.innerHeight || 0) * 0.25;
+      var pointerNone = cs.pointerEvents === 'none';
+      if (!(coversWidth && (nearBottom || nearTop || coversViewport || pointerNone))) continue;
+
+      if (backgroundHasGradient(cs)) {
+        if (cs.position !== 'absolute' && cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+        hideElement(el, root);
+      } else if (hasGradientPseudo(el)) {
+        markNoPseudoGradient(el);
+      }
+    }
+  }
+
   function isPaywallLike(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el === document.documentElement || el === document.body) return false;
@@ -314,10 +447,12 @@
 
     try {
       var root = findArticleRoot();
+      markArticlePage(root);
       hideKnown(root);
       unlockScroll(root);
       revealArticle(root);
       hideViewportOverlays(root);
+      hideGradientOverlays(root);
     } catch (e) {
       // 页面结构千变万化，单次 sweep 失败不应影响阅读。
     } finally {

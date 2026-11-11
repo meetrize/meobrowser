@@ -1,0 +1,122 @@
+/*
+ * 彭博去付费墙（Page Pack）
+ *
+ * 只做三件事：
+ * 1. 隐藏 Bloomberg / Piano(Tinypass) 的付费墙、注册墙、订阅弹层与遮罩；
+ * 2. 解除页面为弹层添加的滚动锁，恢复被裁切的正文；
+ * 3. 去掉预览区残留的渐变遮罩 / mask。
+ *
+ * 注意：本文件不会、也无法凭空补全服务端未下发的正文。
+ */
+
+/* ---------- 已知付费墙 / 注册墙 / 订阅弹层 ---------- */
+
+#paywall,
+#paywall-container,
+.paywall,
+.paywall-overlay,
+.paywall-modal,
+.paywall-backdrop,
+.paywall-gradient,
+[data-testid="paywall"],
+[data-testid="Paywall"],
+[data-testid="paywall-container"],
+[data-testid="inline-paywall"],
+[data-testid="article-paywall"],
+[data-testid="paywall-modal"],
+[data-component="paywall"],
+[data-component="paywall-overlay"],
+[class*="paywall-overlay" i],
+[class*="paywall-modal" i],
+[class*="paywall-backdrop" i],
+[class*="paywall-gradient" i],
+[class*="PaywallOverlay"],
+[class*="PaywallModal"],
+[class*="PaywallBackdrop"],
+[class*="PaywallGradient"],
+[class*="regwall" i],
+[class*="reg-wall" i],
+tp-modal,
+tp-backdrop,
+tp-iframe-wrapper,
+iframe[src*="tinypass"],
+iframe[src*="piano"] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* ---------- 解除 html/body 的滚动锁 ---------- */
+
+html,
+body {
+  overflow-y: auto !important;
+  overscroll-behavior-y: auto !important;
+}
+
+/* ---------- 保证正文容器不被隐藏/裁切/模糊 ---------- */
+
+article,
+.body-content,
+[data-component="article-body"],
+[data-testid="article-body"],
+[data-testid="articleBody"],
+[data-testid="body-content"] {
+  display: block !important;
+  max-height: none !important;
+  overflow: visible !important;
+  filter: none !important;
+}
+
+/* ---------- 去掉预览区残留的渐变遮罩 / mask ---------- */
+
+/* 原生 <dialog> / popover / fullscreen 的 ::backdrop 不是 DOM 节点，无法选中；
+ * 它经常就是那层半透明黑色遮罩。单独写规则，避免某个不支持的伪元素导致整组失效。 */
+dialog::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+[popover]::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:fullscreen::backdrop {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 有些网站用超大扩散半径的 box-shadow 模拟全屏遮罩，
+ * 阴影不是元素，检查器同样选不中。 */
+html.meo-bloomberg-article,
+html.meo-bloomberg-article body,
+html.meo-bloomberg-article main,
+html.meo-bloomberg-article article,
+html.meo-bloomberg-article .body-content {
+  box-shadow: none !important;
+  -webkit-box-shadow: none !important;
+}
+
+/* 只在识别到文章页时加 html.meo-bloomberg-article，避免影响首页等页面。 */
+html.meo-bloomberg-article main,
+html.meo-bloomberg-article article,
+html.meo-bloomberg-article .body-content,
+html.meo-bloomberg-article [data-component="article-body"],
+html.meo-bloomberg-article [data-testid="article-body"],
+html.meo-bloomberg-article [data-testid="articleBody"] {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+}
+
+/* JS 检测到“绝对定位的渐变伪元素”后，会给容器加这个 class。 */
+.meo-bloomberg-no-pseudo-gradient::before,
+.meo-bloomberg-no-pseudo-gradient::after {
+  background: none !important;
+  background-image: none !important;
+}

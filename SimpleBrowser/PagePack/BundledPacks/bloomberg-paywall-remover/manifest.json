@@ -1,0 +1,42 @@
+{
+  "id": "bloomberg-paywall-remover",
+  "name": "彭博去付费墙",
+  "version": "1.0.11",
+  "description": "隐藏 Bloomberg 文章页的付费墙遮罩、订阅弹层、渐变层与滚动锁；并内置阅读模式，把正文放入顶层阅读器，绕开延迟加载的黑色遮罩。",
+  "author": "MeoBrowser",
+  "sourceURL": "bundle://bloomberg-paywall-remover",
+  "enabled": true,
+  "matches": [
+    "*://www.bloomberg.com/*",
+    "*://bloomberg.com/*"
+  ],
+  "excludes": [],
+  "files": [
+    {
+      "name": "bloomberg-paywall.css",
+      "kind": "css",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "bloomberg-paywall.js",
+      "kind": "js",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "bloomberg-reader.css",
+      "kind": "css",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "bloomberg-reader.js",
+      "kind": "js",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    }
+  ],
+  "createdAt": 1794360000,
+  "updatedAt": 1794411600
+}

@@ -1,9 +1,10 @@
 /*
  * 纽约时报去付费墙（Page Pack）
  *
- * 只做两件事：
+ * 只做三件事：
  * 1. 隐藏 NYT / Piano(Tinypass) 的付费墙、注册墙、订阅弹层与遮罩；
- * 2. 解除页面为弹层添加的滚动锁，让已加载的正文可以继续阅读。
+ * 2. 解除页面为弹层添加的滚动锁，让已加载的正文可以继续阅读；
+ * 3. 去掉预览区残留的渐变遮罩 / mask。
  *
  * 注意：本文件不会、也无法凭空补全服务端未下发的正文。
  */
@@ -53,4 +54,28 @@ section[name="articleBody"],
   display: block !important;
   max-height: none !important;
   overflow: visible !important;
+}
+
+/* ---------- 去掉预览区残留的渐变遮罩 / mask ---------- */
+
+/* 只在识别到文章页时加 html.meo-nyt-article，避免影响 NYT 首页等页面。 */
+html.meo-nyt-article main,
+html.meo-nyt-article #site-content,
+html.meo-nyt-article article,
+html.meo-nyt-article section[name="articleBody"],
+html.meo-nyt-article [data-testid="article-body"],
+html.meo-nyt-article [data-testid="articleBody"] {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+}
+
+/* 有些实现把渐变放在正文容器的 ::before / ::after 上。
+ * 不在 CSS 里一刀切 background:none，避免误伤正文内的装饰；
+ * 由 JS 检测到“绝对定位的渐变伪元素”后再加下面这个 class。 */
+.meo-nyt-no-pseudo-gradient::before,
+.meo-nyt-no-pseudo-gradient::after {
+  background: none !important;
+  background-image: none !important;
 }
