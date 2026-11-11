@@ -4,35 +4,67 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
-data class DiscoveredHost(val host: String, val port: Int, val name: String)
+data class DiscoveredHost(val host: String, val port: Int, val name: String) {
+    fun endpoint(): String = "$host:$port"
+}
 
 object BonjourDiscovery {
     private const val TAG = "MeoBonjour"
     private const val SERVICE_TYPE = "_meologin._tcp."
 
-    fun discover(context: Context, timeoutMs: Long = 6000): DiscoveredHost? {
+    fun discover(context: Context, timeoutMs: Long = 6000): DiscoveredHost? =
+        discoverAll(context, timeoutMs).firstOrNull()
+
+    /** 收集超时内解析到的全部 `_meologin` 服务（串行 resolve，兼容 NSD 限制）。 */
+    fun discoverAll(context: Context, timeoutMs: Long = 5000): List<DiscoveredHost> {
         val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
-        val found = AtomicReference<DiscoveredHost?>(null)
+        val results = LinkedHashMap<String, DiscoveredHost>()
+        val pending = ConcurrentLinkedQueue<NsdServiceInfo>()
+        val resolving = AtomicBoolean(false)
+        val stopped = AtomicBoolean(false)
         val latch = CountDownLatch(1)
         var discoveryListener: NsdManager.DiscoveryListener? = null
-        var resolveListener: NsdManager.ResolveListener? = null
 
-        resolveListener = object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.w(TAG, "resolve failed: $errorCode")
-                latch.countDown()
+        fun remember(info: NsdServiceInfo) {
+            val host = info.host?.hostAddress ?: return
+            val port = info.port
+            if (host.isBlank() || port <= 0) return
+            val name = info.serviceName?.takeIf { it.isNotBlank() } ?: "MeoBrowser"
+            synchronized(results) {
+                results["$host:$port"] = DiscoveredHost(host, port, name)
             }
+        }
 
-            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                val host = serviceInfo.host?.hostAddress
-                if (!host.isNullOrBlank() && serviceInfo.port > 0) {
-                    found.set(DiscoveredHost(host, serviceInfo.port, serviceInfo.serviceName ?: "MeoBrowser"))
-                }
-                latch.countDown()
+        fun pumpResolve() {
+            if (stopped.get() || !resolving.compareAndSet(false, true)) return
+            val next = pending.poll()
+            if (next == null) {
+                resolving.set(false)
+                return
+            }
+            try {
+                nsd.resolveService(next, object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                        Log.w(TAG, "resolve failed: $errorCode")
+                        resolving.set(false)
+                        pumpResolve()
+                    }
+
+                    override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                        remember(serviceInfo)
+                        resolving.set(false)
+                        pumpResolve()
+                    }
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "resolve throw", e)
+                resolving.set(false)
+                pumpResolve()
             }
         }
 
@@ -48,12 +80,8 @@ object BonjourDiscovery {
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 if (!serviceInfo.serviceType.contains("meologin")) return
-                try {
-                    nsd.resolveService(serviceInfo, resolveListener)
-                } catch (e: Exception) {
-                    Log.w(TAG, "resolve throw", e)
-                    latch.countDown()
-                }
+                pending.offer(serviceInfo)
+                pumpResolve()
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
@@ -65,11 +93,17 @@ object BonjourDiscovery {
         } catch (e: Exception) {
             Log.w(TAG, "discover error", e)
         } finally {
+            stopped.set(true)
             try {
                 discoveryListener?.let { nsd.stopServiceDiscovery(it) }
             } catch (_: Exception) {
             }
+            // 再等片刻让进行中的 resolve 收尾
+            try {
+                Thread.sleep(200)
+            } catch (_: Exception) {
+            }
         }
-        return found.get()
+        return synchronized(results) { results.values.toList() }
     }
 }

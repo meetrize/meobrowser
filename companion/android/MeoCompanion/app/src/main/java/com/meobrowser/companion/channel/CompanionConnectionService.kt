@@ -28,6 +28,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -58,10 +59,13 @@ class CompanionConnectionService : Service() {
                 val pairingCode = intent.getStringExtra(EXTRA_PAIRING_CODE)
                 val hostOverride = intent.getStringExtra(EXTRA_HOST_OVERRIDE)
                 val forceSecurityCode = intent.getStringExtra(EXTRA_FORCE_SECURITY_CODE)
+                val allowLanDiscover = intent.getBooleanExtra(EXTRA_ALLOW_LAN_DISCOVER, true)
                 CompanionSession.cancelReconnect()
                 CompanionSession.userRequestedDisconnect = false
                 startForeground(NOTIF_ID, buildNotification("正在连接…"))
-                executor.execute { connectInternal(pairingCode, hostOverride, forceSecurityCode) }
+                executor.execute {
+                    connectInternal(pairingCode, hostOverride, forceSecurityCode, allowLanDiscover = allowLanDiscover)
+                }
             }
             ACTION_DISCONNECT -> {
                 CompanionSession.userRequestedDisconnect = true
@@ -107,7 +111,8 @@ class CompanionConnectionService : Service() {
         pairingCode: String?,
         hostOverride: String?,
         forceSecurityCode: String? = null,
-        forceRediscover: Boolean = false
+        forceRediscover: Boolean = false,
+        allowLanDiscover: Boolean = true
     ) {
         try {
             CompanionSession.userRequestedDisconnect = false
@@ -119,11 +124,12 @@ class CompanionConnectionService : Service() {
                 updateNotification(CompanionSession.statusText)
                 return
             }
-            val (host, port) = resolveTarget(hostOverride, forceRediscover)
+            val (host, port) = resolveTarget(hostOverride, forceRediscover, allowLanDiscover)
             client.connect(host, port)
             prefs.lastHost = host
             prefs.lastPort = port
             prefs.lastHostOverride = "$host:$port"
+            prefs.upsertKnownHost(host, port, prefs.lastHostName)
 
             val securityMode = prefs.authMode == CompanionAuthMode.SECURITY_CODE
             val codeToSend = when {
@@ -182,34 +188,112 @@ class CompanionConnectionService : Service() {
 
     /**
      * 解析目标主机。
-     * @param forceRediscover true 时优先 Bonjour（Mac 端口/IP 可能已变）；否则先用缓存。
+     * 自动/重连：短试缓存 → Bonjour 与同端口子网探测竞速。
+     * 手动主机（allowLanDiscover=false）：严格直连，不扫网。
      */
-    private fun resolveTarget(hostOverride: String?, forceRediscover: Boolean): Pair<String, Int> {
-        if (!hostOverride.isNullOrBlank()) {
-            val parts = hostOverride.trim().split(":")
-            val host = parts[0]
-            val port = parts.getOrNull(1)?.toIntOrNull() ?: 0
-            if (port <= 0) throw IllegalArgumentException("手动主机需包含端口，如 192.168.1.10:12345")
-            return host to port
-        }
-        val cachedHost = prefs.lastHost
-        val cachedPort = prefs.lastPort
-        val hasCache = !cachedHost.isNullOrBlank() && cachedPort > 0
+    private fun resolveTarget(
+        hostOverride: String?,
+        forceRediscover: Boolean,
+        allowLanDiscover: Boolean
+    ): Pair<String, Int> {
+        val preferred = parseHostPort(hostOverride)
+            ?: prefs.lastHost?.takeIf { it.isNotBlank() }?.let { h ->
+                prefs.lastPort.takeIf { it > 0 }?.let { h to it }
+            }
 
-        if (forceRediscover || !hasCache) {
-            val discovered = BonjourDiscovery.discover(this)
-            if (discovered != null) {
-                return discovered.host to discovered.port
+        // 用户刚填的手动主机：不探测、不扫网
+        if (!allowLanDiscover) {
+            if (preferred == null) {
+                throw IllegalArgumentException("手动主机需包含端口，如 192.168.1.10:12345")
             }
-            if (hasCache) {
-                Log.w(TAG, "Bonjour miss, fallback to cached $cachedHost:$cachedPort")
-                return cachedHost!! to cachedPort
-            }
-            throw IllegalStateException("未发现 MeoBrowser（_meologin._tcp），请确认同 Wi‑Fi 或填写手动主机")
+            return preferred
         }
 
-        // 优先已保存的主机，避免每次推码去 Bonjour（慢且可能失败）
-        return cachedHost!! to cachedPort
+        if (preferred != null && !forceRediscover) {
+            CompanionSession.statusText = "正在连接 ${preferred.first}:${preferred.second}…"
+            CompanionSession.notifyStatus()
+            updateNotification(CompanionSession.statusText)
+            if (LanSubnetProbe.probeOne(preferred.first, preferred.second)) {
+                return preferred
+            }
+            Log.w(TAG, "preferred miss ${preferred.first}:${preferred.second}, rediscover")
+        }
+
+        CompanionSession.statusText = "正在探测局域网…"
+        CompanionSession.notifyStatus()
+        updateNotification(CompanionSession.statusText)
+
+        val knownPort = preferred?.second?.takeIf { it > 0 } ?: prefs.lastPort.takeIf { it > 0 }
+        val preferHost = preferred?.first ?: prefs.lastHost
+        val discovered = raceDiscover(knownPort, preferHost)
+        if (discovered != null) {
+            return discovered.host to discovered.port
+        }
+        if (preferred != null) {
+            Log.w(TAG, "discover miss, fallback to preferred ${preferred.first}:${preferred.second}")
+            return preferred
+        }
+        throw IllegalStateException("未发现 MeoBrowser，请确认同 Wi‑Fi 或填写手动主机")
+    }
+
+    private fun parseHostPort(raw: String?): Pair<String, Int>? {
+        if (raw.isNullOrBlank()) return null
+        val parts = raw.trim().split(":")
+        val host = parts[0].trim()
+        val port = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        if (host.isBlank() || port <= 0) return null
+        return host to port
+    }
+
+    /** Bonjour 与同端口子网探测并行，先命中者胜。 */
+    private fun raceDiscover(knownPort: Int?, preferHost: String?): DiscoveredHost? {
+        val found = AtomicReference<DiscoveredHost?>(null)
+        val cancelled = AtomicBoolean(false)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val tasks = Executors.newFixedThreadPool(2)
+        try {
+            tasks.execute {
+                try {
+                    val d = BonjourDiscovery.discover(this, timeoutMs = 4000)
+                    if (d != null) found.compareAndSet(null, d)
+                    if (found.get() != null) {
+                        cancelled.set(true)
+                        latch.countDown()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "bonjour race", e)
+                }
+            }
+            if (knownPort != null && knownPort > 0) {
+                tasks.execute {
+                    try {
+                        val d = LanSubnetProbe.scan(
+                            context = this,
+                            port = knownPort,
+                            preferHost = preferHost,
+                            cancelled = cancelled
+                        )
+                        if (d != null) found.compareAndSet(null, d)
+                        if (found.get() != null) {
+                            cancelled.set(true)
+                            latch.countDown()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "subnet race", e)
+                    }
+                }
+            }
+            latch.await(4500, TimeUnit.MILLISECONDS)
+        } finally {
+            cancelled.set(true)
+            tasks.shutdown()
+            try {
+                tasks.awaitTermination(500, TimeUnit.MILLISECONDS)
+            } catch (_: Exception) {
+            }
+            tasks.shutdownNow()
+        }
+        return found.get()
     }
 
     /** 指数退避：0.5s → 1s → 2s → … 上限 60s。每 3 次失败强制 Bonjour。 */
@@ -307,7 +391,18 @@ class CompanionConnectionService : Service() {
                 }
                 CompanionSession.resetReconnectBackoff()
                 val hostName = json.optString("hostName", "MeoBrowser")
-                CompanionSession.statusText = "已配对 · $hostName（连接保持中）"
+                prefs.lastHostName = hostName
+                val host = prefs.lastHost
+                val port = prefs.lastPort
+                if (!host.isNullOrBlank() && port > 0) {
+                    prefs.upsertKnownHost(host, port, hostName)
+                }
+                val endpoint = prefs.hostPortLabel()
+                CompanionSession.statusText = if (!endpoint.isNullOrBlank()) {
+                    "已配对 · $hostName · $endpoint（连接保持中）"
+                } else {
+                    "已配对 · $hostName（连接保持中）"
+                }
                 updateNotification(CompanionSession.statusText)
                 CompanionSession.notifyStatus()
                 stopInviteAdvertiser()
@@ -527,19 +622,22 @@ class CompanionConnectionService : Service() {
         const val EXTRA_PAIRING_CODE = "pairing_code"
         const val EXTRA_HOST_OVERRIDE = "host_override"
         const val EXTRA_FORCE_SECURITY_CODE = "force_security_code"
+        const val EXTRA_ALLOW_LAN_DISCOVER = "allow_lan_discover"
         const val EXTRA_OTP_CODE = "otp_code"
 
         fun startConnect(
             context: Context,
             pairingCode: String?,
             hostOverride: String?,
-            forceSecurityCode: String? = null
+            forceSecurityCode: String? = null,
+            allowLanDiscover: Boolean = true
         ) {
             val intent = Intent(context, CompanionConnectionService::class.java).apply {
                 action = ACTION_CONNECT
                 putExtra(EXTRA_PAIRING_CODE, pairingCode)
                 putExtra(EXTRA_HOST_OVERRIDE, hostOverride)
                 putExtra(EXTRA_FORCE_SECURITY_CODE, forceSecurityCode)
+                putExtra(EXTRA_ALLOW_LAN_DISCOVER, allowLanDiscover)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

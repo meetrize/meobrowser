@@ -25,9 +25,11 @@ import com.meobrowser.companion.call.CallAlertPrefs
 import com.meobrowser.companion.call.CallStateMonitor
 import com.meobrowser.companion.channel.CompanionConnectionService
 import com.meobrowser.companion.channel.CompanionSession
+import com.meobrowser.companion.channel.LanHostScanner
 import com.meobrowser.companion.channel.LinkConnectionState
 import com.meobrowser.companion.databinding.ActivityMainBinding
 import com.meobrowser.companion.pairing.CompanionAuthMode
+import com.meobrowser.companion.pairing.KnownLanHost
 import com.meobrowser.companion.pairing.NotificationMirrorMode
 import com.meobrowser.companion.pairing.PairingPrefs
 import com.meobrowser.companion.setup.SetupCheckItem
@@ -55,6 +57,8 @@ class MainActivity : AppCompatActivity() {
     private var suppressMirrorModeCallback = false
     private var suppressCallAlertCallback = false
     private var suppressWechatReplyCallback = false
+    private var scanningLanHosts = false
+    private var displayedLanHosts: List<KnownLanHost> = emptyList()
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -100,6 +104,8 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             if (!::binding.isInitialized) return@runOnUiThread
             updateLinkStatusUi(status)
+            syncHostFieldFromPrefs()
+            renderLanHosts(prefs.knownHosts())
             refreshOtpDisplay()
             refreshChecks()
             refreshCallAlertSummary()
@@ -214,6 +220,12 @@ class MainActivity : AppCompatActivity() {
         binding.disconnectButton.setOnClickListener {
             CompanionConnectionService.disconnect(this)
         }
+
+        binding.scanLanHostsButton.setOnClickListener {
+            scanLanHosts()
+        }
+        seedKnownHostFromCurrent()
+        renderLanHosts(prefs.knownHosts())
 
         binding.readRecentOtpButton.setOnClickListener {
             if (!RecentSmsOtpReader.hasReadPermission(this)) {
@@ -470,6 +482,12 @@ class MainActivity : AppCompatActivity() {
         if (host.isNotBlank()) {
             prefs.lastHostOverride = host
         }
+        // 用户手动填了主机：严格直连；自动连接 / 未填主机：允许局域网发现
+        val allowLanDiscover = !manual || host.isBlank()
+        val preferredHost = when {
+            manual && host.isNotBlank() -> host
+            else -> prefs.hostPortLabel() ?: host.ifBlank { null }
+        }
         if (prefs.authMode == CompanionAuthMode.SECURITY_CODE) {
             if (code.isNotBlank()) {
                 prefs.securityCode = code
@@ -482,22 +500,24 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
-            CompanionSession.statusText = "正在连接（安全码）…"
+            CompanionSession.statusText = if (manual) "正在连接（安全码）…" else "自动连接中…"
             CompanionSession.notifyStatus()
             CompanionConnectionService.startConnect(
                 this,
                 pairingCode = if (token.isNullOrBlank()) securityCode else null,
-                hostOverride = host.ifBlank { null },
-                forceSecurityCode = securityCode
+                hostOverride = preferredHost,
+                forceSecurityCode = securityCode,
+                allowLanDiscover = allowLanDiscover
             )
         } else {
             if (code.isNotBlank()) prefs.lastPairingCode = code
-            CompanionSession.statusText = "正在连接…"
+            CompanionSession.statusText = if (manual) "正在连接…" else "自动连接中…"
             CompanionSession.notifyStatus()
             CompanionConnectionService.startConnect(
                 this,
                 pairingCode = code.ifBlank { null },
-                hostOverride = host.ifBlank { null }
+                hostOverride = preferredHost,
+                allowLanDiscover = allowLanDiscover
             )
         }
     }
@@ -522,11 +542,107 @@ class MainActivity : AppCompatActivity() {
         if (!code.isNullOrBlank()) {
             binding.pairingCodeInput.setText(code)
         }
-        val host = prefs.lastHostOverride?.takeIf { it.isNotBlank() }
-            ?: prefs.hostPortLabel()
-        if (!host.isNullOrBlank()) {
-            binding.hostOverrideInput.setText(host)
+        syncHostFieldFromPrefs(force = true)
+    }
+
+    /** 用最近成功连接的 IP:端口刷新输入框（编辑中时不打断）。 */
+    private fun syncHostFieldFromPrefs(force: Boolean = false) {
+        if (!::binding.isInitialized) return
+        val host = prefs.hostPortLabel() ?: return
+        if (!force && binding.hostOverrideInput.hasFocus()) return
+        val current = binding.hostOverrideInput.text?.toString()?.trim().orEmpty()
+        if (current == host) return
+        binding.hostOverrideInput.setText(host)
+    }
+
+    private fun seedKnownHostFromCurrent() {
+        val host = prefs.lastHost
+        val port = prefs.lastPort
+        if (!host.isNullOrBlank() && port > 0) {
+            prefs.upsertKnownHost(host, port, prefs.lastHostName)
         }
+    }
+
+    private fun scanLanHosts() {
+        if (scanningLanHosts) return
+        scanningLanHosts = true
+        binding.scanLanHostsButton.isEnabled = false
+        binding.lanHostsHint.text = "正在扫描局域网…"
+        lifecycleScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                LanHostScanner.scan(this@MainActivity, prefs)
+            }
+            scanningLanHosts = false
+            binding.scanLanHostsButton.isEnabled = true
+            renderLanHosts(found)
+            binding.lanHostsHint.text = if (found.isEmpty()) {
+                "未发现设备。请确认 Mac 已打开 MeoBrowser 且同 Wi‑Fi。"
+            } else {
+                "发现 ${found.size} 台，点选即可切换连接。"
+            }
+        }
+    }
+
+    private fun renderLanHosts(hosts: List<KnownLanHost>) {
+        if (!::binding.isInitialized) return
+        displayedLanHosts = hosts
+        binding.lanHostsContainer.removeAllViews()
+        if (hosts.isEmpty()) {
+            if (!scanningLanHosts) {
+                binding.lanHostsHint.text = "暂无设备记录，点「扫描」发现同 Wi‑Fi 上的 MeoBrowser。"
+            }
+            return
+        }
+        val current = prefs.hostPortLabel()
+        val connected = CompanionSession.client.isConnected
+        for (host in hosts) {
+            val row = layoutInflater.inflate(R.layout.item_lan_host, binding.lanHostsContainer, false)
+            val nameView = row.findViewById<TextView>(R.id.lanHostName)
+            val endpointView = row.findViewById<TextView>(R.id.lanHostEndpoint)
+            val radio = row.findViewById<android.widget.RadioButton>(R.id.lanHostRadio)
+            val badge = row.findViewById<TextView>(R.id.lanHostBadge)
+            nameView.text = host.name.ifBlank { "MeoBrowser" }
+            endpointView.text = host.endpoint()
+            val selected = host.endpoint() == current
+            radio.isChecked = selected
+            badge.visibility = if (selected && connected) View.VISIBLE else View.GONE
+            row.setOnClickListener { selectLanHost(host) }
+            binding.lanHostsContainer.addView(row)
+        }
+        if (!scanningLanHosts) {
+            binding.lanHostsHint.text = "共 ${hosts.size} 台，点选切换；也可点「扫描」刷新。"
+        }
+    }
+
+    private fun selectLanHost(host: KnownLanHost) {
+        val already =
+            CompanionSession.client.isConnected && prefs.hostPortLabel() == host.endpoint()
+        binding.hostOverrideInput.setText(host.endpoint())
+        prefs.lastHostOverride = host.endpoint()
+        prefs.lastHost = host.host
+        prefs.lastPort = host.port
+        if (host.name.isNotBlank() && host.name != "局域网主机" && host.name != "lan-probe") {
+            prefs.lastHostName = host.name
+        }
+        prefs.upsertKnownHost(host.host, host.port, prefs.lastHostName)
+        renderLanHosts(prefs.knownHosts())
+        if (already) {
+            Toast.makeText(this, "已连接 ${host.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        CompanionSession.statusText = "正在切换到 ${host.name}…"
+        CompanionSession.notifyStatus()
+        // 换机时旧 deviceToken 可能无效：有安全码则优先用安全码重配
+        val security = prefs.authMode == CompanionAuthMode.SECURITY_CODE
+        val securityCode = prefs.securityCode
+        val useSecurity = security && !securityCode.isNullOrBlank()
+        CompanionConnectionService.startConnect(
+            this,
+            pairingCode = if (useSecurity) securityCode else null,
+            hostOverride = host.endpoint(),
+            forceSecurityCode = if (useSecurity) securityCode else null,
+            allowLanDiscover = false
+        )
     }
 
     private fun rescanNotifications() {
@@ -683,6 +799,8 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateLinkStatusUi(CompanionSession.statusText)
+        syncHostFieldFromPrefs()
+        renderLanHosts(prefs.knownHosts())
         refreshOtpDisplay()
         refreshChecks()
         binding.notifAccessHint.text = OtpNotificationListener.enabledDetail(this)

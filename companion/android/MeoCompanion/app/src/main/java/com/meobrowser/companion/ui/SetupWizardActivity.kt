@@ -269,7 +269,8 @@ class SetupWizardActivity : AppCompatActivity() {
                         this,
                         pairingCode = code.ifBlank { null },
                         hostOverride = host.ifBlank { null },
-                        forceSecurityCode = if (security) prefs.securityCode else null
+                        forceSecurityCode = if (security) prefs.securityCode else null,
+                        allowLanDiscover = host.isBlank()
                     )
                     Toast.makeText(this, "正在连接…", Toast.LENGTH_SHORT).show()
                 }

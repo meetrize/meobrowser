@@ -107,9 +107,16 @@
         [weakSelf acceptConnection:connection];
     });
 
-    // Bonjour 服务名
+    // Bonjour 服务名带本机名，便于局域网多台 Mac 区分
+    NSString *localName = NSHost.currentHost.localizedName ?: @"Mac";
+    localName = [[localName componentsSeparatedByCharactersInSet:
+                  [[NSCharacterSet alphanumericCharacterSet] invertedSet]]
+                 componentsJoinedByString:@"-"];
+    if (localName.length == 0) localName = @"Mac";
+    if (localName.length > 40) localName = [localName substringToIndex:40];
+    NSString *serviceName = [NSString stringWithFormat:@"MeoBrowser-%@", localName];
     nw_advertise_descriptor_t advertise =
-        nw_advertise_descriptor_create_bonjour_service("MeoBrowser", "_meologin._tcp", NULL);
+        nw_advertise_descriptor_create_bonjour_service(serviceName.UTF8String, "_meologin._tcp", NULL);
     nw_listener_set_advertise_descriptor(listener, advertise);
 
     self.listener = listener;

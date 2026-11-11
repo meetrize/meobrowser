@@ -311,7 +311,8 @@ class BrowserActivity : AppCompatActivity() {
             this,
             pairingCode = if (useToken) null else pairingPrefs.securityCode,
             hostOverride = pairingPrefs.lastHostOverride,
-            forceSecurityCode = pairingPrefs.securityCode
+            forceSecurityCode = pairingPrefs.securityCode,
+            allowLanDiscover = true
         )
     }
 

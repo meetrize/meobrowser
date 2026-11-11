@@ -80,6 +80,55 @@ class PairingPrefs(context: Context) {
         get() = prefs.getString(KEY_LAST_HOST_OVERRIDE, null)
         set(value) = prefs.edit().putString(KEY_LAST_HOST_OVERRIDE, value).apply()
 
+    /** 最近一次成功连接的 Mac 显示名（hello_ok hostName） */
+    var lastHostName: String?
+        get() = prefs.getString(KEY_LAST_HOST_NAME, null)
+        set(value) = prefs.edit().putString(KEY_LAST_HOST_NAME, value).apply()
+
+    fun knownHosts(): List<KnownLanHost> =
+        KnownLanHost.decodeList(prefs.getString(KEY_KNOWN_HOSTS, null))
+
+    fun upsertKnownHost(host: String, port: Int, name: String?) {
+        if (host.isBlank() || port <= 0) return
+        val display = name?.takeIf { it.isNotBlank() } ?: lastHostName ?: "MeoBrowser"
+        val now = System.currentTimeMillis()
+        val merged = LinkedHashMap<String, KnownLanHost>()
+        for (item in knownHosts()) {
+            merged[item.endpoint()] = item
+        }
+        val key = "$host:$port"
+        val prev = merged[key]
+        merged[key] = KnownLanHost(
+            host = host,
+            port = port,
+            name = if (!name.isNullOrBlank()) name else (prev?.name ?: display),
+            lastSeenAt = now
+        )
+        // 同名不同地址：保留，按最近见到排序，最多 12 台
+        val sorted = merged.values.sortedByDescending { it.lastSeenAt }.take(12)
+        prefs.edit().putString(KEY_KNOWN_HOSTS, KnownLanHost.encodeList(sorted)).apply()
+    }
+
+    fun mergeDiscoveredHosts(found: List<KnownLanHost>) {
+        if (found.isEmpty()) return
+        val merged = LinkedHashMap<String, KnownLanHost>()
+        for (item in knownHosts()) merged[item.endpoint()] = item
+        for (item in found) {
+            val prev = merged[item.endpoint()]
+            merged[item.endpoint()] = item.copy(
+                name = when {
+                    item.name.isNotBlank() && item.name != "lan-probe" && item.name != "MeoBrowser" -> item.name
+                    prev != null && prev.name.isNotBlank() -> prev.name
+                    item.name == "lan-probe" -> prev?.name ?: "局域网主机"
+                    else -> item.name.ifBlank { prev?.name ?: "MeoBrowser" }
+                },
+                lastSeenAt = maxOf(item.lastSeenAt, prev?.lastSeenAt ?: 0L)
+            )
+        }
+        val sorted = merged.values.sortedByDescending { it.lastSeenAt }.take(12)
+        prefs.edit().putString(KEY_KNOWN_HOSTS, KnownLanHost.encodeList(sorted)).apply()
+    }
+
     fun hostPortLabel(): String? {
         val host = lastHost
         val port = lastPort
@@ -123,6 +172,8 @@ class PairingPrefs(context: Context) {
         private const val KEY_LAST_PORT = "last_port"
         private const val KEY_LAST_PAIRING_CODE = "last_pairing_code"
         private const val KEY_LAST_HOST_OVERRIDE = "last_host_override"
+        private const val KEY_LAST_HOST_NAME = "last_host_name"
+        private const val KEY_KNOWN_HOSTS = "known_lan_hosts"
         private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_SECURITY_CODE = "security_code"
         private const val KEY_NOTIF_MIRROR_MODE = "notification_mirror_mode"
