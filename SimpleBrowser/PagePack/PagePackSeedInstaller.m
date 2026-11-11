@@ -6,6 +6,7 @@ static NSArray<NSString *> *MeoBundledSeedFolderNames(void) {
     return @[
         @"maps-overlay-calibration",
         @"earth-overlay-calibration",
+        @"nytimes-paywall-remover",
     ];
 }
 

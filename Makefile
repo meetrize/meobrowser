@@ -437,6 +437,9 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.css \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/manifest.json \
 		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/earth-overlay-calibration/pack-identity.js \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/manifest.json \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/nytimes-paywall.css \
+		$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/nytimes-paywall.js \
 		| $(BUILD_DIR)
 	mkdir -p $(BROWSER_BUNDLE)/Contents/MacOS $(BROWSER_RES_DIR)
 	$(call WRITE_BROWSER_INFO_PLIST,$(BROWSER_BUNDLE),$(BROWSER_EXECUTABLE),$(BROWSER_DISPLAY_NAME))
@@ -479,6 +482,10 @@ $(BROWSER_RES_STAMP): $(BROWSER_ICON_SRC) \
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/overlay-calibration.css" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/overlay-calibration.css"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.js" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/leaflet.js"
 	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/maps-overlay-calibration/leaflet.css" "$(BROWSER_RES_DIR)/BundledPacks/earth-overlay-calibration/leaflet.css"
+	mkdir -p "$(BROWSER_RES_DIR)/BundledPacks/nytimes-paywall-remover"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/manifest.json" "$(BROWSER_RES_DIR)/BundledPacks/nytimes-paywall-remover/manifest.json"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/nytimes-paywall.css" "$(BROWSER_RES_DIR)/BundledPacks/nytimes-paywall-remover/nytimes-paywall.css"
+	cp "$(BROWSER_SRC_DIR)/PagePack/BundledPacks/nytimes-paywall-remover/nytimes-paywall.js" "$(BROWSER_RES_DIR)/BundledPacks/nytimes-paywall-remover/nytimes-paywall.js"
 	@touch "$@"
 
 $(BROWSER_BINARY): $(BROWSER_OBJECTS) $(BROWSER_RES_STAMP) $(BROWSER_ENTITLEMENTS) Makefile

@@ -1,0 +1,30 @@
+{
+  "id": "nytimes-paywall-remover",
+  "name": "纽约时报去付费墙",
+  "version": "1.0.0",
+  "description": "隐藏 NYTimes 文章页的付费墙遮罩、订阅弹层与滚动锁，恢复页面已加载的正文。正文若被服务端截断，本插件无法补全。",
+  "author": "MeoBrowser",
+  "sourceURL": "bundle://nytimes-paywall-remover",
+  "enabled": true,
+  "matches": [
+    "*://www.nytimes.com/*",
+    "*://nytimes.com/*"
+  ],
+  "excludes": [],
+  "files": [
+    {
+      "name": "nytimes-paywall.css",
+      "kind": "css",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    },
+    {
+      "name": "nytimes-paywall.js",
+      "kind": "js",
+      "runAt": "document-start",
+      "mainFrameOnly": true
+    }
+  ],
+  "createdAt": 1794355200,
+  "updatedAt": 1794355200
+}
