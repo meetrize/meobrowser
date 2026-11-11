@@ -596,9 +596,9 @@ static NSString *MeoScrollToFragmentJS(void) {
         self.contextMenuCitePayload = nil;
     }
 
-    // 立刻抓选区与命中元素，避免进入「问问 AI」子菜单后 selection 丢失
+    // 只确保选区缓存脚本已装；菜单弹出瞬间不要跑 cite hit-test（大图站会白屏）。
+    // 选区靠 rightMouseDown / sticky / AX；图片/链接引用在「加入引用」时再现场采集。
     [self meo_ensureSelectionCacheInstalled];
-    [self meo_captureContextMenuAIContext];
 
     // 去掉系统「查询 / 翻译」（选中文本时通常在菜单最前两项）
     [self meo_removeSystemLookUpAndTranslateItemsFromMenu:menu];
@@ -645,6 +645,9 @@ static NSString *MeoScrollToFragmentJS(void) {
                    [identifier isEqualToString:@"WKMenuItemIdentifierDownloadLinkedFile"]) {
             hasLinkMenu = YES;
         } else if ([identifier isEqualToString:@"WKMenuItemIdentifierCopy"]) {
+            // WebKit 清 selection 后系统拷贝会空；改走 sticky/缓存选区。
+            item.target = self;
+            item.action = @selector(meo_copySelection:);
             copySelectionItem = item;
         }
     }
@@ -911,7 +914,29 @@ static NSString *MeoScrollToFragmentJS(void) {
 
     __weak typeof(self) weakSelf = self;
     __weak NSMenu *weakMenu = menu;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+    // 菜单弹出时 page selection 常已空；优先 sticky，再读缓存选区。
+    BOOL hasSticky = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                      NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0
+        || [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0;
+    if (hasSticky) {
+        for (NSMenuItem *item in insertedItems) {
+            if ([menu.itemArray containsObject:item]) {
+                item.hidden = NO;
+            }
+        }
+        return;
+    }
+    [self evaluateJavaScript:
+         @"(function(){try{"
+          "if(typeof window.__meoGetCachedSelection==='function'){"
+          "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+          "}"
+          "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+          "  return String(window.__meoLastSelection);"
+          "var s=window.getSelection&&window.getSelection();"
+          "return s?String(s.toString()||''):'';"
+          "}catch(e){return '';}})()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         NSMenu *strongMenu = weakMenu;
@@ -924,6 +949,9 @@ static NSString *MeoScrollToFragmentJS(void) {
             NSString *trimmed = [(NSString *)result stringByTrimmingCharactersInSet:
                                  [NSCharacterSet whitespaceAndNewlineCharacterSet]];
             hasSelection = trimmed.length > 0;
+            if (hasSelection) {
+                [strongSelf meo_rememberSelectedText:trimmed];
+            }
         }
 
         for (NSMenuItem *item in insertedItems) {
@@ -941,17 +969,41 @@ static NSString *MeoScrollToFragmentJS(void) {
 
 - (void)meo_copySelection:(id)sender {
 #pragma unused(sender)
+    NSString *cached = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (cached.length == 0) {
+        cached = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                  NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (cached.length > 0) {
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        [pasteboard clearContents];
+        [pasteboard setString:cached forType:NSPasteboardTypeString];
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+    [self evaluateJavaScript:
+         @"(function(){try{"
+          "if(typeof window.__meoGetCachedSelection==='function'){"
+          "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+          "}"
+          "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+          "  return String(window.__meoLastSelection);"
+          "var s=window.getSelection&&window.getSelection();"
+          "return s?String(s.toString()||''):'';"
+          "}catch(e){return '';}})()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
             return;
         }
-        NSString *text = (NSString *)result;
+        NSString *text = [(NSString *)result stringByTrimmingCharactersInSet:
+                          NSCharacterSet.whitespaceAndNewlineCharacterSet];
         if (text.length == 0) {
             return;
         }
+        [strongSelf meo_rememberSelectedText:text];
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
         [pasteboard setString:text forType:NSPasteboardTypeString];
@@ -1093,7 +1145,9 @@ static NSString *MeoScrollToFragmentJS(void) {
 }
 
 - (NSString *)meo_contextMenuCiteScriptAtX:(CGFloat)x y:(CGFloat)y forceImage:(BOOL)forceImage {
-    // 选区缓存安装复用 meo_selectionCacheInstallJavaScript，避免两套逻辑漂移
+    // 轻量 hit-test：只取选区 / 链接 / 图片 URL。禁止 canvas·toDataURL·全页 images 扫描，
+    // 否则大图站（如 aibase）在 willOpenMenu 瞬间编码会把 WebContent 打挂成白屏。
+    // 缩略图改由 meo_deliverCitePayload → meo_snapshotImageThumbnailForURL 延后生成。
     return [NSString stringWithFormat:
         @"%@;(function(x, y, forceImage) {"
          "  function absUrl(u) {"
@@ -1118,18 +1172,6 @@ static NSString *MeoScrollToFragmentJS(void) {
          "    } catch (e) {}"
          "    return '';"
          "  }"
-         "  function thumbFromImg(img) {"
-         "    try {"
-         "      var w = img.naturalWidth || 0, h = img.naturalHeight || 0;"
-         "      if (!w || !h) return '';"
-         "      var max = 128, s = Math.min(1, max / Math.max(w, h));"
-         "      var c = document.createElement('canvas');"
-         "      c.width = Math.max(1, Math.round(w * s));"
-         "      c.height = Math.max(1, Math.round(h * s));"
-         "      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);"
-         "      return c.toDataURL('image/jpeg', 0.72);"
-         "    } catch (e) { return ''; }"
-         "  }"
          "  function imgUrl(img) {"
          "    if (!img) return '';"
          "    return absUrl(img.currentSrc || img.getAttribute('data-src') || img.src || '');"
@@ -1139,7 +1181,7 @@ static NSString *MeoScrollToFragmentJS(void) {
          "    if (!iu) return null;"
          "    return { kind: 'image', url: iu, title: ((img.alt || img.getAttribute('title') || '').trim()),"
          "             pageURL: absUrl(location.href), pageTitle: (document.title || '').trim(),"
-         "             thumb: thumbFromImg(img) };"
+         "             thumb: '' };"
          "  }"
          "  function findImgInNode(n) {"
          "    while (n) {"
@@ -1155,7 +1197,7 @@ static NSString *MeoScrollToFragmentJS(void) {
          "    }"
          "    return null;"
          "  }"
-         // 1) elementsFromPoint：穿透透明遮罩
+         // 1) elementsFromPoint：穿透透明遮罩（不扫全页 images）
          "  var stack = [];"
          "  try { stack = document.elementsFromPoint(x, y) || []; } catch (e) {"
          "    try { var one = document.elementFromPoint(x, y); if (one) stack = [one]; } catch (e2) {}"
@@ -1166,22 +1208,7 @@ static NSString *MeoScrollToFragmentJS(void) {
          "      var p1 = imagePayload(hitImg); if (p1) return p1;"
          "    }"
          "  }"
-         // 2) 几何命中：点落在哪张图的矩形内（坐标稍偏也能找到）
-         "  try {"
-         "    var list = document.images || [];"
-         "    var best = null, bestArea = 1e15;"
-         "    for (var i = 0; i < list.length; i++) {"
-         "      var im = list[i];"
-         "      var r = im.getBoundingClientRect();"
-         "      if (r.width < 2 || r.height < 2) continue;"
-         "      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {"
-         "        var area = r.width * r.height;"
-         "        if (area < bestArea) { bestArea = area; best = im; }"
-         "      }"
-         "    }"
-         "    if (best) { var p2 = imagePayload(best); if (p2) return p2; }"
-         "  } catch (e) {}"
-         // 3) 背景图
+         // 2) 落点元素链上的 CSS 背景图（仅 stack，不做全页扫描）
          "  for (var bi = 0; bi < stack.length; bi++) {"
          "    var bn = stack[bi];"
          "    while (bn && bn !== document.documentElement) {"
@@ -1195,7 +1222,7 @@ static NSString *MeoScrollToFragmentJS(void) {
          "      bn = bn.parentElement;"
          "    }"
          "  }"
-         // 4) WebKit 已确认是图片菜单：用最近大图兜底，绝不退回网页 URL
+         // 3) WebKit 已确认是图片菜单：仅在 forceImage 时做最近大图兜底（仍不编码缩略图）
          "  if (forceImage) {"
          "    try {"
          "      var imgs = document.images || [];"
@@ -1234,7 +1261,7 @@ static NSString *MeoScrollToFragmentJS(void) {
          "      var fileExt = {pdf:1,zip:1,rar:1,7z:1,tar:1,gz:1,doc:1,docx:1,xls:1,xlsx:1,ppt:1,pptx:1,"
          "        csv:1,json:1,xml:1,txt:1,md:1,dmg:1,pkg:1,mp3:1,mp4:1,mov:1,wav:1};"
          "      if (imgExt[ext]) {"
-         "        return { kind: 'image', url: href, title: label, pageURL: pageHref, pageTitle: pageTitle };"
+         "        return { kind: 'image', url: href, title: label, pageURL: pageHref, pageTitle: pageTitle, thumb: '' };"
          "      }"
          "      if (fileExt[ext]) { return { kind: 'file', url: href, title: label || path.split('/').pop() }; }"
          "      return { kind: 'link', url: href, title: label };"
@@ -1917,7 +1944,34 @@ static NSString *MeoScrollToFragmentJS(void) {
     __weak typeof(self) weakSelf = self;
     __weak NSMenu *weakMenu = menu;
     __weak NSMenuItem *weakItem = openSelectionURLItem;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+
+    NSString *sticky = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (sticky.length == 0) {
+        sticky = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                  NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (sticky.length > 0) {
+        NSString *urlString = [self meo_HTTPURLStringFromSelectedText:sticky];
+        if (urlString.length > 0) {
+            openSelectionURLItem.representedObject = urlString;
+            openSelectionURLItem.hidden = NO;
+            return;
+        }
+        [menu removeItem:openSelectionURLItem];
+        return;
+    }
+
+    [self evaluateJavaScript:
+         @"(function(){try{"
+          "if(typeof window.__meoGetCachedSelection==='function'){"
+          "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+          "}"
+          "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+          "  return String(window.__meoLastSelection);"
+          "var s=window.getSelection&&window.getSelection();"
+          "return s?String(s.toString()||''):'';"
+          "}catch(e){return '';}})()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         NSMenu *strongMenu = weakMenu;
@@ -2033,7 +2087,27 @@ static NSString *MeoScrollToFragmentJS(void) {
         return;
     }
 
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+    NSString *sticky = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (sticky.length == 0) {
+        sticky = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                  NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (sticky.length > 0) {
+        openURL([self meo_HTTPURLStringFromSelectedText:sticky]);
+        return;
+    }
+
+    [self evaluateJavaScript:
+         @"(function(){try{"
+          "if(typeof window.__meoGetCachedSelection==='function'){"
+          "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+          "}"
+          "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+          "  return String(window.__meoLastSelection);"
+          "var s=window.getSelection&&window.getSelection();"
+          "return s?String(s.toString()||''):'';"
+          "}catch(e){return '';}})()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf || error || ![result isKindOfClass:[NSString class]]) {
@@ -2046,8 +2120,36 @@ static NSString *MeoScrollToFragmentJS(void) {
 
 - (void)meo_searchSelectionWithDefaultEngine:(id)sender {
 #pragma unused(sender)
+    NSString *cached = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (cached.length == 0) {
+        cached = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+                  NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    }
+    if (cached.length > 0) {
+        NSURL *url = [BrowsingPreferences searchURLForQuery:cached];
+        if (!url) {
+            return;
+        }
+        if (self.openURLHandler) {
+            self.openURLHandler(url);
+        } else {
+            [self loadRequest:[NSURLRequest requestWithURL:url]];
+        }
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    [self evaluateJavaScript:@"window.getSelection().toString()"
+    [self evaluateJavaScript:
+         @"(function(){try{"
+          "if(typeof window.__meoGetCachedSelection==='function'){"
+          "  var c=window.__meoGetCachedSelection(); if(c&&String(c).trim()) return String(c);"
+          "}"
+          "if(window.__meoLastSelection&&String(window.__meoLastSelection).trim())"
+          "  return String(window.__meoLastSelection);"
+          "var s=window.getSelection&&window.getSelection();"
+          "return s?String(s.toString()||''):'';"
+          "}catch(e){return '';}})()"
            completionHandler:^(id result, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
@@ -2056,7 +2158,12 @@ static NSString *MeoScrollToFragmentJS(void) {
         if (error || ![result isKindOfClass:[NSString class]]) {
             return;
         }
-        NSURL *url = [BrowsingPreferences searchURLForQuery:(NSString *)result];
+        NSString *query = [(NSString *)result stringByTrimmingCharactersInSet:
+                           NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (query.length == 0) {
+            return;
+        }
+        NSURL *url = [BrowsingPreferences searchURLForQuery:query];
         if (!url) {
             return;
         }
