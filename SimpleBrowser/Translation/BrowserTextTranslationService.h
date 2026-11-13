@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 文本翻译后端（Google 文本 API + Lingva 回退）。只传字符串，不改页面 URL。
+/// 文本翻译后端。默认走设置中的 MTranServer（可改地址）；也可切 Google + Lingva。只传字符串，不改页面 URL。
 @interface BrowserTextTranslationService : NSObject
 
 + (instancetype)sharedService;
@@ -21,10 +21,17 @@ NS_ASSUME_NONNULL_BEGIN
          targetLocale:(NSString *)targetLocale
            completion:(void (^)(NSString * _Nullable translated, NSError * _Nullable error))completion;
 
-/// 批量翻译；concurrency 建议 4～8。completion 在主线程。
+/// 批量翻译；concurrency 建议 4～8（Google 路径）。completion 在主线程。
 - (void)translateTexts:(NSArray<NSString *> *)texts
           targetLocale:(NSString *)targetLocale
            concurrency:(NSUInteger)concurrency
+            completion:(void (^)(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount))completion;
+
+/// 批量翻译；progress 在每批返回时于主线程回调（partial 与 texts 等长，未完成槽为空串）。
+- (void)translateTexts:(NSArray<NSString *> *)texts
+          targetLocale:(NSString *)targetLocale
+           concurrency:(NSUInteger)concurrency
+              progress:(void (^ _Nullable)(NSArray<NSString *> *partialOrEmpty))progress
             completion:(void (^)(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount))completion;
 
 @end

@@ -215,10 +215,9 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     if (webView == nil) {
         return;
     }
-    BrowserPageTranslationPendingRequest *pending = [self.pendingByWebView objectForKey:webView];
-    [self.pendingByWebView removeObjectForKey:webView];
+    // 保留 pending：等 didFinish 再启动，避免 commit 时 DOM 仍空导致「未找到可翻译文本」。
 
-    // 新文档：取消进行中的翻译，清除译文态（保留 pending 以便切换模式后续跑）。
+    // 新文档：取消进行中的翻译，清除译文态。
     if ([self.translatingWebViews containsObject:webView]) {
         [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
         [self.translatingWebViews removeObject:webView];
@@ -235,17 +234,35 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
             ((void (*)(id, SEL, id, id))objc_msgSend)(ctx, sel, url, ^{});
         }
     }
+}
 
-    if (pending != nil && pending.localeID.length > 0) {
-        BrowserTab *tab = self.menuTab;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self startTranslationForWebView:webView
-                                         tab:tab
-                          localeIdentifier:pending.localeID
-                                      mode:pending.mode
-                         allowSafariEngine:NO];
-        });
+- (void)webViewDidFinishNavigation:(WKWebView *)webView URL:(NSURL *)url {
+    (void)url;
+    if (webView == nil) {
+        return;
     }
+    BrowserPageTranslationPendingRequest *pending = [self.pendingByWebView objectForKey:webView];
+    if (pending == nil || pending.localeID.length == 0) {
+        return;
+    }
+    [self.pendingByWebView removeObjectForKey:webView];
+    BrowserTab *tab = self.menuTab;
+    __weak typeof(self) weakSelf = self;
+    __weak WKWebView *weakWebView = webView;
+    // 再让出一拍，等首屏脚本/异步正文落地。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        WKWebView *strongWebView = weakWebView;
+        if (!self || !strongWebView) {
+            return;
+        }
+        [self startTranslationForWebView:strongWebView
+                                     tab:tab
+                      localeIdentifier:pending.localeID
+                                  mode:pending.mode
+                     allowSafariEngine:NO];
+    });
 }
 
 - (BOOL)isShowingTranslationForWebView:(WKWebView *)webView {
@@ -523,6 +540,18 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
 
 #pragma mark - Translate / Original
 
+- (BOOL)isSafariTranslatedWebView:(WKWebView *)webView {
+    id ctx = [self contextForWebView:webView createIfNeeded:NO];
+    if (ctx == nil) {
+        return NO;
+    }
+    @try {
+        return [[ctx valueForKey:@"hasStartedTranslating"] boolValue];
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+}
+
 - (void)translateWebView:(WKWebView *)webView
                      tab:(BrowserTab *)tab
       localeIdentifier:(NSString *)localeID
@@ -535,8 +564,40 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         return;
     }
 
-    // 模式互斥：已翻译时先 reload，再在 commit 后按新模式启动。
+    // 已翻译：对照/即指即译可就地清注入再译，避免 reload 后 commit 过早抽空 DOM。
+    // 替换模式或 Safari 译文必须 reload 才能恢复原文。
     if ([self isShowingTranslationForWebView:webView]) {
+        BOOL safariTranslated = [self isSafariTranslatedWebView:webView];
+        NSNumber *currentModeNum = [self.presentationModeByWebView objectForKey:webView];
+        BrowserTranslationPresentationMode currentMode =
+            currentModeNum ? (BrowserTranslationPresentationMode)currentModeNum.integerValue
+                           : BrowserTranslationPresentationModeReplace;
+        BOOL canRetranslateInPlace =
+            !safariTranslated
+            && mode != BrowserTranslationPresentationModeReplace
+            && currentMode != BrowserTranslationPresentationModeReplace;
+
+        if (canRetranslateInPlace) {
+            __weak typeof(self) weakSelf = self;
+            __weak WKWebView *weakWebView = webView;
+            [[BrowserTranslationPipeline sharedPipeline] clearPagePresentationInWebView:webView completion:^{
+                typeof(self) self = weakSelf;
+                WKWebView *strongWebView = weakWebView;
+                if (!self || !strongWebView) {
+                    return;
+                }
+                [self.inPageTranslatedWebViews removeObject:strongWebView];
+                [self.presentationModeByWebView removeObjectForKey:strongWebView];
+                [self notifyUIStateDidChange];
+                [self startTranslationForWebView:strongWebView
+                                             tab:tab
+                              localeIdentifier:localeID
+                                          mode:mode
+                             allowSafariEngine:NO];
+            }];
+            return;
+        }
+
         BrowserPageTranslationPendingRequest *pending = [[BrowserPageTranslationPendingRequest alloc] init];
         pending.mode = mode;
         pending.localeID = localeID;

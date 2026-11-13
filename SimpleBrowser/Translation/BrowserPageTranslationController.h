@@ -29,6 +29,9 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationUIState) {
 /// 主文档 commit 后通知，便于 Safari 引擎做语言检测。
 - (void)webViewDidCommitNavigation:(WKWebView *)webView URL:(nullable NSURL *)url;
 
+/// 主文档加载完成后通知；「再次翻译」在 reload 后在此启动，避免 commit 时 DOM 未就绪。
+- (void)webViewDidFinishNavigation:(WKWebView *)webView URL:(nullable NSURL *)url;
+
 /// 标签关闭或 WebView 销毁时清理上下文。
 - (void)invalidateForWebView:(WKWebView *)webView;
 

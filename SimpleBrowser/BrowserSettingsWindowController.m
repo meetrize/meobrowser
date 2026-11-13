@@ -11,6 +11,7 @@
 #import "BrowserDownloadPreferences.h"
 #import "BrowserTransparentModePreferences.h"
 #import "BrowserAutoScrollPreferences.h"
+#import "BrowserTranslationPreferences.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 #import "ServerSyncSettings.h"
@@ -68,6 +69,14 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSTextField *autoScrollSpeedValueLabel;
 @property (nonatomic, strong) NSTextField *autoScrollHintLabel;
 
+@property (nonatomic, strong) NSPopUpButton *translationProviderPopUp;
+@property (nonatomic, strong) SBTextField *translationAPIBaseURLField;
+@property (nonatomic, strong) SBSecureTextField *translationAPITokenField;
+@property (nonatomic, strong) NSButton *translationAPIBaseURLResetButton;
+@property (nonatomic, strong) NSTextField *translationHintLabel;
+@property (nonatomic, strong) NSStackView *translationURLRow;
+@property (nonatomic, strong) NSGridView *translationGrid;
+
 @property (nonatomic, strong) NSButton *reloadShortcutEnabledCheckbox;
 @property (nonatomic, strong) NSButton *reloadShortcutButton;
 @property (nonatomic, strong) NSButton *reloadShortcutResetButton;
@@ -97,7 +106,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @implementation BrowserSettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 760)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 540, 860)
                                                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
@@ -138,6 +147,14 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(autoScrollPreferencesDidChange:)
                                                      name:BrowserAutoScrollPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(translationPreferencesDidChange:)
+                                                     name:BrowserTranslationPreferencesDidChangeNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(translationFieldDidEndEditing:)
+                                                     name:NSControlTextDidEndEditingNotification
                                                    object:nil];
     }
     return self;
@@ -217,6 +234,52 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [searchGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
     NSTextField *searchHint = [self makeHint:@"在地址栏输入非网址内容时将使用所选搜索引擎。"];
+
+    NSTextField *translationCaption = [self makeCaption:@"网页翻译"];
+    self.translationProviderPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.translationProviderPopUp.translatesAutoresizingMaskIntoConstraints = NO;
+    self.translationProviderPopUp.target = self;
+    self.translationProviderPopUp.action = @selector(translationProviderChanged:);
+    for (NSString *provider in [BrowserTranslationPreferences availableProviders]) {
+        [self.translationProviderPopUp addItemWithTitle:[BrowserTranslationPreferences displayNameForProvider:provider]];
+        self.translationProviderPopUp.lastItem.representedObject = provider;
+    }
+    [self.translationProviderPopUp.widthAnchor constraintGreaterThanOrEqualToConstant:180].active = YES;
+
+    self.translationAPIBaseURLField = [SBTextField standardField];
+    self.translationAPIBaseURLField.placeholderString = BrowserTranslationDefaultMTranBaseURL;
+    self.translationAPIBaseURLField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.translationAPIBaseURLField.widthAnchor constraintGreaterThanOrEqualToConstant:260].active = YES;
+
+    self.translationAPIBaseURLResetButton = [NSButton buttonWithTitle:@"恢复默认"
+                                                              target:self
+                                                              action:@selector(translationAPIBaseURLResetClicked:)];
+    self.translationAPIBaseURLResetButton.bezelStyle = NSBezelStyleRounded;
+
+    self.translationURLRow = [NSStackView stackViewWithViews:@[
+        self.translationAPIBaseURLField, self.translationAPIBaseURLResetButton
+    ]];
+    self.translationURLRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.translationURLRow.spacing = 8;
+    self.translationURLRow.alignment = NSLayoutAttributeCenterY;
+
+    self.translationAPITokenField = [SBSecureTextField standardField];
+    self.translationAPITokenField.placeholderString = @"可选；服务器设置了 MT_API_TOKEN 时填写";
+    self.translationAPITokenField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.translationAPITokenField.widthAnchor constraintGreaterThanOrEqualToConstant:260].active = YES;
+
+    self.translationGrid = [NSGridView gridViewWithViews:@[
+        @[[NSTextField labelWithString:@"服务"], self.translationProviderPopUp],
+        @[[NSTextField labelWithString:@"地址"], self.translationURLRow],
+        @[[NSTextField labelWithString:@"Token"], self.translationAPITokenField],
+    ]];
+    self.translationGrid.columnSpacing = 12;
+    self.translationGrid.rowSpacing = 8;
+    [self.translationGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
+
+    self.translationHintLabel = [self makeHint:
+        @"地址栏翻译（替换 / 双语对照 / 即指即译）共用此后端。MTranServer 填根地址，如 http://192.168.31.111:8989；局域网其他机器填对应 IP。切到 Google 则改用在线文本 API。"];
+    [self refreshTranslationUI];
 
     NSTextField *browserCaption = [self makeCaption:@"默认浏览器"];
     self.defaultBrowserStatusLabel = [NSTextField labelWithString:@""];
@@ -545,7 +608,9 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self addTabNamed:@"常规"
            identifier:BrowserSettingsTabGeneral
                 views:@[
-                    searchGrid, searchHint, browserCaption, browserRow, browserHint,
+                    searchGrid, searchHint,
+                    translationCaption, self.translationGrid, self.translationHintLabel,
+                    browserCaption, browserRow, browserHint,
                     downloadCaption, downloadRow, self.downloadDirectoryHintLabel,
                     stylePresetCaption, self.transparentStylePresetRow,
                     transparentCaption, transparentColorRow,
@@ -556,7 +621,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
                     autoScrollCaption, autoScrollRow, self.autoScrollHintLabel,
                 ]
             toTabView:self.tabView
-           widthViews:@[searchHint, browserHint, downloadRow, self.downloadDirectoryHintLabel,
+           widthViews:@[searchHint, self.translationHintLabel, browserHint, downloadRow, self.downloadDirectoryHintLabel,
                         self.transparentStylePresetRow, transparentColorRow, shadowColorRow,
                         shadowStrengthRow, shadowRadiusRow,
                         self.transparentModeHintLabel, autoScrollRow, self.autoScrollHintLabel]];
@@ -1169,6 +1234,73 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     (void)sender;
     [BrowserAutoScrollPreferences setSpeedPxPerSec:self.autoScrollSpeedSlider.doubleValue];
     [self refreshAutoScrollSpeedUI];
+}
+
+- (void)translationPreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self refreshTranslationUI];
+}
+
+- (void)refreshTranslationUI {
+    if (!self.translationProviderPopUp) {
+        return;
+    }
+    BrowserTranslationPreferences *prefs = BrowserTranslationPreferences.sharedPreferences;
+    BOOL editingURL = (self.translationAPIBaseURLField.currentEditor != nil);
+    BOOL editingToken = (self.translationAPITokenField.currentEditor != nil);
+
+    NSInteger selected = -1;
+    for (NSInteger i = 0; i < self.translationProviderPopUp.numberOfItems; i++) {
+        NSString *provider = [self.translationProviderPopUp itemAtIndex:i].representedObject;
+        if ([provider isEqualToString:prefs.provider]) {
+            selected = i;
+            break;
+        }
+    }
+    if (selected >= 0) {
+        [self.translationProviderPopUp selectItemAtIndex:selected];
+    }
+
+    BOOL useMTran = [prefs.provider isEqualToString:BrowserTranslationProviderMTran];
+    self.translationAPIBaseURLField.enabled = useMTran;
+    self.translationAPITokenField.enabled = useMTran;
+    self.translationAPIBaseURLResetButton.enabled = useMTran;
+    if (!editingURL) {
+        self.translationAPIBaseURLField.stringValue = prefs.apiBaseURL ?: BrowserTranslationDefaultMTranBaseURL;
+    }
+    if (!editingToken) {
+        self.translationAPITokenField.stringValue = prefs.apiToken ?: @"";
+    }
+}
+
+- (void)persistTranslationFields {
+    BrowserTranslationPreferences *prefs = BrowserTranslationPreferences.sharedPreferences;
+    NSString *provider = self.translationProviderPopUp.selectedItem.representedObject;
+    if ([provider isKindOfClass:[NSString class]] && provider.length > 0) {
+        prefs.provider = provider;
+    }
+    prefs.apiBaseURL = self.translationAPIBaseURLField.stringValue ?: @"";
+    prefs.apiToken = self.translationAPITokenField.stringValue ?: @"";
+}
+
+- (void)translationProviderChanged:(id)sender {
+    (void)sender;
+    [self persistTranslationFields];
+    [self refreshTranslationUI];
+}
+
+- (void)translationAPIBaseURLResetClicked:(id)sender {
+    (void)sender;
+    BrowserTranslationPreferences.sharedPreferences.apiBaseURL = BrowserTranslationDefaultMTranBaseURL;
+    [self refreshTranslationUI];
+}
+
+- (void)translationFieldDidEndEditing:(NSNotification *)note {
+    id obj = note.object;
+    if (obj != self.translationAPIBaseURLField && obj != self.translationAPITokenField) {
+        return;
+    }
+    [self persistTranslationFields];
 }
 
 - (void)refreshTransparentModeColorUI {
