@@ -270,6 +270,11 @@
 }
 
 - (void)startJSPresentationTranslationForSession:(BrowserTranslationPipelineSession *)session {
+    [self collectJSPresentationCandidatesForSession:session attempt:0];
+}
+
+- (void)collectJSPresentationCandidatesForSession:(BrowserTranslationPipelineSession *)session
+                                          attempt:(NSUInteger)attempt {
     if (session.cancelled || session.completed) {
         return;
     }
@@ -298,13 +303,16 @@
             if (!innerSelf || session.cancelled || session.completed) {
                 return;
             }
-            [innerSelf continueJSPresentationWithCollectResult:value session:session];
+            [innerSelf continueJSPresentationWithCollectResult:value
+                                                       session:session
+                                                       attempt:attempt];
         }];
     }];
 }
 
 - (void)continueJSPresentationWithCollectResult:(id)value
-                                        session:(BrowserTranslationPipelineSession *)session {
+                                        session:(BrowserTranslationPipelineSession *)session
+                                        attempt:(NSUInteger)attempt {
     if (session.cancelled || session.completed) {
         return;
     }
@@ -319,6 +327,19 @@
         rawCandidates = value[@"candidates"];
     }
     if (![rawCandidates isKindOfClass:[NSArray class]] || rawCandidates.count == 0) {
+        // reload / SPA 首屏未就绪时重试几次，避免误报「未找到可翻译文本」。
+        if (attempt < 6) {
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf;
+                if (!self || session.cancelled || session.completed) {
+                    return;
+                }
+                [self collectJSPresentationCandidatesForSession:session attempt:attempt + 1];
+            });
+            return;
+        }
         [self finishSession:session success:NO message:@"未找到可翻译文本"];
         return;
     }
@@ -355,6 +376,18 @@
     }
 
     if (jobs.count == 0) {
+        if (attempt < 6) {
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf;
+                if (!self || session.cancelled || session.completed) {
+                    return;
+                }
+                [self collectJSPresentationCandidatesForSession:session attempt:attempt + 1];
+            });
+            return;
+        }
         [self finishSession:session success:NO message:@"未找到可翻译文本"];
         return;
     }
@@ -364,53 +397,121 @@
         [texts addObject:job[@"text"] ?: @""];
     }
 
+    NSMutableSet<NSString *> *appliedIds = [NSMutableSet set];
+    __block NSInteger progressiveApplied = 0;
     __weak typeof(self) weakSelf = self;
     [[BrowserTextTranslationService sharedService] translateTexts:texts
                                                      targetLocale:session.targetLocale
                                                       concurrency:6
-                                                       completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+                                                        progress:^(NSArray<NSString *> *partialOrEmpty) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
             return;
         }
         NSMutableArray<NSDictionary *> *units = [NSMutableArray array];
-        for (NSUInteger i = 0; i < jobs.count && i < translatedOrEmpty.count; i++) {
-            NSString *translated = translatedOrEmpty[i];
+        for (NSUInteger i = 0; i < jobs.count && i < partialOrEmpty.count; i++) {
+            NSString *translated = partialOrEmpty[i];
             if (translated.length == 0) {
                 continue;
             }
             NSDictionary *job = jobs[i];
+            NSString *candidateId = job[@"id"] ?: @"";
+            if (candidateId.length == 0 || [appliedIds containsObject:candidateId]) {
+                continue;
+            }
+            [appliedIds addObject:candidateId];
             [units addObject:@{
-                @"id": job[@"id"] ?: @"",
+                @"id": candidateId,
                 @"source": job[@"text"] ?: @"",
                 @"text": translated,
             }];
         }
         if (units.count == 0) {
-            [strongSelf finishSession:session success:NO message:@"翻译服务暂时不可用"];
             return;
         }
         [strongSelf applyJSPresentationByIdWithUnits:units
                                              session:session
-                                       failureCount:failureCount];
+                                          completion:^(NSInteger applied, NSInteger total) {
+            (void)total;
+            progressiveApplied += applied;
+        }];
+    }
+                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed) {
+            return;
+        }
+        // 收尾：补上 progress 未覆盖的（极少），并结束会话。
+        NSMutableArray<NSDictionary *> *units = [NSMutableArray array];
+        NSUInteger successCount = 0;
+        for (NSUInteger i = 0; i < jobs.count && i < translatedOrEmpty.count; i++) {
+            NSString *translated = translatedOrEmpty[i];
+            if (translated.length == 0) {
+                continue;
+            }
+            successCount += 1;
+            NSDictionary *job = jobs[i];
+            NSString *candidateId = job[@"id"] ?: @"";
+            if (candidateId.length == 0 || [appliedIds containsObject:candidateId]) {
+                continue;
+            }
+            [appliedIds addObject:candidateId];
+            [units addObject:@{
+                @"id": candidateId,
+                @"source": job[@"text"] ?: @"",
+                @"text": translated,
+            }];
+        }
+        void (^finishWithApplied)(NSInteger) = ^(NSInteger appliedNow) {
+            NSInteger applied = progressiveApplied + appliedNow;
+            BOOL ok = YES;
+            NSString *message = nil;
+            if (successCount == 0 || applied == 0) {
+                ok = NO;
+                message = (successCount == 0) ? @"翻译服务暂时不可用" : @"未能在页面上应用译文";
+            } else if (applied <= 2 && (NSInteger)jobs.count >= 10) {
+                ok = NO;
+                message = @"未能定位正文译文";
+            } else if (applied < (NSInteger)successCount || failureCount > 0) {
+                message = @"部分段落未译出";
+            }
+            [strongSelf finishSession:session success:ok message:message];
+        };
+        if (units.count == 0) {
+            finishWithApplied(0);
+            return;
+        }
+        [strongSelf applyJSPresentationByIdWithUnits:units
+                                             session:session
+                                          completion:^(NSInteger applied, NSInteger total) {
+            (void)total;
+            finishWithApplied(applied);
+        }];
     }];
 }
 
 - (void)applyJSPresentationByIdWithUnits:(NSArray<NSDictionary *> *)units
                                  session:(BrowserTranslationPipelineSession *)session
-                           failureCount:(NSUInteger)failureCount {
+                              completion:(void (^)(NSInteger applied, NSInteger total))completion {
     if (session.cancelled || session.completed) {
+        if (completion) {
+            completion(0, (NSInteger)units.count);
+        }
         return;
     }
     WKWebView *webView = session.webView;
     if (webView == nil) {
-        [self finishSession:session success:NO message:@"页面已关闭"];
+        if (completion) {
+            completion(0, (NSInteger)units.count);
+        }
         return;
     }
 
     NSString *unitsJSON = [[self class] jsonStringFromObject:units];
     if (unitsJSON.length == 0) {
-        [self finishSession:session success:NO message:@"翻译结果无效"];
+        if (completion) {
+            completion(0, (NSInteger)units.count);
+        }
         return;
     }
 
@@ -422,10 +523,11 @@
                     @"return window.__MeoTranslation.%@(%@);})()",
                     method, method, unitsJSON];
 
-    __weak typeof(self) weakSelf = self;
     [[self class] evaluateJavaScript:js inWebView:webView completion:^(id value) {
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf || session.cancelled || session.completed) {
+        if (session.cancelled || session.completed) {
+            if (completion) {
+                completion(0, (NSInteger)units.count);
+            }
             return;
         }
         NSInteger applied = 0;
@@ -436,18 +538,9 @@
                 total = [value[@"total"] integerValue];
             }
         }
-        BOOL ok = YES;
-        NSString *message = nil;
-        if (applied == 0) {
-            ok = NO;
-            message = @"未能在页面上应用译文";
-        } else if (applied <= 2 && total >= 10) {
-            ok = NO;
-            message = @"未能定位正文译文";
-        } else if (applied < total || failureCount > 0) {
-            message = @"部分段落未译出";
+        if (completion) {
+            completion(applied, total);
         }
-        [strongSelf finishSession:session success:ok message:message];
     }];
 }
 
@@ -471,6 +564,11 @@
 #pragma mark - Translate pipeline (Replace / TextManipulation)
 
 - (void)translateCollectedItemsForSession:(BrowserTranslationPipelineSession *)session {
+    [self translateCollectedItemsForSession:session attempt:0];
+}
+
+- (void)translateCollectedItemsForSession:(BrowserTranslationPipelineSession *)session
+                                  attempt:(NSUInteger)attempt {
     if (session.cancelled || session.completed) {
         return;
     }
@@ -480,6 +578,41 @@
         return;
     }
     if (session.collectedItems.count == 0) {
+        if (attempt < 5) {
+            __weak typeof(self) weakSelf = self;
+            __weak WKWebView *weakWebView = webView;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf;
+                WKWebView *strongWebView = weakWebView;
+                if (!self || !strongWebView || session.cancelled || session.completed) {
+                    return;
+                }
+                // 重新跑 TextManipulation 抽取（DOM 可能刚就绪）。
+                session.collectedItems = [NSMutableArray array];
+                session.startFinished = NO;
+                Class confCls = NSClassFromString(@"_WKTextManipulationConfiguration");
+                id configuration = confCls ? [confCls new] : nil;
+                if (configuration && [configuration respondsToSelector:NSSelectorFromString(@"setIncludeSubframes:")]) {
+                    ((void (*)(id, SEL, BOOL))objc_msgSend)(configuration, NSSelectorFromString(@"setIncludeSubframes:"), YES);
+                }
+                ((void (*)(id, SEL, id))objc_msgSend)(strongWebView, NSSelectorFromString(@"_setTextManipulationDelegate:"), self);
+                ((void (*)(id, SEL, id, id))objc_msgSend)(
+                    strongWebView,
+                    NSSelectorFromString(@"_startTextManipulationsWithConfiguration:completion:"),
+                    configuration,
+                    ^{
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if (session.cancelled || session.completed) {
+                                return;
+                            }
+                            session.startFinished = YES;
+                            [self translateCollectedItemsForSession:session attempt:attempt + 1];
+                        });
+                    });
+            });
+            return;
+        }
         [self finishSession:session success:NO message:@"未找到可翻译文本"];
         return;
     }

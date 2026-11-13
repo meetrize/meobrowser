@@ -5,6 +5,9 @@
 #import "BrowserAIAssistantPrompts.h"
 #import "AIPageContextRecipe.h"
 #import "AIPageContextRecipeStore.h"
+#import "BrowserTextTranslationService.h"
+#import "BrowserSelectionTranslationPresenter.h"
+#import "BrowserTransientToast.h"
 
 #import <objc/message.h>
 
@@ -681,6 +684,9 @@ static NSString *MeoScrollToFragmentJS(void) {
         [self meo_insertOpenSelectionURLItemInMenu:menu nearItem:searchWebItem];
     }
 
+    // 选区「翻译」：走设置里的 MTranServer / Google 文本接口。
+    [self meo_insertSelectionTranslateItemInMenu:menu nearItem:searchWebItem ?: copySelectionItem];
+
     // 「问问 AI」：有选区针对选区；无选区用当前页 URL/标题作上下文。
     [self meo_insertAIAssistantMenuInMenu:menu nearItem:searchWebItem ?: copySelectionItem];
 
@@ -1007,6 +1013,91 @@ static NSString *MeoScrollToFragmentJS(void) {
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
         [pasteboard setString:text forType:NSPasteboardTypeString];
+    }];
+}
+
+- (nullable NSString *)meo_currentContextSelectedText {
+    NSString *cached = [self.contextMenuSelectedText stringByTrimmingCharactersInSet:
+                        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (cached.length > 0) {
+        return cached;
+    }
+    cached = [self.meoStickySelectedText stringByTrimmingCharactersInSet:
+              NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return cached.length > 0 ? cached : nil;
+}
+
+- (void)meo_insertSelectionTranslateItemInMenu:(NSMenu *)menu nearItem:(nullable NSMenuItem *)nearItem {
+    if (!menu) {
+        return;
+    }
+    NSString *selected = [self meo_currentContextSelectedText];
+    if (selected.length == 0) {
+        return;
+    }
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"翻译"
+                                                   action:@selector(meo_translateSelection:)
+                                            keyEquivalent:@""];
+    item.target = self;
+    item.toolTip = @"使用设置中的翻译服务翻译选中文本";
+    NSInteger insertAt = 0;
+    if (nearItem) {
+        NSInteger idx = [menu indexOfItem:nearItem];
+        if (idx != NSNotFound) {
+            insertAt = idx;
+        }
+    }
+    [menu insertItem:item atIndex:insertAt];
+}
+
+- (void)meo_translateSelection:(id)sender {
+    (void)sender;
+    NSString *selected = [self meo_currentContextSelectedText];
+    if (selected.length == 0) {
+        NSWindow *window = self.window;
+        if (window) {
+            [BrowserTransientToast showMessage:@"没有可翻译的选中文本" inWindow:window duration:1.8];
+        }
+        return;
+    }
+
+    NSWindow *window = self.window;
+    if (window) {
+        [BrowserTransientToast showPersistentMessage:@"正在翻译…" inWindow:window];
+    }
+
+    NSString *targetLocale = @"zh-Hans";
+    NSArray<NSString *> *preferred = [NSLocale preferredLanguages];
+    if (preferred.count > 0) {
+        targetLocale = preferred.firstObject;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [[BrowserTextTranslationService sharedService] translateText:selected
+                                                    targetLocale:targetLocale
+                                                      completion:^(NSString *translated, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            NSWindow *hostWindow = self.window ?: window;
+            if (hostWindow) {
+                [BrowserTransientToast dismissPersistentMessageInWindow:hostWindow];
+            }
+            if (!self) {
+                return;
+            }
+            if (translated.length == 0) {
+                if (hostWindow) {
+                    NSString *msg = error.localizedDescription.length > 0
+                        ? error.localizedDescription
+                        : @"翻译失败，请检查翻译服务";
+                    [BrowserTransientToast showMessage:msg inWindow:hostWindow duration:2.4];
+                }
+                return;
+            }
+            [[BrowserSelectionTranslationPresenter sharedPresenter] showTranslatedText:translated
+                                                                          originalText:selected
+                                                                              relativeTo:self];
+        });
     }];
 }
 

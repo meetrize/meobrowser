@@ -8012,6 +8012,7 @@ didBecomeDownload:(WKDownload *)download {
     [self syncFromWebView:webView];
     [self.feedAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
     NSURL *finishURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
+    [self.pageTranslationController webViewDidFinishNavigation:webView URL:finishURL];
     [[PagePackInjector sharedInjector] injectMatchingPacksIntoWebView:webView
                                                                    URL:finishURL
                                                                  phase:PagePackInjectionPhaseDocumentEnd];

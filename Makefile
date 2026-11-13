@@ -89,6 +89,8 @@ BROWSER_SOURCES := $(BROWSER_SRC_DIR)/main.m \
                    $(BROWSER_SRC_DIR)/Translation/BrowserInPageTranslator.m \
                    $(BROWSER_SRC_DIR)/Translation/BrowserTextTranslationService.m \
                    $(BROWSER_SRC_DIR)/Translation/BrowserTranslationPipeline.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserTranslationPreferences.m \
+                   $(BROWSER_SRC_DIR)/Translation/BrowserSelectionTranslationPresenter.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserSSLExceptionStore.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserCertificateWarningView.m \
                    $(BROWSER_SRC_DIR)/Security/BrowserNavigationErrorView.m \
