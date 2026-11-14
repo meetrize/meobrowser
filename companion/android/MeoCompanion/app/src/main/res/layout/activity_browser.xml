@@ -16,19 +16,65 @@
         android:paddingEnd="4dp"
         android:background="#FFF7F8FA">
 
-        <EditText
-            android:id="@+id/addressBar"
+        <LinearLayout
+            android:id="@+id/addressBarContainer"
             android:layout_width="0dp"
             android:layout_height="40dp"
             android:layout_weight="1"
             android:background="@drawable/bg_address_bar"
-            android:hint="@string/address_hint"
-            android:imeOptions="actionGo"
-            android:inputType="textUri"
-            android:maxLines="1"
-            android:paddingHorizontal="14dp"
-            android:textSize="14sp"
-            android:importantForAutofill="no" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="4dp">
+
+            <EditText
+                android:id="@+id/addressBar"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@null"
+                android:hint="@string/address_hint"
+                android:imeOptions="actionGo"
+                android:inputType="textUri"
+                android:maxLines="1"
+                android:paddingEnd="4dp"
+                android:textSize="14sp"
+                android:importantForAutofill="no" />
+
+            <!-- 聚焦且有内容时显示：清除 + 确认回车 -->
+            <LinearLayout
+                android:id="@+id/addressBarActions"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <ImageButton
+                    android:id="@+id/addressClearButton"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/address_clear"
+                    android:focusable="false"
+                    android:focusableInTouchMode="false"
+                    android:padding="4dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_address_clear" />
+
+                <ImageButton
+                    android:id="@+id/addressGoButton"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/address_go"
+                    android:focusable="false"
+                    android:focusableInTouchMode="false"
+                    android:padding="4dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_address_go" />
+            </LinearLayout>
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/overflowButton"

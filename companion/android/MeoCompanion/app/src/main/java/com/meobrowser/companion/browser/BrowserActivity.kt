@@ -20,6 +20,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -38,6 +39,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.view.WindowCompat
+import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -160,10 +162,19 @@ class BrowserActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_GO ||
                 (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
             ) {
-                navigate(binding.addressBar.text?.toString().orEmpty())
+                submitAddressBar()
                 true
             } else false
         }
+        binding.addressBar.setOnFocusChangeListener { _, _ -> updateAddressBarActions() }
+        binding.addressBar.doAfterTextChanged { updateAddressBarActions() }
+        binding.addressClearButton.setOnClickListener {
+            binding.addressBar.setText("")
+            binding.addressBar.requestFocus()
+            showSoftKeyboard(binding.addressBar)
+        }
+        binding.addressGoButton.setOnClickListener { submitAddressBar() }
+        updateAddressBarActions()
 
         binding.newTabGrid.itemAnimator = null
         applyShortcutGridLayout()
@@ -661,6 +672,31 @@ class BrowserActivity : AppCompatActivity() {
     private fun applyTextZoomToAll() {
         val zoom = browserPrefs.textZoom
         tabManager.all.forEach { it.webView?.settings?.textZoom = zoom }
+    }
+
+    private fun submitAddressBar() {
+        val raw = binding.addressBar.text?.toString().orEmpty()
+        hideSoftKeyboard(binding.addressBar)
+        binding.addressBar.clearFocus()
+        navigate(raw)
+    }
+
+    private fun updateAddressBarActions() {
+        if (!::binding.isInitialized) return
+        val focused = binding.addressBar.hasFocus()
+        val hasText = !binding.addressBar.text.isNullOrEmpty()
+        binding.addressBarActions.visibility =
+            if (focused && hasText) View.VISIBLE else View.GONE
+    }
+
+    private fun showSoftKeyboard(view: View) {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        imm.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideSoftKeyboard(view: View) {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        imm.hideSoftInputFromWindow(view.windowToken, 0)
     }
 
     private fun navigate(raw: String) {
