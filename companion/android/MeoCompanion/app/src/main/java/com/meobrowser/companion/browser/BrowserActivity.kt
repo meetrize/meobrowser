@@ -8,17 +8,12 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.LayoutInflater
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
@@ -67,7 +62,6 @@ import com.meobrowser.companion.sms.SmsListenCoordinator
 import com.meobrowser.companion.sync.SyncEngine
 import com.meobrowser.companion.sync.SyncPrefs
 import com.meobrowser.companion.ui.MainActivity
-import kotlin.math.abs
 
 class BrowserActivity : AppCompatActivity() {
     private lateinit var binding: ActivityBrowserBinding
@@ -82,12 +76,7 @@ class BrowserActivity : AppCompatActivity() {
     private var findQuery: String? = null
     private var toolsSheet: BottomSheetDialog? = null
     private var tabsSheet: BottomSheetDialog? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val hideExitFullscreenRunnable = Runnable { hideExitFullscreenChip() }
-    private var fullscreenTapTracking = false
-    private var fullscreenDownX = 0f
-    private var fullscreenDownY = 0f
-    private var touchSlop = 0
+    private lateinit var pullRefresh: WebViewPullRefreshController
     private val shortcutSyncListener: () -> Unit = {
         runOnUiThread { refreshShortcutGrid() }
     }
@@ -115,7 +104,6 @@ class BrowserActivity : AppCompatActivity() {
 
         applyOrientationMode()
         applyFullscreenMode()
-        touchSlop = ViewConfiguration.get(this).scaledTouchSlop
         binding.exitFullscreenButton.setOnClickListener {
             if (browserPrefs.fullscreen) toggleFullscreen()
         }
@@ -156,6 +144,9 @@ class BrowserActivity : AppCompatActivity() {
             startActivity(Intent(this, MainActivity::class.java))
         }
         binding.newTabButton.setOnClickListener { newTab() }
+        binding.fullscreenButton.setOnClickListener {
+            if (!browserPrefs.fullscreen) toggleFullscreen()
+        }
         binding.overflowButton.setOnClickListener { showOverflowMenu() }
         updateLinkStatusDot(CompanionSession.statusText)
         binding.addressBar.setOnEditorActionListener { _, actionId, event ->
@@ -175,6 +166,12 @@ class BrowserActivity : AppCompatActivity() {
         }
         binding.addressGoButton.setOnClickListener { submitAddressBar() }
         updateAddressBarActions()
+        pullRefresh = WebViewPullRefreshController(
+            swipe = binding.swipeRefresh,
+            isWebPageActive = { tabManager.active?.isNewTabPage == false },
+            onRefresh = { reload() }
+        )
+        pullRefresh.attach()
 
         binding.newTabGrid.itemAnimator = null
         applyShortcutGridLayout()
@@ -214,73 +211,11 @@ class BrowserActivity : AppCompatActivity() {
         super.onStop()
     }
 
-    override fun onDestroy() {
-        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
-        super.onDestroy()
-    }
-
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && browserPrefs.fullscreen) {
             applyFullscreenMode()
         }
-    }
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (browserPrefs.fullscreen) {
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    fullscreenDownX = ev.rawX
-                    fullscreenDownY = ev.rawY
-                    fullscreenTapTracking = true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (fullscreenTapTracking) {
-                        if (abs(ev.rawX - fullscreenDownX) > touchSlop ||
-                            abs(ev.rawY - fullscreenDownY) > touchSlop
-                        ) {
-                            fullscreenTapTracking = false
-                        }
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (fullscreenTapTracking &&
-                        abs(ev.rawX - fullscreenDownX) <= touchSlop &&
-                        abs(ev.rawY - fullscreenDownY) <= touchSlop &&
-                        !isTouchOnExitFullscreenButton(ev)
-                    ) {
-                        showExitFullscreenChip()
-                    }
-                    fullscreenTapTracking = false
-                }
-                MotionEvent.ACTION_CANCEL -> fullscreenTapTracking = false
-            }
-        }
-        return super.dispatchTouchEvent(ev)
-    }
-
-    private fun isTouchOnExitFullscreenButton(ev: MotionEvent): Boolean {
-        val btn = binding.exitFullscreenButton
-        if (btn.visibility != View.VISIBLE) return false
-        val loc = IntArray(2)
-        btn.getLocationOnScreen(loc)
-        val x = ev.rawX
-        val y = ev.rawY
-        return x >= loc[0] && x <= loc[0] + btn.width &&
-            y >= loc[1] && y <= loc[1] + btn.height
-    }
-
-    private fun showExitFullscreenChip() {
-        if (!browserPrefs.fullscreen) return
-        binding.exitFullscreenButton.visibility = View.VISIBLE
-        binding.exitFullscreenButton.bringToFront()
-        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
-        mainHandler.postDelayed(hideExitFullscreenRunnable, EXIT_FULLSCREEN_CHIP_MS)
-    }
-
-    private fun hideExitFullscreenChip() {
-        mainHandler.removeCallbacks(hideExitFullscreenRunnable)
-        binding.exitFullscreenButton.visibility = View.GONE
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
@@ -636,36 +571,26 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 浏览器「阅读全屏」：只藏地址栏/底栏，保留系统状态栏与导航栏；
+     * 右上角常驻半透明退出按钮，系统返回键也可退出。
+     */
     private fun applyFullscreenMode() {
-        WindowCompat.setDecorFitsSystemWindows(window, !browserPrefs.fullscreen)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val controller = window.insetsController
-            if (controller != null) {
-                if (browserPrefs.fullscreen) {
-                    controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                    controller.systemBarsBehavior =
-                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                } else {
-                    controller.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                }
-            }
+            window.insetsController?.show(
+                WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars()
+            )
         } else {
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = if (browserPrefs.fullscreen) {
-                (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
-            } else {
-                View.SYSTEM_UI_FLAG_VISIBLE
-            }
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
         }
-        binding.topBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
-        binding.bottomBar.visibility = if (browserPrefs.fullscreen) View.GONE else View.VISIBLE
-        if (!browserPrefs.fullscreen) {
-            hideExitFullscreenChip()
+        val fullscreen = browserPrefs.fullscreen
+        binding.topBar.visibility = if (fullscreen) View.GONE else View.VISIBLE
+        binding.bottomBar.visibility = if (fullscreen) View.GONE else View.VISIBLE
+        binding.exitFullscreenButton.visibility = if (fullscreen) View.VISIBLE else View.GONE
+        if (fullscreen) {
+            binding.exitFullscreenButton.bringToFront()
         }
     }
 
@@ -730,13 +655,50 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
 
+    private fun updatePullToRefreshEnabled() {
+        if (!::pullRefresh.isInitialized) return
+        val tab = tabManager.active
+        val onWebPage = tab?.isNewTabPage == false
+        pullRefresh.setPageEnabled(onWebPage)
+        if (onWebPage) {
+            pullRefresh.bind(tab?.webView)
+        } else {
+            pullRefresh.unbind()
+        }
+    }
+
+    private fun stopPullToRefresh() {
+        if (!::pullRefresh.isInitialized) return
+        pullRefresh.stopRefreshing()
+    }
+
     private fun reload() {
         val tab = tabManager.active ?: return
         if (tab.isNewTabPage) {
+            stopPullToRefresh()
             refreshShortcutGrid()
             return
         }
-        tab.webView?.reload()
+        val wv = tab.webView
+        if (wv == null) {
+            stopPullToRefresh()
+            return
+        }
+        wv.reload()
+    }
+
+    /** 拦截 zhihu://、intent:// 等，唤起系统 App；返回 true 表示 WebView 不要再加载。 */
+    private fun handlePossibleExternalUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        if (!ExternalAppNavigator.shouldHandleExternally(url)) return false
+        return ExternalAppNavigator.open(this, url) { fallbackHttp ->
+            runOnUiThread {
+                val tab = tabManager.active ?: return@runOnUiThread
+                tab.url = fallbackHttp
+                ensureWebView(tab).loadUrl(fallbackHttp)
+                showActiveTab()
+            }
+        }
     }
 
     private fun updateNavChrome() {
@@ -772,19 +734,20 @@ class BrowserActivity : AppCompatActivity() {
         val tab = tabManager.active ?: return
         if (tab.isNewTabPage) {
             binding.newTabContainer.visibility = View.VISIBLE
-            binding.webContainer.visibility = View.GONE
+            binding.swipeRefresh.visibility = View.GONE
             binding.addressBar.setText("")
             binding.addressBar.hint = getString(R.string.address_hint)
             binding.backButton.isEnabled = false
             binding.forwardButton.isEnabled = false
             binding.backButton.alpha = 0.35f
             binding.forwardButton.alpha = 0.35f
+            updatePullToRefreshEnabled()
             refreshShortcutGrid()
             applyLowMemoryToInactive()
             return
         }
         binding.newTabContainer.visibility = View.GONE
-        binding.webContainer.visibility = View.VISIBLE
+        binding.swipeRefresh.visibility = View.VISIBLE
         val wv = ensureWebView(tab)
         binding.webContainer.removeAllViews()
         (wv.parent as? ViewGroup)?.removeView(wv)
@@ -797,6 +760,8 @@ class BrowserActivity : AppCompatActivity() {
         )
         binding.addressBar.setText(tab.url)
         updateNavChrome()
+        // WebView 已挂到容器后再绑定手势门闩
+        updatePullToRefreshEnabled()
         applyLowMemoryToInactive()
     }
 
@@ -817,12 +782,19 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun destroyWebViewIfNeeded(tab: BrowserTab) {
+        if (boundWebViewIs(tab.webView)) {
+            pullRefresh.unbind()
+        }
         tab.webView?.apply {
             stopLoading()
             (parent as? ViewGroup)?.removeView(this)
             destroy()
         }
         tab.webView = null
+    }
+
+    private fun boundWebViewIs(webView: WebView?): Boolean {
+        return webView != null && tabManager.active?.webView === webView
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -838,7 +810,15 @@ class BrowserActivity : AppCompatActivity() {
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         }
         wv.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return false
+                return handlePossibleExternalUrl(url)
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                return handlePossibleExternalUrl(url)
+            }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 val t = tabManager.all.find { it.webView === view } ?: return
@@ -849,6 +829,11 @@ class BrowserActivity : AppCompatActivity() {
                     binding.addressBar.setText(t.url)
                     updateNavChrome()
                     binding.loadProgress.visibility = View.GONE
+                    stopPullToRefresh()
+                    pullRefresh.onPageFinished(view)
+                } else if (view != null) {
+                    // 非当前标签也注入，切回来时滚动位置已在跟踪
+                    pullRefresh.onPageFinished(view)
                 }
                 historyStore.record(t.url, t.title, shortcutStore.deviceId())
                 SyncEngine.schedulePush(this@BrowserActivity)
@@ -859,6 +844,9 @@ class BrowserActivity : AppCompatActivity() {
                 if (tabManager.active?.webView !== view) return
                 binding.loadProgress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
                 binding.loadProgress.progress = newProgress
+                if (newProgress >= 100) {
+                    stopPullToRefresh()
+                }
             }
 
             override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -1239,7 +1227,6 @@ class BrowserActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MeoBrowser"
-        private const val EXIT_FULLSCREEN_CHIP_MS = 3000L
         const val EXTRA_OPEN_URL = "extra_open_url"
     }
 }

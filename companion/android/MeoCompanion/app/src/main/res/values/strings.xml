@@ -20,6 +20,8 @@
     <string name="address_hint">搜索或输入网址</string>
     <string name="address_clear">清除地址</string>
     <string name="address_go">前往</string>
+    <string name="external_app_not_installed">未安装可打开该链接的应用</string>
+    <string name="external_app_open_failed">无法打开外部应用链接</string>
     <string name="link_status">互联状态</string>
     <string name="link_status_connected">已连接到 Mac</string>
     <string name="link_status_connecting">正在连接…</string>
@@ -36,7 +38,7 @@
     <string name="tools_reload">刷新</string>
     <string name="tools_fullscreen">全屏</string>
     <string name="exit_fullscreen">退出全屏</string>
-    <string name="fullscreen_entered_hint">已进入全屏，点一下屏幕可退出</string>
+    <string name="fullscreen_entered_hint">已进入全屏，点右上角图标或按返回键可退出</string>
     <string name="fullscreen_exited">已退出全屏</string>
     <string name="tools_rotate">屏幕旋转</string>
     <string name="tools_font_size">字体大小</string>

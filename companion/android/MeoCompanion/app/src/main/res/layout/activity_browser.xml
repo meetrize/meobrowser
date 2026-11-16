@@ -102,10 +102,16 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <FrameLayout
-            android:id="@+id/webContainer"
+        <com.meobrowser.companion.browser.TopEdgeSwipeRefreshLayout
+            android:id="@+id/swipeRefresh"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent">
+
+            <FrameLayout
+                android:id="@+id/webContainer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </com.meobrowser.companion.browser.TopEdgeSwipeRefreshLayout>
 
         <!-- 新标签页：竖屏壁纸 + 轻遮罩 + 快捷方式网格 -->
         <FrameLayout
@@ -141,25 +147,24 @@
                 android:overScrollMode="never" />
         </FrameLayout>
 
-        <TextView
+        <!-- 全屏时右上角常驻半透明退出按钮；系统状态栏保留 -->
+        <ImageButton
             android:id="@+id/exitFullscreenButton"
-            android:layout_width="wrap_content"
+            android:layout_width="40dp"
             android:layout_height="40dp"
-            android:layout_gravity="top|center_horizontal"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/bg_exit_fullscreen"
-            android:clickable="true"
-            android:elevation="8dp"
-            android:focusable="true"
-            android:gravity="center"
-            android:paddingHorizontal="18dp"
-            android:text="@string/exit_fullscreen"
-            android:textColor="#FFFFFFFF"
-            android:textSize="14sp"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="12dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/bg_exit_fullscreen_fab"
+            android:contentDescription="@string/exit_fullscreen"
+            android:elevation="6dp"
+            android:padding="8dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_exit_fullscreen"
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- 底栏：后退 · 前进 · 功能 · 标签 · 互联 · 新标签 -->
+    <!-- 底栏：后退 · 前进 · 功能 · 全屏 · 标签 · 互联 · 新标签 -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
@@ -198,6 +203,16 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/tools_panel"
             android:src="@drawable/ic_tools_grid"
+            android:scaleType="centerInside" />
+
+        <ImageButton
+            android:id="@+id/fullscreenButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/tools_fullscreen"
+            android:src="@drawable/ic_enter_fullscreen"
             android:scaleType="centerInside" />
 
         <FrameLayout
