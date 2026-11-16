@@ -29,6 +29,15 @@ class SetupWizardActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         refreshStepUi()
+        // 小米/HyperOS：侧载 APK 常被系统直接拒绝短信等敏感权限，需先开「允许受限设置」
+        if (step == 1 && !SetupChecker.hasSmsPermission(this)) {
+            Toast.makeText(
+                this,
+                "若提示「未知来源/敏感权限」：请在刚打开的应用信息页开启「允许受限设置」，再开短信权限",
+                Toast.LENGTH_LONG
+            ).show()
+            openAppSettings()
+        }
     }
 
     private val batteryLauncher = registerForActivityResult(
@@ -116,9 +125,14 @@ class SetupWizardActivity : AppCompatActivity() {
                 binding.wizardHeadline.text = "① 短信权限"
                 binding.wizardBody.text =
                     "需要「接收短信」和「读取短信」权限。\n\n" +
-                        "小米上【深度求索】等服务号往往仍读不到收件箱，下一步的「通知使用权」才是关键。"
+                        "【小米 / HyperOS 必看】桌面安装的 APK 属于未知来源，系统会拦截敏感权限：\n" +
+                        "1. 长按 MeoBrowser 图标 → 应用信息\n" +
+                        "2. 滑到页面底部（或右上角 ⋮）打开「允许受限设置」\n" +
+                        "3. 再进入「权限管理」→ 短信 → 允许\n\n" +
+                        "若仍读不到服务号验证码，下一步「通知使用权」更关键。"
                 binding.wizardStatus.text = if (ok) "状态：已授予 ✓" else "状态：未授予 ✗"
-                binding.wizardActionButton.text = if (ok) "已完成，可下一步" else "授予短信权限"
+                binding.wizardActionButton.text =
+                    if (ok) "已完成，可下一步" else "授予短信权限（失败则开应用信息）"
                 binding.wizardNextButton.text = "下一步"
             }
             2 -> {

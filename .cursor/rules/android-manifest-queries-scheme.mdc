@@ -1,0 +1,51 @@
+---
+description: Android 16+ queries/intent 每个 intent 最多一个 data scheme，避免安装解析失败
+globs: "**/AndroidManifest.xml"
+alwaysApply: false
+---
+
+# Android Manifest：`<intent>` 与 data scheme
+
+## 强制规则
+
+在 `<queries>`（以及为保险起见，在 `<intent-filter>`）中：
+
+- **每个 `<intent>` / `<intent-filter>` 最多只能有一个** `<data android:scheme="..." />`
+- 需要多个 scheme 时：**拆成多个** `<intent>`（或多个 `<intent-filter>`），各自只带一个 scheme
+
+## 禁止写法
+
+```xml
+<!-- ❌ Android 16 / HyperOS 会解析失败 -->
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="http" />
+    <data android:scheme="https" />
+    <data android:scheme="zhihu" />
+</intent>
+```
+
+## 正确写法
+
+```xml
+<!-- ✅ 每个 intent 一个 scheme -->
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="http" />
+</intent>
+<intent>
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="https" />
+</intent>
+```
+
+## 症状（勿再误判为签名/USB）
+
+- `INSTALL_PARSE_FAILED_MANIFEST_MALFORMED: intent tag may have at most one data scheme`
+- 小米 USB 安装常伪装成：`INSTALL_FAILED_USER_RESTRICTED: Invalid apk`
+- 文件管理安装可能出现 `packageInfo is null`
+
+改 manifest 的 scheme / 外链可见性时，先按本规则拆分，再用真机 `adb install` 验证。
