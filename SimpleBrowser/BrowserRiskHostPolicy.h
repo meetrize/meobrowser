@@ -28,6 +28,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 否则 Google Maps 等合法站点无法运行种子 Pack（如地图叠加校准）。
 + (BOOL)shouldSuppressPagePackForURL:(nullable NSURL *)url title:(nullable NSString *)title;
 
+/// Apple 账户网页登录（ASC / idmsa / appleid 等）：WKWebView 无法渲染登录表单，需改用 Safari。
++ (BOOL)URLNeedsSafariForAppleAccountLogin:(nullable NSURL *)url;
+
 /// 供嵌入式 JS 使用的 host 后缀列表。
 + (NSArray<NSString *> *)loginAssistSuppressionHostSuffixes;
 + (NSArray<NSString *> *)pageAutomationSuppressionHostSuffixes;

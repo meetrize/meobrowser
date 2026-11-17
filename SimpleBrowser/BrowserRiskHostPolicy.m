@@ -19,12 +19,63 @@
     return list;
 }
 
++ (NSArray<NSString *> *)appleAccountAuthHostSuffixes {
+    static NSArray<NSString *> *list = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // Apple 网页登录组件（identityWidget / idmsa）在第三方 WKWebView 中无法完成初始化。
+        list = @[
+            @"idmsa.apple.com",
+            @"appleid.apple.com",
+            @"account.apple.com",
+            @"appstoreconnect.apple.com",
+        ];
+    });
+    return list;
+}
+
++ (BOOL)URLNeedsSafariForAppleAccountLogin:(NSURL *)url {
+    if (!url) {
+        return NO;
+    }
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        return NO;
+    }
+    NSString *host = url.host.lowercaseString ?: @"";
+    NSString *path = url.path.lowercaseString ?: @"";
+    if ([self host:host matchesSuffixes:@[ @"idmsa.apple.com", @"appleid.apple.com" ]]) {
+        return YES;
+    }
+    if ([self host:host matchesSuffixes:@[ @"account.apple.com" ]]) {
+        if (path.length <= 1
+            || [path containsString:@"/sign"]
+            || [path containsString:@"/login"]
+            || [path containsString:@"/auth"]) {
+            return YES;
+        }
+        return NO;
+    }
+    if ([self host:host matchesSuffixes:@[ @"appstoreconnect.apple.com" ]]) {
+        return [path hasPrefix:@"/login"] || [path isEqualToString:@"/login"];
+    }
+    return NO;
+}
+
 + (NSArray<NSString *> *)loginAssistSuppressionHostSuffixes {
-    return [self hibernationProtectedHostSuffixes];
+    static NSArray<NSString *> *list = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableArray<NSString *> *merged =
+            [[self hibernationProtectedHostSuffixes] mutableCopy] ?: [NSMutableArray array];
+        [merged addObjectsFromArray:[self appleAccountAuthHostSuffixes]];
+        list = [merged copy];
+    });
+    return list;
 }
 
 + (NSArray<NSString *> *)pageAutomationSuppressionHostSuffixes {
-    return [self hibernationProtectedHostSuffixes];
+    return [self loginAssistSuppressionHostSuffixes];
 }
 
 + (BOOL)host:(NSString *)host matchesSuffixes:(NSArray<NSString *> *)suffixes {

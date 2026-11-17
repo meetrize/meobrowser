@@ -191,6 +191,8 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, assign) BOOL canGoBack;
 /// 负缓存命中：重新加载按钮显示「仍要访问」，并清除负缓存后重试。
 @property (nonatomic, assign) BOOL fromNegativeCache;
+/// Apple 账户网页登录：主按钮改为「用 Safari 打开」。
+@property (nonatomic, assign) BOOL openInSafari;
 @end
 
 @implementation BrowserPendingNavigationError
@@ -6888,7 +6890,12 @@ doCommandBySelector:(SEL)commandSelector {
     if (!pending || pending.webView != self.webView) {
         return;
     }
-    NSString *reloadTitle = pending.fromNegativeCache ? @"仍要访问" : @"重新加载";
+    NSString *reloadTitle = @"重新加载";
+    if (pending.openInSafari) {
+        reloadTitle = @"用 Safari 打开";
+    } else if (pending.fromNegativeCache) {
+        reloadTitle = @"仍要访问";
+    }
     [self.navigationErrorView configureWithTitle:pending.title
                                          message:pending.message
                                       showGoBack:pending.canGoBack
@@ -7504,6 +7511,53 @@ doCommandBySelector:(SEL)commandSelector {
     [self updateSecurityBadgeVisibility];
 }
 
+- (void)openURLInSafari:(NSURL *)url {
+    if (!url) {
+        return;
+    }
+    NSURL *safari = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
+    if (safari) {
+        if (@available(macOS 10.15, *)) {
+            NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+            config.activates = YES;
+            [[NSWorkspace sharedWorkspace] openURLs:@[ url ]
+                               withApplicationAtURL:safari
+                                      configuration:config
+                                  completionHandler:^(NSRunningApplication *app, NSError *error) {
+                (void)app;
+                if (error) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [[NSWorkspace sharedWorkspace] openURL:url];
+                    });
+                }
+            }];
+            return;
+        }
+    }
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)presentAppleAccountLoginSafariHandoffForWebView:(WKWebView *)webView URL:(NSURL *)url {
+    if (!webView || !url) {
+        return;
+    }
+    BrowserPendingNavigationError *pending = [[BrowserPendingNavigationError alloc] init];
+    pending.webView = webView;
+    pending.title = @"无法在此浏览器完成 Apple 登录";
+    pending.message =
+        @"App Store Connect / Apple 账户登录页依赖 Safari 的系统登录能力。"
+        @"第三方 WKWebView 只能加载到空白壳（无账号输入框）。"
+        @"请用 Safari 打开并完成登录。";
+    pending.failingURL = url;
+    pending.canGoBack = webView.canGoBack;
+    pending.fromNegativeCache = NO;
+    pending.openInSafari = YES;
+    [self.pendingNavigationErrorByWebView setObject:pending forKey:webView];
+    if (webView == self.webView) {
+        [self showNavigationErrorForPending:pending];
+    }
+}
+
 - (void)navigationErrorViewDidChooseReload:(BrowserNavigationErrorView *)view {
     (void)view;
     BrowserTab *tab = self.tabController.selectedTab;
@@ -7514,6 +7568,13 @@ doCommandBySelector:(SEL)commandSelector {
     WKWebView *webView = self.webView;
     BrowserPendingNavigationError *pending =
         webView ? [self.pendingNavigationErrorByWebView objectForKey:webView] : nil;
+    if (pending.openInSafari) {
+        NSURL *safariURL = pending.failingURL
+            ?: ([BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL);
+        [self clearNavigationErrorForWebView:webView];
+        [self openURLInSafari:safariURL];
+        return;
+    }
     NSURL *reloadURL = pending.failingURL;
     BOOL clearNegative = pending.fromNegativeCache || reloadURL != nil;
     NSString *hostKey = clearNegative ? [BrowserHostNegativeCache hostKeyForURL:reloadURL] : nil;
@@ -8036,6 +8097,26 @@ didBecomeDownload:(WKDownload *)download {
         if (self.transparentModeEnabled) {
             [self.transparentModeController applyTransparentPageStyleToWebView:webView];
         }
+    }
+    // Apple 账户登录页：壳能打开，但 idmsa 登录组件在第三方 WebKit 中无法渲染表单。
+    if ([BrowserRiskHostPolicy URLNeedsSafariForAppleAccountLogin:finishURL]) {
+        __weak WKWebView *weakWebView = webView;
+        __weak BrowserWindowController *weakSelf = self;
+        NSURL *handoffURL = [finishURL copy];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            BrowserWindowController *strongSelf = weakSelf;
+            WKWebView *strongWebView = weakWebView;
+            if (!strongSelf || !strongWebView) {
+                return;
+            }
+            NSURL *current = [BrowserWebView publicURLFromInternalURL:strongWebView.URL] ?: strongWebView.URL;
+            if (![BrowserRiskHostPolicy URLNeedsSafariForAppleAccountLogin:current]) {
+                return;
+            }
+            [strongSelf presentAppleAccountLoginSafariHandoffForWebView:strongWebView
+                                                                    URL:handoffURL ?: current];
+        });
     }
 }
 
