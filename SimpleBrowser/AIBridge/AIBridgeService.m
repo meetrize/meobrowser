@@ -12,6 +12,9 @@
 #import "BrowserWindowController.h"
 #import <WebKit/WebKit.h>
 #import <AppKit/AppKit.h>
+#import <ifaddrs.h>
+#import <arpa/inet.h>
+#import <net/if.h>
 
 NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeServiceStateDidChangeNotification";
 
@@ -23,6 +26,8 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
 @property (nonatomic, strong) NSMutableArray<AIBridgeRequestLogEntry *> *logs;
 @property (nonatomic, assign, readwrite, getter=isListening) BOOL listening;
 @property (nonatomic, assign, readwrite) NSInteger listeningPort;
+/// providerId -> 最近一次 probe 成功的时间戳，用于跳过冗长就绪等待
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *providerReadyAt;
 @end
 
 @implementation AIBridgeService
@@ -166,6 +171,7 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     if (self) {
         _server = [[AIBridgeHTTPServer alloc] init];
         _logs = [NSMutableArray array];
+        _providerReadyAt = [NSMutableDictionary dictionary];
         __weak typeof(self) weakSelf = self;
         _server.requestHandler = ^(NSString *method, NSString *path,
                                    NSDictionary<NSString *, NSString *> *headers,
@@ -187,7 +193,11 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     }
     AIBridgeJobQueue *q = AIBridgeJobQueue.sharedQueue;
     if (q.isBusy) {
-        return [NSString stringWithFormat:@"生成中… 排队 %lu", (unsigned long)q.pendingCount];
+        if (q.pendingCount > 0) {
+            return [NSString stringWithFormat:@"生成中… 排队 %lu（卡死可点「重启服务」）",
+                    (unsigned long)q.pendingCount];
+        }
+        return @"生成中…";
     }
     if (q.pendingCount > 0) {
         return [NSString stringWithFormat:@"排队 %lu", (unsigned long)q.pendingCount];
@@ -195,8 +205,50 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     return @"空闲";
 }
 
+/// 本机局域网 IPv4（优先 en0/en1），无则 nil。
+- (nullable NSString *)preferredLANIPv4 {
+    NSMutableArray<NSString *> *preferred = [NSMutableArray array];
+    NSMutableArray<NSString *> *others = [NSMutableArray array];
+    struct ifaddrs *interfaces = NULL;
+    if (getifaddrs(&interfaces) != 0) {
+        return nil;
+    }
+    for (struct ifaddrs *ifa = interfaces; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if ((ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+            continue;
+        }
+        char host[INET_ADDRSTRLEN] = {0};
+        struct sockaddr_in *addr = (struct sockaddr_in *)ifa->ifa_addr;
+        if (!inet_ntop(AF_INET, &addr->sin_addr, host, sizeof(host))) {
+            continue;
+        }
+        NSString *ip = [NSString stringWithUTF8String:host];
+        if (ip.length == 0 || [ip hasPrefix:@"127."] || [ip hasPrefix:@"169.254."]) {
+            continue;
+        }
+        NSString *name = ifa->ifa_name ? [NSString stringWithUTF8String:ifa->ifa_name] : @"";
+        if ([name isEqualToString:@"en0"] || [name isEqualToString:@"en1"]) {
+            [preferred addObject:ip];
+        } else {
+            [others addObject:ip];
+        }
+    }
+    freeifaddrs(interfaces);
+    if (preferred.count > 0) {
+        return preferred.firstObject;
+    }
+    return others.firstObject;
+}
+
 - (NSString *)baseURLString {
     NSInteger port = self.listeningPort > 0 ? self.listeningPort : AIBridgePreferences.sharedPreferences.port;
+    NSString *lan = [self preferredLANIPv4];
+    if (lan.length > 0) {
+        return [NSString stringWithFormat:@"http://%@:%ld", lan, (long)port];
+    }
     return [NSString stringWithFormat:@"http://127.0.0.1:%ld", (long)port];
 }
 
@@ -235,6 +287,54 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     self.listening = NO;
     self.listeningPort = 0;
     [self notify];
+}
+
+- (void)scheduleListenerRestart {
+    [self.server stop];
+    self.listening = NO;
+    self.listeningPort = 0;
+    [self notify];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSError *err = nil;
+        if ([strongSelf startServer:&err]) {
+            AIBridgePreferences.sharedPreferences.serverEnabled = YES;
+        } else {
+            NSLog(@"[AIBridge] restart listen failed: %@", err.localizedDescription);
+        }
+        [strongSelf notify];
+    });
+}
+
+- (void)purgeQueueAndAbortBoundPages {
+    void (^work)(void) = ^{
+        [[AIBridgeJobQueue sharedQueue] resetNow];
+        [self.logs removeAllObjects];
+        [self.providerReadyAt removeAllObjects];
+        [self notify];
+    };
+    if ([NSThread isMainThread]) {
+        work();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), work);
+    }
+}
+
+- (BOOL)restartServer:(NSError **)error {
+    (void)error;
+    void (^work)(void) = ^{
+        [self purgeQueueAndAbortBoundPages];
+        [self scheduleListenerRestart];
+    };
+    if ([NSThread isMainThread]) {
+        work();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), work);
+    }
+    return YES;
 }
 
 - (AIBridgeBinding *)bindCurrentTab:(BrowserTab *)tab
@@ -287,27 +387,6 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     if (b) {
         return b;
     }
-    if (![modelId hasPrefix:@"bridge__"]) {
-        if (error) {
-            *error = [NSError errorWithDomain:@"AIBridgeService" code:404
-                                    userInfo:@{NSLocalizedDescriptionKey: @"model not bound"}];
-        }
-        return nil;
-    }
-    NSString *rest = [modelId substringFromIndex:@"bridge__".length];
-    if (![rest containsString:@"__"]) {
-        NSArray *list = [AIBridgeRegistry.sharedRegistry bindingsForProviderId:rest];
-        if (list.count > 1) {
-            if (error) {
-                *error = [NSError errorWithDomain:@"AIBridgeService" code:409
-                                        userInfo:@{NSLocalizedDescriptionKey:
-                                                       [NSString stringWithFormat:
-                                                        @"model %@ 对应 %lu 个绑定，请使用完整 modelId（bridge__%@__xxxxxx）",
-                                                        modelId, (unsigned long)list.count, rest]}];
-            }
-            return nil;
-        }
-    }
     if (error) {
         *error = [NSError errorWithDomain:@"AIBridgeService" code:404
                                 userInfo:@{NSLocalizedDescriptionKey: @"model not bound"}];
@@ -321,7 +400,9 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
 }
 
 - (void)cancelAllJobs {
-    [[AIBridgeJobQueue sharedQueue] cancelAll];
+    // 同步清空，避免 cancel 返回后队列仍显示 busy
+    [[AIBridgeJobQueue sharedQueue] resetNow];
+    [self.providerReadyAt removeAllObjects];
     [self notify];
 }
 
@@ -454,6 +535,22 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
         return;
     }
 
+    if ([pathOnly isEqualToString:@"/v1/bridge/restart"] && [method isEqualToString:@"POST"]) {
+        // 先回包，再异步清队列并热重启监听，避免连接被中途掐断
+        NSInteger port = self.listeningPort > 0 ? self.listeningPort : AIBridgePreferences.sharedPreferences.port;
+        [self respondJSON:respond status:200 object:@{
+            @"ok": @YES,
+            @"restarting": @YES,
+            @"port": @(port),
+            @"baseURL": self.baseURLString ?: @""
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self restartServer:nil];
+        });
+        return;
+    }
+
     if ([pathOnly isEqualToString:@"/v1/bridge/inspect"] && ([method isEqualToString:@"GET"] || [method isEqualToString:@"POST"])) {
         [self handleInspect:body respond:respond];
         return;
@@ -481,15 +578,21 @@ NSNotificationName const AIBridgeServiceStateDidChangeNotification = @"AIBridgeS
     }
     AIBridgePreferences *prefs = AIBridgePreferences.sharedPreferences;
     AIBridgeJobQueue *q = AIBridgeJobQueue.sharedQueue;
+    NSString *lan = [self preferredLANIPv4] ?: @"";
     NSDictionary *payload = @{
         @"ok": @YES,
         @"listening": @(self.listening),
+        @"host": @"0.0.0.0",
         @"port": @(self.listeningPort),
+        @"baseURL": self.baseURLString ?: @"",
+        @"lanIP": lan,
         @"bindings": bindings,
         @"queue": @{
             @"busy": @(q.isBusy),
             @"pending": @(q.pendingCount),
-            @"maxPending": @(q.maxPending)
+            @"active": @(q.activeJobCount),
+            @"maxPending": @(q.maxPending),
+            @"note": @"same provider single-flight (busy→429); different providers parallel"
         },
         @"upstream": @{
             @"ollamaBaseURL": prefs.ollamaBaseURL ?: @"",
@@ -805,13 +908,26 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         }];
         return;
     }
-    // HTTP 在 meo.aibridge.http 后台队列；WKWebView / evaluateJavaScript 必须回主线程。
+    // meo_timeout_ms：单次网页任务超时（默认 60s，上限 180s）
+    NSInteger jobTimeoutMs = 60000;
+    id timeoutRaw = json[@"meo_timeout_ms"] ?: json[@"timeout_ms"];
+    if ([timeoutRaw isKindOfClass:[NSNumber class]]) {
+        jobTimeoutMs = [(NSNumber *)timeoutRaw integerValue];
+    } else if ([timeoutRaw isKindOfClass:[NSString class]]) {
+        jobTimeoutMs = [(NSString *)timeoutRaw integerValue];
+    }
+    if (jobTimeoutMs < 10000) jobTimeoutMs = 10000;
+    if (jobTimeoutMs > 180000) jobTimeoutMs = 180000;
+
+    // 立刻入队占槽：同 provider 串行；就绪探测只在真正开跑时做，避免并发请求抢同一 WebView 把 JS 队列堵死。
     NSTimeInterval t0 = [NSDate date].timeIntervalSince1970;
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    AIBridgeJobPrepareBlock prepare = ^(WKWebView *wv, BrowserTab *tab, NSString *pid, AIBridgeJobPrepareCompletion prepDone) {
         __strong typeof(weakSelf) strongBoot = weakSelf;
-        if (!strongBoot) return;
-        // 请求前在后台唤醒绑定标签（不应抢前台）；冷启动时让页面自己加载完成。
+        if (!strongBoot) {
+            if (prepDone) prepDone(NO, 503, @"bridge gone", @"bridge_error");
+            return;
+        }
         if (binding.tab) {
             [[NSNotificationCenter defaultCenter]
                 postNotificationName:@"AIBridgeRequestPrepareBoundTabNotification"
@@ -822,107 +938,122 @@ static const unsigned long long kAIBridgeAttachmentMaxBytes = 20ULL * 1024ULL * 
         if (binding.tab.pendingRestorableLoad) {
             [binding.tab loadPendingRestorableURLIfNeeded];
         }
-        WKWebView *wv = binding.tab.webView ?: [binding.tab ensureWebView];
         if (!wv) {
-            [strongBoot respondJSON:respond status:503 object:@{@"error": @{@"message": @"webView unavailable", @"type": @"bridge_error"}}];
+            if (prepDone) prepDone(NO, 503, @"webView unavailable", @"bridge_error");
             return;
         }
-    // 加载周期内轮询 document.location（不能只看 webView.URL，临时导航期仍可能是 blank 文档）。
-    [strongBoot waitUntilDocumentHostReadyOnWebView:wv
-                                          tab:binding.tab
-                                   providerId:providerId
-                                      timeout:45.0
-                                   completion:^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
-        __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        if (!ok) {
-            NSString *msg = failDetail.length ? failDetail
-                : @"绑定标签页面尚未加载。请稍候重试；若持续失败，可在侧栏点「显示」查看该网页。";
-            BOOL mismatch = [msg containsString:@"域名不匹配"];
-            NSInteger status = mismatch ? 409 : 503;
-            [strongSelf appendLogModel:model status:status duration:0 detail:msg];
-            [strongSelf respondJSON:respond status:status object:@{
-                @"error": @{
-                    @"message": msg,
-                    @"type": mismatch ? @"host_mismatch" : @"bridge_error",
-                    @"host": liveHost ?: @"",
-                    @"url": liveAbs ?: @"",
-                    @"provider": providerId ?: @""
-                }
-            }];
+        NSNumber *readyAt = strongBoot.providerReadyAt[pid ?: @""];
+        BOOL warm = readyAt && (NSDate.date.timeIntervalSince1970 - readyAt.doubleValue) < 45.0;
+        // 热路径：跳过 host/probe，直接发（sendAndWait 内仍有 ensureReady）
+        if (warm) {
+            if (prepDone) prepDone(YES, 200, nil, nil);
             return;
         }
-        binding.pageURL = liveAbs;
-        binding.tabTitle = binding.tab.title;
-
-        // 冷启动 SPA 水合较慢：给足 probe 稳定窗口（连续两次 ok）。
-        [strongSelf ensureReadyAndProbeUntilReadyOnWebView:wv
-                                                providerId:providerId
-                                                   timeout:45.0
-                                                completion:^(NSDictionary *probe, NSString *errorDetail, NSString *errorType) {
-            __strong typeof(weakSelf) innerSelf = weakSelf;
-            if (!innerSelf) return;
-            if (errorDetail.length) {
-                NSInteger status = 409;
-                [innerSelf appendLogModel:model status:status duration:0 detail:errorDetail];
-                [innerSelf respondJSON:respond status:status object:@{
-                    @"error": @{
-                        @"message": errorDetail,
-                        @"type": errorType.length ? errorType : @"login_required",
-                        @"probe": probe ?: @{}
-                    }
-                }];
+        NSTimeInterval hostTimeout = 8.0;
+        NSTimeInterval probeTimeout = 8.0;
+        [strongBoot waitUntilDocumentHostReadyOnWebView:wv
+                                                    tab:tab ?: binding.tab
+                                             providerId:pid
+                                                timeout:hostTimeout
+                                             completion:^(BOOL ok, NSString *liveHost, NSString *liveAbs, NSString *failDetail) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                if (prepDone) prepDone(NO, 503, @"bridge gone", @"bridge_error");
                 return;
             }
-            [[AIBridgeJobQueue sharedQueue] enqueueModel:model
-                                                  prompt:prompt
-                                             attachments:attachments
-                                               timeoutMs:180000
-                                              completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
-                if (httpStatus != 200) {
-                    NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
-                    [innerSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
-                    [innerSelf notify];
-                    NSString *errType = @"bridge_error";
-                    NSString *msg = errorMessage ?: @"failed";
-                    if ([msg containsString:@"attachments_unsupported"]) {
-                        errType = @"attachments_unsupported";
-                    } else if ([msg containsString:@"attach_timeout"]) {
-                        errType = @"attach_timeout";
-                    } else if ([msg containsString:@"attach"] || [result[@"phase"] isEqual:@"attach"]) {
-                        errType = @"attach_failed";
-                    }
-                    [innerSelf respondJSON:respond status:httpStatus object:@{
-                        @"error": @{
-                            @"message": msg,
-                            @"type": errType
-                        }
-                    }];
+            if (!ok) {
+                NSString *msg = failDetail.length ? failDetail
+                    : @"绑定标签页面尚未加载。请稍候重试；若持续失败，可在侧栏点「显示」查看该网页。";
+                BOOL mismatch = [msg containsString:@"域名不匹配"];
+                if (prepDone) {
+                    prepDone(NO, mismatch ? 409 : 503, msg, mismatch ? @"host_mismatch" : @"bridge_error");
+                }
+                (void)liveHost;
+                return;
+            }
+            binding.pageURL = liveAbs;
+            binding.tabTitle = binding.tab.title;
+            [strongSelf ensureReadyAndProbeUntilReadyOnWebView:wv
+                                                    providerId:pid
+                                                       timeout:probeTimeout
+                                                    completion:^(NSDictionary *probe, NSString *errorDetail, NSString *errorType) {
+                (void)probe;
+                __strong typeof(weakSelf) innerSelf = weakSelf;
+                if (!innerSelf) {
+                    if (prepDone) prepDone(NO, 503, @"bridge gone", @"bridge_error");
                     return;
                 }
-                NSString *text = result[@"text"] ?: @"";
-                if (agentMode) {
-                    [innerSelf finishAgentCompletionWithText:text
-                                                       model:model
-                                                     request:json
-                                                      stream:stream
-                                                   startedAt:t0
-                                              repairAttempted:NO
-                                                     respond:respond];
-                } else {
-                    NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
-                    [innerSelf appendLogModel:model status:200 duration:dt detail:nil];
-                    [innerSelf notify];
-                    if (stream) {
-                        [innerSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
-                    } else {
-                        [innerSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
+                if (errorDetail.length) {
+                    [innerSelf.providerReadyAt removeObjectForKey:pid ?: @""];
+                    if (prepDone) {
+                        prepDone(NO, 409, errorDetail, errorType.length ? errorType : @"login_required");
                     }
+                    return;
                 }
+                if (pid.length) {
+                    innerSelf.providerReadyAt[pid] = @(NSDate.date.timeIntervalSince1970);
+                }
+                if (prepDone) prepDone(YES, 200, nil, nil);
             }];
         }];
+    };
+
+    [[AIBridgeJobQueue sharedQueue] enqueueModel:model
+                                          prompt:prompt
+                                     attachments:attachments
+                                       timeoutMs:jobTimeoutMs
+                                         prepare:prepare
+                                      completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
+        __strong typeof(weakSelf) innerSelf = weakSelf;
+        if (!innerSelf) return;
+        if (httpStatus != 200) {
+            NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+            [innerSelf appendLogModel:model status:httpStatus duration:dt detail:errorMessage];
+            [innerSelf notify];
+            NSString *errType = @"bridge_error";
+            NSString *msg = errorMessage ?: @"failed";
+            if ([msg containsString:@"attachments_unsupported"]) {
+                errType = @"attachments_unsupported";
+            } else if ([msg containsString:@"attach_timeout"]) {
+                errType = @"attach_timeout";
+            } else if ([msg containsString:@"attach"] || [result[@"phase"] isEqual:@"attach"]) {
+                errType = @"attach_failed";
+            } else if ([msg containsString:@"域名不匹配"]) {
+                errType = @"host_mismatch";
+            } else if ([msg containsString:@"登录"] || [msg containsString:@"输入框"]) {
+                errType = @"login_required";
+            }
+            [innerSelf respondJSON:respond status:httpStatus object:@{
+                @"error": @{
+                    @"message": msg,
+                    @"type": errType
+                }
+            }];
+            return;
+        }
+        if (providerId.length) {
+            innerSelf.providerReadyAt[providerId] = @(NSDate.date.timeIntervalSince1970);
+        }
+        NSString *text = result[@"text"] ?: @"";
+        if (agentMode) {
+            [innerSelf finishAgentCompletionWithText:text
+                                               model:model
+                                             request:json
+                                              stream:stream
+                                           startedAt:t0
+                                      repairAttempted:NO
+                                             respond:respond];
+        } else {
+            NSTimeInterval dt = [NSDate date].timeIntervalSince1970 - t0;
+            [innerSelf appendLogModel:model status:200 duration:dt detail:nil];
+            [innerSelf notify];
+            if (stream) {
+                [innerSelf respondFakeSSE:respond model:model text:text created:(NSInteger)t0];
+            } else {
+                [innerSelf respondCompletion:respond model:model text:text created:(NSInteger)t0];
+            }
+        }
     }];
-    }); // dispatch_async main (WKWebView)
 }
 
 static NSString * const kMeoBridgeDocHostJS =
@@ -1043,8 +1174,9 @@ static NSString * const kMeoBridgeDocHostJS =
         return;
     }
     NSTimeInterval deadline = NSDate.date.timeIntervalSince1970 + MAX(timeout, 1.0);
-    const NSTimeInterval interval = 0.6;
-    const NSInteger requiredConsecutiveOk = 2;
+    // 热路径：缩短轮询间隔；只需 1 次 probe 成功（旧逻辑连续 2 次易白白多等 ~0.6s+）
+    const NSTimeInterval interval = 0.35;
+    const NSInteger requiredConsecutiveOk = 1;
     __weak typeof(self) weakSelf = self;
     // 强引用 __block 保活；weak 仅用于自调度，避免 retain cycle 警告。
     // finish 时将强引用置 nil。切勿只保留 weak，否则轮询会停。
@@ -1292,7 +1424,7 @@ static NSString * const kMeoBridgeDocHostJS =
         [[AIBridgeJobQueue sharedQueue] enqueueModel:model
                                               prompt:repairPrompt
                                          attachments:nil
-                                           timeoutMs:180000
+                                           timeoutMs:90000
                                           completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) {

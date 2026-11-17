@@ -33,6 +33,10 @@ typedef void (^AIBridgeDOMCompletion)(NSDictionary *_Nullable result, NSError *_
                completion:(AIBridgeDOMCompletion)completion;
 
 - (void)abortOnWebView:(WKWebView *)webView;
+/// 丢弃已注入标记，下次 ensureReady 会重新加载 adapter（升级脚本后必须）。
+- (void)invalidateInjections;
+/// 中止页内任务并卸掉 __MeoAIBridge，迫使下次重新注入。
+- (void)resetBridgeOnWebView:(WKWebView *)webView;
 
 - (void)newChatOnWebView:(WKWebView *)webView
               providerId:(NSString *)providerId

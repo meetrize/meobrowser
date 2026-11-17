@@ -42,8 +42,9 @@ NSNotificationName const AIBridgeRegistryDidChangeNotification = @"AIBridgeRegis
 }
 
 + (NSString *)modelIdForProviderId:(NSString *)providerId bindingId:(NSString *)bindingId {
+    (void)bindingId;
     NSString *pid = providerId.length ? providerId : @"unknown";
-    return [NSString stringWithFormat:@"bridge__%@__%@", pid, [self shortIdFromBindingId:bindingId]];
+    return [NSString stringWithFormat:@"bridge__%@", pid];
 }
 
 + (NSString *)providerIdFromModelId:(NSString *)modelId {
@@ -106,20 +107,12 @@ NSNotificationName const AIBridgeRegistryDidChangeNotification = @"AIBridgeRegis
             return b;
         }
     }
-    // 短名 bridge__provider：仅唯一绑定时命中
-    if (![modelId hasPrefix:@"bridge__"]) {
+    // 固定名 / 旧长格式 bridge__provider(__short) → 按 provider 取最新
+    NSString *pid = [AIBridgeRegistry providerIdFromModelId:modelId];
+    if (pid.length == 0) {
         return nil;
     }
-    NSString *rest = [modelId substringFromIndex:@"bridge__".length];
-    if ([rest containsString:@"__"]) {
-        // 长格式未命中
-        return nil;
-    }
-    NSArray *list = [self bindingsForProviderId:rest];
-    if (list.count == 1) {
-        return list.firstObject;
-    }
-    return nil;
+    return [self bindingForProviderId:pid];
 }
 
 - (AIBridgeBinding *)bindTab:(BrowserTab *)tab
@@ -130,11 +123,11 @@ NSNotificationName const AIBridgeRegistryDidChangeNotification = @"AIBridgeRegis
     if (!tab || providerId.length == 0) {
         return nil;
     }
-    // 同 tab 已有绑定 → 卸掉
+    // 同 tab 或同 provider 已有绑定 → 卸掉（固定 modelId 每平台一条）
     NSMutableArray<NSString *> *remove = [NSMutableArray array];
     for (NSString *key in self.byBindingId) {
         AIBridgeBinding *b = self.byBindingId[key];
-        if (b.tab == tab) {
+        if (b.tab == tab || [b.providerId isEqualToString:providerId]) {
             [remove addObject:key];
         }
     }

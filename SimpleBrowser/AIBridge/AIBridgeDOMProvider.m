@@ -100,15 +100,19 @@
     NSString *key = [self keyForWebView:webView providerId:providerId];
     NSString *pid = providerId.length ? providerId : @"deepseek";
     // 已注入则跳过整包重注入（冷启动 probe 轮询时反复注入会卡住 WebKit 队列）。
+    // deepseek rev>=7：助手快照修正 + 超时捞字
+    NSInteger minRev = [pid isEqualToString:@"deepseek"] ? 15 : 1;
     NSString *checkJS = [NSString stringWithFormat:
         @"(function(){ try {"
          "  var a=window.__MeoAIBridge;"
          "  if(!a||typeof a.probe!=='function') return 'missing';"
+         "  var rev=a._meoAdapterRev||0;"
+         "  if(rev<%ld) return 'stale';"
          "  var p=a.probe();"
          "  if(p&&p.id&&p.id!=='%@') return 'wrong';"
          "  return 'ok';"
          "} catch(e){ return 'err'; } })()",
-        pid];
+        (long)minRev, pid];
     __weak typeof(self) weakSelf = self;
     [self evaluate:checkJS onWebView:webView completion:^(id checkResult, NSError *checkErr) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -349,24 +353,60 @@
                 timeoutMs:(NSInteger)timeoutMs
                completion:(AIBridgeDOMCompletion)completion {
     __weak typeof(self) weakSelf = self;
-    [self ensureReadyOnWebView:webView providerId:providerId completion:^(NSError *error) {
+    NSInteger ms = timeoutMs > 0 ? timeoutMs : 120000;
+    __block BOOL outerFinished = NO;
+    void (^finishOuter)(NSDictionary *, NSError *) = ^(NSDictionary *dict, NSError *err) {
+        if (outerFinished) return;
+        outerFinished = YES;
+        if (completion) completion(dict, err);
+    };
+    // 外层硬超时：先捞字再结束，避免页面已显示 OK 却交空 504
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((ms / 1000.0) + 8.0) * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
+        if (outerFinished) return;
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
+            finishOuter(@{@"ok": @NO, @"error": @"timeout", @"text": @""}, nil);
+            return;
+        }
+        [strongSelf abortOnWebView:webView];
+        NSString *grab =
+            @"(function(){ try {"
+             "  var api=window.__MeoAIBridge;"
+             "  if(api&&api.readLastAssistant){ var a=api.readLastAssistant(); if(a&&a.text) return String(a.text); }"
+             "  if(api&&api.chatSnapshot){ var s=api.chatSnapshot(); if(s&&s.last) return String(s.last); }"
+             "  return '';"
+             "} catch(e){ return ''; } })()";
+        [strongSelf evaluate:grab onWebView:webView completion:^(id result, NSError *error) {
+            (void)error;
+            if (outerFinished) return;
+            NSString *t = [result isKindOfClass:[NSString class]] ? (NSString *)result : @"";
+            if (t.length > 0) {
+                finishOuter(@{@"ok": @YES, @"text": t, @"recovered": @YES}, nil);
+            } else {
+                finishOuter(@{@"ok": @NO, @"error": @"timeout", @"text": @""}, nil);
+            }
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (outerFinished) return;
+            finishOuter(@{@"ok": @NO, @"error": @"timeout", @"text": @""}, nil);
+        });
+    });
+    [self ensureReadyOnWebView:webView providerId:providerId completion:^(NSError *error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || outerFinished) {
             return;
         }
         if (error) {
-            if (completion) {
-                completion(nil, error);
-            }
+            finishOuter(nil, error);
             return;
         }
-        NSInteger ms = timeoutMs > 0 ? timeoutMs : 120000;
         NSArray *atts = attachments.count ? attachments : @[];
         [strongSelf stageAttachments:atts onWebView:webView completion:^(NSError *stageErr) {
+            if (outerFinished) return;
             if (stageErr) {
-                if (completion) {
-                    completion(nil, stageErr);
-                }
+                finishOuter(nil, stageErr);
                 return;
             }
             NSString *promptJSON = [strongSelf jsonStringForPrompt:prompt ?: @""];
@@ -381,8 +421,9 @@
                      "      return 'error';"
                      "    }"
                      "    var specs = window.__MeoAIBridgeAttachSpecs || [];"
-                     "    window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
+                     "    var job = window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
                      "    window.__MeoAIBridge.attachAndSendAndWait(%@, specs, {timeoutMs:%ld, stableMs:1000, attachTimeoutMs:25000}).then(function(r){"
+                     "      if (window.__MeoAIBridgeJob !== job) return;"
                      "      window.__MeoAIBridgeAttachSpecs = [];"
                      "      window.__MeoAIBridgeJob = {status:'done', result:{"
                      "        ok: !!(r && r.ok),"
@@ -394,6 +435,7 @@
                      "        count: (r && typeof r.count === 'number') ? r.count : 0"
                      "      }};"
                      "    }).catch(function(e){"
+                     "      if (window.__MeoAIBridgeJob !== job) return;"
                      "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
                      "    });"
                      "    return 'started';"
@@ -411,8 +453,12 @@
                      "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'sendAndWait missing'}};"
                      "      return 'error';"
                      "    }"
-                     "    window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now()};"
+                     "    var baseTxt='', baseCnt=0;"
+                     "    try { var b0=window.__MeoAIBridge.readLastAssistant(); baseTxt=(b0&&b0.text)?String(b0.text):''; baseCnt=(b0&&typeof b0.count==='number')?b0.count:0; } catch(e0){}"
+                     "    var promptTxt=''; try { promptTxt=String(%@||'').trim(); } catch(eP){}"
+                     "    var job = window.__MeoAIBridgeJob = {status:'running', startedAt: Date.now(), baseline: baseTxt, baselineCount: baseCnt, liveText: '', prompt: promptTxt};"
                      "    window.__MeoAIBridge.sendAndWait(%@, {timeoutMs:%ld, stableMs:1000}).then(function(r){"
+                     "      if (window.__MeoAIBridgeJob !== job) return;"
                      "      window.__MeoAIBridgeJob = {status:'done', result:{"
                      "        ok: !!(r && r.ok),"
                      "        text: (r && r.text != null) ? String(r.text) : '',"
@@ -421,6 +467,7 @@
                      "        count: (r && typeof r.count === 'number') ? r.count : 0"
                      "      }};"
                      "    }).catch(function(e){"
+                     "      if (window.__MeoAIBridgeJob !== job) return;"
                      "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:String(e)}};"
                      "    });"
                      "    return 'started';"
@@ -429,28 +476,31 @@
                      "    return 'error';"
                      "  }"
                      "})()",
-                    promptJSON, (long)ms];
+                    promptJSON, promptJSON, (long)ms];
             }
 
             [strongSelf evaluate:startJS onWebView:webView completion:^(id startResult, NSError *startError) {
+                if (outerFinished) return;
                 if (startError) {
-                    if (completion) {
-                        completion(nil, startError);
-                    }
+                    finishOuter(nil, startError);
                     return;
                 }
                 NSString *startStatus = [startResult isKindOfClass:[NSString class]] ? startResult : @"";
-                if ([startStatus isEqualToString:@"error"]) {
-                    [strongSelf pollJobOnWebView:webView
-                                       deadline:[NSDate dateWithTimeIntervalSinceNow:1]
-                                     completion:completion];
-                    return;
-                }
-                NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(ms / 1000.0) + 5.0];
-                [strongSelf pollJobOnWebView:webView deadline:deadline completion:completion];
+                NSDate *deadline = [startStatus isEqualToString:@"error"]
+                    ? [NSDate dateWithTimeIntervalSinceNow:1]
+                    : [NSDate dateWithTimeIntervalSinceNow:(ms / 1000.0) + 5.0];
+                [strongSelf pollJobOnWebView:webView
+                                    deadline:deadline
+                                  completion:^(NSDictionary *result, NSError *pollErr) {
+                    finishOuter(result, pollErr);
+                }];
             }];
         }];
     }];
+}
+
+- (void)invalidateInjections {
+    [self.readyKeys removeAllObjects];
 }
 
 - (void)abortOnWebView:(WKWebView *)webView {
@@ -463,6 +513,24 @@
          "    if (window.__MeoAIBridgeJob && window.__MeoAIBridgeJob.status === 'running') {"
          "      window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'aborted', text:''}};"
          "    }"
+         "    return 'ok';"
+         "  } catch(e) { return String(e); }"
+         "})()";
+    [self evaluate:js onWebView:webView completion:^(__unused id result, __unused NSError *error) {
+    }];
+}
+
+- (void)resetBridgeOnWebView:(WKWebView *)webView {
+    [self invalidateInjections];
+    NSString *js =
+        @"(function(){"
+         "  try {"
+         "    if (window.__MeoAIBridge && typeof window.__MeoAIBridge.abort === 'function') {"
+         "      window.__MeoAIBridge.abort();"
+         "    }"
+         "    window.__MeoAIBridgeJob = {status:'done', result:{ok:false, error:'aborted', text:''}};"
+         "    try { delete window.__MeoAIBridge; } catch (e1) { window.__MeoAIBridge = null; }"
+         "    try { delete window.__MeoAIBridgeAttachSpecs; } catch (e2) {}"
          "    return 'ok';"
          "  } catch(e) { return String(e); }"
          "})()";
@@ -580,46 +648,209 @@
 - (void)pollJobOnWebView:(WKWebView *)webView
                 deadline:(NSDate *)deadline
               completion:(AIBridgeDOMCompletion)completion {
+    // 一次完成守卫 + 硬超时；轮询期间记住已见正文，超时绝不再丢字交 504
+    __block BOOL finished = NO;
+    __block NSString *lastSeenText = @"";
+    __block NSString *jobBaseline = @"";
+    // finishOnce 保持轮询 block 存活，完成或超时时解除引用。
+    __block void (^pollOnce)(void) = nil;
+    void (^finishOnce)(NSDictionary *, NSError *) = ^(NSDictionary *dict, NSError *err) {
+        if (finished) return;
+        finished = YES;
+        pollOnce = nil;
+        if (completion) completion(dict, err);
+    };
+
+    NSTimeInterval remain = [deadline timeIntervalSinceNow];
+    if (remain < 0.5) remain = 0.5;
+
+    NSString *lastChanceJS =
+        @"(function(){"
+         "  try {"
+         "    var j = window.__MeoAIBridgeJob;"
+         "    if (j && j.status === 'done' && j.result && j.result.text) return JSON.stringify(j.result);"
+         "    var api = window.__MeoAIBridge;"
+         "    var t='', cnt=0, base=(j&&j.baseline!=null)?String(j.baseline):'';"
+         "    var baseCnt=(j&&typeof j.baselineCount==='number')?j.baselineCount:0;"
+         "    if (api && typeof api.readLastAssistant === 'function') {"
+         "      var a = api.readLastAssistant();"
+         "      t = (a && a.text) ? String(a.text) : '';"
+         "      cnt = (a && typeof a.count==='number') ? a.count : 0;"
+         "    }"
+         "    if (!t && api && typeof api.chatSnapshot === 'function') {"
+         "      var s = api.chatSnapshot();"
+         "      t = (s && s.last) ? String(s.last) : '';"
+         "      if (!cnt && s && typeof s.count==='number') cnt=s.count;"
+         "    }"
+         "    if (j && j.liveText && String(j.liveText).length > t.length) t=String(j.liveText);"
+         "    var prompt=(j&&j.prompt!=null)?String(j.prompt).trim():'';"
+         "    if (prompt && t && t.trim()===prompt) t='';"
+         "    if (prompt && t && t.indexOf(prompt)>=0 && t.length<=prompt.length+4) t='';"
+         "    // 必须是相对 baseline 的新助手正文；禁止把发送前旧回复交出去"
+         "    if (t && (t!==base || cnt>baseCnt)) return JSON.stringify({ok:true,text:t,recovered:true,count:cnt});"
+         "  } catch (e) {}"
+         "  return JSON.stringify({ok:false, error:'timeout', text:''});"
+         "})()";
+
     NSString *pollJS =
         @"(function(){"
          "  var j = window.__MeoAIBridgeJob;"
          "  if (!j) return JSON.stringify({status:'idle'});"
-         "  if (j.status === 'running') return JSON.stringify({status:'running'});"
+         "  if (j.status === 'running') {"
+         "    var live=(j.liveText!=null)?String(j.liveText):'';"
+         "    var base=(j.baseline!=null)?String(j.baseline):'';"
+         "    var baseCnt=(typeof j.baselineCount==='number')?j.baselineCount:0;"
+         "    var api=window.__MeoAIBridge, cnt=0;"
+         "    try {"
+         "      if(api&&typeof api.readLastAssistant==='function'){"
+         "        var a=api.readLastAssistant();"
+         "        if(a&&a.text) live=String(a.text);"
+         "        if(a&&typeof a.count==='number') cnt=a.count;"
+         "      }"
+         "      if((!live||!cnt)&&api&&typeof api.chatSnapshot==='function'){"
+         "        var s=api.chatSnapshot();"
+         "        if(!live&&s&&s.last) live=String(s.last);"
+         "        if(!cnt&&s&&typeof s.count==='number') cnt=s.count;"
+         "      }"
+         "    } catch(e) {}"
+         "    var prompt=(j.prompt!=null)?String(j.prompt):'';"
+         "    if(prompt && live && live.trim()===prompt.trim()) live='';"
+         "    if(prompt && live && live.indexOf(prompt)>=0 && live.length<=prompt.length+4) live='';"
+         "    return JSON.stringify({status:'running', phase:j.phase||null, detail:j.detail||null,"
+         "      text:live, baseline:base, baselineCount:baseCnt, sawGrowth:!!j.sawGrowth, count:cnt,"
+         "      prompt:prompt,"
+         "      ageMs: j.startedAt ? (Date.now()-j.startedAt) : null});"
+         "  }"
          "  return JSON.stringify({status:'done', result: j.result || {ok:false, error:'empty'}});"
          "})()";
+
     __weak typeof(self) weakSelf = self;
-    [self evaluate:pollJS onWebView:webView completion:^(id result, NSError *error) {
+    __block void (^finishWithLastChance)(void) = nil;
+    finishWithLastChance = ^{
+        if (finished) return;
+        // DeepSeek 偶发「思考结束稍后才挂正文」：截止后继续轮询数秒再判超时
+        __block NSInteger attemptsLeft = 8;
+        __block void (^tryRead)(void) = nil;
+        void (^recoverEmpty)(void) = ^{
+            if (finished) return;
+            if (lastSeenText.length > 0) {
+                finishOnce(@{@"ok": @YES, @"text": lastSeenText, @"recovered": @YES}, nil);
+                [self abortOnWebView:webView];
+                return;
+            }
+            [self abortOnWebView:webView];
+            finishOnce(@{@"ok": @NO, @"error": @"timeout", @"text": @""}, nil);
+        };
+        tryRead = ^{
+            if (finished) return;
+            [self evaluate:lastChanceJS onWebView:webView completion:^(id result, NSError *error) {
+                (void)error;
+                if (finished) return;
+                NSDictionary *dict = [self coerceDictionary:result];
+                NSString *text = [dict[@"text"] isKindOfClass:[NSString class]] ? dict[@"text"] : @"";
+                if (text.length == 0) text = lastSeenText;
+                if (text.length > 0) {
+                    finishOnce(@{@"ok": @YES, @"text": text, @"recovered": @YES}, nil);
+                    [self abortOnWebView:webView];
+                    return;
+                }
+                attemptsLeft -= 1;
+                if (attemptsLeft <= 0) {
+                    recoverEmpty();
+                    return;
+                }
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    if (tryRead) tryRead();
+                });
+            }];
+        };
+        tryRead();
+    };
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(remain * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        finishWithLastChance();
+    });
+
+    __block void (^__weak weakPollOnce)(void) = nil;
+    pollOnce = ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        if (error) {
-            if (completion) {
-                completion(nil, error);
-            }
-            return;
-        }
-        NSDictionary *payload = [strongSelf coerceDictionary:result];
-        NSString *status = [payload[@"status"] isKindOfClass:[NSString class]] ? payload[@"status"] : @"";
-        if ([status isEqualToString:@"done"]) {
-            id res = payload[@"result"];
-            NSDictionary *dict = [res isKindOfClass:[NSDictionary class]] ? res : nil;
-            if (completion) {
-                completion(dict ?: @{@"ok": @NO, @"error": @"bad result"}, nil);
-            }
-            return;
-        }
+        if (!strongSelf || finished) return;
         if ([[NSDate date] compare:deadline] == NSOrderedDescending) {
-            if (completion) {
-                completion(@{@"ok": @NO, @"error": @"timeout", @"text": @""}, nil);
-            }
+            finishWithLastChance();
             return;
         }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [strongSelf pollJobOnWebView:webView deadline:deadline completion:completion];
-        });
-    }];
+        [strongSelf evaluate:pollJS onWebView:webView completion:^(id result, NSError *error) {
+            if (finished) return;
+            __strong typeof(weakSelf) inner = weakSelf;
+            if (!inner) return;
+            if (error) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    if (weakPollOnce) weakPollOnce();
+                });
+                return;
+            }
+            NSDictionary *payload = [inner coerceDictionary:result];
+            NSString *status = [payload[@"status"] isKindOfClass:[NSString class]] ? payload[@"status"] : @"";
+            NSString *live = [payload[@"text"] isKindOfClass:[NSString class]] ? payload[@"text"] : @"";
+            NSString *baseline = [payload[@"baseline"] isKindOfClass:[NSString class]] ? payload[@"baseline"] : @"";
+            if (baseline.length && jobBaseline.length == 0) jobBaseline = baseline;
+            NSString *prompt = [payload[@"prompt"] isKindOfClass:[NSString class]] ? payload[@"prompt"] : @"";
+            if (live.length > 0 && prompt.length > 0 && [live isEqualToString:prompt]) {
+                live = @"";
+            }
+            // 仅记录「相对 baseline 已变」的正文，避免 lastChance 交出发送前旧回复
+            if (live.length > 0) {
+                BOOL differsFromBase =
+                    (jobBaseline.length == 0 && baseline.length == 0) ||
+                    (jobBaseline.length > 0 && ![live isEqualToString:jobBaseline]) ||
+                    (baseline.length > 0 && ![live isEqualToString:baseline]);
+                if (differsFromBase) lastSeenText = live;
+            }
+            // 页内 adapter 负责判断生成是否结束；不能仅凭两次文本相同就截断流式回复。
+            if ([status isEqualToString:@"done"]) {
+                id res = payload[@"result"];
+                NSDictionary *dict = [res isKindOfClass:[NSDictionary class]] ? res : nil;
+                NSString *t = [dict[@"text"] isKindOfClass:[NSString class]] ? dict[@"text"] : @"";
+                // adapter 已确认是本轮新消息；相同提问可能得到与上一轮完全相同的回答。
+                if (t.length > 0 && [dict[@"ok"] boolValue]) {
+                    finishOnce(dict, nil);
+                    return;
+                }
+                BOOL tIsPrompt = prompt.length > 0 && [t isEqualToString:prompt];
+                BOOL tIsBaseline = (jobBaseline.length > 0 && [t isEqualToString:jobBaseline]) ||
+                                   (baseline.length > 0 && [t isEqualToString:baseline]);
+                if (tIsPrompt || tIsBaseline) t = @"";
+                if (t.length == 0 && lastSeenText.length > 0) {
+                    finishOnce(@{@"ok": @YES, @"text": lastSeenText, @"recovered": @YES}, nil);
+                    return;
+                }
+                // 页内 timeout 但带「新」字 → 仍当成功交回
+                if (dict && ![dict[@"ok"] boolValue] && t.length > 0) {
+                    finishOnce(@{@"ok": @YES, @"text": t, @"recovered": @YES}, nil);
+                    return;
+                }
+                finishOnce(dict ?: @{@"ok": @NO, @"error": @"bad result"}, nil);
+                return;
+            }
+            if ([status isEqualToString:@"idle"]) {
+                if (lastSeenText.length > 0) {
+                    finishOnce(@{@"ok": @YES, @"text": lastSeenText, @"recovered": @YES}, nil);
+                } else {
+                    finishOnce(@{@"ok": @NO, @"error": @"job_lost", @"text": @""}, nil);
+                }
+                return;
+            }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if (weakPollOnce) weakPollOnce();
+            });
+        }];
+    };
+    weakPollOnce = pollOnce;
+    pollOnce();
 }
 
 @end

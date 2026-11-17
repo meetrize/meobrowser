@@ -16,7 +16,7 @@ typedef void (^AIBridgeHTTPRequestHandler)(NSString *method,
 @property (nonatomic, assign, readonly, getter=isRunning) BOOL running;
 @property (nonatomic, assign, readonly) NSInteger listeningPort;
 
-/// 仅绑定 127.0.0.1
+/// 绑定 0.0.0.0（本机 + 局域网可达）
 - (BOOL)startOnPort:(NSInteger)port error:(NSError *_Nullable *_Nullable)error;
 - (void)stop;
 

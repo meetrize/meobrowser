@@ -151,6 +151,15 @@
         if (r.width > 0 && r.height > 0) return b;
       }
     }
+    // 当前 DeepSeek 的停止控件是无文字的实心圆形按钮；输入为空时出现，生成结束后消失。
+    // 有输入时同样式可能是发送按钮，不能将其当成生成中。
+    if (input && !readInputText(input)) {
+      var stop = root.querySelector('.ds-button--primary.ds-button--filled.ds-button--circle');
+      if (stop && !isDisabledControl(stop)) {
+        var rect = stop.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return stop;
+      }
+    }
     return null;
   }
 
@@ -161,30 +170,167 @@
     return document.querySelector('input[type="file"]');
   }
 
+  function uniqueNodes(list) {
+    var out = [];
+    var seen = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      if (!el) continue;
+      if (seen) {
+        if (seen.has(el)) continue;
+        seen.add(el);
+      } else if (out.indexOf(el) !== -1) {
+        continue;
+      }
+      out.push(el);
+    }
+    return out;
+  }
+
+  function isUserBubble(el) {
+    if (!el) return false;
+    try {
+      var root =
+        (el.closest &&
+          (el.closest('.ds-message') ||
+            el.closest('[class*="ds-message"]') ||
+            el.closest('.chat-content-item'))) ||
+        el;
+      var role =
+        ((root.getAttribute && root.getAttribute('data-role')) || '') +
+        ' ' +
+        ((root.className || '') + '');
+      if (/user|human|question/i.test(role) && !/assistant|model/i.test(role)) return true;
+      // 用户气泡常无 assistant-message 类；有则一定不是用户
+      if (root.querySelector && root.querySelector('[class*="ds-assistant-message"], .ds-assistant-message-main-content')) {
+        return false;
+      }
+      // 启发式：含用户编辑/复制条且无助手 markdown 类
+      if (
+        root.querySelector &&
+        root.querySelector('[class*="user"], [data-role="user"]') &&
+        !(el.className && /assistant/i.test(el.className + ''))
+      ) {
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function assistantNodes() {
-    return AIBridgeRuntime.qsa(
-      '.ds-markdown.ds-assistant-message-main-content, .ds-message .ds-markdown.ds-assistant-message-main-content'
-    ).filter(function (el) {
-      return ((el.innerText || '').trim().length > 0);
+    // 勿用裸 .ds-message .ds-markdown：用户气泡也会命中，早退会把提问当答案
+    var primary = AIBridgeRuntime.qsa(
+      [
+        '.ds-markdown.ds-assistant-message-main-content',
+        '.ds-message .ds-markdown.ds-assistant-message-main-content',
+        '.ds-assistant-message-main-content',
+        '[class*="ds-assistant-message"] .ds-markdown',
+        '.ds-message[data-role="assistant"] .ds-markdown',
+        '.chat-content-item-assistant .markdown-container .markdown',
+        '.chat-content-item-assistant .markdown',
+        '.chat-content-item-assistant'
+      ].join(', ')
+    );
+    var filtered = primary.filter(function (el) {
+      if (!el) return false;
+      if (isUserBubble(el)) return false;
+      // 排除思考块 / 工具调用噪音
+      try {
+        if (el.closest && (el.closest('.thinking-container') || el.closest('.toolcall-content-text'))) {
+          return false;
+        }
+      } catch (e) {}
+      var t = ((el.innerText || el.textContent || '') + '').trim();
+      if (!t) return false;
+      if (/^(思考中|正在思考|Thinking|停止生成)/i.test(t) && t.length < 20) return false;
+      return true;
     });
+    return uniqueNodes(filtered);
   }
 
   function extractAssistantMarkdown(el) {
     if (!el) return '';
+    // 优先取内部真正 markdown，避免整块含「思考已完成」前缀
+    try {
+      var mdNodes = el.querySelectorAll
+        ? el.querySelectorAll(
+            '.ds-markdown.ds-assistant-message-main-content, .markdown-container .markdown, .markdown, .ds-markdown'
+          )
+        : [];
+      for (var i = mdNodes.length - 1; i >= 0; i--) {
+        var n = mdNodes[i];
+        if (n.closest && (n.closest('.thinking-container') || n.closest('.toolcall-content-text'))) continue;
+        var rich =
+          (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(n)) ||
+          '';
+        var raw = (rich || n.innerText || n.textContent || '').trim();
+        raw = raw
+          .replace(/^(思考已完成了?|思考完成了?|已深度思考|正在思考中)\s*/g, '')
+          .trim();
+        if (raw && raw.length >= 1) return raw;
+      }
+    } catch (e) {}
     var md =
       (AIBridgeRuntime.richMarkdownFromElement && AIBridgeRuntime.richMarkdownFromElement(el)) ||
       '';
     if (md && md.trim()) return md.trim();
-    return ((el.innerText || el.textContent || '') + '').trim();
+    return ((el.innerText || el.textContent || '') + '')
+      .replace(/^(思考已完成了?|思考完成了?|已深度思考|正在思考中)\s*/g, '')
+      .trim();
+  }
+
+  function chatSnapshot() {
+    // 必须以「最后一条助手消息」为准；用最后一条 .ds-message 常误读到用户气泡，导致永远无 growth、最终 timeout。
+    var list = assistantNodes();
+    var el = list.length ? list[list.length - 1] : null;
+    var last = extractAssistantMarkdown(el) || '';
+    var msgs = AIBridgeRuntime.qsa('.ds-message');
+    if (!msgs.length) {
+      msgs = AIBridgeRuntime.qsa('[class*="ds-message"]');
+    }
+    if (!last && msgs.length) {
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        var cand = msgs[i];
+        if (isUserBubble(cand)) continue;
+        var role = ((cand.getAttribute && cand.getAttribute('data-role')) || '') +
+          ' ' + ((cand.className || '') + '');
+        if (/user|human|question/i.test(role) && !/assistant|model/i.test(role)) continue;
+        // 无助手标记则跳过，避免把用户气泡当地板
+        var hasAsst =
+          (cand.querySelector &&
+            cand.querySelector(
+              '.ds-assistant-message-main-content, [class*="ds-assistant-message"]'
+            )) ||
+          /assistant/i.test(role);
+        if (!hasAsst) continue;
+        var t = extractAssistantMarkdown(cand) || ((cand.innerText || '') + '').trim();
+        if (t && t.length > 0) {
+          last = t;
+          break;
+        }
+      }
+    }
+    var count = Math.max(list.length, msgs.length);
+    return {
+      count: count,
+      last: last,
+      fingerprint: count + ':' + last.length + ':' + last.slice(0, 48)
+    };
   }
 
   function readLastAssistant() {
+    var snap = chatSnapshot();
     var list = assistantNodes();
-    var el = list.length ? list[list.length - 1] : null;
+    var text = snap.last || '';
+    // 仅在助手专用节点上兜底；勿扫全页 .ds-markdown（会读到用户提问）
+    if (!text && list.length) {
+      text = extractAssistantMarkdown(list[list.length - 1]) || '';
+    }
     return {
-      text: extractAssistantMarkdown(el),
-      count: list.length,
-      messageId: null
+      text: text || '',
+      count: Math.max(snap.count, list.length),
+      messageId: null,
+      fingerprint: snap.fingerprint
     };
   }
 
@@ -511,7 +657,19 @@
   });
 
   var api = window.__MeoAIBridge;
+  var bridgeAborted = false;
+  var prevAbort = typeof api.abort === 'function' ? api.abort.bind(api) : null;
+  api.abort = function () {
+    bridgeAborted = true;
+    if (prevAbort) {
+      try {
+        prevAbort();
+      } catch (e) {}
+    }
+  };
+  api._meoAdapterRev = 15; // 排除生成结束后仍留在页面上的禁用按钮
   api.readLastAssistant = readLastAssistant;
+  api.chatSnapshot = chatSnapshot;
 
   api.probeAttachments = function () {
     var fi = findFileInput();
@@ -587,11 +745,15 @@
   // 冷启动 / SPA 水合前：先等输入框，再粘性填入，再点发送；避免 setValue 落在未挂载的 React 输入上。
   api.sendAndWait = async function (text, opts) {
     opts = opts || {};
-    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 120000;
-    var stableMs = opts.stableMs != null ? opts.stableMs : 1000;
+    bridgeAborted = false;
+    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 60000;
+    var stableMs = opts.stableMs != null ? opts.stableMs : 450;
+    // 点击发送后若既无 busy 也无新回复，尽早失败，避免空等堵队列
+    var noResponseMs = opts.noResponseMs != null ? opts.noResponseMs : 18000;
     var body = text == null ? '' : String(text);
     var readyDeadline = Date.now() + Math.min(45000, timeoutMs);
     while (Date.now() < readyDeadline && !findInput()) {
+      if (bridgeAborted) return { ok: false, error: 'aborted' };
       await sleep(200);
     }
     if (!findInput()) {
@@ -609,13 +771,14 @@
     }
 
     if (!fillPrompt()) return { ok: false, phase: 'send', error: 'setInput failed' };
-    await sleep(300);
+    await sleep(120);
     var peek = readInputText(findInput());
     var needle = body.trim().slice(0, Math.min(12, body.trim().length));
     if (needle && peek.indexOf(needle) === -1) {
       var stickyOk = false;
-      for (var r = 0; r < 12; r++) {
-        await sleep(250);
+      for (var r = 0; r < 8; r++) {
+        if (bridgeAborted) return { ok: false, error: 'aborted' };
+        await sleep(180);
         if (!findInput()) continue;
         fillPrompt();
         await sleep(200);
@@ -631,8 +794,12 @@
     }
 
     var baseline = readLastAssistant();
+    var baselineSnap = chatSnapshot();
+    var baselineNodes = assistantNodes();
+    var baselineNode = baselineNodes.length ? baselineNodes[baselineNodes.length - 1] : null;
     var clicked = false;
     for (var s = 0; s < 40; s++) {
+      if (bridgeAborted) return { ok: false, error: 'aborted' };
       var btn = findSendButton();
       if (btn) {
         btn.click();
@@ -656,37 +823,129 @@
     if (!clicked) return { ok: false, phase: 'send', error: 'send button not ready' };
 
     var start = Date.now();
-    var lastText = baseline.text;
+    var baseText = baseline.text || baselineSnap.last || '';
+    var promptNorm = String(text || '').trim();
+    var lastText = baseText;
     var lastChange = Date.now();
     var sawGrowth = false;
     var sawBusy = false;
+    function usableAnswer(t) {
+      var u = String(t || '').trim();
+      if (!u) return false;
+      if (promptNorm && u === promptNorm) return false;
+      // 用户气泡偶发带前缀/后缀时仍高度重合
+      if (promptNorm && u.length <= promptNorm.length + 4 && u.indexOf(promptNorm) >= 0) return false;
+      return true;
+    }
+    try {
+      if (window.__MeoAIBridgeJob) {
+        window.__MeoAIBridgeJob.baseline = baseText;
+        window.__MeoAIBridgeJob.liveText = '';
+        window.__MeoAIBridgeJob.prompt = promptNorm;
+      }
+    } catch (eB) {}
 
     while (Date.now() - start < timeoutMs) {
-      if (api.isBusy()) sawBusy = true;
+      if (bridgeAborted) {
+        var ab = readLastAssistant();
+        var abs = chatSnapshot();
+        var abText = ab.text || abs.last || '';
+        if (!usableAnswer(abText) || abText === baseText) abText = '';
+        if (abText) {
+          return { ok: true, text: abText, sawBusy: sawBusy, recovered: true, aborted: true };
+        }
+        return { ok: false, error: 'aborted', text: '', sawBusy: sawBusy };
+      }
+      var busyNow = !!api.isBusy();
+      if (busyNow) {
+        sawBusy = true;
+      }
+
       var cur = readLastAssistant();
-      if (cur.text && (cur.count > baseline.count || cur.text !== baseline.text)) {
-        if (cur.text !== lastText) {
-          lastText = cur.text;
+      var snap = chatSnapshot();
+      var currentNodes = assistantNodes();
+      var currentNode = currentNodes.length ? currentNodes[currentNodes.length - 1] : null;
+      var newNode = !!currentNode && currentNode !== baselineNode;
+      var curText = cur.text || snap.last || '';
+      if (!usableAnswer(curText)) curText = '';
+      var countGrew = cur.count > baseline.count || snap.count > baselineSnap.count;
+      var textGrew = !!baseText && !!curText && curText !== baseText;
+      var streamGrew =
+        !!baseText && !!lastText && !!curText && curText !== baseText && curText.length > lastText.length + 1;
+      try {
+        if (window.__MeoAIBridgeJob && window.__MeoAIBridgeJob.status === 'running') {
+          window.__MeoAIBridgeJob.liveText =
+            curText && (textGrew || countGrew || streamGrew) ? curText : '';
+          window.__MeoAIBridgeJob.sawGrowth = !!sawGrowth;
+          window.__MeoAIBridgeJob.busy = !!busyNow;
+          window.__MeoAIBridgeJob.prompt = promptNorm;
+          window.__MeoAIBridgeJob.baseline = baseText;
+          window.__MeoAIBridgeJob.baselineCount = baseline.count || 0;
+        }
+      } catch (eL) {}
+      var grew = !!curText && usableAnswer(curText) && (countGrew || textGrew || streamGrew || newNode);
+      if (grew) {
+        if (curText !== lastText) {
+          lastText = curText;
           lastChange = Date.now();
         }
         sawGrowth = true;
       }
-      if (sawGrowth && !api.isBusy() && Date.now() - lastChange >= stableMs) {
-        return { ok: true, text: cur.text, sawBusy: sawBusy, count: cur.count };
+
+      function canDeliver(t) {
+        if (!t || !usableAnswer(t)) return false;
+        if (t === baseText && !countGrew && !newNode) return false;
+        // DeepSeek 常原地更新气泡，count 不增：有 baseline 时靠正文变化；无 baseline 时须经历过 busy
+        if (!baseText && !countGrew && !sawBusy) return false;
+        if (!baseText && !countGrew && sawBusy && t) return true;
+        return true;
       }
-      await sleep(250);
+
+      // 正常完成：内容稳定且不 busy
+      if (sawGrowth && !busyNow && canDeliver(curText) && Date.now() - lastChange >= stableMs) {
+        return { ok: true, text: curText, sawBusy: sawBusy, count: cur.count };
+      }
+      // 页面完全没反应：尽早失败
+      if (!sawGrowth && !sawBusy && Date.now() - start >= noResponseMs) {
+        return {
+          ok: false,
+          error: 'no_response',
+          detail: 'no busy/growth after send',
+          text: curText || '',
+          sawBusy: false,
+          count: cur.count
+        };
+      }
+      await sleep(180);
+    }
+    var last = readLastAssistant();
+    var lastSnap = chatSnapshot();
+    var finalText = last.text || lastSnap.last || '';
+    if (!usableAnswer(finalText)) finalText = '';
+    // 超时：只要页上有「相对提问」的助手正文就交
+    if (finalText && (finalText !== baseText || last.count > baseline.count)) {
+      return {
+        ok: true,
+        text: finalText,
+        sawBusy: sawBusy,
+        count: last.count,
+        recovered: true,
+        sameAsBaseline: finalText === baseText
+      };
     }
     return {
       ok: false,
       error: 'timeout',
-      text: readLastAssistant().text,
+      text: '',
       sawBusy: sawBusy,
-      count: readLastAssistant().count
+      count: last.count,
+      detail: sawGrowth ? 'grew_but_lost' : 'no_new_assistant_text'
     };
   };
 
   api.attachAndSendAndWait = async function (text, specs, opts) {
     opts = opts || {};
+    bridgeAborted = false;
     var probe = api.probeAttachments();
     if (!probe.supported) {
       return { ok: false, phase: 'attach', error: 'attachments_unsupported', detail: probe.detail };
@@ -766,8 +1025,10 @@
       }
     }
 
+    var baseline = readLastAssistant();
     var clicked = false;
     for (var s = 0; s < 30; s++) {
+      if (bridgeAborted) return { ok: false, error: 'aborted' };
       var btn = findSendButton();
       if (btn) {
         btn.click();
@@ -791,36 +1052,74 @@
     if (!clicked) return { ok: false, phase: 'send', error: 'send button not ready' };
 
     jobProgress('wait', null);
-    // 已点击发送：复用 sendAndWait 的等待逻辑（跳过再次 setInput）
-    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 120000;
+    var timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : 90000;
     var stableMs = opts.stableMs != null ? opts.stableMs : 1000;
-    var baseline = readLastAssistant();
+    var noResponseMs = opts.noResponseMs != null ? opts.noResponseMs : 25000;
     var start = Date.now();
     var lastText = baseline.text;
     var lastChange = Date.now();
     var sawGrowth = false;
     var sawBusy = false;
     while (Date.now() - start < timeoutMs) {
-      if (api.isBusy()) sawBusy = true;
+      if (bridgeAborted) {
+        var ab = readLastAssistant();
+        if (ab.text && ab.text !== baseline.text) {
+          return { ok: true, text: ab.text, sawBusy: sawBusy, recovered: true, aborted: true };
+        }
+        return { ok: false, error: 'aborted', text: ab.text, sawBusy: sawBusy };
+      }
+      var busyNow = api.isBusy();
+      if (busyNow) sawBusy = true;
       var cur = readLastAssistant();
-      if (cur.text && (cur.count > baseline.count || cur.text !== baseline.text)) {
+      var grew =
+        !!cur.text &&
+        (cur.count > baseline.count ||
+          cur.text !== baseline.text ||
+          (baseline.text && cur.text.length > baseline.text.length + 2));
+      if (grew) {
         if (cur.text !== lastText) {
           lastText = cur.text;
           lastChange = Date.now();
         }
         sawGrowth = true;
       }
-      if (sawGrowth && !api.isBusy() && Date.now() - lastChange >= stableMs) {
+      if (sawGrowth && !busyNow && Date.now() - lastChange >= stableMs) {
         return { ok: true, text: cur.text, sawBusy: sawBusy, count: cur.count };
       }
+      if (sawGrowth && sawBusy && !busyNow && cur.text) {
+        return { ok: true, text: cur.text, sawBusy: true, count: cur.count };
+      }
+      if (sawGrowth && Date.now() - lastChange >= Math.max(stableMs * 2, 1800)) {
+        return { ok: true, text: cur.text, sawBusy: sawBusy, count: cur.count, forcedStable: true };
+      }
+      if (!sawGrowth && !sawBusy && Date.now() - start >= noResponseMs) {
+        return {
+          ok: false,
+          error: 'no_response',
+          detail: 'no busy/growth after send',
+          text: cur.text || '',
+          sawBusy: false,
+          count: cur.count
+        };
+      }
       await sleep(250);
+    }
+    var last = readLastAssistant();
+    if (last.text && (last.text !== baseline.text || last.count > baseline.count)) {
+      return {
+        ok: true,
+        text: last.text,
+        sawBusy: sawBusy,
+        count: last.count,
+        recovered: true
+      };
     }
     return {
       ok: false,
       error: 'timeout',
-      text: readLastAssistant().text,
+      text: last.text || '',
       sawBusy: sawBusy,
-      count: readLastAssistant().count
+      count: last.count
     };
   };
 
@@ -845,6 +1144,7 @@
       hasSend: !!send,
       sendClass: send ? String(send.className || '').slice(0, 80) : null,
       assistantCount: assistantNodes().length,
+      lastAssistant: (function(){ try { var a=readLastAssistant(); return (a&&a.text)?String(a.text).slice(0,120):''; } catch(e){ return ''; } })(),
       busy: !!findBusy(),
       attachmentsSupported: !!att.supported,
       hasFileInput: !!att.hasFileInput,

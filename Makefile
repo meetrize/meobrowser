@@ -398,9 +398,15 @@ define WRITE_BROWSER_INFO_PLIST
 	@echo '</dict></plist>' >> $(1)/Contents/Info.plist
 endef
 
-.PHONY: all browser clean run run-browser install-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools test-ai-bridge-tools
+.PHONY: all browser clean run run-browser install-browser watch-browser live-browser stats stats-browser stats-all verify setup-tools test-ai-bridge-tools test-ai-bridge-poll
 
 all: $(BINARY) $(NIB_OUT)
+
+test-ai-bridge-poll: | $(BUILD_DIR)
+	$(CC) -fobjc-arc -fblocks -I$(BROWSER_SRC_DIR)/AIBridge Tests/ai_bridge_poll_test.m \
+		$(BROWSER_SRC_DIR)/AIBridge/AIBridgeDOMProvider.m -framework Foundation -framework WebKit \
+		-o $(BUILD_DIR)/ai_bridge_poll_test
+	$(BUILD_DIR)/ai_bridge_poll_test
 
 $(BINARY): $(SOURCES) | $(BUILD_DIR)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS

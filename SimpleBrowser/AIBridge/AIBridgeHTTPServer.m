@@ -5,6 +5,7 @@
 @property (nonatomic, strong) nw_connection_t connection;
 @property (nonatomic, strong) NSMutableData *buffer;
 @property (nonatomic, assign) BOOL headersParsed;
+@property (nonatomic, assign) BOOL requestDispatched; // 同一连接只处理一次，避免等响应时重复入队
 @property (nonatomic, assign) NSInteger contentLength;
 @property (nonatomic, copy) NSString *method;
 @property (nonatomic, copy) NSString *path;
@@ -48,15 +49,17 @@
 
     nw_parameters_t parameters = nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL,
                                                                NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    // 允许局域网访问：reuse 本地地址，避免重启时短时间 bind 失败
+    nw_parameters_set_reuse_local_address(parameters, true);
     NSString *portString = [NSString stringWithFormat:@"%ld", (long)port];
-    nw_endpoint_t local = nw_endpoint_create_host("127.0.0.1", portString.UTF8String);
+    nw_endpoint_t local = nw_endpoint_create_host("0.0.0.0", portString.UTF8String);
     nw_parameters_set_local_endpoint(parameters, local);
 
     nw_listener_t listener = nw_listener_create(parameters);
     if (!listener) {
         if (error) {
             *error = [NSError errorWithDomain:@"AIBridgeHTTPServer" code:1
-                                    userInfo:@{NSLocalizedDescriptionKey: @"无法创建 127.0.0.1 监听器"}];
+                                    userInfo:@{NSLocalizedDescriptionKey: @"无法创建 0.0.0.0 监听器"}];
         }
         return NO;
     }
@@ -71,7 +74,7 @@
         if (state == nw_listener_state_ready) {
             strongSelf.listeningPort = (NSInteger)nw_listener_get_port(listener);
             strongSelf.running = YES;
-            NSLog(@"[AIBridge] listening on 127.0.0.1:%ld", (long)strongSelf.listeningPort);
+            NSLog(@"[AIBridge] listening on 0.0.0.0:%ld (LAN reachable)", (long)strongSelf.listeningPort);
         } else if (state == nw_listener_state_failed) {
             NSLog(@"[AIBridge] listener failed: %@", nwError);
             strongSelf.running = NO;
@@ -163,20 +166,21 @@
             [strongSelf tryParseConnection:strongConn];
         }
         if (isComplete) {
-            if (!strongConn.responded) {
+            if (!strongConn.responded && !strongConn.requestDispatched) {
                 [strongSelf respondOn:strongConn status:400 contentType:@"text/plain; charset=utf-8"
                                  body:[@"incomplete request" dataUsingEncoding:NSUTF8StringEncoding]];
             }
             return;
         }
-        if (!strongConn.responded) {
+        // 已派发长耗时请求后停止续收，避免空读/粘包再次进入解析
+        if (!strongConn.responded && !strongConn.requestDispatched) {
             [strongSelf receiveMore:strongConn];
         }
     });
 }
 
 - (void)tryParseConnection:(AIBridgeHTTPConnection *)conn {
-    if (conn.responded) {
+    if (conn.responded || conn.requestDispatched) {
         return;
     }
     if (!conn.headersParsed) {
@@ -231,6 +235,12 @@
     if ((NSInteger)conn.buffer.length < conn.contentLength) {
         return;
     }
+    // 关键派发：长耗时 /v1/chat/completions 等待期间 TCP 续收会再次进入此处
+    if (conn.requestDispatched) {
+        return;
+    }
+    conn.requestDispatched = YES;
+
     NSData *body = conn.contentLength > 0
         ? [conn.buffer subdataWithRange:NSMakeRange(0, (NSUInteger)conn.contentLength)]
         : [NSData data];

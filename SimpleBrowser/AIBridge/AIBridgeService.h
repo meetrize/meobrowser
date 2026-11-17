@@ -26,6 +26,10 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
 
 - (BOOL)startServer:(NSError *_Nullable *_Nullable)error;
 - (void)stopServer;
+/// 清空队列/日志并重启 HTTP 监听（卡死恢复）。
+- (BOOL)restartServer:(NSError *_Nullable *_Nullable)error;
+/// 仅清空队列与页内任务（不重启端口）。
+- (void)purgeQueueAndAbortBoundPages;
 
 /// 新建 binding（多实例）。成功时 *outBinding 非空。
 - (nullable AIBridgeBinding *)bindCurrentTab:(BrowserTab *)tab
@@ -42,7 +46,7 @@ FOUNDATION_EXPORT NSNotificationName const AIBridgeServiceStateDidChangeNotifica
 - (void)newChatForProviderId:(NSString *)providerId completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion;
 - (void)newChatForBindingId:(NSString *)bindingId completion:(void (^)(BOOL ok, NSString *_Nullable detail))completion;
 
-/// 解析 model；多短名绑定时返回 nil 且 error 说明 ambiguous
+/// 解析固定 modelId（bridge__provider）；兼容旧长格式
 - (nullable AIBridgeBinding *)resolveBindingForModelId:(NSString *)modelId
                                                  error:(NSError *_Nullable *_Nullable)error;
 

@@ -91,6 +91,8 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 @property (nonatomic, strong) NSButton *testSendButton;
 @property (nonatomic, strong) NSTextField *testStatusLabel;
 @property (nonatomic, assign) BOOL testInFlight;
+@property (nonatomic, assign) NSUInteger testGeneration;
+@property (nonatomic, strong, nullable) NSTimer *testProgressTimer;
 @property (nonatomic, assign) BOOL bindInFlight;
 
 @property (nonatomic, strong) NSButton *startStopButton;
@@ -215,17 +217,22 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.baseURLField.editable = NO;
     self.baseURLField.selectable = YES;
     self.baseURLField.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
-    self.baseURLField.stringValue = @"http://127.0.0.1:3921/v1";
-    self.baseURLField.toolTip = @"点击复制带 /v1 的 Base URL";
+    self.baseURLField.stringValue = @"http://0.0.0.0:3921/v1";
+    self.baseURLField.toolTip = @"点击复制带 /v1 的 Base URL（局域网 IP）";
 
     self.baseURLCopyButton = [NSButton buttonWithTitle:@"复制 Base URL" target:self action:@selector(copyBaseURL:)];
     self.baseURLCopyButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.baseURLCopyButton.bezelStyle = NSBezelStyleRounded;
-    self.baseURLCopyButton.toolTip = @"复制 http://127.0.0.1:端口/v1";
+    self.baseURLCopyButton.toolTip = @"复制 http://局域网IP:端口/v1";
 
     self.startStopButton = [NSButton buttonWithTitle:@"启动服务" target:self action:@selector(toggleServer:)];
     self.startStopButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.startStopButton.bezelStyle = NSBezelStyleRounded;
+
+    NSButton *restartBtn = [NSButton buttonWithTitle:@"重启服务" target:self action:@selector(restartServerClicked:)];
+    restartBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    restartBtn.bezelStyle = NSBezelStyleRounded;
+    restartBtn.toolTip = @"清空排队任务并重启 HTTP 监听（卡死时用）";
 
     self.autoStartCheckbox = [NSButton checkboxWithTitle:@"随浏览器自动启动"
                                                   target:self
@@ -297,7 +304,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.modelIdField.selectable = YES;
     self.modelIdField.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightSemibold];
     self.modelIdField.stringValue = @"未绑定";
-    self.modelIdField.toolTip = @"点击复制完整 modelId（如 bridge__deepseek__bc84ad）";
+    self.modelIdField.toolTip = @"点击复制固定 modelId（如 bridge__deepseek）";
 
     self.modelCopyButton = [NSButton buttonWithTitle:@"复制 Model" target:self action:@selector(copyModelId:)];
     self.modelCopyButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -316,6 +323,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     NSButton *cancelBtn = [NSButton buttonWithTitle:@"取消任务" target:self action:@selector(cancelClicked:)];
     cancelBtn.translatesAutoresizingMaskIntoConstraints = NO;
     cancelBtn.bezelStyle = NSBezelStyleRounded;
+    cancelBtn.toolTip = @"取消当前任务与排队中的任务";
 
     NSButton *copyCurl = [NSButton buttonWithTitle:@"复制 curl 示例" target:self action:@selector(copyCurl:)];
     copyCurl.translatesAutoresizingMaskIntoConstraints = NO;
@@ -326,7 +334,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     testCaption.translatesAutoresizingMaskIntoConstraints = NO;
     testCaption.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
 
-    NSTextField *testHint = [NSTextField wrappingLabelWithString:@"对当前选中 Provider 调用本机 /v1/chat/completions"];
+    NSTextField *testHint = [NSTextField wrappingLabelWithString:@"直连桥接队列测网页收取（不经局域网回环）。外部客户端仍用上方 Base URL。"];
     testHint.translatesAutoresizingMaskIntoConstraints = NO;
     testHint.font = [NSFont systemFontOfSize:10];
     testHint.textColor = NSColor.tertiaryLabelColor;
@@ -378,7 +386,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     self.logView = log;
 
     NSTextField *hint = [NSTextField wrappingLabelWithString:
-        @"仅本机 127.0.0.1。model：bridge__*（网页）/ ollama__* / openai__*。"
+        @"监听 0.0.0.0（本机+局域网）。model 固定为 bridge__provider / ollama__* / openai__*。"
          "请遵守各 AI 平台条款，仅供个人实验。左侧边缘可拖拽调宽。"];
     hint.translatesAutoresizingMaskIntoConstraints = NO;
     hint.font = [NSFont systemFontOfSize:10];
@@ -387,7 +395,7 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     NSArray *subs = @[
         title, close, self.statusDot, self.statusLabel,
         self.baseURLCaption, self.baseURLField, self.baseURLCopyButton,
-        self.startStopButton, self.autoStartCheckbox,
+        self.startStopButton, restartBtn, self.autoStartCheckbox,
         tokenCaption, self.tokenField, copyToken, regen,
         bindCaption, self.providerPopup, bindBtn, unbindBtn, unbindAllBtn, probeBtn,
         self.bindLabel,
@@ -438,9 +446,11 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
         [self.startStopButton.topAnchor constraintEqualToAnchor:self.baseURLCopyButton.bottomAnchor constant:10],
         [self.startStopButton.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:14],
+        [restartBtn.centerYAnchor constraintEqualToAnchor:self.startStopButton.centerYAnchor],
+        [restartBtn.leadingAnchor constraintEqualToAnchor:self.startStopButton.trailingAnchor constant:8],
 
         [self.autoStartCheckbox.centerYAnchor constraintEqualToAnchor:self.startStopButton.centerYAnchor],
-        [self.autoStartCheckbox.leadingAnchor constraintEqualToAnchor:self.startStopButton.trailingAnchor constant:10],
+        [self.autoStartCheckbox.leadingAnchor constraintEqualToAnchor:restartBtn.trailingAnchor constant:10],
         [self.autoStartCheckbox.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-14],
 
         [tokenCaption.topAnchor constraintEqualToAnchor:self.startStopButton.bottomAnchor constant:14],
@@ -752,6 +762,42 @@ static const CGFloat kSidebarMaxWidth = 560.0;
     [self reloadUI];
 }
 
+- (void)stopTestProgressTimer {
+    [self.testProgressTimer invalidate];
+    self.testProgressTimer = nil;
+}
+
+- (void)restartServerClicked:(id)sender {
+    (void)sender;
+    // 先作废进行中的快速测试，再彻底清队列
+    self.testGeneration += 1;
+    self.testInFlight = NO;
+    [self stopTestProgressTimer];
+    self.testSendButton.enabled = YES;
+    self.testStatusLabel.stringValue = @"已中止测试请求";
+    self.testStatusLabel.textColor = NSColor.secondaryLabelColor;
+    self.testResultView.string = @"";
+
+    AIBridgeService *svc = AIBridgeService.sharedService;
+    [svc purgeQueueAndAbortBoundPages];
+    [svc restartServer:nil];
+
+    self.statusLabel.stringValue = @"队列已清空，正在重启…";
+    self.statusDot.layer.backgroundColor = NSColor.systemOrangeColor.CGColor;
+    self.bindLabel.stringValue = [NSString stringWithFormat:
+        @"已清空全部任务（active=%lu）。可重新发送。",
+        (unsigned long)AIBridgeJobQueue.sharedQueue.activeJobCount];
+    self.bindLabel.textColor = NSColor.systemOrangeColor;
+    [self reloadUI];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        weakSelf.bindLabel.stringValue = @"队列已清空，服务已重启，可重新发送";
+        weakSelf.bindLabel.textColor = NSColor.systemGreenColor;
+        [weakSelf reloadUI];
+    });
+}
+
 - (void)autoStartChanged:(id)sender {
     (void)sender;
     AIBridgePreferences.sharedPreferences.autoStartWithBrowser =
@@ -922,10 +968,20 @@ static const CGFloat kSidebarMaxWidth = 560.0;
 
 - (void)cancelClicked:(id)sender {
     (void)sender;
+    self.testGeneration += 1;
+    self.testInFlight = NO;
+    [self stopTestProgressTimer];
+    self.testSendButton.enabled = YES;
     [[AIBridgeService sharedService] cancelAllJobs];
     self.bindLabel.stringValue = @"已取消排队/当前任务";
     self.bindLabel.textColor = NSColor.secondaryLabelColor;
-    [self reloadUI];
+    self.testStatusLabel.stringValue = @"已取消";
+    self.testStatusLabel.textColor = NSColor.secondaryLabelColor;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf reloadUI];
+    });
 }
 
 #pragma mark - Quick test
@@ -948,80 +1004,67 @@ static const CGFloat kSidebarMaxWidth = 560.0;
         return;
     }
 
-    AIBridgeService *svc = AIBridgeService.sharedService;
-    if (!svc.isListening) {
-        NSError *err = nil;
-        if (![svc startServer:&err]) {
-            self.testStatusLabel.stringValue = err.localizedDescription ?: @"无法启动服务";
-            self.testStatusLabel.textColor = NSColor.systemRedColor;
-            return;
-        }
-    }
-
+    // 快速测试走本机 JobQueue 直连；不能为新测试取消正在处理的请求。
     NSString *model = [NSString stringWithFormat:@"bridge__%@", pid];
-    NSString *token = AIBridgePreferences.sharedPreferences.bearerToken ?: @"";
-    NSString *urlStr = [NSString stringWithFormat:@"%@/v1/chat/completions", svc.baseURLString];
-    NSURL *url = [NSURL URLWithString:urlStr];
-    if (!url) {
-        self.testStatusLabel.stringValue = @"URL 无效";
-        return;
-    }
-
-    NSDictionary *body = @{
-        @"model": model,
-        @"stream": @NO,
-        @"messages": @[ @{ @"role": @"user", @"content": prompt } ]
-    };
-    NSError *jsonErr = nil;
-    NSData *payload = [NSJSONSerialization dataWithJSONObject:body options:0 error:&jsonErr];
-    if (!payload) {
-        self.testStatusLabel.stringValue = jsonErr.localizedDescription ?: @"JSON 编码失败";
-        return;
-    }
-
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.HTTPMethod = @"POST";
-    req.HTTPBody = payload;
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    [req setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-    req.timeoutInterval = 200;
-
+    self.testGeneration += 1;
+    NSUInteger gen = self.testGeneration;
     self.testInFlight = YES;
     self.testSendButton.enabled = NO;
-    self.testStatusLabel.stringValue = [NSString stringWithFormat:@"请求中… %@", model];
-    self.testStatusLabel.textColor = NSColor.secondaryLabelColor;
     self.testResultView.string = @"";
+    self.testStatusLabel.stringValue = [NSString stringWithFormat:@"直连桥接中… %@", model];
+    self.testStatusLabel.textColor = NSColor.secondaryLabelColor;
 
     __weak typeof(self) weakSelf = self;
     NSDate *started = [NSDate date];
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    [self stopTestProgressTimer];
+    self.testProgressTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+        (void)timer;
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.testInFlight || strongSelf.testGeneration != gen) {
+            [strongSelf stopTestProgressTimer];
+            return;
+        }
+        AIBridgeJobQueue *q = AIBridgeJobQueue.sharedQueue;
+        NSTimeInterval sec = [[NSDate date] timeIntervalSinceDate:started];
+        strongSelf.testStatusLabel.stringValue = [NSString stringWithFormat:
+            @"直连中 %.0fs · %@ · 排队 %lu",
+            sec,
+            q.isBusy ? @"生成中" : @"等待",
+            (unsigned long)q.pendingCount];
+        [strongSelf reloadUI];
+    }];
+
+    [[AIBridgeJobQueue sharedQueue] enqueueModel:model
+                                          prompt:prompt
+                                     attachments:nil
+                                       timeoutMs:45000
+                                      completion:^(NSDictionary *result, NSInteger httpStatus, NSString *errorMessage) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            weakSelf.testInFlight = NO;
-            weakSelf.testSendButton.enabled = YES;
-            NSTimeInterval sec = [[NSDate date] timeIntervalSinceDate:started];
-            NSHTTPURLResponse *http = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
-            if (error) {
-                weakSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"失败 %.1fs", sec];
-                weakSelf.testStatusLabel.textColor = NSColor.systemRedColor;
-                weakSelf.testResultView.string = error.localizedDescription ?: @"网络错误";
-                [weakSelf reloadUI];
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.testGeneration != gen) {
                 return;
             }
-            NSInteger code = http.statusCode;
-            NSString *raw = data.length ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-            NSString *answer = [weakSelf extractAssistantContentFromJSONData:data] ?: raw;
-            if (code >= 200 && code < 300) {
-                weakSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"成功 %ld · %.1fs", (long)code, sec];
-                weakSelf.testStatusLabel.textColor = NSColor.systemGreenColor;
-                weakSelf.testResultView.string = answer.length ? answer : @"（空回复）";
+            [strongSelf stopTestProgressTimer];
+            strongSelf.testInFlight = NO;
+            strongSelf.testSendButton.enabled = YES;
+            NSTimeInterval sec = [[NSDate date] timeIntervalSinceDate:started];
+            NSString *text = [result[@"text"] isKindOfClass:[NSString class]] ? result[@"text"] : @"";
+            if (httpStatus == 200 && text.length > 0) {
+                strongSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"成功 · %.1fs", sec];
+                strongSelf.testStatusLabel.textColor = NSColor.systemGreenColor;
+                strongSelf.testResultView.string = text;
+            } else if (httpStatus == 200) {
+                strongSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"成功但空回复 · %.1fs", sec];
+                strongSelf.testStatusLabel.textColor = NSColor.systemOrangeColor;
+                strongSelf.testResultView.string = @"（空回复）";
             } else {
-                weakSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"HTTP %ld · %.1fs", (long)code, sec];
-                weakSelf.testStatusLabel.textColor = NSColor.systemRedColor;
-                weakSelf.testResultView.string = answer.length ? answer : raw;
+                strongSelf.testStatusLabel.stringValue = [NSString stringWithFormat:@"失败 %ld · %.1fs", (long)httpStatus, sec];
+                strongSelf.testStatusLabel.textColor = NSColor.systemRedColor;
+                strongSelf.testResultView.string = errorMessage.length ? errorMessage : (text.length ? text : @"bridge failed");
             }
-            [weakSelf reloadUI];
+            [strongSelf reloadUI];
         });
-    }] resume];
+    }];
 }
 
 - (nullable NSString *)extractAssistantContentFromJSONData:(NSData *)data {

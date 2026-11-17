@@ -18,9 +18,9 @@
 }
 
 - (void)cancelInFlight {
+    // 只取消本助手的 HTTP 等待；不要 reset 整桥队列，否则会把局域网正在跑的任务掐成 499。
     [self.inFlightTask cancel];
     self.inFlightTask = nil;
-    [[AIBridgeService sharedService] cancelAllJobs];
 }
 
 - (nullable NSString *)extractAssistantContentFromJSONData:(NSData *)data {
@@ -91,7 +91,10 @@
 
     [AIBridgePreferences.sharedPreferences ensureToken];
     NSString *token = AIBridgePreferences.sharedPreferences.bearerToken ?: @"";
-    NSString *urlStr = [NSString stringWithFormat:@"%@/v1/chat/completions", svc.baseURLString];
+    // 本机助手必须走 127.0.0.1，禁止用局域网 IP 回环（会堵队列、长连接 0 字节）。
+    // baseURLString 仍给外部客户端展示 LAN 地址。
+    NSInteger port = svc.listeningPort > 0 ? svc.listeningPort : AIBridgePreferences.sharedPreferences.port;
+    NSString *urlStr = [NSString stringWithFormat:@"http://127.0.0.1:%ld/v1/chat/completions", (long)port];
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url) {
         if (completion) {
@@ -131,7 +134,7 @@
     req.HTTPBody = payload;
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     [req setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-    req.timeoutInterval = 200;
+    req.timeoutInterval = 90;
 
     [self.inFlightTask cancel];
     __weak typeof(self) weakSelf = self;

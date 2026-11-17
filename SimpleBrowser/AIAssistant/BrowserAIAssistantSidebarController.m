@@ -2410,6 +2410,8 @@ static BOOL MeoAIAssistantPasteboardLooksLikeImage(NSPasteboard *pb) {
     (void)sender;
     if (!self.inFlight) return;
     [[BrowserAIAssistantClient sharedClient] cancelInFlight];
+    // 用户点停止：才清桥接队列；普通 HTTP 取消不会动局域网任务
+    [[AIBridgeService sharedService] cancelAllJobs];
     self.inFlight = NO;
     self.inFlightSessionId = nil;
     [self.chatPanel hideThinkingStatus];
