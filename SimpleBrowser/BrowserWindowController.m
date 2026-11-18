@@ -42,6 +42,7 @@
 #import "BrowserAddressBarRowView.h"
 #import "BrowserURLInputClassifier.h"
 #import "BrowserPageTranslationController.h"
+#import "BrowserAutoTranslatePreferences.h"
 #import "BrowserDownloadManager.h"
 #import "BrowserDownloadPanel.h"
 #import "BrowserSettingsWindowController.h"
@@ -256,6 +257,7 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) NSButton *bookmarkButton;
 @property (nonatomic, strong) NSButton *translateButton;
 @property (nonatomic, strong) BrowserPageTranslationController *pageTranslationController;
+@property (nonatomic, strong) NSButton *autoTranslateCheckbox;
 @property (nonatomic, strong) NSButton *securityBadgeButton;
 @property (nonatomic, strong) NSButton *downloadButton;
 @property (nonatomic, strong) NSView *downloadBadgeView;
@@ -1108,9 +1110,29 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
                                                object:nil];
     [self updateChromeCompanionToolAppearance];
 
+    self.autoTranslateCheckbox = [NSButton checkboxWithTitle:@"默认翻译"
+                                                      target:self
+                                                      action:@selector(toggleAutoTranslateCheckbox:)];
+    self.autoTranslateCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.autoTranslateCheckbox.font = [NSFont systemFontOfSize:11];
+    self.autoTranslateCheckbox.toolTip = @"勾选后，打开本站即自动翻译；取消则本站不再自动翻译。也可在翻译菜单中开启「始终翻译英文网站」。";
+    if (@available(macOS 10.14, *)) {
+        self.autoTranslateCheckbox.contentTintColor = [NSColor secondaryLabelColor];
+    }
+    [self.autoTranslateCheckbox setContentHuggingPriority:NSLayoutPriorityRequired
+                                           forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.autoTranslateCheckbox setContentCompressionResistancePriority:NSLayoutPriorityRequired
+                                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.addressBarRow = [[BrowserAddressBarRowView alloc] initWithAddressField:self.addressField
+                                                              leadingAccessory:self.autoTranslateCheckbox
                                                                  securityBadge:self.securityBadgeButton
                                                                    actionGroup:nil];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(autoTranslatePreferencesDidChange:)
+                                                 name:BrowserAutoTranslatePreferencesDidChangeNotification
+                                               object:nil];
 
     self.toolbar = [NSStackView stackViewWithViews:@[
         self.navButtons, self.addressBarRow
@@ -3811,12 +3833,80 @@ applyScraperDraftRecipe:(id)recipe {
     return nil;
 }
 
+- (void)autoTranslatePreferencesDidChange:(NSNotification *)note {
+    (void)note;
+    [self updateAutoTranslateCheckboxState];
+}
+
+- (void)updateAutoTranslateCheckboxState {
+    if (!self.autoTranslateCheckbox) {
+        return;
+    }
+    BrowserTab *tab = self.tabController.selectedTab;
+    NSURL *url = self.webView.URL ?: [tab currentOrRestorableURL];
+    BOOL pageOK = tab != nil && !tab.isNewTabPage
+        && [BrowsingPreferences isPersistableURL:url]
+        && [BrowserAutoTranslatePreferences normalizedHostFromURL:url].length > 0;
+    self.autoTranslateCheckbox.enabled = pageOK;
+    if (!pageOK) {
+        self.autoTranslateCheckbox.state = NSControlStateValueOff;
+        self.autoTranslateCheckbox.toolTip = @"打开网页后可勾选，使本站默认自动翻译";
+        return;
+    }
+    NSString *host = [BrowserAutoTranslatePreferences normalizedHostFromURL:url];
+    BrowserAutoTranslatePreferences *prefs = BrowserAutoTranslatePreferences.sharedPreferences;
+    // 地址栏勾选：本站显式开启，或「始终翻译英文」且本站未关闭。
+    BOOL checked = NO;
+    if ([prefs isHostExplicitlyDisabled:host]) {
+        checked = NO;
+    } else if ([prefs isHostExplicitlyEnabled:host] || prefs.alwaysTranslateEnglish) {
+        checked = YES;
+    }
+    self.autoTranslateCheckbox.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
+    if (checked) {
+        if ([prefs isHostExplicitlyEnabled:host]) {
+            self.autoTranslateCheckbox.toolTip =
+                [NSString stringWithFormat:@"已开启：打开 %@ 时自动翻译。取消勾选可关闭。", host];
+        } else {
+            self.autoTranslateCheckbox.toolTip =
+                @"已跟随「始终翻译英文网站」。取消勾选将对本站关闭自动翻译。";
+        }
+    } else {
+        self.autoTranslateCheckbox.toolTip =
+            [NSString stringWithFormat:@"勾选后，打开 %@ 时自动翻译", host ?: @"本站"];
+    }
+}
+
+- (void)toggleAutoTranslateCheckbox:(id)sender {
+    (void)sender;
+    BrowserTab *tab = self.tabController.selectedTab;
+    WKWebView *webView = self.webView;
+    NSURL *url = webView.URL ?: [tab currentOrRestorableURL];
+    if (!tab || tab.isNewTabPage || ![BrowsingPreferences isPersistableURL:url]) {
+        [self updateAutoTranslateCheckboxState];
+        return;
+    }
+    BOOL wantOn = (self.autoTranslateCheckbox.state == NSControlStateValueOn);
+    BrowserAutoTranslatePreferences *prefs = BrowserAutoTranslatePreferences.sharedPreferences;
+    if (wantOn) {
+        [prefs enableAutoTranslateForURL:url];
+        [self.pageTranslationController translateWebView:webView
+                                                     tab:tab
+                                      localeIdentifier:@"zh-Hans"
+                                                  mode:BrowserTranslationPresentationModeReplace];
+    } else {
+        [prefs disableAutoTranslateForURL:url];
+    }
+    [self updateAutoTranslateCheckboxState];
+}
+
 - (void)updateTranslateButtonState {
     BrowserTab *tab = self.tabController.selectedTab;
     WKWebView *webView = self.webView;
     BOOL pageOK = tab != nil && !tab.isNewTabPage && webView != nil
         && [BrowsingPreferences isPersistableURL:(webView.URL ?: [tab currentOrRestorableURL])];
     self.translateButton.enabled = pageOK;
+    [self updateAutoTranslateCheckboxState];
     BrowserPageTranslationUIState state = [self.pageTranslationController uiStateForWebView:webView];
     if (@available(macOS 10.14, *)) {
         if (!pageOK) {
@@ -8073,7 +8163,10 @@ didBecomeDownload:(WKDownload *)download {
     [self syncFromWebView:webView];
     [self.feedAssistController noteNavigationFinishedInWebView:webView URL:webView.URL];
     NSURL *finishURL = [BrowserWebView publicURLFromInternalURL:webView.URL] ?: webView.URL;
-    [self.pageTranslationController webViewDidFinishNavigation:webView URL:finishURL];
+    [self.pageTranslationController webViewDidFinishNavigation:webView URL:finishURL tab:tab];
+    if (webView == self.webView) {
+        [self updateAutoTranslateCheckboxState];
+    }
     [[PagePackInjector sharedInjector] injectMatchingPacksIntoWebView:webView
                                                                    URL:finishURL
                                                                  phase:PagePackInjectionPhaseDocumentEnd];

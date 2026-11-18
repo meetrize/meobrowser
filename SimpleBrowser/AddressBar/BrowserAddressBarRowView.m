@@ -4,6 +4,7 @@
 
 static const CGFloat kResizeHandleWidth = 10.0;
 static const CGFloat kSecurityBadgeSpacing = 6.0;
+static const CGFloat kLeadingAccessorySpacing = 8.0;
 
 /// 画在地址栏「下面」的半圆胶囊描边（不依赖 NSTextField 自己的 bezel 绘制）。
 @interface BrowserAddressBarCapsuleChromeView : NSView
@@ -53,11 +54,13 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
 @implementation BrowserAddressBarRowView
 
 - (instancetype)initWithAddressField:(SBTextField *)addressField
+                    leadingAccessory:(NSView *)leadingAccessory
                        securityBadge:(NSView *)securityBadge
                          actionGroup:(BrowserAddressBarActionGroup *)actionGroup {
     self = [super initWithFrame:NSZeroRect];
     if (self) {
         _addressField = addressField;
+        _leadingAccessory = leadingAccessory;
         _securityBadge = securityBadge;
         _actionGroup = actionGroup;
 
@@ -71,6 +74,23 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
             actionGroup.layoutContainer = self;
         }
 
+        if (addressField.usesCapsuleBezel) {
+            BrowserAddressBarCapsuleChromeView *chrome = [[BrowserAddressBarCapsuleChromeView alloc] initWithFrame:NSZeroRect];
+            chrome.translatesAutoresizingMaskIntoConstraints = NO;
+            self.capsuleChrome = chrome;
+            addressField.bezeled = NO;
+            addressField.bordered = NO;
+            addressField.drawsBackground = NO;
+            addressField.wantsLayer = NO;
+            addressField.focusRingType = NSFocusRingTypeNone;
+            addressField.cell.focusRingType = NSFocusRingTypeNone;
+        }
+
+        // 先挂齐子视图，再激活约束，避免 centerY 跨层级报错。
+        if (leadingAccessory) {
+            leadingAccessory.translatesAutoresizingMaskIntoConstraints = NO;
+            [self addSubview:leadingAccessory];
+        }
         if (securityBadge) {
             [self addSubview:securityBadge];
             securityBadge.hidden = YES;
@@ -81,36 +101,35 @@ static const CGFloat kSecurityBadgeSpacing = 6.0;
                 [addressField.leadingAnchor constraintEqualToAnchor:securityBadge.trailingAnchor
                                                            constant:0];
         }
-
-        if (addressField.usesCapsuleBezel) {
-            BrowserAddressBarCapsuleChromeView *chrome = [[BrowserAddressBarCapsuleChromeView alloc] initWithFrame:NSZeroRect];
-            chrome.translatesAutoresizingMaskIntoConstraints = NO;
-            self.capsuleChrome = chrome;
-            [self addSubview:chrome];
-            addressField.bezeled = NO;
-            addressField.bordered = NO;
-            addressField.drawsBackground = NO;
-            addressField.wantsLayer = NO;
-            addressField.focusRingType = NSFocusRingTypeNone;
-            addressField.cell.focusRingType = NSFocusRingTypeNone;
-        }
-
         [self addSubview:addressField];
         if (self.capsuleChrome) {
             [self addSubview:self.capsuleChrome positioned:NSWindowBelow relativeTo:addressField];
         }
 
         NSMutableArray<NSLayoutConstraint *> *constraints = [NSMutableArray array];
+        NSLayoutAnchor *leadingCursor = self.leadingAnchor;
+        CGFloat leadingGap = 0;
+
+        if (leadingAccessory) {
+            [constraints addObjectsFromArray:@[
+                [leadingAccessory.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+                [leadingAccessory.centerYAnchor constraintEqualToAnchor:addressField.centerYAnchor],
+            ]];
+            leadingCursor = leadingAccessory.trailingAnchor;
+            leadingGap = kLeadingAccessorySpacing;
+        }
+
         if (securityBadge) {
             [constraints addObjectsFromArray:@[
-                [securityBadge.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+                [securityBadge.leadingAnchor constraintEqualToAnchor:leadingCursor constant:leadingGap],
                 [securityBadge.centerYAnchor constraintEqualToAnchor:addressField.centerYAnchor],
                 [securityBadge.heightAnchor constraintEqualToConstant:18],
                 self.securityBadgeWidthConstraint,
                 self.securityBadgeSpacingConstraint,
             ]];
         } else {
-            [constraints addObject:[addressField.leadingAnchor constraintEqualToAnchor:self.leadingAnchor]];
+            [constraints addObject:
+                [addressField.leadingAnchor constraintEqualToAnchor:leadingCursor constant:leadingGap]];
         }
 
         [constraints addObjectsFromArray:@[

@@ -5,14 +5,16 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 地址栏 + 可选安全徽章；工具按钮已迁至标签栏 Chrome 区（actionGroup 可空）。
+/// 地址栏 + 可选前置控件 / 安全徽章；工具按钮已迁至标签栏 Chrome 区（actionGroup 可空）。
 @interface BrowserAddressBarRowView : NSView
 
 @property (nonatomic, strong, readonly) SBTextField *addressField;
+@property (nonatomic, strong, readonly, nullable) NSView *leadingAccessory;
 @property (nonatomic, strong, readonly, nullable) NSView *securityBadge;
 @property (nonatomic, strong, readonly, nullable) BrowserAddressBarActionGroup *actionGroup;
 
 - (instancetype)initWithAddressField:(SBTextField *)addressField
+                    leadingAccessory:(nullable NSView *)leadingAccessory
                        securityBadge:(nullable NSView *)securityBadge
                          actionGroup:(nullable BrowserAddressBarActionGroup *)actionGroup NS_DESIGNATED_INITIALIZER;
 - (instancetype)initWithFrame:(NSRect)frameRect NS_UNAVAILABLE;

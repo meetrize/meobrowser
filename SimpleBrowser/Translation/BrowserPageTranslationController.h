@@ -29,11 +29,19 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationUIState) {
 /// 主文档 commit 后通知，便于 Safari 引擎做语言检测。
 - (void)webViewDidCommitNavigation:(WKWebView *)webView URL:(nullable NSURL *)url;
 
-/// 主文档加载完成后通知；「再次翻译」在 reload 后在此启动，避免 commit 时 DOM 未就绪。
-- (void)webViewDidFinishNavigation:(WKWebView *)webView URL:(nullable NSURL *)url;
+/// 主文档加载完成后通知；「再次翻译」在 reload 后在此启动；并按「默认翻译」偏好自动开译。
+- (void)webViewDidFinishNavigation:(WKWebView *)webView
+                               URL:(nullable NSURL *)url
+                               tab:(nullable BrowserTab *)tab;
 
 /// 标签关闭或 WebView 销毁时清理上下文。
 - (void)invalidateForWebView:(WKWebView *)webView;
+
+/// 主动按当前偏好模式翻译（默认替换→简体中文）。用于勾选「默认翻译」后立即生效。
+- (void)translateWebView:(nullable WKWebView *)webView
+                     tab:(nullable BrowserTab *)tab
+      localeIdentifier:(NSString *)localeID
+                  mode:(BrowserTranslationPresentationMode)mode;
 
 /// 当前页是否处于「已翻译」态。
 - (BOOL)isShowingTranslationForWebView:(nullable WKWebView *)webView;
