@@ -70,6 +70,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
 @property (nonatomic, strong) NSTextField *autoScrollHintLabel;
 
 @property (nonatomic, strong) NSPopUpButton *translationProviderPopUp;
+@property (nonatomic, strong) NSPopUpButton *translationModelPopUp;
 @property (nonatomic, strong) SBTextField *translationAPIBaseURLField;
 @property (nonatomic, strong) SBSecureTextField *translationAPITokenField;
 @property (nonatomic, strong) NSButton *translationAPIBaseURLResetButton;
@@ -244,10 +245,20 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         [self.translationProviderPopUp addItemWithTitle:[BrowserTranslationPreferences displayNameForProvider:provider]];
         self.translationProviderPopUp.lastItem.representedObject = provider;
     }
-    [self.translationProviderPopUp.widthAnchor constraintGreaterThanOrEqualToConstant:180].active = YES;
+    [self.translationProviderPopUp.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
+
+    self.translationModelPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.translationModelPopUp.translatesAutoresizingMaskIntoConstraints = NO;
+    self.translationModelPopUp.target = self;
+    self.translationModelPopUp.action = @selector(translationModelChanged:);
+    for (NSString *model in [BrowserTranslationPreferences availableIndexTranslateModels]) {
+        [self.translationModelPopUp addItemWithTitle:[BrowserTranslationPreferences displayNameForIndexTranslateModel:model]];
+        self.translationModelPopUp.lastItem.representedObject = model;
+    }
+    [self.translationModelPopUp.widthAnchor constraintGreaterThanOrEqualToConstant:220].active = YES;
 
     self.translationAPIBaseURLField = [SBTextField standardField];
-    self.translationAPIBaseURLField.placeholderString = BrowserTranslationDefaultMTranBaseURL;
+    self.translationAPIBaseURLField.placeholderString = BrowserTranslationDefaultIndexTranslateBaseURL;
     self.translationAPIBaseURLField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.translationAPIBaseURLField.widthAnchor constraintGreaterThanOrEqualToConstant:260].active = YES;
 
@@ -264,12 +275,13 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     self.translationURLRow.alignment = NSLayoutAttributeCenterY;
 
     self.translationAPITokenField = [SBSecureTextField standardField];
-    self.translationAPITokenField.placeholderString = @"可选；服务器设置了 MT_API_TOKEN 时填写";
+    self.translationAPITokenField.placeholderString = @"可选；公开 API 可留空";
     self.translationAPITokenField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.translationAPITokenField.widthAnchor constraintGreaterThanOrEqualToConstant:260].active = YES;
 
     self.translationGrid = [NSGridView gridViewWithViews:@[
         @[[NSTextField labelWithString:@"服务"], self.translationProviderPopUp],
+        @[[NSTextField labelWithString:@"模型"], self.translationModelPopUp],
         @[[NSTextField labelWithString:@"地址"], self.translationURLRow],
         @[[NSTextField labelWithString:@"Token"], self.translationAPITokenField],
     ]];
@@ -278,7 +290,7 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     [self.translationGrid columnAtIndex:1].xPlacement = NSGridCellPlacementFill;
 
     self.translationHintLabel = [self makeHint:
-        @"地址栏翻译（替换 / 双语对照 / 即指即译）共用此后端。MTranServer 填根地址，如 http://192.168.31.111:8989；局域网其他机器填对应 IP。切到 Google 则改用在线文本 API。"];
+        @"地址栏翻译（替换 / 双语对照 / 即指即译）共用此后端。默认 Index-Translate-2B 公开 API（快）；也可切 MTranServer 局域网地址，或 Google 在线文本 API。"];
     [self refreshTranslationUI];
 
     NSTextField *browserCaption = [self makeCaption:@"默认浏览器"];
@@ -1261,15 +1273,52 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
         [self.translationProviderPopUp selectItemAtIndex:selected];
     }
 
+    NSInteger modelSelected = -1;
+    for (NSInteger i = 0; i < self.translationModelPopUp.numberOfItems; i++) {
+        NSString *model = [self.translationModelPopUp itemAtIndex:i].representedObject;
+        if ([model isEqualToString:prefs.model]) {
+            modelSelected = i;
+            break;
+        }
+    }
+    if (modelSelected >= 0) {
+        [self.translationModelPopUp selectItemAtIndex:modelSelected];
+    }
+
+    BOOL useIndex = [prefs.provider isEqualToString:BrowserTranslationProviderIndexTranslate];
     BOOL useMTran = [prefs.provider isEqualToString:BrowserTranslationProviderMTran];
-    self.translationAPIBaseURLField.enabled = useMTran;
-    self.translationAPITokenField.enabled = useMTran;
-    self.translationAPIBaseURLResetButton.enabled = useMTran;
+    BOOL needsEndpoint = useIndex || useMTran;
+    self.translationModelPopUp.enabled = useIndex;
+    self.translationAPIBaseURLField.enabled = needsEndpoint;
+    self.translationAPITokenField.enabled = needsEndpoint;
+    self.translationAPIBaseURLResetButton.enabled = needsEndpoint;
+
+    NSString *placeholder = [BrowserTranslationPreferences defaultAPIBaseURLForProvider:prefs.provider];
+    self.translationAPIBaseURLField.placeholderString = placeholder;
+    if (useIndex) {
+        self.translationAPITokenField.placeholderString = @"可选；公开 API 可留空";
+    } else if (useMTran) {
+        self.translationAPITokenField.placeholderString = @"可选；服务器设置了 MT_API_TOKEN 时填写";
+    } else {
+        self.translationAPITokenField.placeholderString = @"Google 路径无需 Token";
+    }
+
     if (!editingURL) {
-        self.translationAPIBaseURLField.stringValue = prefs.apiBaseURL ?: BrowserTranslationDefaultMTranBaseURL;
+        self.translationAPIBaseURLField.stringValue = prefs.apiBaseURL.length > 0 ? prefs.apiBaseURL : placeholder;
     }
     if (!editingToken) {
         self.translationAPITokenField.stringValue = prefs.apiToken ?: @"";
+    }
+
+    if (useIndex) {
+        self.translationHintLabel.stringValue =
+            @"默认调用 bilibili Index-Translate 公开 API（OpenAI 兼容 /chat/completions），模型 Index-Translate-2B 更快；也可填自建服务地址。";
+    } else if (useMTran) {
+        self.translationHintLabel.stringValue =
+            @"MTranServer 填根地址，如 http://192.168.31.111:8989；局域网其他机器填对应 IP。";
+    } else {
+        self.translationHintLabel.stringValue =
+            @"使用 Google 在线文本 API，失败时回退 Lingva；无需填写地址与 Token。";
     }
 }
 
@@ -1279,19 +1328,42 @@ NSString * const BrowserSettingsTabDeveloper = @"developer";
     if ([provider isKindOfClass:[NSString class]] && provider.length > 0) {
         prefs.provider = provider;
     }
-    prefs.apiBaseURL = self.translationAPIBaseURLField.stringValue ?: @"";
-    prefs.apiToken = self.translationAPITokenField.stringValue ?: @"";
+    NSString *model = self.translationModelPopUp.selectedItem.representedObject;
+    if ([model isKindOfClass:[NSString class]] && model.length > 0) {
+        prefs.model = model;
+    }
+    if ([prefs.provider isEqualToString:BrowserTranslationProviderIndexTranslate]
+        || [prefs.provider isEqualToString:BrowserTranslationProviderMTran]) {
+        prefs.apiBaseURL = self.translationAPIBaseURLField.stringValue ?: @"";
+        prefs.apiToken = self.translationAPITokenField.stringValue ?: @"";
+    }
 }
 
 - (void)translationProviderChanged:(id)sender {
     (void)sender;
-    [self persistTranslationFields];
+    BrowserTranslationPreferences *prefs = BrowserTranslationPreferences.sharedPreferences;
+    NSString *provider = self.translationProviderPopUp.selectedItem.representedObject;
+    NSString *model = self.translationModelPopUp.selectedItem.representedObject;
+    if ([model isKindOfClass:[NSString class]] && model.length > 0) {
+        prefs.model = model;
+    }
+    // 只改 provider：setProvider 会在地址仍是旧默认时自动换成新默认；
+    // 不要用输入框里的旧地址覆盖回去。
+    if ([provider isKindOfClass:[NSString class]] && provider.length > 0) {
+        prefs.provider = provider;
+    }
     [self refreshTranslationUI];
+}
+
+- (void)translationModelChanged:(id)sender {
+    (void)sender;
+    [self persistTranslationFields];
 }
 
 - (void)translationAPIBaseURLResetClicked:(id)sender {
     (void)sender;
-    BrowserTranslationPreferences.sharedPreferences.apiBaseURL = BrowserTranslationDefaultMTranBaseURL;
+    BrowserTranslationPreferences *prefs = BrowserTranslationPreferences.sharedPreferences;
+    prefs.apiBaseURL = [BrowserTranslationPreferences defaultAPIBaseURLForProvider:prefs.provider];
     [self refreshTranslationUI];
 }
 

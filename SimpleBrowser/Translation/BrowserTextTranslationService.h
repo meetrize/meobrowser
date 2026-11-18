@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 文本翻译后端。默认走设置中的 MTranServer（可改地址）；也可切 Google + Lingva。只传字符串，不改页面 URL。
+/// 文本翻译后端。默认走 Index-Translate（2B 公开 API）；也可切 MTranServer / Google + Lingva。只传字符串，不改页面 URL。
 @interface BrowserTextTranslationService : NSObject
 
 + (instancetype)sharedService;
@@ -21,13 +21,13 @@ NS_ASSUME_NONNULL_BEGIN
          targetLocale:(NSString *)targetLocale
            completion:(void (^)(NSString * _Nullable translated, NSError * _Nullable error))completion;
 
-/// 批量翻译；concurrency 建议 4～8（Google 路径）。completion 在主线程。
+/// 批量翻译；concurrency 建议 6～12（Index 路径内部至少 12）。completion 在主线程。
 - (void)translateTexts:(NSArray<NSString *> *)texts
           targetLocale:(NSString *)targetLocale
            concurrency:(NSUInteger)concurrency
             completion:(void (^)(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount))completion;
 
-/// 批量翻译；progress 在每批返回时于主线程回调（partial 与 texts 等长，未完成槽为空串）。
+/// 批量翻译；progress 逐步回传（partial 与 texts 等长，未完成槽为空串），便于渐进上屏。
 - (void)translateTexts:(NSArray<NSString *> *)texts
           targetLocale:(NSString *)targetLocale
            concurrency:(NSUInteger)concurrency

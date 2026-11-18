@@ -400,9 +400,10 @@
     NSMutableSet<NSString *> *appliedIds = [NSMutableSet set];
     __block NSInteger progressiveApplied = 0;
     __weak typeof(self) weakSelf = self;
+    // Index-Translate 等并发后端：service 侧至少 12 路；progress 逐步上屏。
     [[BrowserTextTranslationService sharedService] translateTexts:texts
                                                      targetLocale:session.targetLocale
-                                                      concurrency:6
+                                                      concurrency:12
                                                         progress:^(NSArray<NSString *> *partialOrEmpty) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
@@ -658,37 +659,144 @@
         [texts addObject:job[@"text"] ?: @""];
     }
 
+    // item → 该 item 下全部待译 job 下标（指针键，与 jobs 中同一对象）。
+    NSMapTable *jobIndexesByItem = [NSMapTable strongToStrongObjectsMapTable];
+    for (NSUInteger i = 0; i < jobs.count; i++) {
+        id item = jobs[i][@"item"];
+        if (item == nil) {
+            continue;
+        }
+        NSMutableArray<NSNumber *> *indexes = [jobIndexesByItem objectForKey:item];
+        if (indexes == nil) {
+            indexes = [NSMutableArray array];
+            [jobIndexesByItem setObject:indexes forKey:item];
+        }
+        [indexes addObject:@(i)];
+    }
+
+    NSMutableDictionary<NSNumber *, NSString *> *accumulated = [NSMutableDictionary dictionary];
+    NSMutableSet *appliedItems = [NSMutableSet set];
+    __block NSUInteger lastFailureCount = 0;
+    __block BOOL finalApplyStarted = NO;
     __weak typeof(self) weakSelf = self;
+
+    void (^applyReadyReplaceItems)(BOOL) = ^(BOOL isFinal) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed || finalApplyStarted) {
+            return;
+        }
+
+        NSMutableDictionary<NSNumber *, NSString *> *readyJobs = [NSMutableDictionary dictionary];
+        NSMutableArray *newlyReadyItems = [NSMutableArray array];
+        for (id item in jobIndexesByItem.keyEnumerator) {
+            if ([appliedItems containsObject:item]) {
+                continue;
+            }
+            NSArray<NSNumber *> *indexes = [jobIndexesByItem objectForKey:item];
+            BOOL allReady = YES;
+            for (NSNumber *idx in indexes) {
+                if ([accumulated[idx] length] == 0) {
+                    allReady = NO;
+                    break;
+                }
+            }
+            if (!allReady) {
+                continue;
+            }
+            for (NSNumber *idx in indexes) {
+                readyJobs[idx] = accumulated[idx];
+            }
+            [newlyReadyItems addObject:item];
+        }
+
+        if (!isFinal) {
+            if (readyJobs.count == 0) {
+                return;
+            }
+            [appliedItems addObjectsFromArray:newlyReadyItems];
+            [strongSelf applyReplaceTranslations:readyJobs
+                                            jobs:jobs
+                                         session:session
+                                    failureCount:lastFailureCount
+                                         isFinal:NO];
+            return;
+        }
+
+        // 收尾：未成套的 item 也尽量替换已译 token，并与本轮 ready 合并一次提交。
+        NSMutableDictionary<NSNumber *, NSString *> *finalJobs = [readyJobs mutableCopy] ?: [NSMutableDictionary dictionary];
+        [appliedItems addObjectsFromArray:newlyReadyItems];
+        [accumulated enumerateKeysAndObjectsUsingBlock:^(NSNumber *idx, NSString *text, BOOL *stop) {
+            (void)stop;
+            if (text.length == 0 || idx.unsignedIntegerValue >= jobs.count) {
+                return;
+            }
+            id item = jobs[idx.unsignedIntegerValue][@"item"];
+            if (item == nil || [appliedItems containsObject:item]) {
+                return;
+            }
+            finalJobs[idx] = text;
+            [appliedItems addObject:item];
+        }];
+
+        finalApplyStarted = YES;
+        if (finalJobs.count > 0) {
+            [strongSelf applyReplaceTranslations:finalJobs
+                                            jobs:jobs
+                                         session:session
+                                    failureCount:lastFailureCount
+                                         isFinal:YES];
+            return;
+        }
+        if (appliedItems.count == 0 && accumulated.count == 0) {
+            [strongSelf finishSession:session success:NO message:@"翻译服务暂时不可用"];
+            return;
+        }
+        // 全部已在 progress 阶段替换完。
+        BOOL ok = accumulated.count > 0;
+        NSString *message = (ok && lastFailureCount > 0) ? @"部分段落未译出" : nil;
+        if (!ok) {
+            message = @"翻译结果为空";
+        }
+        [strongSelf finishSession:session success:ok message:message];
+    };
+
     [[BrowserTextTranslationService sharedService] translateTexts:texts
                                                      targetLocale:session.targetLocale
-                                                      concurrency:6
-                                                       completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+                                                      concurrency:12
+                                                        progress:^(NSArray<NSString *> *partialOrEmpty) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
             return;
         }
-        NSMutableDictionary<NSNumber *, NSString *> *translatedByJob = [NSMutableDictionary dictionary];
+        for (NSUInteger i = 0; i < partialOrEmpty.count; i++) {
+            NSString *translated = partialOrEmpty[i];
+            if (translated.length > 0) {
+                accumulated[@(i)] = translated;
+            }
+        }
+        applyReadyReplaceItems(NO);
+    }
+                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || session.cancelled || session.completed) {
+            return;
+        }
+        lastFailureCount = failureCount;
         for (NSUInteger i = 0; i < translatedOrEmpty.count; i++) {
             NSString *translated = translatedOrEmpty[i];
             if (translated.length > 0) {
-                translatedByJob[@(i)] = translated;
+                accumulated[@(i)] = translated;
             }
         }
-        if (translatedByJob.count == 0) {
-            [strongSelf finishSession:session success:NO message:@"翻译服务暂时不可用"];
-            return;
-        }
-        [strongSelf applyReplaceTranslations:translatedByJob
-                                        jobs:jobs
-                                     session:session
-                               failureCount:failureCount];
+        applyReadyReplaceItems(YES);
     }];
 }
 
 - (void)applyReplaceTranslations:(NSDictionary<NSNumber *, NSString *> *)translatedByJob
                             jobs:(NSArray<NSDictionary *> *)jobs
                          session:(BrowserTranslationPipelineSession *)session
-                    failureCount:(NSUInteger)failureCount {
+                    failureCount:(NSUInteger)failureCount
+                         isFinal:(BOOL)isFinal {
     if (session.cancelled || session.completed) {
         return;
     }
@@ -701,6 +809,9 @@
     NSMapTable *perItem = [NSMapTable strongToStrongObjectsMapTable];
     [translatedByJob enumerateKeysAndObjectsUsingBlock:^(NSNumber *jobIndex, NSString *translated, BOOL *stop) {
         (void)stop;
+        if (jobIndex.unsignedIntegerValue >= jobs.count) {
+            return;
+        }
         NSDictionary *job = jobs[jobIndex.unsignedIntegerValue];
         id item = job[@"item"];
         NSMutableDictionary *map = [perItem objectForKey:item];
@@ -714,7 +825,9 @@
     Class itemCls = NSClassFromString(@"_WKTextManipulationItem");
     Class tokCls = NSClassFromString(@"_WKTextManipulationToken");
     if (itemCls == Nil || tokCls == Nil) {
-        [self finishSession:session success:NO message:@"当前系统不支持页内翻译"];
+        if (isFinal) {
+            [self finishSession:session success:NO message:@"当前系统不支持页内翻译"];
+        }
         return;
     }
 
@@ -759,7 +872,9 @@
     }
 
     if (replacements.count == 0) {
-        [self finishSession:session success:NO message:@"翻译结果为空"];
+        if (isFinal) {
+            [self finishSession:session success:NO message:@"翻译结果为空"];
+        }
         return;
     }
 
@@ -772,6 +887,9 @@
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) strongSelf = weakSelf;
                 if (!strongSelf || session.cancelled || session.completed) {
+                    return;
+                }
+                if (!isFinal) {
                     return;
                 }
                 BOOL ok = (errors == nil || errors.count == 0 || replacements.count > errors.count);

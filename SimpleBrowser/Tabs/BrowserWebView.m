@@ -684,7 +684,7 @@ static NSString *MeoScrollToFragmentJS(void) {
         [self meo_insertOpenSelectionURLItemInMenu:menu nearItem:searchWebItem];
     }
 
-    // 选区「翻译」：走设置里的 MTranServer / Google 文本接口。
+    // 选区「翻译」：走设置里的 Index-Translate / MTranServer / Google 文本接口。
     [self meo_insertSelectionTranslateItemInMenu:menu nearItem:searchWebItem ?: copySelectionItem];
 
     // 「问问 AI」：有选区针对选区；无选区用当前页 URL/标题作上下文。

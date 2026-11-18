@@ -454,6 +454,15 @@
     var seenSources = Object.create(null);
     var nextId = 0;
 
+    function candidateTop(el) {
+      try {
+        var rect = el.getBoundingClientRect();
+        return (rect && typeof rect.top === 'number') ? rect.top : Number.POSITIVE_INFINITY;
+      } catch (e) {
+        return Number.POSITIVE_INFINITY;
+      }
+    }
+
     function tryAdd(el) {
       if (!el || candidates.length >= COLLECT_CAP) {
         return;
@@ -506,7 +515,8 @@
         seenHosts.add(host);
       }
       seenSources[source] = true;
-      candidates.push({ id: id, source: source });
+      // top 供排序：视口内优先翻译，渐进上屏先看到眼前内容。
+      candidates.push({ id: id, source: source, top: candidateTop(host) });
     }
 
     // Pass 1: semantic tags + links / ARIA roles.
@@ -573,6 +583,19 @@
         }
       });
     }
+
+    // 视口内（及略上方）优先；同优先级按文档自上而下。
+    var viewportBottom = (window.innerHeight || 800) + 40;
+    candidates.sort(function (a, b) {
+      var aTop = (typeof a.top === 'number') ? a.top : Number.POSITIVE_INFINITY;
+      var bTop = (typeof b.top === 'number') ? b.top : Number.POSITIVE_INFINITY;
+      var aInView = aTop < viewportBottom && aTop > -120;
+      var bInView = bTop < viewportBottom && bTop > -120;
+      if (aInView !== bInView) {
+        return aInView ? -1 : 1;
+      }
+      return aTop - bTop;
+    });
 
     return { ok: true, candidates: candidates, total: candidates.length };
   }
