@@ -9,6 +9,7 @@ typedef NS_ENUM(NSInteger, BrowserTabDragGhostStyle) {
 };
 
 /// 标签拖拽半透明影子：截图跟手，不参与命中，不持有 WKWebView。
+/// Detach 态扩展为透明「整窗」预览（标题栏 + 内容区），不再只显示标签条碎片。
 @interface BrowserTabDragGhostController : NSObject
 
 @property (nonatomic, assign, readonly) BOOL visible;
@@ -20,6 +21,13 @@ typedef NS_ENUM(NSInteger, BrowserTabDragGhostStyle) {
 - (void)beginWithSourceView:(NSView *)sourceView
           grabPointInSource:(NSPoint)grabPointInSource
                afterCapture:(void (^ _Nullable)(void))afterCapture;
+
+/// 配置拖出成新窗口时的整窗预览尺寸与内容缩略图（可在 begin 之后、进入 Detach 前调用）。
+- (void)prepareDetachPreviewWithWindowSize:(NSSize)windowSize
+                              contentImage:(NSImage * _Nullable)contentImage;
+
+/// 更新 Detach 预览内容图（异步截图完成后调用；非 Detach 时仅缓存）。
+- (void)updateDetachContentImage:(NSImage * _Nullable)contentImage;
 
 /// 指针屏幕坐标（AppKit 原点左下）。
 - (void)moveToScreenPoint:(NSPoint)screenPoint;

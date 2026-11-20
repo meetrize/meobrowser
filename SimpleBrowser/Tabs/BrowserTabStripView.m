@@ -6,6 +6,7 @@
 #import "BrowserTabDragGhostController.h"
 #import "BrowserTabDropPlaceholderView.h"
 #import "BrowserTabStripChromeActionsView.h"
+#import "BrowserTabThumbnailCache.h"
 #import "AppDelegate.h"
 #import "BrowserWindowController.h"
 
@@ -222,6 +223,7 @@ static NSString *BrowserTabPageURLString(BrowserTab *tab) {
 @property (nonatomic, assign) BOOL dragEnding;
 @property (nonatomic, strong, nullable) BrowserTabDropPlaceholderView *foreignPlaceholder;
 @property (nonatomic, assign) NSUInteger foreignPlaceholderIndex;
+@property (nonatomic, strong, nullable) BrowserTabDropPlaceholderView *localDragPlaceholder;
 @property (nonatomic, weak, nullable) BrowserTabStripView *activeForeignStrip;
 @property (nonatomic, weak, nullable) BrowserWindowController *activeForeignWindow;
 @property (nonatomic, assign) NSUInteger activeForeignIndex;
@@ -1277,6 +1279,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         strongItem.hidden = YES;
         [strongSelf layoutTabsExcludingDraggedItem:strongItem];
     }];
+    [self prepareDragGhostDetachPreviewForItem:item];
     NSPoint screenPoint = [self screenPointFromLocationInWindow:locationInWindow];
     [self.dragGhost moveToScreenPoint:screenPoint];
 }
@@ -1287,6 +1290,50 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         return (BrowserWindowController *)wc;
     }
     return nil;
+}
+
+/// 为拖出态准备「透明整窗」预览尺寸与页面缩略图。
+- (void)prepareDragGhostDetachPreviewForItem:(BrowserTabItemView *)item {
+    if (!self.dragGhost) {
+        return;
+    }
+    NSSize windowSize = self.window ? self.window.frame.size : NSMakeSize(1024, 700);
+    NSUUID *tabID = [self.tabItemIDs objectForKey:item];
+    NSImage *contentImage = nil;
+    if (tabID) {
+        contentImage = [[BrowserTabThumbnailCache sharedCache] imageForTabID:tabID];
+    }
+    [self.dragGhost prepareDetachPreviewWithWindowSize:windowSize contentImage:contentImage];
+
+    // 无缓存时异步截一帧；完成后若仍在本次拖拽中则刷新预览内容。
+    if (contentImage || !tabID) {
+        return;
+    }
+    BrowserTab *tab = [self.layoutTabsByID objectForKey:tabID];
+    WKWebView *webView = tab.webView;
+    if (!webView) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    __weak BrowserTabItemView *weakItem = item;
+    NSUUID *captureTabID = tabID;
+    [[BrowserTabThumbnailCache sharedCache] captureFromWebView:webView
+                                                       forTabID:tabID
+                                                     completion:^(NSImage *image) {
+        typeof(self) strongSelf = weakSelf;
+        BrowserTabItemView *strongItem = weakItem;
+        if (!strongSelf || !strongItem || !image) {
+            return;
+        }
+        if (strongSelf.draggingItem != strongItem || strongSelf.dragEnding || !strongSelf.dragGhost) {
+            return;
+        }
+        NSUUID *currentID = [strongSelf.tabItemIDs objectForKey:strongItem];
+        if (![currentID isEqual:captureTabID]) {
+            return;
+        }
+        [strongSelf.dragGhost updateDetachContentImage:image];
+    }];
 }
 
 - (void)clearForeignDropTarget {
@@ -1339,6 +1386,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         self.dragDetachMode = NO;
         [foreignStrip updateForeignDropPlaceholderAtIndex:insertIndex];
         [self.dragGhost setStyle:BrowserTabDragGhostStyleForeign animated:YES];
+        [self.dragGhost moveToScreenPoint:screenPoint];
         [self layoutTabsCollapsingDraggedItem:item];
         return;
     }
@@ -1351,8 +1399,13 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     BOOL detach = !inStrip;
     if (detach != self.dragDetachMode || self.dragGhost.style == BrowserTabDragGhostStyleForeign) {
         self.dragDetachMode = detach;
+        if (detach) {
+            [self prepareDragGhostDetachPreviewForItem:item];
+        }
         [self.dragGhost setStyle:(detach ? BrowserTabDragGhostStyleDetach : BrowserTabDragGhostStyleInStrip)
                         animated:YES];
+        // 样式切换会改 ghost 尺寸与抓取点，立刻按当前指针重定位，避免跳一帧。
+        [self.dragGhost moveToScreenPoint:screenPoint];
         if (detach) {
             [self layoutTabsCollapsingDraggedItem:item];
             // 已离开标签条：提前把“收养窗口”建好（隐藏），松手时只剩收养+显示，
@@ -1560,24 +1613,44 @@ static const CGFloat kStripDragZoneOutset = 8.0;
     [self layoutTabsExcludingDraggedItem:dragged animated:YES];
 }
 
+- (void)ensureLocalDragPlaceholder {
+    if (self.localDragPlaceholder) {
+        return;
+    }
+    self.localDragPlaceholder = [[BrowserTabDropPlaceholderView alloc] initWithFrame:NSZeroRect];
+    [self.tabsContentView addSubview:self.localDragPlaceholder];
+}
+
+- (void)hideLocalDragPlaceholder {
+    if (self.localDragPlaceholder) {
+        self.localDragPlaceholder.hidden = YES;
+    }
+}
+
 - (void)layoutTabsExcludingDraggedItem:(BrowserTabItemView *)dragged animated:(BOOL)animated {
+    (void)animated;
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
-    // 条内拖拽：在 draggingPreviewIndex 处预留等宽空位（鼠标下的占位符），
+    // 条内拖拽：在 draggingPreviewIndex 处预留等宽空位，并显示可见占位槽；
     // 数组拖动中不再搬移，只挪 frame，从根上消除交会闪动。
     CGFloat gapW = [self layoutWidthForItem:dragged];
     NSUInteger gap = self.draggingPreviewIndex;
     if (gap == NSNotFound || gap > self.tabItems.count) {
         gap = [self.tabItems indexOfObject:dragged];
     }
+    [self ensureLocalDragPlaceholder];
     CGFloat x = 0;
     NSUInteger slot = 0;
+    BOOL placedPlaceholder = NO;
     for (BrowserTabItemView *item in self.tabItems) {
         if (item == dragged) {
             continue;
         }
         if (slot == gap) {
+            self.localDragPlaceholder.frame = NSMakeRect(x, topInset, gapW, tabHeight);
+            self.localDragPlaceholder.hidden = NO;
+            placedPlaceholder = YES;
             x += gapW + kTabSpacing;
         }
         slot++;
@@ -1588,8 +1661,10 @@ static const CGFloat kStripDragZoneOutset = 8.0;
             x += tabWidth + kTabSpacing;
         }
     }
-    if (slot <= gap) {
-        // 落到末尾：末端留空位
+    if (!placedPlaceholder) {
+        // 落到末尾：末端留空位 + 占位槽
+        self.localDragPlaceholder.frame = NSMakeRect(x, topInset, gapW, tabHeight);
+        self.localDragPlaceholder.hidden = NO;
         x += gapW + kTabSpacing;
     }
     CGFloat contentW = MAX(x - kTabSpacing, 1);
@@ -1602,6 +1677,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 }
 
 - (void)layoutTabsCollapsingDraggedItem:(BrowserTabItemView *)dragged {
+    [self hideLocalDragPlaceholder];
     CGFloat topInset = 0;
     CGFloat tabHeight = 0;
     [self tabVerticalMetricsWithStripHeight:NULL topInset:&topInset tabHeight:&tabHeight];
@@ -1762,6 +1838,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
 
 - (void)finishDragSessionRestoringItem:(BrowserTabItemView *)item {
     [self clearForeignDropTarget];
+    [self hideLocalDragPlaceholder];
     item.hidden = NO;
     [self.dragGhost endAndRemoveImmediately];
     self.dragGhost = nil;
@@ -1809,6 +1886,7 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         BrowserWindowController *destination = foreignWC;
         NSUInteger atIndex = foreignIndex;
         [strongSelf clearForeignDropTarget];
+        [strongSelf hideLocalDragPlaceholder];
         item.hidden = NO;
         [strongSelf.dragGhost endAndRemoveImmediately];
         strongSelf.dragGhost = nil;
@@ -2035,9 +2113,11 @@ static const CGFloat kStripDragZoneOutset = 8.0;
         [self.dragGhost endAndRemoveImmediately];
         self.dragGhost = nil;
         [self clearForeignDropTarget];
+        [self hideLocalDragPlaceholder];
         [self discardPrewarmedAdoptionWindow];
     }
     [self hideForeignDropPlaceholder];
+    [self hideLocalDragPlaceholder];
 
     for (BrowserTabItemView *item in self.tabItems) {
         [item removeFromSuperview];
