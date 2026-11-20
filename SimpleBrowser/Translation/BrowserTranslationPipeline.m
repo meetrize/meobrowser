@@ -7,6 +7,9 @@
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, copy) NSString *targetLocale;
 @property (nonatomic, assign) BrowserTranslationPresentationMode mode;
+@property (nonatomic, assign) BOOL resumeIncomplete;
+@property (nonatomic, assign) BOOL collectHitCap;
+@property (nonatomic, assign) NSInteger progressiveAppliedCount;
 @property (nonatomic, strong) NSMutableArray *collectedItems;
 @property (nonatomic, copy, nullable) void (^completion)(BOOL success, NSString * _Nullable errorMessage);
 @property (nonatomic, assign) BOOL startFinished;
@@ -90,10 +93,10 @@
 }
 
 + (void)ensureBridgeInWebView:(WKWebView *)webView completion:(void (^)(BOOL ready))completion {
-    // Require collectCandidates so older injected bridges are upgraded.
+    // bridgeVersion>=2 才支持 resume；旧桥必须强制重注。
     NSString *check =
-        @"(function(){return !!(window.__MeoTranslation && "
-        @"typeof window.__MeoTranslation.collectCandidates==='function');})()";
+        @"(function(){var t=window.__MeoTranslation;return !!(t && "
+        @"typeof t.collectCandidates==='function' && (t.bridgeVersion|0)>=2);})()";
     [self evaluateJavaScript:check inWebView:webView completion:^(id value) {
         if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
             if (completion) {
@@ -126,6 +129,11 @@
 #pragma mark - Public
 
 - (void)cancelTranslationForWebView:(WKWebView *)webView {
+    [self cancelTranslationForWebView:webView cancelMessage:@"已取消翻译"];
+}
+
+- (void)cancelTranslationForWebView:(WKWebView *)webView
+                      cancelMessage:(NSString *)cancelMessage {
     if (webView == nil) {
         return;
     }
@@ -134,7 +142,7 @@
         return;
     }
     session.cancelled = YES;
-    [self finishSession:session success:NO message:nil];
+    [self finishSession:session success:NO message:(cancelMessage.length > 0 ? cancelMessage : @"已取消翻译")];
 }
 
 - (void)clearPagePresentationInWebView:(WKWebView *)webView
@@ -161,11 +169,13 @@
 - (BrowserTranslationPipelineSession *)beginSessionForWebView:(WKWebView *)webView
                                        targetLocaleIdentifier:(NSString *)localeID
                                                          mode:(BrowserTranslationPresentationMode)mode
+                                            resumeIncomplete:(BOOL)resumeIncomplete
                                                    completion:(void (^)(BOOL, NSString * _Nullable))completion {
     BrowserTranslationPipelineSession *session = [[BrowserTranslationPipelineSession alloc] init];
     session.webView = webView;
     session.targetLocale = [[BrowserTextTranslationService sharedService] normalizedTargetLocaleIdentifier:localeID];
     session.mode = mode;
+    session.resumeIncomplete = resumeIncomplete;
     session.collectedItems = [NSMutableArray array];
     session.completion = completion;
     session.retainedDelegate = self;
@@ -180,10 +190,17 @@
             return;
         }
         strongSession.cancelled = YES;
-        [strongSelf finishSession:strongSession success:NO message:@"翻译超时，请重试"];
+        BOOL hadPartial = strongSession.progressiveAppliedCount > 0;
+        NSString *msg = hadPartial
+            ? [NSString stringWithFormat:@"翻译超时（已译 %ld 段），可再次点击翻译继续",
+                                         (long)strongSession.progressiveAppliedCount]
+            : @"翻译超时，请重试";
+        // 已有部分上屏时以 success=YES 收尾，便于控制器保留「已翻译」态并续译。
+        [strongSelf finishSession:strongSession success:hadPartial message:msg];
     });
     session.timeoutBlock = timeoutBlock;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
+    // 大页 + Index 限流时 60s 不够；放宽到 3 分钟。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(180 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(),
                    timeoutBlock);
     return session;
@@ -192,6 +209,18 @@
 - (void)translateWebView:(WKWebView *)webView
   targetLocaleIdentifier:(NSString *)localeID
                     mode:(BrowserTranslationPresentationMode)mode
+              completion:(void (^)(BOOL, NSString * _Nullable))completion {
+    [self translateWebView:webView
+    targetLocaleIdentifier:localeID
+                      mode:mode
+         resumeIncomplete:NO
+                completion:completion];
+}
+
+- (void)translateWebView:(WKWebView *)webView
+  targetLocaleIdentifier:(NSString *)localeID
+                    mode:(BrowserTranslationPresentationMode)mode
+       resumeIncomplete:(BOOL)resumeIncomplete
               completion:(void (^)(BOOL, NSString * _Nullable))completion {
     if (webView == nil || localeID.length == 0) {
         if (completion) {
@@ -218,6 +247,7 @@
         }
         [self startReplaceTranslationForWebView:webView
                          targetLocaleIdentifier:localeID
+                              resumeIncomplete:resumeIncomplete
                                      completion:completion];
         return;
     }
@@ -226,16 +256,19 @@
         [self beginSessionForWebView:webView
               targetLocaleIdentifier:localeID
                                 mode:mode
+                   resumeIncomplete:resumeIncomplete
                           completion:completion];
     [self startJSPresentationTranslationForSession:session];
 }
 
 - (void)startReplaceTranslationForWebView:(WKWebView *)webView
                    targetLocaleIdentifier:(NSString *)localeID
+                        resumeIncomplete:(BOOL)resumeIncomplete
                                completion:(void (^)(BOOL, NSString * _Nullable))completion {
     (void)[self beginSessionForWebView:webView
                 targetLocaleIdentifier:localeID
                                   mode:BrowserTranslationPresentationModeReplace
+                     resumeIncomplete:resumeIncomplete
                             completion:completion];
 
     ((void (*)(id, SEL, id))objc_msgSend)(webView, NSSelectorFromString(@"_setTextManipulationDelegate:"), self);
@@ -294,10 +327,13 @@
             [strongSelf finishSession:session success:NO message:@"无法注入翻译脚本"];
             return;
         }
-        NSString *collectJS =
-            @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.collectCandidates)"
-            @"{return{ok:false,candidates:[],total:0};}"
-            @"return window.__MeoTranslation.collectCandidates();})()";
+        NSString *collectJS = session.resumeIncomplete
+            ? @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.collectCandidates)"
+              @"{return{ok:false,candidates:[],total:0};}"
+              @"return window.__MeoTranslation.collectCandidates({resume:true});})()"
+            : @"(function(){if(!window.__MeoTranslation||!window.__MeoTranslation.collectCandidates)"
+              @"{return{ok:false,candidates:[],total:0};}"
+              @"return window.__MeoTranslation.collectCandidates();})()";
         [[strongSelf class] evaluateJavaScript:collectJS inWebView:webView completion:^(id value) {
             __strong typeof(weakSelf) innerSelf = weakSelf;
             if (!innerSelf || session.cancelled || session.completed) {
@@ -325,8 +361,15 @@
     NSArray *rawCandidates = nil;
     if ([value isKindOfClass:[NSDictionary class]]) {
         rawCandidates = value[@"candidates"];
+        if ([value[@"capped"] respondsToSelector:@selector(boolValue)]) {
+            session.collectHitCap = [value[@"capped"] boolValue];
+        }
     }
     if (![rawCandidates isKindOfClass:[NSArray class]] || rawCandidates.count == 0) {
+        if (session.resumeIncomplete) {
+            [self finishSession:session success:YES message:@"没有剩余未译段落"];
+            return;
+        }
         // reload / SPA 首屏未就绪时重试几次，避免误报「未找到可翻译文本」。
         if (attempt < 6) {
             __weak typeof(self) weakSelf = self;
@@ -376,6 +419,10 @@
     }
 
     if (jobs.count == 0) {
+        if (session.resumeIncomplete) {
+            [self finishSession:session success:YES message:@"没有剩余未译段落"];
+            return;
+        }
         if (attempt < 6) {
             __weak typeof(self) weakSelf = self;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
@@ -400,10 +447,10 @@
     NSMutableSet<NSString *> *appliedIds = [NSMutableSet set];
     __block NSInteger progressiveApplied = 0;
     __weak typeof(self) weakSelf = self;
-    // Index-Translate 等并发后端：service 侧至少 12 路；progress 逐步上屏。
+    // Index-Translate：有限并发；progress 逐步上屏。
     [[BrowserTextTranslationService sharedService] translateTexts:texts
                                                      targetLocale:session.targetLocale
-                                                      concurrency:12
+                                                      concurrency:8
                                                         progress:^(NSArray<NSString *> *partialOrEmpty) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
@@ -435,9 +482,10 @@
                                           completion:^(NSInteger applied, NSInteger total) {
             (void)total;
             progressiveApplied += applied;
+            session.progressiveAppliedCount = progressiveApplied;
         }];
     }
-                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount, NSError *batchError) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
             return;
@@ -465,16 +513,34 @@
         }
         void (^finishWithApplied)(NSInteger) = ^(NSInteger appliedNow) {
             NSInteger applied = progressiveApplied + appliedNow;
+            session.progressiveAppliedCount = applied;
             BOOL ok = YES;
             NSString *message = nil;
+            NSString *reason =
+                [BrowserTextTranslationService userFacingSummaryForBatchError:batchError];
             if (successCount == 0 || applied == 0) {
                 ok = NO;
-                message = (successCount == 0) ? @"翻译服务暂时不可用" : @"未能在页面上应用译文";
-            } else if (applied <= 2 && (NSInteger)jobs.count >= 10) {
+                if (session.resumeIncomplete && reason.length > 0) {
+                    message = [NSString stringWithFormat:@"%@，未能继续翻译", reason];
+                } else {
+                    message = reason.length > 0 ? reason : @"翻译服务暂时不可用";
+                }
+            } else if (applied <= 2 && (NSInteger)jobs.count >= 10 && !session.resumeIncomplete) {
                 ok = NO;
                 message = @"未能定位正文译文";
-            } else if (applied < (NSInteger)successCount || failureCount > 0) {
-                message = @"部分段落未译出";
+            } else if (failureCount > 0) {
+                ok = YES;
+                if (reason.length > 0) {
+                    message = [NSString stringWithFormat:@"%@，已译 %ld 段，可再次点击翻译继续",
+                               reason, (long)applied];
+                } else {
+                    message = [NSString stringWithFormat:@"部分段落未译出（已译 %ld 段），可再次点击翻译继续",
+                               (long)applied];
+                }
+            } else if (session.collectHitCap) {
+                ok = YES;
+                message = [NSString stringWithFormat:@"本批已译 %ld 段，页面还有更多，可再次点击翻译继续",
+                           (long)applied];
             }
             [strongSelf finishSession:session success:ok message:message];
         };
@@ -614,7 +680,10 @@
             });
             return;
         }
-        [self finishSession:session success:NO message:@"未找到可翻译文本"];
+        NSString *emptyMsg = session.resumeIncomplete
+            ? @"没有剩余未译段落，可先显示原文后再重新翻译"
+            : @"未找到可翻译文本，请先显示原文后再试";
+        [self finishSession:session success:NO message:emptyMsg];
         return;
     }
 
@@ -639,6 +708,12 @@
                 continue;
             }
             if ([translateService shouldTranslateText:content]) {
+                // 续译：跳过已像中文的 token，避免把已译段落再送一遍。
+                if (session.resumeIncomplete
+                    && [translateService looksAlreadyChineseTranslated:content]) {
+                    index += 1;
+                    continue;
+                }
                 [jobs addObject:@{
                     @"item": item,
                     @"tokenIndex": @(index),
@@ -650,7 +725,8 @@
     }
 
     if (jobs.count == 0) {
-        [self finishSession:session success:NO message:@"未找到可翻译文本"];
+        NSString *emptyMsg = session.resumeIncomplete ? @"没有剩余未译段落" : @"未找到可翻译文本";
+        [self finishSession:session success:session.resumeIncomplete message:emptyMsg];
         return;
     }
 
@@ -677,6 +753,7 @@
     NSMutableDictionary<NSNumber *, NSString *> *accumulated = [NSMutableDictionary dictionary];
     NSMutableSet *appliedItems = [NSMutableSet set];
     __block NSUInteger lastFailureCount = 0;
+    __block NSError *lastBatchError = nil;
     __block BOOL finalApplyStarted = NO;
     __weak typeof(self) weakSelf = self;
 
@@ -753,16 +830,23 @@
         }
         // 全部已在 progress 阶段替换完。
         BOOL ok = accumulated.count > 0;
-        NSString *message = (ok && lastFailureCount > 0) ? @"部分段落未译出" : nil;
+        NSString *reason = [BrowserTextTranslationService userFacingSummaryForBatchError:lastBatchError];
+        NSString *message = nil;
         if (!ok) {
-            message = @"翻译结果为空";
+            message = reason.length > 0 ? reason : @"翻译结果为空";
+        } else if (lastFailureCount > 0) {
+            if (reason.length > 0) {
+                message = [NSString stringWithFormat:@"%@，已译部分内容，可再次点击翻译继续", reason];
+            } else {
+                message = @"部分段落未译出，可再次点击翻译继续";
+            }
         }
         [strongSelf finishSession:session success:ok message:message];
     };
 
     [[BrowserTextTranslationService sharedService] translateTexts:texts
                                                      targetLocale:session.targetLocale
-                                                      concurrency:12
+                                                      concurrency:8
                                                         progress:^(NSArray<NSString *> *partialOrEmpty) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
@@ -776,12 +860,13 @@
         }
         applyReadyReplaceItems(NO);
     }
-                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+                                                      completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount, NSError *batchError) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf || session.cancelled || session.completed) {
             return;
         }
         lastFailureCount = failureCount;
+        lastBatchError = batchError;
         for (NSUInteger i = 0; i < translatedOrEmpty.count; i++) {
             NSString *translated = translatedOrEmpty[i];
             if (translated.length > 0) {
@@ -890,12 +975,16 @@
                     return;
                 }
                 if (!isFinal) {
+                    if (errors == nil || errors.count < replacements.count) {
+                        session.progressiveAppliedCount +=
+                            (NSInteger)MAX((NSInteger)replacements.count - (NSInteger)(errors.count ?: 0), 0);
+                    }
                     return;
                 }
                 BOOL ok = (errors == nil || errors.count == 0 || replacements.count > errors.count);
                 NSString *message = nil;
                 if (ok && (failureCount > 0 || (errors != nil && errors.count > 0))) {
-                    message = @"部分段落未译出";
+                    message = @"部分段落未译出，可再次点击翻译继续";
                 } else if (!ok) {
                     message = @"部分内容未能替换";
                 }

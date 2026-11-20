@@ -730,7 +730,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         return;
     }
 
-    // 已翻译：对照/即指即译可就地清注入再译，避免 reload 后 commit 过早抽空 DOM。
+    // 已翻译：同模式再点 → 续译未完成段落；换模式 → 对照/悬停可就地清注入再译。
     // 替换模式或 Safari 译文必须 reload 才能恢复原文。
     if ([self isShowingTranslationForWebView:webView]) {
         BOOL safariTranslated = [self isSafariTranslatedWebView:webView];
@@ -738,6 +738,22 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         BrowserTranslationPresentationMode currentMode =
             currentModeNum ? (BrowserTranslationPresentationMode)currentModeNum.integerValue
                            : BrowserTranslationPresentationModeReplace;
+        // 对照/悬停：同模式再点 → 续译未完成段落（不 clear）。
+        BOOL sameJSMode =
+            !safariTranslated
+            && mode == currentMode
+            && mode != BrowserTranslationPresentationModeReplace
+            && currentMode != BrowserTranslationPresentationModeReplace;
+        if (sameJSMode) {
+            [self startTranslationForWebView:webView
+                                         tab:tab
+                          localeIdentifier:localeID
+                                      mode:mode
+                         allowSafariEngine:NO
+                         resumeIncomplete:YES];
+            return;
+        }
+
         BOOL canRetranslateInPlace =
             !safariTranslated
             && mode != BrowserTranslationPresentationModeReplace
@@ -759,11 +775,14 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
                                              tab:tab
                               localeIdentifier:localeID
                                           mode:mode
-                             allowSafariEngine:NO];
+                             allowSafariEngine:NO
+                             resumeIncomplete:NO];
             }];
             return;
         }
 
+        // 替换模式：WK TextManipulation 在已替换 DOM 上常抽不到词，再点会误报「未找到可翻译文本」。
+        // 因此同模式再点改为恢复原文后整页重译（pending）。
         BrowserPageTranslationPendingRequest *pending = [[BrowserPageTranslationPendingRequest alloc] init];
         pending.mode = mode;
         pending.localeID = localeID;
@@ -777,7 +796,8 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
                                  tab:tab
                   localeIdentifier:localeID
                               mode:mode
-                 allowSafariEngine:allowSafari];
+                 allowSafariEngine:allowSafari
+                 resumeIncomplete:NO];
 }
 
 - (void)startTranslationForWebView:(WKWebView *)webView
@@ -785,6 +805,20 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
                 localeIdentifier:(NSString *)localeID
                             mode:(BrowserTranslationPresentationMode)mode
                allowSafariEngine:(BOOL)allowSafariEngine {
+    [self startTranslationForWebView:webView
+                                 tab:tab
+                  localeIdentifier:localeID
+                              mode:mode
+                 allowSafariEngine:allowSafariEngine
+                 resumeIncomplete:NO];
+}
+
+- (void)startTranslationForWebView:(WKWebView *)webView
+                               tab:(BrowserTab *)tab
+                localeIdentifier:(NSString *)localeID
+                            mode:(BrowserTranslationPresentationMode)mode
+               allowSafariEngine:(BOOL)allowSafariEngine
+               resumeIncomplete:(BOOL)resumeIncomplete {
     (void)tab;
     if (webView == nil || localeID.length == 0 || [self isTranslatingWebView:webView]) {
         return;
@@ -793,7 +827,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     [self.presentationModeByWebView setObject:@(mode) forKey:webView];
     [self beginTranslatingUIForWebView:webView];
 
-    if (allowSafariEngine && mode == BrowserTranslationPresentationModeReplace) {
+    if (!resumeIncomplete && allowSafariEngine && mode == BrowserTranslationPresentationModeReplace) {
         BOOL trySafari = self.safariEngineAvailable
             && (!self.safariRegionChecked || self.safariRegionSupported);
         id ctx = trySafari ? [self contextForWebView:webView createIfNeeded:YES] : nil;
@@ -824,14 +858,18 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
                         }
                         [strongSelf translateViaPipelineWebView:strongWebView
                                              localeIdentifier:localeID
-                                                         mode:BrowserTranslationPresentationModeReplace];
+                                                         mode:BrowserTranslationPresentationModeReplace
+                                            resumeIncomplete:NO];
                     });
                 });
             return;
         }
     }
 
-    [self translateViaPipelineWebView:webView localeIdentifier:localeID mode:mode];
+    [self translateViaPipelineWebView:webView
+                   localeIdentifier:localeID
+                               mode:mode
+                  resumeIncomplete:resumeIncomplete];
 }
 
 - (void)beginTranslatingUIForWebView:(WKWebView *)webView {
@@ -846,6 +884,16 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
 - (void)translateViaPipelineWebView:(WKWebView *)webView
                  localeIdentifier:(NSString *)localeID
                              mode:(BrowserTranslationPresentationMode)mode {
+    [self translateViaPipelineWebView:webView
+                   localeIdentifier:localeID
+                               mode:mode
+                  resumeIncomplete:NO];
+}
+
+- (void)translateViaPipelineWebView:(WKWebView *)webView
+                 localeIdentifier:(NSString *)localeID
+                             mode:(BrowserTranslationPresentationMode)mode
+                resumeIncomplete:(BOOL)resumeIncomplete {
     if (webView == nil) {
         return;
     }
@@ -858,6 +906,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     [[BrowserTranslationPipeline sharedPipeline] translateWebView:webView
                                            targetLocaleIdentifier:localeID
                                                              mode:mode
+                                                resumeIncomplete:resumeIncomplete
                                                        completion:^(BOOL success, NSString *errorMessage) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         WKWebView *strongWebView = weakWebView;
@@ -866,7 +915,7 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
         }
         NSString *message = nil;
         if (success) {
-            message = errorMessage; // 可能为「部分段落未译出」
+            message = errorMessage; // 可能为限流提示 / 「部分段落未译出」
         } else if (errorMessage.length > 0) {
             message = errorMessage;
         } else {
@@ -884,10 +933,11 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     }
     [self.pendingByWebView removeObjectForKey:webView];
     BOOL hadPipelineJob = [[BrowserTranslationPipeline sharedPipeline] isTranslatingWebView:webView];
-    [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView];
+    [[BrowserTranslationPipeline sharedPipeline] cancelTranslationForWebView:webView
+                                                             cancelMessage:@"已取消翻译，可再次点击继续"];
     if (!hadPipelineJob) {
         // Safari 路径尚未进入页内翻译，或会话已结束：直接收尾 UI。
-        [self finishTranslatingUIForWebView:webView success:NO message:@"已取消翻译"];
+        [self finishTranslatingUIForWebView:webView success:NO message:@"已取消翻译，可再次点击继续"];
     }
 }
 
@@ -899,9 +949,21 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     }
     [BrowserTransientToast dismissPersistentMessageInWindow:self.hostWindow];
 
-    if (success && webView != nil) {
+    // 超时/限流等中断时页面上往往已有部分译文：仍记为「已翻译」，便于对照/悬停续译。
+    BOOL keepPartial = !success && message.length > 0
+        && ([message containsString:@"超时"]
+            || [message containsString:@"限流"]
+            || [message containsString:@"繁忙"]
+            || [message containsString:@"继续"]
+            || [message containsString:@"部分"]
+            || [message containsString:@"未译"]);
+    if ((success || keepPartial) && webView != nil) {
         [self.inPageTranslatedWebViews addObject:webView];
-        [self showToast:(message.length > 0 ? message : @"翻译完成")];
+        NSString *toast = message.length > 0 ? message : @"翻译完成";
+        if (keepPartial && ![toast containsString:@"继续"]) {
+            toast = [toast stringByAppendingString:@"，可再次点击翻译继续"];
+        }
+        [self showToast:toast];
     } else {
         if (webView != nil && ![self.inPageTranslatedWebViews containsObject:webView]) {
             [self.presentationModeByWebView removeObjectForKey:webView];
@@ -1026,7 +1088,12 @@ typedef NS_ENUM(NSInteger, BrowserPageTranslationMenuAction) {
     if (window == nil || message.length == 0) {
         return;
     }
-    [BrowserTransientToast showMessage:message inWindow:window duration:2.4];
+    // 含「继续」/限流等中断说明时多显示一会儿，方便用户看到。
+    BOOL longer = [message containsString:@"继续"]
+        || [message containsString:@"限流"]
+        || [message containsString:@"繁忙"]
+        || [message containsString:@"不可用"];
+    [BrowserTransientToast showMessage:message inWindow:window duration:longer ? 4.2 : 2.4];
 }
 
 @end

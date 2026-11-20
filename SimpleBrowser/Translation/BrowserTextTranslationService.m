@@ -2,6 +2,9 @@
 #import "BrowserTranslationPreferences.h"
 #import "BrowserSystemURLSession.h"
 
+NSErrorDomain const BrowserTextTranslationErrorDomain = @"BrowserTextTranslationService";
+NSString * const BrowserTextTranslationHTTPStatusKey = @"BrowserTextTranslationHTTPStatus";
+
 @interface BrowserTextTranslationService ()
 @property (nonatomic, strong) NSURLSession *urlSession;
 /// MTran 批量用更长超时，避免大页被 20s 掐断。
@@ -17,6 +20,10 @@ static const NSUInteger kMTranPriorityChunkSize = 36;
 static const NSUInteger kMTranFollowChunkSize = 72;
 /// 后续批并行度（服务端多为单模型，2 足够）。
 static const NSUInteger kMTranFollowParallelism = 2;
+/// Index 公开 API 易限流，并发略降。
+static const NSUInteger kIndexTranslateMinConcurrency = 8;
+/// 限流命中多少次后停止继续发请求（公开 API 很敏感，1 次即停并提示续译）。
+static const NSUInteger kIndexRateLimitAbortThreshold = 1;
 
 + (instancetype)sharedService {
     static BrowserTextTranslationService *shared = nil;
@@ -109,6 +116,85 @@ static const NSUInteger kMTranFollowParallelism = 2;
     return YES;
 }
 
+- (BOOL)looksAlreadyChineseTranslated:(NSString *)text {
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length < 2) {
+        return NO;
+    }
+    NSUInteger cjk = 0;
+    NSUInteger latin = 0;
+    for (NSUInteger i = 0; i < trimmed.length; i++) {
+        unichar c = [trimmed characterAtIndex:i];
+        if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) {
+            cjk += 1;
+        } else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+            latin += 1;
+        }
+    }
+    if (cjk == 0) {
+        return NO;
+    }
+    // 中文明显占优，视为已译，续译时跳过。
+    return cjk >= 4 && cjk * 2 >= latin;
+}
+
++ (NSString *)userFacingSummaryForBatchError:(NSError *)error {
+    if (error == nil) {
+        return nil;
+    }
+    if ([error.domain isEqualToString:BrowserTextTranslationErrorDomain]) {
+        if (error.code == BrowserTextTranslationErrorRateLimited) {
+            return @"翻译接口限流";
+        }
+        if (error.code == BrowserTextTranslationErrorServiceUnavailable) {
+            return @"翻译服务暂时不可用";
+        }
+    }
+    if ([error.domain isEqualToString:NSURLErrorDomain]) {
+        if (error.code == NSURLErrorTimedOut) {
+            return @"翻译请求超时";
+        }
+        if (error.code == NSURLErrorNotConnectedToInternet ||
+            error.code == NSURLErrorNetworkConnectionLost) {
+            return @"网络连接失败";
+        }
+    }
+    NSString *desc = error.localizedDescription;
+    return desc.length > 0 ? desc : @"翻译失败";
+}
+
+- (NSError *)indexTranslateErrorForHTTPStatus:(NSInteger)status bodySnippet:(NSString *)bodySnippet {
+    NSMutableDictionary *info = [NSMutableDictionary dictionary];
+    info[BrowserTextTranslationHTTPStatusKey] = @(status);
+    NSString *lower = bodySnippet.lowercaseString ?: @"";
+    BOOL looksRateLimited = (status == 429)
+        || [lower containsString:@"rate limit"]
+        || [lower containsString:@"too many"]
+        || [lower containsString:@"限流"]
+        || [lower containsString:@"频率"];
+    if (looksRateLimited || status == 429) {
+        info[NSLocalizedDescriptionKey] = @"翻译接口访问过于频繁，已被限流";
+        return [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                   code:BrowserTextTranslationErrorRateLimited
+                               userInfo:info];
+    }
+    if (status == 503 || status == 502 || status == 500) {
+        info[NSLocalizedDescriptionKey] = @"翻译服务暂时不可用";
+        return [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                   code:BrowserTextTranslationErrorServiceUnavailable
+                               userInfo:info];
+    }
+    if (status >= 400) {
+        info[NSLocalizedDescriptionKey] = [NSString stringWithFormat:@"翻译接口错误（HTTP %ld）", (long)status];
+        return [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                   code:BrowserTextTranslationErrorGeneric
+                               userInfo:info];
+    }
+    return [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                               code:BrowserTextTranslationErrorEmptyResult
+                           userInfo:@{ NSLocalizedDescriptionKey: @"未返回译文" }];
+}
+
 - (BOOL)isSuitableForPresentationTranslation:(NSString *)text {
     NSString *normalized = [[text stringByReplacingOccurrencesOfString:@"\\s+"
                                                             withString:@" "
@@ -187,7 +273,7 @@ static const NSUInteger kMTranFollowParallelism = 2;
 - (void)translateTexts:(NSArray<NSString *> *)texts
           targetLocale:(NSString *)targetLocale
            concurrency:(NSUInteger)concurrency
-            completion:(void (^)(NSArray<NSString *> *, NSUInteger))completion {
+            completion:(void (^)(NSArray<NSString *> *, NSUInteger, NSError *))completion {
     [self translateTexts:texts
             targetLocale:targetLocale
              concurrency:concurrency
@@ -199,11 +285,11 @@ static const NSUInteger kMTranFollowParallelism = 2;
           targetLocale:(NSString *)targetLocale
            concurrency:(NSUInteger)concurrency
               progress:(void (^)(NSArray<NSString *> *))progress
-            completion:(void (^)(NSArray<NSString *> *, NSUInteger))completion {
+            completion:(void (^)(NSArray<NSString *> *, NSUInteger, NSError *))completion {
     if (texts.count == 0) {
         if (completion) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                completion(@[], 0);
+                completion(@[], 0, nil);
             });
         }
         return;
@@ -213,14 +299,29 @@ static const NSUInteger kMTranFollowParallelism = 2;
         [self translateTextsUsingMTranBatch:texts
                                targetLocale:[self normalizedTargetLocaleIdentifier:targetLocale]
                                    progress:progress
-                                 completion:completion];
+                                 completion:^(NSArray<NSString *> *translatedOrEmpty, NSUInteger failureCount) {
+            if (completion) {
+                NSError *batchError = nil;
+                if (failureCount > 0 && failureCount >= translatedOrEmpty.count) {
+                    batchError = [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                                     code:BrowserTextTranslationErrorServiceUnavailable
+                                                 userInfo:@{ NSLocalizedDescriptionKey: @"翻译服务暂时不可用" }];
+                } else if (failureCount > 0) {
+                    batchError = [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                                     code:BrowserTextTranslationErrorGeneric
+                                                 userInfo:@{ NSLocalizedDescriptionKey: @"部分段落未译出" }];
+                }
+                completion(translatedOrEmpty, failureCount, batchError);
+            }
+        }];
         return;
     }
 
-    // Index-Translate-2B 单条很快，用更高并发；progress 逐步回传以便 Pipeline 渐进上屏。
+    // Index-Translate：有限并发 + 限流早停；progress 逐步回传以便 Pipeline 渐进上屏。
     NSUInteger limit = MAX(1, concurrency);
     if ([self usesIndexTranslateProvider]) {
-        limit = MAX(limit, 12);
+        // 公开 API 易限流：并发封顶，避免一次打爆。
+        limit = MIN(MAX(limit, 4), kIndexTranslateMinConcurrency);
     }
     NSMutableArray<NSString *> *results = [NSMutableArray arrayWithCapacity:texts.count];
     for (NSUInteger i = 0; i < texts.count; i++) {
@@ -229,6 +330,9 @@ static const NSUInteger kMTranFollowParallelism = 2;
     dispatch_group_t group = dispatch_group_create();
     dispatch_semaphore_t limiter = dispatch_semaphore_create((long)limit);
     __block NSUInteger failureCount = 0;
+    __block NSUInteger rateLimitHits = 0;
+    __block BOOL abortRemaining = NO;
+    __block NSError *firstBatchError = nil;
     NSObject *lock = [[NSObject alloc] init];
     __block NSUInteger completedSinceProgress = 0;
     __block NSUInteger totalCompleted = 0;
@@ -243,7 +347,6 @@ static const NSUInteger kMTranFollowParallelism = 2;
             if (!force && completedSinceProgress == 0) {
                 return;
             }
-            // 首条立刻上屏；之后每满 3 条或强制收尾时推一次，避免 JS 应用过密。
             if (!force && totalCompleted > 1 && completedSinceProgress < 3) {
                 return;
             }
@@ -272,7 +375,6 @@ static const NSUInteger kMTranFollowParallelism = 2;
                     @synchronized (lock) {
                         progressFlushScheduled = NO;
                     }
-                    // 定时合并推送：有未上报结果就强制刷一次。
                     flushProgress(YES);
                 });
             }
@@ -286,14 +388,58 @@ static const NSUInteger kMTranFollowParallelism = 2;
         NSString *text = texts[i];
         dispatch_group_enter(group);
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            BOOL shouldAbort = NO;
+            @synchronized (lock) {
+                shouldAbort = abortRemaining;
+            }
+            if (shouldAbort) {
+                @synchronized (lock) {
+                    failureCount += 1;
+                    completedSinceProgress += 1;
+                    totalCompleted += 1;
+                }
+                scheduleProgress();
+                dispatch_group_leave(group);
+                return;
+            }
             dispatch_semaphore_wait(limiter, DISPATCH_TIME_FOREVER);
+            @synchronized (lock) {
+                shouldAbort = abortRemaining;
+            }
+            if (shouldAbort) {
+                @synchronized (lock) {
+                    failureCount += 1;
+                    completedSinceProgress += 1;
+                    totalCompleted += 1;
+                }
+                scheduleProgress();
+                dispatch_semaphore_signal(limiter);
+                dispatch_group_leave(group);
+                return;
+            }
             [self translateText:text targetLocale:targetLocale completion:^(NSString *translated, NSError *error) {
                 @synchronized (lock) {
                     if (translated.length > 0) {
                         results[i] = translated;
                     } else {
                         failureCount += 1;
-                        (void)error;
+                        BOOL isRate = [error.domain isEqualToString:BrowserTextTranslationErrorDomain]
+                            && error.code == BrowserTextTranslationErrorRateLimited;
+                        if (isRate) {
+                            rateLimitHits += 1;
+                            if (rateLimitHits >= kIndexRateLimitAbortThreshold) {
+                                abortRemaining = YES;
+                            }
+                        }
+                        if (error != nil
+                            && (firstBatchError == nil
+                                || (isRate && firstBatchError.code != BrowserTextTranslationErrorRateLimited))) {
+                            firstBatchError = error;
+                        } else if (error == nil && firstBatchError == nil) {
+                            firstBatchError = [NSError errorWithDomain:BrowserTextTranslationErrorDomain
+                                                                  code:BrowserTextTranslationErrorEmptyResult
+                                                              userInfo:@{ NSLocalizedDescriptionKey: @"未返回译文" }];
+                        }
                     }
                     completedSinceProgress += 1;
                     totalCompleted += 1;
@@ -310,11 +456,13 @@ static const NSUInteger kMTranFollowParallelism = 2;
         if (completion) {
             NSArray<NSString *> *finalResults = nil;
             NSUInteger failures = 0;
+            NSError *batchError = nil;
             @synchronized (lock) {
                 finalResults = [results copy];
                 failures = failureCount;
+                batchError = firstBatchError;
             }
-            completion(finalResults, failures);
+            completion(finalResults, failures, batchError);
         }
     });
 }
@@ -463,13 +611,43 @@ static const NSUInteger kMTranFollowParallelism = 2;
 
     __weak typeof(self) weakSelf = self;
     [[self.urlSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (error || data.length == 0) {
+        NSInteger status = 0;
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            status = [(NSHTTPURLResponse *)response statusCode];
+        }
+        NSString *bodyText = data.length > 0
+            ? ([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"")
+            : @"";
+        if (error) {
             if (completion) {
                 completion(nil, error);
             }
             return;
         }
+        if (status >= 400 || data.length == 0) {
+            NSUInteger snipLen = MIN((NSUInteger)240, bodyText.length);
+            NSString *snippet = snipLen > 0 ? [bodyText substringToIndex:snipLen] : @"";
+            if (completion) {
+                completion(nil, [weakSelf indexTranslateErrorForHTTPStatus:(status > 0 ? status : 502)
+                                                              bodySnippet:snippet]);
+            }
+            return;
+        }
         id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        // 有些网关 200 但仍返回 error 对象。
+        if ([json isKindOfClass:[NSDictionary class]]) {
+            id errObj = json[@"error"];
+            if ([errObj isKindOfClass:[NSDictionary class]] || [errObj isKindOfClass:[NSString class]]) {
+                NSString *snippet = [errObj isKindOfClass:[NSString class]]
+                    ? (NSString *)errObj
+                    : ([errObj description] ?: bodyText);
+                if (completion) {
+                    completion(nil, [weakSelf indexTranslateErrorForHTTPStatus:(status > 0 ? status : 429)
+                                                                  bodySnippet:snippet]);
+                }
+                return;
+            }
+        }
         NSString *translated = nil;
         if ([json isKindOfClass:[NSDictionary class]]) {
             id choices = json[@"choices"];
@@ -492,9 +670,8 @@ static const NSUInteger kMTranFollowParallelism = 2;
         if (completion) {
             completion(translated, translated.length > 0
                        ? nil
-                       : [NSError errorWithDomain:@"BrowserTextTranslationService" code:21 userInfo:nil]);
+                       : [weakSelf indexTranslateErrorForHTTPStatus:status bodySnippet:bodyText]);
         }
-        (void)response;
     }] resume];
 }
 

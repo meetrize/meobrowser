@@ -1,23 +1,22 @@
 (function () {
   'use strict';
 
-  // Allow upgrade when an older bridge (without collectCandidates) is already present.
-  if (window.__MeoTranslation && typeof window.__MeoTranslation.collectCandidates === 'function') {
+  var BRIDGE_VERSION = 2;
+  // 旧桥（无 bridgeVersion / 无 resume）强制升级；保留已上屏译文与 hoverMap。
+  if (window.__MeoTranslation &&
+      typeof window.__MeoTranslation.collectCandidates === 'function' &&
+      (window.__MeoTranslation.bridgeVersion | 0) >= BRIDGE_VERSION) {
     return;
   }
-  if (window.__MeoTranslation && typeof window.__MeoTranslation.clear === 'function') {
-    try {
-      window.__MeoTranslation.clear();
-    } catch (e) {
-    }
-  }
+  var previousHoverMap = (window.__MeoTranslation && window.__MeoTranslation.__hoverMap) || null;
 
   var STYLE_ID = 'meo-tr-style';
   var TIP_ID = 'meo-tr-hover-tip';
   var ATTR = 'data-meo-tid';
   var CLASS_BI = 'meo-tr-bilingual';
-  var COLLECT_CAP = 200;
-  var hoverMap = Object.create(null);
+  // brutalist.report 等聚合页有数千条标题；单批上限提高，并靠 capped 提示续译。
+  var COLLECT_CAP = 480;
+  var hoverMap = previousHoverMap || Object.create(null);
   var hideTimer = null;
   var tipEl = null;
   var listenersBound = false;
@@ -169,7 +168,7 @@
       var childHeading = el.querySelector('h1,h2,h3,h4,h5,h6,a');
       if (childHeading) {
         var childText = normalizeText(childHeading.textContent);
-        if (childText.length >= 20 && !isNoisySource(childText)) {
+        if (childText.length >= 12 && !isNoisySource(childText)) {
           return childHeading;
         }
       }
@@ -183,6 +182,22 @@
       return true;
     }
     if (host.getAttribute(ATTR)) {
+      return true;
+    }
+    var sib = host.nextElementSibling;
+    if (sib && sib.classList && sib.classList.contains(CLASS_BI)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// 已真正上屏译文（双语行或 hover 映射）；续译时跳过这些。
+  function hostHasAppliedTranslation(host) {
+    if (!host) {
+      return true;
+    }
+    var id = host.getAttribute(ATTR);
+    if (id && hoverMap[id]) {
       return true;
     }
     var sib = host.nextElementSibling;
@@ -370,7 +385,8 @@
       return false;
     }
     // Prefer title-ish lines; skip tiny category chips ("Gaming").
-    if (s.length < 20) {
+    // 聚合页短标题（如 "Talos Linux"）也应收录。
+    if (s.length < 12) {
       return false;
     }
     return true;
@@ -446,13 +462,27 @@
     return 'h1,h2,h3,h4,h5,h6,p,li,article a,main a,a[href],[role="link"],[role="heading"]';
   }
 
-  function collectCandidates() {
-    clear();
+  function collectCandidates(options) {
+    var resume = !!(options && options.resume);
+    // 续译：保留已上屏译文，只收集尚未译出的段落。
+    if (!resume) {
+      clear();
+    }
     ensureStyle();
     var candidates = [];
+    var hitCap = false;
     var seenHosts = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
     var seenSources = Object.create(null);
     var nextId = 0;
+    if (resume) {
+      document.querySelectorAll('[' + ATTR + ']').forEach(function (n) {
+        var v = n.getAttribute(ATTR) || '';
+        var m = /^c(\d+)$/.exec(v);
+        if (m) {
+          nextId = Math.max(nextId, parseInt(m[1], 10) + 1);
+        }
+      });
+    }
 
     function candidateTop(el) {
       try {
@@ -465,6 +495,9 @@
 
     function tryAdd(el) {
       if (!el || candidates.length >= COLLECT_CAP) {
+        if (el && candidates.length >= COLLECT_CAP) {
+          hitCap = true;
+        }
         return;
       }
       if (isInSkippedRegion(el) || isCheaplyHidden(el)) {
@@ -474,11 +507,14 @@
       if (!host || isInSkippedRegion(host) || isCheaplyHidden(host)) {
         return;
       }
+      if (resume && hostHasAppliedTranslation(host)) {
+        return;
+      }
       if (seenHosts) {
         if (seenHosts.has(host)) {
           return;
         }
-      } else if (host.getAttribute(ATTR)) {
+      } else if (!resume && host.getAttribute(ATTR)) {
         return;
       }
       var source = ownTextRough(host);
@@ -508,9 +544,12 @@
       if (seenSources[source]) {
         return;
       }
-      var id = 'c' + nextId;
-      nextId += 1;
-      host.setAttribute(ATTR, id);
+      var existingId = host.getAttribute(ATTR);
+      var id = (resume && existingId) ? existingId : ('c' + nextId);
+      if (!(resume && existingId)) {
+        nextId += 1;
+        host.setAttribute(ATTR, id);
+      }
       if (seenHosts) {
         seenHosts.add(host);
       }
@@ -597,7 +636,33 @@
       return aTop - bTop;
     });
 
-    return { ok: true, candidates: candidates, total: candidates.length };
+    if (candidates.length >= COLLECT_CAP) {
+      hitCap = true;
+    }
+    return {
+      ok: true,
+      candidates: candidates,
+      total: candidates.length,
+      capped: hitCap
+    };
+  }
+
+  function hasPageTranslationMarks() {
+    try {
+      if (document.querySelector('.' + CLASS_BI)) {
+        return true;
+      }
+      if (document.querySelector('[' + ATTR + ']')) {
+        return true;
+      }
+      for (var k in hoverMap) {
+        if (Object.prototype.hasOwnProperty.call(hoverMap, k)) {
+          return true;
+        }
+      }
+    } catch (e) {
+    }
+    return false;
   }
 
   function findHostById(id) {
@@ -827,8 +892,11 @@
   }
 
   window.__MeoTranslation = {
+    bridgeVersion: BRIDGE_VERSION,
+    __hoverMap: hoverMap,
     clear: clear,
     collectCandidates: collectCandidates,
+    hasPageTranslationMarks: hasPageTranslationMarks,
     applyBilingualById: applyBilingualById,
     applyHoverById: applyHoverById,
     applyBilingual: applyBilingual,
