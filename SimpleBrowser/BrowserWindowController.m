@@ -247,9 +247,11 @@ static NSImage *BrowserSecurityBadgeWarningImage(void) {
 @property (nonatomic, strong) BrowserLoadingProgressView *loadingProgressView;
 @property (nonatomic, weak) WKWebView *observedProgressWebView;
 @property (nonatomic, weak) WKWebView *observedFullscreenWebView;
-/// Element Fullscreen 期间周期性修补 WKWebView 布局（WebKit 可能异步剥约束导致 0 尺寸黑屏）。
+/// Element Fullscreen 期间周期性修补 WKWebView 布局（仅救援 0 尺寸，避免与 WebKit 抢 frame）。
 @property (nonatomic, strong, nullable) NSTimer *fullscreenLayoutRepairTimer;
 @property (nonatomic, assign) NSInteger fullscreenLayoutRepairGeneration;
+/// 元素全屏时浏览器壳窗口忽略鼠标，避免挡住 WebKit 全屏窗的点击。
+@property (nonatomic, assign) BOOL browserHitsSuppressedForElementFullscreen;
 @property (nonatomic, strong) NSButton *backButton;
 @property (nonatomic, strong) NSButton *forwardButton;
 @property (nonatomic, strong) NSButton *reloadButton;
@@ -2377,11 +2379,42 @@ static const CGFloat kTrafficLightDownwardOffset = 1.0;
     if (!window) {
         return;
     }
-    // 全屏空间内浮动 level 语义弱化；退出全屏后再应用。
+    // 原生全屏或 HTML5 元素全屏期间不要抬高浏览器壳窗口，否则可能盖住 WebKit 全屏层。
     if (window.styleMask & NSWindowStyleMaskFullScreen) {
         return;
     }
+    if (self.browserHitsSuppressedForElementFullscreen
+        || [self webViewIsInElementFullscreen:self.webView]) {
+        window.level = NSNormalWindowLevel;
+        return;
+    }
     window.level = self.alwaysOnTopEnabled ? NSFloatingWindowLevel : NSNormalWindowLevel;
+}
+
+- (void)setBrowserHitsSuppressedForElementFullscreen:(BOOL)suppressed {
+    if (_browserHitsSuppressedForElementFullscreen == suppressed) {
+        if (suppressed) {
+            // 状态未变也确保 level / ignoresMouseEvents 仍正确（KVO 可能重复进入）。
+            NSWindow *window = self.window;
+            if (window) {
+                window.ignoresMouseEvents = YES;
+                window.level = NSNormalWindowLevel;
+            }
+        }
+        return;
+    }
+    _browserHitsSuppressedForElementFullscreen = suppressed;
+    NSWindow *window = self.window;
+    if (!window) {
+        return;
+    }
+    if (suppressed) {
+        window.ignoresMouseEvents = YES;
+        window.level = NSNormalWindowLevel;
+    } else {
+        window.ignoresMouseEvents = NO;
+        [self applyAlwaysOnTopWindowLevel];
+    }
 }
 
 /// 保证附属浮层不低于父窗，避免置顶后被压在下面。
@@ -4234,6 +4267,13 @@ applyScraperDraftRecipe:(id)recipe {
 /// 用 autoresizing 铺满 contentContainer。
 /// Element Fullscreen 时 WebKit 会移走 WKWebView 并剥掉 Auto Layout 约束；
 /// 若 translatesAutoresizingMaskIntoConstraints=NO 且无约束，视图尺寸为 0 → 黑/白屏（抖音等用 div 全屏时尤甚）。
+///
+/// 注意：WKFullScreenWindowController 会把 WKWebView 挂到自有 `_clipView`，并用
+/// `NSInsetRect(contentView.bounds, -obscuredInsets…)` 设定 frame（可与 superview.bounds 不等）。
+/// 普通浏览时我们会挂 `WidthSizable|HeightSizable`；退出全屏后该 mask 仍留在 WKWebView 上。
+/// 第二次进全屏时若不清掉，AppKit 会在 layout 时把 WebKit 的 inset frame 收成
+/// superview.bounds → 第一次全屏正常、第二次关闭/进度条点不到。
+/// 故元素全屏期间一律锁 `NSViewNotSizable`，且非 0 尺寸时绝不改 frame。
 - (void)pinWebViewLayoutInSuperview:(WKWebView *)webView {
     if (webView == nil || webView.superview == nil) {
         return;
@@ -4250,6 +4290,22 @@ applyScraperDraftRecipe:(id)recipe {
             [NSLayoutConstraint deactivateConstraints:owned];
         }
     }
+
+    if ([self webViewIsInElementFullscreen:webView]) {
+        // 无论当前宿主是 contentContainer 还是 WK clipView：先清掉上次退出留下的 WidthSizable。
+        webView.translatesAutoresizingMaskIntoConstraints = YES;
+        webView.autoresizingMask = NSViewNotSizable;
+        if (superview != self.contentContainer) {
+            NSSize viewSize = webView.bounds.size;
+            BOOL emptyView = (viewSize.width < 1.0 || viewSize.height < 1.0);
+            if (emptyView) {
+                // 仅救援 0 尺寸黑屏；有尺寸时保留 WebKit 的 inset frame。
+                webView.frame = superview.bounds;
+            }
+        }
+        return;
+    }
+
     webView.translatesAutoresizingMaskIntoConstraints = YES;
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     webView.frame = superview.bounds;
@@ -4863,7 +4919,8 @@ applyScraperDraftRecipe:(id)recipe {
     __weak typeof(self) weakSelf = self;
     __weak WKWebView *weakWebView = webView;
 
-    // 进入全屏后短延迟再钉几次，覆盖 WebKit 异步换父视图 / 清约束的竞态。
+    // 进入全屏后短延迟再检查几次，覆盖 WebKit 异步换父视图 / 清约束的竞态。
+    // pin 内部在元素全屏宿主上只会救援塌缩尺寸，不会覆盖 WebKit 的有效 frame。
     for (NSNumber *delay in @[ @0.0, @0.05, @0.25, @1.0 ]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -4882,7 +4939,9 @@ applyScraperDraftRecipe:(id)recipe {
                        });
     }
 
-    // 长时全屏：若 frame 被剥成空矩形则立即修补（抖音等约数分钟后偶发黑屏）。
+    // 长时全屏：仅当 frame 被剥成空矩形或明显塌缩时修补（抖音等约数分钟后偶发黑屏）。
+    // 不再把「与 superview.bounds 差 >1px」当故障——那会覆盖 WebKit 的 obscuredInsets frame，
+    // 导致全屏控件（关闭、进度条）点不到。
     self.fullscreenLayoutRepairTimer =
         [NSTimer scheduledTimerWithTimeInterval:2.0
                                         repeats:YES
@@ -4899,18 +4958,7 @@ applyScraperDraftRecipe:(id)recipe {
                                                   [strongSelf stopFullscreenLayoutRepair];
                                                   return;
                                               }
-                                              NSView *superview = strongWebView.superview;
-                                              if (superview == nil) {
-                                                  return;
-                                              }
-                                              NSSize viewSize = strongWebView.bounds.size;
-                                              NSSize hostSize = superview.bounds.size;
-                                              BOOL emptyView = (viewSize.width < 1.0 || viewSize.height < 1.0);
-                                              BOOL mismatched = (fabs(viewSize.width - hostSize.width) > 1.0 ||
-                                                                 fabs(viewSize.height - hostSize.height) > 1.0);
-                                              if (emptyView || mismatched) {
-                                                  [strongSelf pinWebViewLayoutInSuperview:strongWebView];
-                                              }
+                                              [strongSelf pinWebViewLayoutInSuperview:strongWebView];
                                           }];
     self.fullscreenLayoutRepairTimer.tolerance = 0.5;
 }
@@ -4954,10 +5002,12 @@ applyScraperDraftRecipe:(id)recipe {
 
 - (void)handleWebViewFullscreenStateChange:(WKWebView *)webView {
     if (@available(macOS 13.0, *)) {
-        // 全屏过程中 WebKit 会把 WKWebView 挪到自有窗口并清约束；立即用 autoresizing 铺满，避免 0 尺寸空白。
+        // 全屏过程中 WebKit 把 WKWebView 挪到自有窗口并自管 frame。
+        // 只在 0 尺寸时救援；浏览器壳窗口让出鼠标，避免挡住全屏控件点击。
         switch (webView.fullscreenState) {
             case WKFullscreenStateEnteringFullscreen:
             case WKFullscreenStateInFullscreen:
+                [self setBrowserHitsSuppressedForElementFullscreen:YES];
                 [self pinWebViewLayoutInSuperview:webView];
                 [self startFullscreenLayoutRepairIfNeededForWebView:webView];
                 break;
@@ -4966,6 +5016,7 @@ applyScraperDraftRecipe:(id)recipe {
                 break;
             case WKFullscreenStateNotInFullscreen:
                 [self stopFullscreenLayoutRepair];
+                [self setBrowserHitsSuppressedForElementFullscreen:NO];
                 if (webView.superview == self.contentContainer) {
                     [self pinWebViewLayoutInSuperview:webView];
                 } else if (webView.superview == nil &&
